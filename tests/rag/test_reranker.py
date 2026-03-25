@@ -114,3 +114,53 @@ def test_reranker_backend_protocol() -> None:
     """_MockRerankerBackend satisfies the RerankerBackend protocol."""
     backend = _MockRerankerBackend()
     assert isinstance(backend, RerankerBackend)
+
+
+def test_model_reranker_init_called_once_under_concurrent_predict() -> None:
+    """Double-checked locking: concurrent predict() calls init the model exactly once."""
+    import sys
+    import threading
+    import time
+    from typing import Any
+
+    import numpy as np
+
+    from archon.rag.reranker import ModelReranker
+
+    init_count = 0
+    barrier = threading.Barrier(2)
+
+    class _SlowTextCrossEncoder:
+        def __init__(self, model_name: str, **kwargs: Any) -> None:
+            nonlocal init_count
+            init_count += 1
+            time.sleep(0.05)  # slow enough to expose the race
+
+        def rerank(self, query: str, documents: object) -> list[float]:
+            return [0.5] * len(list(documents))  # type: ignore[arg-type]
+
+    original = sys.modules["fastembed"].TextCrossEncoder
+    sys.modules["fastembed"].TextCrossEncoder = _SlowTextCrossEncoder
+    try:
+        reranker = ModelReranker("BAAI/bge-reranker-v2-m3")
+        results: list[list[float]] = []
+        exceptions: list[Exception] = []
+
+        def run_predict() -> None:
+            barrier.wait()  # force simultaneous entry
+            try:
+                results.append(reranker.predict([("q", "doc1"), ("q", "doc2")]))
+            except Exception as exc:
+                exceptions.append(exc)
+
+        threads = [threading.Thread(target=run_predict) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not exceptions, f"Unexpected exceptions: {exceptions}"
+        assert len(results) == 2
+        assert init_count == 1, f"Model __init__ called {init_count} times — lock missing"
+    finally:
+        sys.modules["fastembed"].TextCrossEncoder = original

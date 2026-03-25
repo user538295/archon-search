@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Protocol, runtime_checkable
 
 from archon.rag._types import SearchResult
@@ -19,14 +20,17 @@ class ModelReranker:
         self._model_name = model_name
         self._providers = providers or None  # None = CPU default in fastembed
         self._model = None  # loaded on first predict()
+        self._lock = threading.Lock()
 
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
         if not pairs:
             return []
         if self._model is None:
-            from fastembed import TextCrossEncoder  # noqa: PLC0415
+            with self._lock:
+                if self._model is None:
+                    from fastembed import TextCrossEncoder  # noqa: PLC0415
 
-            self._model = TextCrossEncoder(self._model_name, providers=self._providers)
+                    self._model = TextCrossEncoder(self._model_name, providers=self._providers)
         # TextCrossEncoder.rerank(query, documents) → Iterable[float]
         # All pairs share the same query (pairs[0][0])
         query = pairs[0][0]

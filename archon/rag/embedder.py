@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Protocol, runtime_checkable
 
 
@@ -17,12 +18,15 @@ class ModelEmbedder:
         self._model_name = model_name
         self._providers = providers or None  # None = CPU default in fastembed
         self._model = None  # loaded on first encode()
+        self._lock = threading.Lock()
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         if self._model is None:
-            from fastembed import TextEmbedding  # noqa: PLC0415
+            with self._lock:
+                if self._model is None:
+                    from fastembed import TextEmbedding  # noqa: PLC0415
 
-            self._model = TextEmbedding(self._model_name, providers=self._providers)
+                    self._model = TextEmbedding(self._model_name, providers=self._providers)
         # TextEmbedding.embed() returns a generator of 1-D numpy arrays
         return [e.tolist() for e in self._model.embed(texts)]
 

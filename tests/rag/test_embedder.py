@@ -121,3 +121,52 @@ async def test_embedder_embed_empty_list_leaves_dim_unset() -> None:
     assert result == []
     with pytest.raises(RuntimeError, match="not yet initialized"):
         _ = embedder.embedding_dim
+
+
+def test_model_embedder_init_called_once_under_concurrent_encode() -> None:
+    """Double-checked locking: concurrent encode() calls init the model exactly once."""
+    import sys
+    import time
+
+    import numpy as np
+
+    from archon.rag.embedder import ModelEmbedder
+
+    init_count = 0
+    barrier = threading.Barrier(2)
+
+    class _SlowTextEmbedding:
+        def __init__(self, model_name: str, **kwargs: Any) -> None:
+            nonlocal init_count
+            init_count += 1
+            time.sleep(0.05)  # slow enough to expose the race
+
+        def embed(self, texts: list[str]):  # type: ignore[return]
+            for _ in texts:
+                yield np.zeros(4, dtype=np.float32)
+
+    original = sys.modules["fastembed"].TextEmbedding
+    sys.modules["fastembed"].TextEmbedding = _SlowTextEmbedding
+    try:
+        embedder = ModelEmbedder("BAAI/bge-small-en-v1.5")
+        results: list[list[list[float]]] = []
+        exceptions: list[Exception] = []
+
+        def run_encode() -> None:
+            barrier.wait()  # force simultaneous entry
+            try:
+                results.append(embedder.encode(["hello"]))
+            except Exception as exc:
+                exceptions.append(exc)
+
+        threads = [threading.Thread(target=run_encode) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not exceptions, f"Unexpected exceptions: {exceptions}"
+        assert len(results) == 2
+        assert init_count == 1, f"Model __init__ called {init_count} times — lock missing"
+    finally:
+        sys.modules["fastembed"].TextEmbedding = original
