@@ -5,14 +5,17 @@ import hashlib
 import inspect
 import logging
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from archon.rag._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestResult, SearchResult
 from archon.rag.chunker import DocumentChunker
-from archon.rag.embedder import Embedder, ModelEmbedder
+from archon.rag.embedder import Embedder, EmbedderBackend, ModelEmbedder
 from archon.rag.parser import DocumentParser, ParseError
-from archon.rag.reranker import ModelReranker, Reranker
+from archon.rag.reranker import ModelReranker, Reranker, RerankerBackend
 from archon.rag.store import RagStore
+
+if TYPE_CHECKING:
+    from archon.config.loader import RagConfig
 
 logger = logging.getLogger("archon")
 
@@ -102,9 +105,9 @@ class RagPipeline:
         # Collect and filter files
         files: list[Path] = []
         for file_path in path.glob(glob_pattern):
-            if not file_path.is_file():
-                continue
             if file_path.is_symlink():
+                continue
+            if not file_path.is_file():
                 continue
             # Skip hidden paths
             rel_parts = file_path.relative_to(path).parts
@@ -154,6 +157,7 @@ class RagPipeline:
             try:
                 center_idx = int(result.chunk_id.split("-")[-1])
             except ValueError:
+                logger.warning("Malformed chunk_id %r — skipping adjacent fetch", result.chunk_id)
                 output.append({"result": result, "context_before": [], "context_after": []})
                 continue
 
@@ -167,6 +171,7 @@ class RagPipeline:
                 try:
                     neighbor_idx = int(chunk.chunk_id.split("-")[-1])
                 except ValueError:
+                    logger.warning("Malformed neighbor chunk_id %r — skipping", chunk.chunk_id)
                     continue
                 if neighbor_idx < center_idx:
                     context_before.append(chunk)
@@ -197,27 +202,26 @@ class RagPipeline:
 
 
 def create_pipeline(
-    cfg: object,
-    embedder_backend: object = None,
-    reranker_backend: object = None,
+    cfg: RagConfig,
+    embedder_backend: EmbedderBackend | None = None,
+    reranker_backend: RerankerBackend | None = None,
 ) -> RagPipeline:
     """Build a RagPipeline from a RagConfig.
 
     Does NOT call store.connect() — caller is responsible for connecting.
     """
-    # Import here to avoid circular issues; cfg is a RagConfig instance
-    store = RagStore(cfg.db_path)  # type: ignore[attr-defined]
-    _embedder_backend = embedder_backend or ModelEmbedder(
-        cfg.embedding_model,  # type: ignore[attr-defined]
-        providers=cfg.providers,  # type: ignore[attr-defined]
+    store = RagStore(cfg.db_path)
+    _embedder_backend: EmbedderBackend = embedder_backend or ModelEmbedder(
+        cfg.embedding_model,
+        providers=cfg.providers,
     )
-    _reranker_backend = reranker_backend or ModelReranker(
-        cfg.reranker_model,  # type: ignore[attr-defined]
-        providers=cfg.providers,  # type: ignore[attr-defined]
+    _reranker_backend: RerankerBackend = reranker_backend or ModelReranker(
+        cfg.reranker_model,
+        providers=cfg.providers,
     )
-    embedder = Embedder(_embedder_backend)  # type: ignore[arg-type]
-    reranker = Reranker(_reranker_backend)  # type: ignore[arg-type]
-    chunker = DocumentChunker(cfg.chunk_size)  # type: ignore[attr-defined]
+    embedder = Embedder(_embedder_backend)
+    reranker = Reranker(_reranker_backend)
+    chunker = DocumentChunker(cfg.chunk_size)
     parser = DocumentParser()
 
     return RagPipeline(
@@ -226,7 +230,7 @@ def create_pipeline(
         reranker=reranker,
         chunker=chunker,
         parser=parser,
-        history_collection=cfg.history_collection,  # type: ignore[attr-defined]
-        top_k_retrieve=cfg.top_k_retrieve,  # type: ignore[attr-defined]
-        top_k_return=cfg.top_k_return,  # type: ignore[attr-defined]
+        history_collection=cfg.history_collection,
+        top_k_retrieve=cfg.top_k_retrieve,
+        top_k_return=cfg.top_k_return,
     )
