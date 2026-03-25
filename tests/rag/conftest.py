@@ -12,6 +12,11 @@ import sys
 import types
 import uuid
 
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("RAYON_NUM_THREADS", "1")
+
 import numpy as np
 import pytest
 
@@ -48,6 +53,10 @@ if "fastembed" not in sys.modules:
 # Belt-and-braces: also block sentence_transformers
 if "sentence_transformers" not in sys.modules:
     sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
+
+# Block onnxruntime (64MB native library) — not needed for tests
+if "onnxruntime" not in sys.modules:
+    sys.modules["onnxruntime"] = types.ModuleType("onnxruntime")
 
 # ---------------------------------------------------------------------------
 # Module-scoped store fixture — one LanceDB connection per test module to

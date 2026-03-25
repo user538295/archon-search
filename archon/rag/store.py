@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Optional
-
-import lancedb
-import pyarrow as pa
+from typing import TYPE_CHECKING, Any, Optional
 
 from archon.rag._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
+
+if TYPE_CHECKING:
+    import lancedb
+    import pyarrow as pa
 
 logger = logging.getLogger("archon")
 
@@ -37,11 +38,16 @@ class RagStore:
     # ------------------------------------------------------------------
 
     async def connect(self) -> None:
+        import lancedb  # noqa: PLC0415
+
         self._db_path.mkdir(parents=True, exist_ok=True)
         self._db = await lancedb.connect_async(str(self._db_path))
 
     async def disconnect(self) -> None:
+        db = self._db
         self._db = None
+        if db is not None:
+            db.close()
 
     # ------------------------------------------------------------------
     # Guard
@@ -66,6 +72,8 @@ class RagStore:
 
     @staticmethod
     def _schema(embedding_dim: int) -> pa.Schema:
+        import pyarrow as pa  # noqa: PLC0415
+
         return pa.schema(
             [
                 pa.field("doc_id", pa.utf8()),
@@ -142,8 +150,10 @@ class RagStore:
     async def rebuild_fts_index(self, collection: str) -> None:
         self._validate_collection(collection)
         db = self._require_connected()
+        from lancedb.index import FTS  # noqa: PLC0415
+
         table = await db.open_table(collection)
-        await table.create_index("text", config=lancedb.index.FTS(), replace=True)
+        await table.create_index("text", config=FTS(), replace=True)
 
     # ------------------------------------------------------------------
     # Search
