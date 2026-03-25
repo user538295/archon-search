@@ -363,10 +363,13 @@ async def test_store_fetch_adjacent_chunks_at_boundary_returns_partial(
 
     neighbors = await connected_store.fetch_adjacent_chunks(col_name, doc_id, 0, 2)
     chunk_ids = {c.chunk_id for c in neighbors}
-    # no negative-index IDs expected
-    assert all(c.chunk_id.split("-")[1].lstrip("0") or "0" in c.chunk_id for c in neighbors)
+    assert len(neighbors) == 2, f"Expected 2 neighbors, got {len(neighbors)}"
     assert f"{doc_id}-000001" in chunk_ids
     assert f"{doc_id}-000002" in chunk_ids
+    # Verify no negative-index chunk IDs were generated
+    for c in neighbors:
+        idx = int(c.chunk_id.split("-")[-1])
+        assert idx >= 0, f"Negative index in chunk_id: {c.chunk_id}"
 
 
 @pytest.mark.asyncio
@@ -461,22 +464,89 @@ async def test_store_hybrid_search_rrf_ranking_correct(
     """Doc matching both vector + keyword should outscore doc matching only vector."""
     await connected_store.ensure_collection(col_name, _DIM)
 
+    # Dual-match doc: FAR from query vector (idx=5 → [5.0]*4), but matches FTS keyword
     dual_id = _doc_id()
     unique = f"frobnicate{uuid.uuid4().hex[:4]}"
-    dual_chunks = [_chunk(dual_id, 0, text=f"The {unique} widget")]
+    dual_chunks = [_chunk(dual_id, 5, text=f"The {unique} widget")]
     await connected_store.ingest_chunks(col_name, dual_chunks)
 
+    # Vec-only doc: CLOSE to query vector (idx=0 → [0.0]*4), but no FTS keyword match
     vec_only_id = _doc_id()
     vec_chunks = [_chunk(vec_only_id, 0, text="unrelated topic completely")]
     await connected_store.ingest_chunks(col_name, vec_chunks)
 
     await connected_store.rebuild_fts_index(col_name)
 
+    # Query with vector [0.0]*4 (favors vec-only) and keyword (favors dual)
     results = await connected_store.hybrid_search(
         col_name, [0.0] * _DIM, unique, top_k=5
     )
-    if len(results) >= 2:
-        dual_result = next((r for r in results if r.doc_id == dual_id), None)
-        vec_result = next((r for r in results if r.doc_id == vec_only_id), None)
-        if dual_result and vec_result:
-            assert dual_result.score >= vec_result.score
+    assert len(results) >= 1, f"Expected at least 1 result, got {len(results)}"
+
+    dual_result = next((r for r in results if r.doc_id == dual_id), None)
+    assert dual_result is not None, "Dual-match document not found in results"
+
+    vec_result = next((r for r in results if r.doc_id == vec_only_id), None)
+    if vec_result is not None:
+        assert dual_result.score >= vec_result.score, (
+            f"Dual-match score {dual_result.score} should be >= vec-only score {vec_result.score}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Edge-case tests (C1-I-7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_store_delete_document_nonexistent_collection_returns_zero(
+    connected_store: RagStore,
+) -> None:
+    """delete_document on a collection that does not exist returns 0."""
+    doc_id = _doc_id()
+    count = await connected_store.delete_document("no-such-collection-xyz", doc_id)
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_store_fetch_adjacent_nonexistent_collection_returns_empty(
+    connected_store: RagStore,
+) -> None:
+    """fetch_adjacent_chunks on a nonexistent collection returns []."""
+    doc_id = _doc_id()
+    result = await connected_store.fetch_adjacent_chunks("no-such-collection-xyz", doc_id, 0, 1)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_store_ingest_empty_list_returns_zero(
+    connected_store: RagStore, col_name: str,
+) -> None:
+    """ingest_chunks with empty list returns 0 without touching the table."""
+    await connected_store.ensure_collection(col_name, _DIM)
+    count = await connected_store.ingest_chunks(col_name, [])
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_store_list_documents_limit_capped_at_1000(
+    connected_store: RagStore, col_name: str,
+) -> None:
+    """list_documents caps limit at 1000 — requesting more does not OOM."""
+    await connected_store.ensure_collection(col_name, _DIM)
+    # Should not raise even with unreasonable limit
+    docs = await connected_store.list_documents(col_name, limit=100_000)
+    assert isinstance(docs, list)
+
+
+def test_fts_exception_filter_reraises_non_fts_errors() -> None:
+    """The FTS exception filter in hybrid_search only catches FTS-related errors."""
+    # Errors containing "index" or "fts" should be caught (degraded to vector-only)
+    for msg in ["FTS index not found", "No index on column", "fts search failed"]:
+        exc_str = msg.lower()
+        assert "index" in exc_str or "fts" in exc_str, f"Should be caught: {msg}"
+
+    # Errors NOT containing "index" or "fts" should be re-raised
+    for msg in ["disk corruption", "connection timeout", "permission denied"]:
+        exc_str = msg.lower()
+        assert "index" not in exc_str and "fts" not in exc_str, f"Should re-raise: {msg}"

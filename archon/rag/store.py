@@ -106,9 +106,9 @@ class RagStore:
             try:
                 table = await db.open_table(name)
                 chunk_count = await table.count_rows()
-                # count distinct doc_ids by fetching only the doc_id column
-                rows = await table.query().select(["doc_id"]).limit(chunk_count + 1).to_list()
-                doc_count = len({r["doc_id"] for r in rows})
+                # count distinct doc_ids via Arrow column (avoids materializing dicts)
+                arrow_table = await table.query().select(["doc_id"]).to_arrow()
+                doc_count = len(arrow_table.column("doc_id").unique())
                 result.append(CollectionInfo(name=name, doc_count=doc_count, chunk_count=chunk_count))
             except (RuntimeError, ValueError, OSError) as exc:
                 logger.warning("Could not inspect collection %s: %s", name, exc)
@@ -186,8 +186,12 @@ class RagStore:
             fts_q = await table.search(query_text, query_type="fts")
             fts_rows = await fts_q.limit(fetch).to_list()
             fts_rank = {r["chunk_id"]: i for i, r in enumerate(fts_rows)}
-        except Exception:
-            logger.warning("FTS search failed for collection %r, using vector-only", collection)
+        except Exception as exc:
+            exc_str = str(exc).lower()
+            if "index" in exc_str or "fts" in exc_str:
+                logger.warning("FTS index not available for collection %r, using vector-only results", collection)
+            else:
+                raise
 
         # Build combined row lookup
         all_rows: dict[str, dict[str, Any]] = {r["chunk_id"]: r for r in vec_rows}
@@ -244,6 +248,7 @@ class RagStore:
         self, collection: str, limit: int = 100
     ) -> list[DocumentInfo]:
         self._validate_collection(collection)
+        limit = min(limit, 1000)  # cap to prevent unbounded memory consumption
         db = self._require_connected()
         try:
             table = await db.open_table(collection)

@@ -49,12 +49,16 @@ class Reranker:
         pairs = [(query, c.text) for c in candidates]
         scores: list[float] = await asyncio.to_thread(self._backend.predict, pairs)
 
-        # Mutate scores in-place, then sort descending
+        if len(scores) != len(candidates):
+            raise ValueError(
+                f"Backend returned {len(scores)} scores for {len(candidates)} candidates"
+            )
+
+        # Update scores in-place (intentional per spec) and return a sorted copy
         for candidate, score in zip(candidates, scores):
             candidate.score = score
 
-        candidates.sort(key=lambda c: c.score, reverse=True)
-        return candidates[:top_k]
+        return sorted(candidates, key=lambda c: c.score, reverse=True)[:top_k]
 
 
 def make_reranker(model_name: str, providers: list[str] | None = None) -> Reranker:
