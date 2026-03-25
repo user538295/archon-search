@@ -5,7 +5,7 @@ import hashlib
 import inspect
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from archon.rag._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestResult, SearchResult
 from archon.rag.chunker import DocumentChunker
@@ -149,9 +149,9 @@ class RagPipeline:
 
     async def search_with_context(
         self, query: str, collection: str, context_window: int = 1
-    ) -> list[dict[str, object]]:
+    ) -> list[dict[str, Any]]:
         results = await self.search(query, collection)
-        output: list[dict[str, object]] = []
+        output: list[dict[str, Any]] = []
 
         for result in results:
             try:

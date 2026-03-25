@@ -50,9 +50,9 @@ def create_app(pipeline: RagPipeline, default_collection: str) -> FastMCP:
             )
             return [
                 {
-                    "result": asdict(r["result"]),  # type: ignore[arg-type]
-                    "context_before": [asdict(c) for c in r["context_before"]],  # type: ignore[union-attr]
-                    "context_after": [asdict(c) for c in r["context_after"]],  # type: ignore[union-attr]
+                    "result": asdict(r["result"]),
+                    "context_before": [asdict(c) for c in r["context_before"]],
+                    "context_after": [asdict(c) for c in r["context_after"]],
                 }
                 for r in results
             ]

@@ -110,7 +110,7 @@ class RagInstaller:
 
         doc = tomlkit.parse(config_path.read_text())
         if "rag" not in doc:
-            doc["rag"] = tomlkit.table()  # type: ignore[assignment]
+            doc["rag"] = tomlkit.table()
 
         rag_section = doc["rag"]
         if isinstance(rag_section, dict):
