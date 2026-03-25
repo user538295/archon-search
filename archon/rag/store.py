@@ -16,6 +16,7 @@ logger = logging.getLogger("archon")
 
 _CHUNK_ID_RE = re.compile(r"^[a-f0-9]{64}-\d{6}$")
 _DOC_ID_RE = re.compile(r"^[a-f0-9]{64}$")
+_COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 _RRF_K = 60  # RRF constant
 
@@ -46,6 +47,14 @@ class RagStore:
     # Guard
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _validate_collection(collection: str) -> None:
+        if not _COLLECTION_RE.match(collection):
+            raise ValueError(
+                f"Invalid collection name: {collection!r} — "
+                "must start with alphanumeric, contain only [a-zA-Z0-9_-], max 64 chars"
+            )
+
     def _require_connected(self) -> lancedb.db.AsyncConnection:
         if self._db is None:
             raise RuntimeError("RagStore not connected")
@@ -73,6 +82,7 @@ class RagStore:
     # ------------------------------------------------------------------
 
     async def ensure_collection(self, collection: str, embedding_dim: int) -> None:
+        self._validate_collection(collection)
         db = self._require_connected()
         await db.create_table(
             collection,
@@ -82,20 +92,18 @@ class RagStore:
 
     async def list_collections(self) -> list[CollectionInfo]:
         db = self._require_connected()
-        # list_tables() returns a response object with .tables attribute
-        response = await db.list_tables()
-        names: list[str] = response.tables
+        names: list[str] = (await db.list_tables()).tables
         result: list[CollectionInfo] = []
         for name in names:
             try:
                 table = await db.open_table(name)
                 chunk_count = await table.count_rows()
-                # count distinct doc_ids
+                # count distinct doc_ids by fetching only the doc_id column
                 rows = await table.query().select(["doc_id"]).limit(chunk_count + 1).to_list()
                 doc_count = len({r["doc_id"] for r in rows})
                 result.append(CollectionInfo(name=name, doc_count=doc_count, chunk_count=chunk_count))
-            except Exception:
-                logger.warning("Could not inspect collection %s", name)
+            except (RuntimeError, ValueError, OSError) as exc:
+                logger.warning("Could not inspect collection %s: %s", name, exc)
         return result
 
     # ------------------------------------------------------------------
@@ -103,6 +111,7 @@ class RagStore:
     # ------------------------------------------------------------------
 
     async def ingest_chunks(self, collection: str, chunks: list[ChunkRecord]) -> int:
+        self._validate_collection(collection)
         db = self._require_connected()
         for chunk in chunks:
             if not _CHUNK_ID_RE.match(chunk.chunk_id):
@@ -131,6 +140,7 @@ class RagStore:
     # ------------------------------------------------------------------
 
     async def rebuild_fts_index(self, collection: str) -> None:
+        self._validate_collection(collection)
         db = self._require_connected()
         table = await db.open_table(collection)
         await table.create_index("text", config=lancedb.index.FTS(), replace=True)
@@ -146,6 +156,7 @@ class RagStore:
         query_text: str,
         top_k: int,
     ) -> list[SearchResult]:
+        self._validate_collection(collection)
         db = self._require_connected()
         try:
             table = await db.open_table(collection)
@@ -159,6 +170,7 @@ class RagStore:
         vec_rank: dict[str, int] = {r["chunk_id"]: i for i, r in enumerate(vec_rows)}
 
         # FTS search (may fail if no index)
+        fts_rows: list[dict[str, Any]] = []
         fts_rank: dict[str, int] = {}
         try:
             fts_q = await table.search(query_text, query_type="fts")
@@ -169,11 +181,8 @@ class RagStore:
 
         # Build combined row lookup
         all_rows: dict[str, dict[str, Any]] = {r["chunk_id"]: r for r in vec_rows}
-        try:
-            for r in fts_rows:  # noqa: F821  # type: ignore[name-defined]
-                all_rows.setdefault(r["chunk_id"], r)
-        except NameError:
-            pass
+        for r in fts_rows:
+            all_rows.setdefault(r["chunk_id"], r)
 
         # RRF scoring
         scored: list[tuple[float, dict[str, Any]]] = []
@@ -203,6 +212,7 @@ class RagStore:
     # ------------------------------------------------------------------
 
     async def delete_document(self, collection: str, doc_id: str) -> int:
+        self._validate_collection(collection)
         db = self._require_connected()
         if not _DOC_ID_RE.match(doc_id):
             raise ValueError(f"Invalid doc_id: {doc_id!r} — must be 64 hex chars")
@@ -223,6 +233,7 @@ class RagStore:
     async def list_documents(
         self, collection: str, limit: int = 100
     ) -> list[DocumentInfo]:
+        self._validate_collection(collection)
         db = self._require_connected()
         try:
             table = await db.open_table(collection)
@@ -270,7 +281,10 @@ class RagStore:
         center_idx: int,
         window: int,
     ) -> list[ChunkRecord]:
+        self._validate_collection(collection)
         db = self._require_connected()
+        if not _DOC_ID_RE.match(doc_id):
+            raise ValueError(f"Invalid doc_id: {doc_id!r}")
         target_ids = [
             f"{doc_id}-{i:06d}"
             for i in range(max(0, center_idx - window), center_idx + window + 1)
@@ -293,7 +307,7 @@ class RagStore:
             .to_list()
         )
 
-        return [
+        result = [
             ChunkRecord(
                 doc_id=r["doc_id"],
                 chunk_id=r["chunk_id"],
@@ -304,3 +318,5 @@ class RagStore:
             )
             for r in rows
         ]
+        result.sort(key=lambda c: c.chunk_id)
+        return result

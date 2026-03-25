@@ -13,8 +13,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import trafilatura
-
 
 class ParseError(Exception):
     """Raised when a document cannot be parsed."""
@@ -72,6 +70,7 @@ class DocumentParser:
 
     def _parse_html(self, path: Path) -> str:
         try:
+            import trafilatura  # lazy: optional rag extra
             raw = path.read_text(encoding="utf-8", errors="replace")
             extracted = trafilatura.extract(raw, include_tables=True, include_links=False)
             if extracted is None:

@@ -1,4 +1,4 @@
-"""Embedding layer for RAG — wraps SentenceTransformer with async support."""
+"""Embedding layer for RAG — wraps fastembed.TextEmbedding with async support."""
 from __future__ import annotations
 
 import asyncio
@@ -11,18 +11,20 @@ class EmbedderBackend(Protocol):
 
 
 class ModelEmbedder:
-    """Lazy-loading SentenceTransformer backend."""
+    """Lazy-loading fastembed TextEmbedding backend."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, providers: list[str] | None = None) -> None:
         self._model_name = model_name
+        self._providers = providers or None  # None = CPU default in fastembed
         self._model = None  # loaded on first encode()
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         if self._model is None:
-            from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+            from fastembed import TextEmbedding  # noqa: PLC0415
 
-            self._model = SentenceTransformer(self._model_name)
-        return self._model.encode(texts).tolist()
+            self._model = TextEmbedding(self._model_name, providers=self._providers)
+        # TextEmbedding.embed() returns a generator of 1-D numpy arrays
+        return [e.tolist() for e in self._model.embed(texts)]
 
 
 class Embedder:
@@ -34,19 +36,29 @@ class Embedder:
 
     @property
     def embedding_dim(self) -> int:
+        """Return the cached embedding dimension.
+
+        Raises RuntimeError if embed() has never been called.
+        This property does NOT call backend.encode itself.
+        """
         if self._embedding_dim is None:
-            probe = self._backend.encode(["probe"])
-            self._embedding_dim = len(probe[0])
+            raise RuntimeError(
+                "embedding_dim not yet initialized — call embed() first"
+            )
         return self._embedding_dim
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        return await asyncio.to_thread(self._backend.encode, texts)
+        """Encode texts in a thread pool; lazily initialises embedding_dim."""
+        result: list[list[float]] = await asyncio.to_thread(self._backend.encode, texts)
+        if self._embedding_dim is None and result:
+            self._embedding_dim = len(result[0])
+        return result
 
     async def embed_one(self, text: str) -> list[float]:
         results = await self.embed([text])
         return results[0]
 
 
-def make_embedder(model_name: str) -> Embedder:
+def make_embedder(model_name: str, providers: list[str] | None = None) -> Embedder:
     """Factory: create a ModelEmbedder-backed Embedder."""
-    return Embedder(ModelEmbedder(model_name))
+    return Embedder(ModelEmbedder(model_name, providers=providers))

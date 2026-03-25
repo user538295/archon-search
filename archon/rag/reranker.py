@@ -1,4 +1,4 @@
-"""Reranking layer for RAG — wraps CrossEncoder with async support."""
+"""Reranking layer for RAG — wraps fastembed.TextCrossEncoder with async support."""
 from __future__ import annotations
 
 import asyncio
@@ -13,18 +13,25 @@ class RerankerBackend(Protocol):
 
 
 class ModelReranker:
-    """Lazy-loading CrossEncoder backend."""
+    """Lazy-loading fastembed TextCrossEncoder backend."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, providers: list[str] | None = None) -> None:
         self._model_name = model_name
+        self._providers = providers or None  # None = CPU default in fastembed
         self._model = None  # loaded on first predict()
 
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+        if not pairs:
+            return []
         if self._model is None:
-            from sentence_transformers import CrossEncoder  # noqa: PLC0415
+            from fastembed import TextCrossEncoder  # noqa: PLC0415
 
-            self._model = CrossEncoder(self._model_name)
-        return self._model.predict(pairs).tolist()
+            self._model = TextCrossEncoder(self._model_name, providers=self._providers)
+        # TextCrossEncoder.rerank(query, documents) → Iterable[float]
+        # All pairs share the same query (pairs[0][0])
+        query = pairs[0][0]
+        documents = [p[1] for p in pairs]
+        return list(self._model.rerank(query, documents))
 
 
 class Reranker:
@@ -42,12 +49,14 @@ class Reranker:
         pairs = [(query, c.text) for c in candidates]
         scores: list[float] = await asyncio.to_thread(self._backend.predict, pairs)
 
-        ranked = sorted(
-            zip(scores, candidates), key=lambda item: item[0], reverse=True
-        )
-        return [c for _, c in ranked[:top_k]]
+        # Mutate scores in-place, then sort descending
+        for candidate, score in zip(candidates, scores):
+            candidate.score = score
+
+        candidates.sort(key=lambda c: c.score, reverse=True)
+        return candidates[:top_k]
 
 
-def make_reranker(model_name: str) -> Reranker:
+def make_reranker(model_name: str, providers: list[str] | None = None) -> Reranker:
     """Factory: create a ModelReranker-backed Reranker."""
-    return Reranker(ModelReranker(model_name))
+    return Reranker(ModelReranker(model_name, providers=providers))
