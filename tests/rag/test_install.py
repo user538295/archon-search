@@ -144,7 +144,7 @@ class TestDetectGpu:
 
 
 class TestInstallDeps:
-    def _capture_pip_args(self, tmp_path: Path, gpu: bool) -> list[list[str]]:
+    def _capture_pip_args(self, tmp_path: Path, gpu: str) -> list[list[str]]:
         installer = _make_installer(tmp_path)
         calls: list[list[str]] = []
 
@@ -156,13 +156,20 @@ class TestInstallDeps:
 
         return calls
 
-    def test_install_deps_gpu_installs_fastembed_gpu(self, tmp_path: Path) -> None:
-        calls = self._capture_pip_args(tmp_path, gpu=True)
+    def test_install_deps_cuda_still_installs_gpu_packages(self, tmp_path: Path) -> None:
+        calls = self._capture_pip_args(tmp_path, gpu="cuda")
         all_args = " ".join(arg for cmd in calls for arg in cmd)
         assert "fastembed-gpu" in all_args
+        assert "onnxruntime-gpu" in all_args
 
-    def test_install_deps_cpu_installs_fastembed(self, tmp_path: Path) -> None:
-        calls = self._capture_pip_args(tmp_path, gpu=False)
+    def test_install_deps_apple_silicon_installs_standard_fastembed(self, tmp_path: Path) -> None:
+        calls = self._capture_pip_args(tmp_path, gpu="apple_silicon")
+        all_args = " ".join(arg for cmd in calls for arg in cmd)
+        assert "fastembed" in all_args
+        assert "fastembed-gpu" not in all_args
+
+    def test_install_deps_none_installs_standard_fastembed(self, tmp_path: Path) -> None:
+        calls = self._capture_pip_args(tmp_path, gpu="none")
         all_args = " ".join(arg for cmd in calls for arg in cmd)
         assert "fastembed" in all_args
         assert "fastembed-gpu" not in all_args
@@ -170,7 +177,7 @@ class TestInstallDeps:
     def test_install_deps_dry_run_no_op(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path, dry_run=True)
         with patch("subprocess.run") as mock_run:
-            installer.install_deps(gpu=False)
+            installer.install_deps(gpu="none")
         mock_run.assert_not_called()
 
 

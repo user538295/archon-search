@@ -62,12 +62,12 @@ class RagInstaller:
     # Dependency installation
     # ------------------------------------------------------------------
 
-    def install_deps(self, gpu: bool) -> None:
+    def install_deps(self, gpu: GpuType) -> None:
         """Install RAG dependencies. No-op when dry_run=True."""
         if self.dry_run:
             return
 
-        if gpu:
+        if gpu == "cuda":
             subprocess.run(
                 ["uv", "pip", "uninstall", "fastembed", "-y"],
                 check=False,
