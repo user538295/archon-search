@@ -89,6 +89,44 @@ class RagInstaller:
         )
 
     # ------------------------------------------------------------------
+    # Provider validation
+    # ------------------------------------------------------------------
+
+    def validate_providers(self, providers: list[str]) -> bool:
+        """Check that all non-CPU providers are available and embedding works.
+
+        Returns True only if:
+        1. Every non-CPU provider in `providers` is listed by onnxruntime.get_available_providers().
+        2. TextEmbedding can be instantiated and produces an embedding without error.
+
+        Never raises — caller handles fallback.
+        """
+        non_cpu = [p for p in providers if "CPU" not in p]
+        if non_cpu:
+            try:
+                import onnxruntime  # lazy — not installed on all systems
+                available = onnxruntime.get_available_providers()
+            except Exception as exc:
+                logger.warning("validate_providers: could not query onnxruntime providers: %s", exc)
+                return False
+            missing = [p for p in non_cpu if p not in available]
+            if missing:
+                logger.warning(
+                    "validate_providers: providers not available in onnxruntime: %s", missing
+                )
+                return False
+
+        try:
+            from fastembed import TextEmbedding  # lazy — not installed on all systems
+            model = TextEmbedding(self.cfg.embedding_model, providers=providers)
+            list(model.embed(["archon rag test"]))
+        except Exception as exc:
+            logger.warning("validate_providers: embedding test failed: %s", exc)
+            return False
+
+        return True
+
+    # ------------------------------------------------------------------
     # Provider configuration
     # ------------------------------------------------------------------
 
