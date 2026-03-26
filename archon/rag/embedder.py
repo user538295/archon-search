@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -17,7 +17,7 @@ class ModelEmbedder:
     def __init__(self, model_name: str, providers: list[str] | None = None) -> None:
         self._model_name = model_name
         self._providers = providers or None  # None = CPU default in fastembed
-        self._model = None  # loaded on first encode()
+        self._model: Any = None  # loaded on first encode()
         self._lock = threading.Lock()
 
     def encode(self, texts: list[str]) -> list[list[float]]:

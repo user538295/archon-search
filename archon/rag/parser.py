@@ -81,14 +81,14 @@ class DocumentParser:
 
     def _parse_pdf(self, path: Path) -> str:
         try:
-            from docling.document_converter import DocumentConverter  # type: ignore[import]
-            return DocumentConverter().convert(str(path)).document.export_to_markdown()
+            from docling.document_converter import DocumentConverter  # noqa: PLC0415
+            return str(DocumentConverter().convert(str(path)).document.export_to_markdown())
         except Exception as exc:
             raise ParseError(path, exc) from exc
 
     def _parse_office(self, path: Path) -> str:
         try:
-            from markitdown import MarkItDown  # type: ignore[import]
+            from markitdown import MarkItDown  # noqa: PLC0415
             return MarkItDown().convert(str(path)).text_content
         except Exception as exc:
             raise ParseError(path, exc) from exc
