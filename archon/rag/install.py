@@ -92,12 +92,20 @@ class RagInstaller:
     # Provider configuration
     # ------------------------------------------------------------------
 
-    def configure_providers(self, gpu: bool) -> None:
-        """Write providers = ["CUDAExecutionProvider"] to [rag] section via tomlkit.
+    def configure_providers(self, gpu: GpuType) -> None:
+        """Write providers list to [rag] section via tomlkit based on gpu type.
 
-        No-op when gpu=False or dry_run=True.
+        - "cuda": write ["CUDAExecutionProvider"]
+        - "apple_silicon": write ["CoreMLExecutionProvider"]
+        - "none": no-op
+        No-op when dry_run=True.
         """
-        if not gpu or self.dry_run:
+        _provider_map = {
+            "cuda": "CUDAExecutionProvider",
+            "apple_silicon": "CoreMLExecutionProvider",
+        }
+        target_provider = _provider_map.get(gpu)
+        if target_provider is None or self.dry_run:
             return
 
         config_path = Path(self.config_file)
@@ -111,10 +119,10 @@ class RagInstaller:
 
         rag_section = doc["rag"]
         if isinstance(rag_section, dict):
-            providers = rag_section.get("providers")
-            if providers and "CUDAExecutionProvider" in providers:
-                return  # already set
-            rag_section["providers"] = ["CUDAExecutionProvider"]
+            existing_providers = rag_section.get("providers", [])
+            if target_provider in existing_providers:
+                return  # already set — skip to preserve user-extended chains
+            rag_section["providers"] = [target_provider]
 
         config_path.write_text(tomlkit.dumps(doc))
 
@@ -211,7 +219,7 @@ class RagInstaller:
             print(f"Installing missing packages: {', '.join(missing)}")
             self.install_deps(gpu=gpu)
 
-        # Configure CUDA providers if GPU available
+        # Configure execution providers based on GPU type
         self.configure_providers(gpu=gpu)
 
         # Create data directory

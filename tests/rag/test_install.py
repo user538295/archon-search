@@ -194,7 +194,7 @@ class TestConfigureProviders:
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
 
-        installer.configure_providers(gpu=True)
+        installer.configure_providers(gpu="cuda")
 
         content = config_file.read_text()
         assert "CUDAExecutionProvider" in content
@@ -207,7 +207,7 @@ class TestConfigureProviders:
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
 
-        installer.configure_providers(gpu=False)
+        installer.configure_providers(gpu="none")
 
         assert config_file.read_text() == original
 
@@ -219,9 +219,93 @@ class TestConfigureProviders:
         installer = _make_installer(tmp_path, dry_run=True)
         installer.config_file = str(config_file)
 
-        installer.configure_providers(gpu=True)
+        installer.configure_providers(gpu="cuda")
 
         assert config_file.read_text() == original
+
+    def test_configure_providers_apple_silicon_writes_coreml(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[rag]\nenabled = true\n")
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="apple_silicon")
+
+        content = config_file.read_text()
+        assert "CoreMLExecutionProvider" in content
+        assert "CUDAExecutionProvider" not in content
+
+    def test_configure_providers_cuda_unchanged(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[rag]\nenabled = true\n")
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="cuda")
+
+        content = config_file.read_text()
+        assert "CUDAExecutionProvider" in content
+
+    def test_configure_providers_none_is_noop(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        original = "[rag]\nenabled = true\n"
+        config_file.write_text(original)
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="none")
+
+        assert config_file.read_text() == original
+
+    def test_configure_providers_idempotent_if_already_set(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[rag]\nenabled = true\n")
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="cuda")
+        content_after_first = config_file.read_text()
+
+        installer.configure_providers(gpu="cuda")
+        content_after_second = config_file.read_text()
+
+        assert content_after_first == content_after_second
+        assert "CUDAExecutionProvider" in content_after_second
+
+    def test_configure_providers_apple_silicon_idempotent_with_fallback_chain(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        # providers already has CoreML + CPU fallback chain
+        config_file.write_text(
+            '[rag]\nenabled = true\nproviders = ["CoreMLExecutionProvider", "CPUExecutionProvider"]\n'
+        )
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="apple_silicon")
+
+        content = config_file.read_text()
+        # must NOT clobber the existing chain
+        assert "CPUExecutionProvider" in content
+        assert "CoreMLExecutionProvider" in content
+
+    def test_configure_providers_replaces_cuda_with_coreml(self, tmp_path: Path) -> None:
+        """Switching from cuda to apple_silicon must fully replace providers list."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[rag]\nenabled = true\nproviders = ["CUDAExecutionProvider"]\n')
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="apple_silicon")
+
+        content = config_file.read_text()
+        assert "CoreMLExecutionProvider" in content
+        assert "CUDAExecutionProvider" not in content
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +416,7 @@ class TestCreateHistoryCollection:
 
 
 class TestRun:
-    def _base_patches(self, tmp_path: Path, gpu: bool = False) -> dict[str, object]:
+    def _base_patches(self, tmp_path: Path) -> dict[str, object]:
         svc = MagicMock()
         svc.register.return_value = 0
         svc.start.return_value = 0
@@ -350,7 +434,7 @@ class TestRun:
         installer = _make_installer(tmp_path)
 
         with patch("builtins.input", return_value="n"), \
-             patch.object(installer, "detect_gpu", return_value=False), \
+             patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps") as mock_install:
             result = installer.run(non_interactive=False)
@@ -372,7 +456,7 @@ class TestRun:
 
         with patch("archon.rag.install.get_rag_service", return_value=svc), \
              patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch.object(installer, "detect_gpu", return_value=False), \
+             patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "_wait_for_service", return_value=True):
@@ -396,7 +480,7 @@ class TestRun:
 
         with patch("archon.rag.install.get_rag_service", return_value=svc), \
              patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch.object(installer, "detect_gpu", return_value=False), \
+             patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "_wait_for_service", return_value=True), \
