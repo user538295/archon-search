@@ -258,7 +258,14 @@ class RagInstaller:
             self.install_deps(gpu=gpu)
 
         # Configure execution providers based on GPU type
-        self.configure_providers(gpu=gpu)
+        if not self.dry_run and gpu == "apple_silicon":
+            if self.validate_providers(["CoreMLExecutionProvider"]):
+                self.configure_providers(gpu=gpu)
+                print("CoreML acceleration validated — GPU/Neural Engine active.")
+            else:
+                print("Warning: CoreML validation failed — falling back to CPU. macOS 12+ required.")
+        else:
+            self.configure_providers(gpu=gpu)
 
         # Create data directory
         self.create_data_dir()

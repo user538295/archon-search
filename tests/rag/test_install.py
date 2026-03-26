@@ -764,6 +764,155 @@ class TestValidateProviders:
 
 
 # ---------------------------------------------------------------------------
+# run() — validation-first flow (Task 3.2)
+# ---------------------------------------------------------------------------
+
+
+class TestRunFlow:
+    """Tests for the validation-first flow wired into run()."""
+
+    def test_run_flow_apple_silicon_validation_passes(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """apple_silicon: validate → success → configure_providers called → success message printed."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "validate_providers", return_value=True) as mock_validate, \
+             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        mock_validate.assert_called_once_with(["CoreMLExecutionProvider"])
+        mock_configure.assert_called_once_with(gpu="apple_silicon")
+        captured = capsys.readouterr()
+        assert "CoreML acceleration validated" in captured.out
+        assert "Warning" not in captured.out
+
+    def test_run_flow_apple_silicon_validation_fails_falls_back(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """apple_silicon: validate → failure → configure_providers NOT called → warning printed."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "validate_providers", return_value=False) as mock_validate, \
+             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        mock_validate.assert_called_once_with(["CoreMLExecutionProvider"])
+        mock_configure.assert_not_called()
+        captured = capsys.readouterr()
+        assert "Warning: CoreML validation failed" in captured.out
+
+    def test_run_flow_cuda_skips_validation(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """cuda: validation NOT called → configure_providers called directly, no CoreML messages."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "detect_gpu", return_value="cuda"), \
+             patch.object(installer, "install_deps") as mock_install, \
+             patch.object(installer, "check_deps", return_value=["some-dep"]), \
+             patch.object(installer, "validate_providers") as mock_validate, \
+             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        mock_install.assert_called_once_with(gpu="cuda")
+        mock_validate.assert_not_called()
+        mock_configure.assert_called_once_with(gpu="cuda")
+        captured = capsys.readouterr()
+        assert "CoreML" not in captured.out
+
+    def test_run_flow_no_gpu_unchanged(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """no gpu: validation NOT called → configure_providers called (no-op internally), no CoreML messages."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "install_deps") as mock_install, \
+             patch.object(installer, "check_deps", return_value=["some-dep"]), \
+             patch.object(installer, "validate_providers") as mock_validate, \
+             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        mock_install.assert_called_once_with(gpu="none")
+        mock_validate.assert_not_called()
+        mock_configure.assert_called_once_with(gpu="none")
+        captured = capsys.readouterr()
+        assert "CoreML" not in captured.out
+
+    def test_run_flow_apple_silicon_fallback_does_not_write_providers_to_config(self, tmp_path: Path) -> None:
+        """Fallback path: providers key must be absent from the real config.toml."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[rag]\nenabled = true\n")
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "validate_providers", return_value=False), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        import tomlkit
+        doc = tomlkit.parse(config_file.read_text())
+        rag_section = doc.get("rag", {})
+        assert "providers" not in rag_section
+
+    def test_run_flow_dry_run_skips_validation(self, tmp_path: Path) -> None:
+        """dry_run=True: validate_providers skipped, configure_providers called directly."""
+        installer = _make_installer(tmp_path, dry_run=True)
+
+        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "validate_providers") as mock_validate, \
+             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        mock_validate.assert_not_called()
+        mock_configure.assert_called_once_with(gpu="apple_silicon")
+
+
+# ---------------------------------------------------------------------------
 # load_service / unload_service
 # ---------------------------------------------------------------------------
 
