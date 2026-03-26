@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 
 import tomlkit
 
-from archon.platform import get_rag_service
+from archon.platform import get_rag_service, get_runtime
+from archon.platform.types import GpuType
 from archon.rag.pipeline import create_pipeline
 
 if TYPE_CHECKING:
@@ -53,13 +54,9 @@ class RagInstaller:
     # GPU detection
     # ------------------------------------------------------------------
 
-    def detect_gpu(self) -> bool:
-        """Return True if nvidia-smi exits 0, False otherwise."""
-        try:
-            result = subprocess.run(["nvidia-smi"], capture_output=True)
-            return result.returncode == 0
-        except FileNotFoundError:
-            return False
+    def detect_gpu(self) -> GpuType:
+        """Return the GPU type detected by the platform runtime."""
+        return get_runtime().detect_gpu_type()
 
     # ------------------------------------------------------------------
     # Dependency installation

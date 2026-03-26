@@ -100,24 +100,42 @@ class TestCheckDeps:
 
 
 class TestDetectGpu:
-    def test_detect_gpu_returns_true_when_nvidia_smi_succeeds(self, tmp_path: Path) -> None:
+    def test_detect_gpu_delegates_to_platform_runtime(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
-        completed = MagicMock()
-        completed.returncode = 0
-        with patch("subprocess.run", return_value=completed):
-            assert installer.detect_gpu() is True
+        mock_runtime = MagicMock()
+        mock_runtime.detect_gpu_type.return_value = "cuda"
+        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+            result = installer.detect_gpu()
+        assert result == "cuda"
+        mock_runtime.detect_gpu_type.assert_called_once()
 
-    def test_detect_gpu_returns_false_when_nvidia_smi_missing(self, tmp_path: Path) -> None:
+    def test_detect_gpu_returns_cuda(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
-        with patch("subprocess.run", side_effect=FileNotFoundError):
-            assert installer.detect_gpu() is False
+        mock_runtime = MagicMock()
+        mock_runtime.detect_gpu_type.return_value = "cuda"
+        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+            assert installer.detect_gpu() == "cuda"
 
-    def test_detect_gpu_returns_false_when_nvidia_smi_fails(self, tmp_path: Path) -> None:
+    def test_detect_gpu_returns_apple_silicon(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
-        completed = MagicMock()
-        completed.returncode = 1
-        with patch("subprocess.run", return_value=completed):
-            assert installer.detect_gpu() is False
+        mock_runtime = MagicMock()
+        mock_runtime.detect_gpu_type.return_value = "apple_silicon"
+        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+            assert installer.detect_gpu() == "apple_silicon"
+
+    def test_detect_gpu_returns_none_on_intel_mac(self, tmp_path: Path) -> None:
+        installer = _make_installer(tmp_path)
+        mock_runtime = MagicMock()
+        mock_runtime.detect_gpu_type.return_value = "none"
+        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+            assert installer.detect_gpu() == "none"
+
+    def test_detect_gpu_returns_none_on_linux_no_cuda(self, tmp_path: Path) -> None:
+        installer = _make_installer(tmp_path)
+        mock_runtime = MagicMock()
+        mock_runtime.detect_gpu_type.return_value = "none"
+        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+            assert installer.detect_gpu() == "none"
 
 
 # ---------------------------------------------------------------------------
