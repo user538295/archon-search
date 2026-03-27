@@ -1,0 +1,174 @@
+"""MultiCollectionRouter — centroid pre-ranking for RAG collection selection (FEAT-022)."""
+from __future__ import annotations
+
+import logging
+import math
+from typing import TYPE_CHECKING
+
+import httpx
+
+from archon.rag.collection_meta import CollectionMeta
+
+if TYPE_CHECKING:
+    from archon.rag.embedder import Embedder
+
+logger = logging.getLogger("archon")
+
+_FETCH_TIMEOUT = 10.0
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+class MultiCollectionRouter:
+    """Routes a query to relevant RAG collections via centroid similarity pre-ranking."""
+
+    def __init__(
+        self,
+        rag_url: str,
+        embedder: "Embedder",
+        shortlist_size: int,
+        confidence_threshold: float,
+        embedding_model: str,
+    ) -> None:
+        self._rag_url = rag_url
+        self._embedder = embedder
+        self._shortlist_size = shortlist_size
+        self._confidence_threshold = confidence_threshold
+        self._embedding_model = embedding_model
+
+        self._cached_metadata: list[CollectionMeta] | None = None
+        self._last_routable_names: list[str] = []
+        self._decomposer_was_invoked: bool = False
+
+    async def fetch_metadata(self) -> list[CollectionMeta]:
+        """Fetch collection metadata via JSON-RPC; result is cached.
+
+        Returns [] on timeout (with a debug-level warning).
+        """
+        if self._cached_metadata is not None:
+            return self._cached_metadata
+
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {"name": "get_collections_meta", "arguments": {}},
+            "id": 1,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT) as client:
+                response = await client.post(self._rag_url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+        except httpx.TimeoutException:
+            logger.debug("fetch_metadata: timed out fetching collection metadata")
+            return []
+
+        raw_collections: list[dict] = data.get("result", {}).get("collections", [])
+        result = [CollectionMeta(**col) for col in raw_collections]
+        self._cached_metadata = result
+        return result
+
+    def rank(
+        self, query_embedding: list[float], collections: list[CollectionMeta]
+    ) -> list[CollectionMeta]:
+        """Rank collections by cosine similarity to query_embedding.
+
+        - Collections with mismatched embedding_model are treated as centroid=None.
+        - None-centroid collections are placed after scored ones.
+        - Confidence gate: if max(similarity) < threshold and there are scored collections,
+          returns [].
+        - All-None-centroid case: bypass gate, return up to shortlist_size.
+        """
+        scored: list[tuple[float, CollectionMeta]] = []
+        unscored: list[CollectionMeta] = []
+
+        for col in collections:
+            if col.centroid is not None and col.embedding_model == self._embedding_model:
+                sim = _cosine_similarity(query_embedding, col.centroid)
+                scored.append((sim, col))
+            else:
+                unscored.append(col)
+
+        # All None/mismatched — bypass confidence gate
+        if not scored:
+            return unscored[: self._shortlist_size]
+
+        scored.sort(key=lambda t: t[0], reverse=True)
+        max_sim = scored[0][0]
+        if max_sim < self._confidence_threshold:
+            return []
+
+        ranked = [col for _, col in scored] + unscored
+        return ranked[: self._shortlist_size]
+
+    async def select(self, query: str) -> list[CollectionMeta]:
+        """Embed query, fetch metadata, rank, and return shortlist."""
+        metadata = await self.fetch_metadata()
+        if not metadata:
+            return []
+        vector = await self._embedder.embed_one(query)
+        return self.rank(vector, metadata)
+
+    async def get_pre_context(
+        self, query: str, pinned_names: list[str], available_slots: int
+    ) -> str | None:
+        """Build the <rag_collections> context block for the decomposer.
+
+        Sets _last_routable_names and _decomposer_was_invoked as a side-effect.
+        Returns None when the decomposer should not be involved, the block otherwise.
+        """
+        all_meta = await self.fetch_metadata()
+
+        pinned_set = set(pinned_names)
+        routable_meta = [m for m in all_meta if m.name not in pinned_set]
+
+        self._last_routable_names = [m.name for m in routable_meta]
+
+        if not all_meta:
+            self._decomposer_was_invoked = False
+            return None
+
+        if available_slots <= 0:
+            self._decomposer_was_invoked = False
+            return None
+
+        n_routable = len(routable_meta)
+
+        # Tier 1: ≤3 routable — skip decomposer, search all
+        if n_routable <= 3:
+            self._decomposer_was_invoked = False
+            return None
+
+        # Tier 2: 4 ≤ n_routable ≤ shortlist_size — decomposer selects, no centroid ranking
+        if n_routable <= self._shortlist_size:
+            self._decomposer_was_invoked = True
+            return self._build_block(routable_meta, available_slots)
+
+        # Tier 3: n_routable > shortlist_size — centroid pre-ranking, then decomposer
+        vector = await self._embedder.embed_one(query)
+        shortlist = self.rank(vector, routable_meta)
+        self._last_routable_names = [m.name for m in shortlist]
+        self._decomposer_was_invoked = True
+        return self._build_block(shortlist, available_slots)
+
+    def _build_block(self, collections: list[CollectionMeta], available_slots: int) -> str:
+        effective_slots = max(1, available_slots)
+        lines = [
+            "<rag_collections>",
+            f"Available collections (select 1\u2013{effective_slots} most relevant for this query,"
+            " output their names in",
+            "<rag_selected_collections>name1, name2</rag_selected_collections>"
+            " tags at the end of your routing decision):",
+        ]
+        for col in collections:
+            desc = col.description if col.description else "(no description)"
+            lines.append(f"- {col.name}: {desc}")
+        lines.append("</rag_collections>")
+        return "\n".join(lines)
