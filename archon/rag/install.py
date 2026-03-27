@@ -73,12 +73,12 @@ class RagInstaller:
                 check=False,
             )
             subprocess.run(
-                ["uv", "pip", "install", "fastembed-gpu>=0.7.4", "onnxruntime-gpu"],
+                ["uv", "pip", "install", "fastembed-gpu>=0.8.0", "onnxruntime-gpu"],
                 check=True,
             )
         else:
             subprocess.run(
-                ["uv", "pip", "install", "fastembed>=0.7.4"],
+                ["uv", "pip", "install", "fastembed>=0.8.0"],
                 check=True,
             )
 
