@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -18,6 +20,8 @@ logger = logging.getLogger("archon")
 _CHUNK_ID_RE = re.compile(r"^[a-f0-9]{64}-\d{6}$")
 _DOC_ID_RE = re.compile(r"^[a-f0-9]{64}$")
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+_ARCHON_PREFIX = "_archon_"
+_META_TABLE = "_archon_collection_meta"
 
 _RRF_K = 60  # RRF constant
 
@@ -85,6 +89,24 @@ class RagStore:
             ]
         )
 
+    @staticmethod
+    def _meta_schema() -> pa.Schema:
+        import pyarrow as pa  # noqa: PLC0415
+
+        return pa.schema(
+            [
+                pa.field("name", pa.utf8()),
+                pa.field("description", pa.utf8()),
+                pa.field("centroid_json", pa.utf8()),
+                pa.field("doc_count", pa.int64()),
+                pa.field("chunk_count", pa.int64()),
+                pa.field("embedding_model", pa.utf8()),
+                pa.field("last_indexed", pa.utf8()),
+                pa.field("last_described", pa.utf8()),
+                pa.field("described_at_doc_count", pa.int64()),
+            ]
+        )
+
     # ------------------------------------------------------------------
     # Collection management
     # ------------------------------------------------------------------
@@ -140,7 +162,8 @@ class RagStore:
 
     async def list_collections(self) -> list[CollectionInfo]:
         db = self._require_connected()
-        names: list[str] = (await db.list_tables()).tables
+        all_names: list[str] = (await db.list_tables()).tables
+        names = [n for n in all_names if not n.startswith(_ARCHON_PREFIX)]
         result: list[CollectionInfo] = []
         for name in names:
             try:
@@ -153,6 +176,78 @@ class RagStore:
             except (RuntimeError, ValueError, OSError) as exc:
                 logger.warning("Could not inspect collection %s: %s", name, exc)
         return result
+
+    # ------------------------------------------------------------------
+    # Collection metadata (FEAT-022)
+    # ------------------------------------------------------------------
+
+    async def get_collection_meta(self, name: str) -> "CollectionMeta | None":
+        from archon.rag.collection_meta import CollectionMeta  # noqa: PLC0415
+
+        self._validate_collection(name)
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return None
+        table = await db.open_table(_META_TABLE)
+        # Fetch all rows and filter in Python to avoid SQL injection concerns
+        rows = await table.query().to_list()
+        matching = [r for r in rows if r["name"] == name]
+        if not matching:
+            return None
+        row = matching[0]
+        centroid = json.loads(row["centroid_json"]) if row["centroid_json"] else None
+        last_indexed = datetime.fromisoformat(row["last_indexed"]) if row["last_indexed"] else None
+        last_described = datetime.fromisoformat(row["last_described"]) if row["last_described"] else None
+        raw_described_at: int = row["described_at_doc_count"]
+        described_at = None if raw_described_at < 0 else raw_described_at
+        return CollectionMeta(
+            name=row["name"],
+            description=row["description"] if row["description"] else None,
+            centroid=centroid,
+            doc_count=row["doc_count"],
+            chunk_count=row["chunk_count"],
+            embedding_model=row["embedding_model"],
+            last_indexed=last_indexed,
+            last_described=last_described,
+            described_at_doc_count=described_at,
+        )
+
+    async def update_collection_meta(self, meta: "CollectionMeta") -> None:
+        self._validate_collection(meta.name)
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            table = await db.create_table(_META_TABLE, schema=self._meta_schema())
+        else:
+            table = await db.open_table(_META_TABLE)
+            # Upsert = delete existing row by name, then insert.
+            # name is validated against _COLLECTION_RE (alphanumeric + underscore/dash),
+            # so it is safe to use directly in the SQL filter expression.
+            rows = await table.query().to_list()
+            if any(r["name"] == meta.name for r in rows):
+                await table.delete(f"name = '{meta.name}'")
+
+        centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
+        last_indexed_str = meta.last_indexed.isoformat() if meta.last_indexed else ""
+        last_described_str = meta.last_described.isoformat() if meta.last_described else ""
+        described_at = meta.described_at_doc_count if meta.described_at_doc_count is not None else -1
+
+        await table.add(
+            [
+                {
+                    "name": meta.name,
+                    "description": meta.description or "",
+                    "centroid_json": centroid_json,
+                    "doc_count": meta.doc_count,
+                    "chunk_count": meta.chunk_count,
+                    "embedding_model": meta.embedding_model,
+                    "last_indexed": last_indexed_str,
+                    "last_described": last_described_str,
+                    "described_at_doc_count": described_at,
+                }
+            ]
+        )
 
     # ------------------------------------------------------------------
     # Ingest

@@ -743,3 +743,167 @@ def test_fts_exception_filter_reraises_non_fts_errors() -> None:
     for msg in ["disk corruption", "connection timeout", "permission denied"]:
         exc_str = msg.lower()
         assert "index" not in exc_str and "fts" not in exc_str, f"Should re-raise: {msg}"
+
+
+# ---------------------------------------------------------------------------
+# CollectionMeta tests (Task 1.1 — FEAT-022)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_collection_meta_get_missing_returns_none(
+    connected_store: RagStore,
+) -> None:
+    """get_collection_meta returns None for a name not yet stored."""
+    result = await connected_store.get_collection_meta("nonexistent-xyz-meta")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_collection_meta_upsert(connected_store: RagStore) -> None:
+    """update_collection_meta stores metadata; get_collection_meta retrieves it."""
+    from archon.rag.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(
+        name="test-meta-col",
+        description="A test collection",
+        centroid=[0.1, 0.2, 0.3],
+        doc_count=5,
+        chunk_count=10,
+        embedding_model="BAAI/bge-small-en-v1.5",
+        last_indexed=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        last_described=datetime(2026, 3, 2, tzinfo=timezone.utc),
+    )
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("test-meta-col")
+    assert retrieved is not None
+    assert retrieved.name == "test-meta-col"
+    assert retrieved.description == "A test collection"
+    assert retrieved.centroid is not None
+    assert len(retrieved.centroid) == 3
+    assert abs(retrieved.centroid[0] - 0.1) < 1e-6
+    assert retrieved.doc_count == 5
+    assert retrieved.chunk_count == 10
+    assert retrieved.embedding_model == "BAAI/bge-small-en-v1.5"
+    assert retrieved.last_indexed == datetime(2026, 3, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_collection_meta_upsert_includes_described_at_doc_count(
+    connected_store: RagStore,
+) -> None:
+    """update_collection_meta persists described_at_doc_count; None round-trips."""
+    from archon.rag.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(
+        name="test-meta-described",
+        description="with described count",
+        centroid=None,
+        doc_count=20,
+        chunk_count=40,
+        embedding_model="model-x",
+        described_at_doc_count=20,
+    )
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("test-meta-described")
+    assert retrieved is not None
+    assert retrieved.described_at_doc_count == 20
+
+    # Update with None described_at_doc_count
+    meta2 = CollectionMeta(
+        name="test-meta-none-desc",
+        doc_count=0,
+        chunk_count=0,
+        embedding_model="model-x",
+        described_at_doc_count=None,
+    )
+    await connected_store.update_collection_meta(meta2)
+    retrieved2 = await connected_store.get_collection_meta("test-meta-none-desc")
+    assert retrieved2 is not None
+    assert retrieved2.described_at_doc_count is None
+
+
+@pytest.mark.asyncio
+async def test_collection_meta_upsert_overwrites_on_same_name(
+    connected_store: RagStore,
+) -> None:
+    """Second update_collection_meta with same name replaces the first (upsert semantics)."""
+    from archon.rag.collection_meta import CollectionMeta
+
+    name = "test-meta-overwrite"
+    meta1 = CollectionMeta(
+        name=name,
+        description="original",
+        centroid=[1.0, 2.0],
+        doc_count=1,
+        chunk_count=2,
+        embedding_model="model-a",
+    )
+    await connected_store.update_collection_meta(meta1)
+
+    meta2 = CollectionMeta(
+        name=name,
+        description="updated",
+        centroid=[3.0, 4.0],
+        doc_count=10,
+        chunk_count=20,
+        embedding_model="model-b",
+    )
+    await connected_store.update_collection_meta(meta2)
+
+    retrieved = await connected_store.get_collection_meta(name)
+    assert retrieved is not None
+    assert retrieved.description == "updated"
+    assert retrieved.doc_count == 10
+    assert retrieved.chunk_count == 20
+    assert retrieved.embedding_model == "model-b"
+    assert retrieved.centroid is not None
+    assert abs(retrieved.centroid[0] - 3.0) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_collection_meta_centroid_none_round_trips(
+    connected_store: RagStore,
+) -> None:
+    """CollectionMeta with centroid=None round-trips as None (not a zero vector)."""
+    from archon.rag.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(
+        name="test-meta-no-centroid",
+        description=None,
+        centroid=None,
+        doc_count=0,
+        chunk_count=0,
+        embedding_model="model-x",
+    )
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("test-meta-no-centroid")
+    assert retrieved is not None
+    assert retrieved.centroid is None
+
+
+@pytest.mark.asyncio
+async def test_list_collections_excludes_archon_prefix(
+    connected_store: RagStore, col_name: str
+) -> None:
+    """list_collections() must not include internal _archon_ tables."""
+    from archon.rag.collection_meta import CollectionMeta
+
+    # Ensure a user-visible collection exists
+    await connected_store.ensure_collection(col_name, _DIM)
+
+    # Trigger creation of the _archon_collection_meta table
+    meta = CollectionMeta(
+        name="some-col",
+        description="desc",
+        centroid=None,
+        doc_count=1,
+        chunk_count=2,
+        embedding_model="model",
+    )
+    await connected_store.update_collection_meta(meta)
+
+    # list_collections must not expose internal _archon_ tables
+    names = [c.name for c in await connected_store.list_collections()]
+    assert col_name in names
+    assert not any(n.startswith("_archon_") for n in names)
