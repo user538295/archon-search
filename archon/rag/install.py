@@ -195,13 +195,14 @@ class RagInstaller:
     # History collection bootstrap
     # ------------------------------------------------------------------
 
-    async def create_history_collection(self) -> None:
-        """Ingest history directory into RAG store using direct pipeline access."""
-        history_dir = Path(self._full_cfg.history.directory).expanduser() / "sessions"
+    async def _bootstrap_collections(self) -> None:
+        """Sync configured collections into the RAG store."""
+        from archon.rag.sync import RagCollectionSync  # noqa: PLC0415
+
         pipeline = create_pipeline(self.cfg)
         try:
             await pipeline.store.connect()
-            await pipeline.ingest_directory(history_dir, self.cfg.history_collection)
+            await RagCollectionSync(pipeline).sync(self._full_cfg.rag.collections)
         finally:
             await pipeline.store.disconnect()
 
@@ -270,9 +271,9 @@ class RagInstaller:
         # Create data directory
         self.create_data_dir()
 
-        # Bootstrap history collection
+        # Bootstrap collections
         if not self.dry_run:
-            asyncio.run(self.create_history_collection())
+            asyncio.run(self._bootstrap_collections())
 
         # Register and start service
         self.write_service_file()

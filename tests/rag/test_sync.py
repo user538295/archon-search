@@ -529,7 +529,6 @@ class TestRagCollectionSyncIntegration:
             reranker=reranker,
             chunker=chunker,
             parser=parser,
-            history_collection="sessions",
             top_k_retrieve=5,
             top_k_return=3,
         )

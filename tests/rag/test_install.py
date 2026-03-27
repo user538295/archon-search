@@ -23,31 +23,37 @@ def _make_rag_config(tmp_path: Path) -> object:
         host: str = "localhost"
         port: int = 8282
         db_path: str = str(tmp_path / "rag_db")
-        history_collection: str = "archon-history"
         embedding_model: str = "BAAI/bge-small-en-v1.5"
         reranker_model: str = "BAAI/bge-reranker-v2-m3"
         providers: list[str] = field(default_factory=list)
         top_k_retrieve: int = 20
         top_k_return: int = 5
         chunk_size: int = 512
+        collections: list[str] = field(default_factory=list)
 
     return FakeRagConfig()
 
 
 def _make_full_config(tmp_path: Path) -> object:
     """Build a minimal full Config-like object for tests."""
-    from dataclasses import dataclass
+    from dataclasses import dataclass, field
 
     @dataclass
     class FakeHistoryConfig:
         directory: str = str(tmp_path / "history")
 
     @dataclass
+    class FakeRagConfigInner:
+        collections: list[str] = field(default_factory=list)
+
+    @dataclass
     class FakeFullConfig:
         history: FakeHistoryConfig = None  # type: ignore[assignment]
+        rag: FakeRagConfigInner = None  # type: ignore[assignment]
 
         def __post_init__(self) -> None:
             self.history = FakeHistoryConfig()
+            self.rag = FakeRagConfigInner()
 
     return FakeFullConfig()
 
@@ -367,13 +373,13 @@ class TestServiceDelegation:
 
 
 # ---------------------------------------------------------------------------
-# create_history_collection
+# _bootstrap_collections (replaces _bootstrap_collections)
 # ---------------------------------------------------------------------------
 
 
-class TestCreateHistoryCollection:
-    def test_create_history_collection_builds_pipeline_and_ingests(self, tmp_path: Path) -> None:
-        """connect() called before ingest_directory, disconnect() called in finally."""
+class TestBootstrapCollections:
+    def test_bootstrap_collections_builds_pipeline_and_syncs(self, tmp_path: Path) -> None:
+        """connect() called before sync, disconnect() called in finally."""
         installer = _make_installer(tmp_path)
 
         call_order: list[str] = []
@@ -382,30 +388,33 @@ class TestCreateHistoryCollection:
         mock_store.connect.side_effect = lambda: call_order.append("connect")
         mock_pipeline = MagicMock()
         mock_pipeline.store = mock_store
-        mock_pipeline.ingest_directory = AsyncMock(
-            side_effect=lambda *a, **kw: (call_order.append("ingest"), [])[1]
-        )
 
-        with patch("archon.rag.install.create_pipeline", return_value=mock_pipeline):
-            asyncio.run(installer.create_history_collection())
+        mock_sync_result = MagicMock()
+        mock_sync = AsyncMock(side_effect=lambda *a, **kw: (call_order.append("sync"), mock_sync_result)[1])
+
+        with patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync:
+            MockSync.return_value.sync = mock_sync
+            asyncio.run(installer._bootstrap_collections())
 
         mock_store.connect.assert_called_once()
-        mock_pipeline.ingest_directory.assert_called_once()
+        mock_sync.assert_called_once()
         mock_store.disconnect.assert_called_once()
-        assert call_order.index("connect") < call_order.index("ingest")
+        assert call_order.index("connect") < call_order.index("sync")
 
-    def test_create_history_collection_disconnects_on_ingest_failure(self, tmp_path: Path) -> None:
-        """disconnect() called even when ingest_directory raises."""
+    def test_bootstrap_collections_disconnects_on_sync_failure(self, tmp_path: Path) -> None:
+        """disconnect() called even when sync raises."""
         installer = _make_installer(tmp_path)
 
         mock_store = AsyncMock()
         mock_pipeline = MagicMock()
         mock_pipeline.store = mock_store
-        mock_pipeline.ingest_directory = AsyncMock(side_effect=RuntimeError("boom"))
 
-        with patch("archon.rag.install.create_pipeline", return_value=mock_pipeline):
+        with patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync:
+            MockSync.return_value.sync = AsyncMock(side_effect=RuntimeError("boom"))
             with pytest.raises(RuntimeError, match="boom"):
-                asyncio.run(installer.create_history_collection())
+                asyncio.run(installer._bootstrap_collections())
 
         mock_store.disconnect.assert_called_once()
 
@@ -442,7 +451,7 @@ class TestRun:
         assert result != 0
         mock_install.assert_not_called()
 
-    def test_installer_run_calls_create_history_collection(self, tmp_path: Path) -> None:
+    def test_installer_run_calls__bootstrap_collections(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
 
         svc = MagicMock()
@@ -452,18 +461,21 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_store = AsyncMock()
         mock_pipeline.store = mock_store
-        mock_pipeline.ingest_directory = AsyncMock(return_value=[])
+
+        mock_sync = AsyncMock(return_value=MagicMock())
 
         with patch("archon.rag.install.get_rag_service", return_value=svc), \
              patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "_wait_for_service", return_value=True):
+            MockSync.return_value.sync = mock_sync
             result = installer.run(non_interactive=True)
 
         assert result == 0
-        mock_pipeline.ingest_directory.assert_called_once()
+        mock_sync.assert_called_once()
 
     def test_installer_run_warns_when_service_running(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """If service is already running, installer warns but continues."""
@@ -476,15 +488,16 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_store = AsyncMock()
         mock_pipeline.store = mock_store
-        mock_pipeline.ingest_directory = AsyncMock(return_value=[])
 
         with patch("archon.rag.install.get_rag_service", return_value=svc), \
              patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "_wait_for_service", return_value=True), \
              patch.object(installer, "_is_service_running", return_value=True):
+            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
             result = installer.run(non_interactive=True)
 
         assert result == 0
@@ -781,7 +794,7 @@ class TestRunFlow:
              patch.object(installer, "validate_providers", return_value=True) as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_is_service_running", return_value=False), \
@@ -805,7 +818,7 @@ class TestRunFlow:
              patch.object(installer, "validate_providers", return_value=False) as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_is_service_running", return_value=False), \
@@ -828,7 +841,7 @@ class TestRunFlow:
              patch.object(installer, "validate_providers") as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_is_service_running", return_value=False), \
@@ -852,7 +865,7 @@ class TestRunFlow:
              patch.object(installer, "validate_providers") as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_is_service_running", return_value=False), \
@@ -879,7 +892,7 @@ class TestRunFlow:
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_is_service_running", return_value=False), \

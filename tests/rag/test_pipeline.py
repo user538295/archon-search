@@ -55,7 +55,6 @@ def make_pipeline(store):  # type: ignore[no-untyped-def]
         reranker=make_reranker(),
         chunker=DocumentChunker(chunk_size=128),
         parser=DocumentParser(),
-        history_collection="archon-history",
         top_k_retrieve=10,
         top_k_return=5,
     )
@@ -142,7 +141,7 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
         reranker=make_reranker(),
         chunker=DocumentChunker(chunk_size=64),
         parser=DocumentParser(),
-        history_collection="archon-history",
+
         top_k_retrieve=10,
         top_k_return=5,
     )
@@ -186,7 +185,7 @@ async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_na
         reranker=make_reranker(),
         chunker=DocumentChunker(chunk_size=128),
         parser=DocumentParser(),
-        history_collection="archon-history",
+
         top_k_retrieve=10,
         top_k_return=5,
     )
@@ -256,7 +255,7 @@ async def test_pipeline_search_with_context_returns_neighbors(connected_store, c
         reranker=make_reranker(),
         chunker=DocumentChunker(chunk_size=32),
         parser=DocumentParser(),
-        history_collection="archon-history",
+
         top_k_retrieve=10,
         top_k_return=5,
     )
@@ -381,7 +380,7 @@ async def test_pipeline_ingest_directory_rebuilds_fts_once(connected_store, col_
             reranker=make_reranker(),
             chunker=DocumentChunker(chunk_size=128),
             parser=DocumentParser(),
-            history_collection="archon-history",
+    
             top_k_retrieve=10,
             top_k_return=5,
         )
@@ -528,7 +527,7 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
         reranker=make_reranker(),
         chunker=DocumentChunker(chunk_size=128),
         parser=DocumentParser(),
-        history_collection="archon-history",
+
         top_k_retrieve=10,
         top_k_return=5,
     )
@@ -591,7 +590,7 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
         reranker=make_reranker(),
         chunker=DocumentChunker(chunk_size=128),
         parser=DocumentParser(),
-        history_collection="archon-history",
+
         top_k_retrieve=10,
         top_k_return=5,
     )
@@ -661,3 +660,51 @@ async def test_create_pipeline_does_not_auto_connect():
 
     with pytest.raises(RuntimeError, match="RagStore not connected"):
         await pipeline.list_collections()
+
+
+# ---------------------------------------------------------------------------
+# FEAT-021 Task 2.2 — history_collection parameter removed
+# ---------------------------------------------------------------------------
+
+
+def test_create_pipeline_no_history_collection_param() -> None:
+    """RagPipeline.__init__ must NOT accept history_collection parameter."""
+    import inspect
+    from archon.rag.pipeline import RagPipeline
+
+    sig = inspect.signature(RagPipeline.__init__)
+    assert "history_collection" not in sig.parameters, (
+        "history_collection parameter still present in RagPipeline.__init__"
+    )
+
+
+def test_create_pipeline_factory_no_history_collection_param() -> None:
+    """create_pipeline() must NOT pass history_collection to RagPipeline."""
+    import inspect
+    from archon.rag.pipeline import create_pipeline
+
+    sig = inspect.signature(create_pipeline)
+    assert "history_collection" not in sig.parameters, (
+        "history_collection parameter still present in create_pipeline()"
+    )
+
+
+def test_ragpipeline_has_no_history_collection_attr() -> None:
+    """RagPipeline instance must NOT have _history_collection attribute."""
+    from unittest.mock import MagicMock
+    from archon.rag.embedder import Embedder
+    from archon.rag.pipeline import RagPipeline
+    from archon.rag.reranker import Reranker
+
+    pipeline = RagPipeline(
+        store=MagicMock(),
+        embedder=Embedder(MockEmbedderBackend()),
+        reranker=Reranker(MockRerankerBackend()),
+        chunker=MagicMock(),
+        parser=MagicMock(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    assert not hasattr(pipeline, "_history_collection"), (
+        "_history_collection attribute still present on RagPipeline"
+    )

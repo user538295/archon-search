@@ -312,7 +312,7 @@ async def test_server_search_tool_with_real_pipeline(
         reranker=Reranker(_FakeRerank()),
         chunker=DocumentChunker(),
         parser=DocumentParser(),
-        history_collection=col_name,
+
         top_k_retrieve=5,
         top_k_return=3,
     )
@@ -349,7 +349,7 @@ async def test_server_error_serialization_through_mcp_transport(
         reranker=Reranker(MagicMock()),
         chunker=DocumentChunker(),
         parser=DocumentParser(),
-        history_collection=col_name,
+
         top_k_retrieve=5,
         top_k_return=3,
     )

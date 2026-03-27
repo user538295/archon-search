@@ -144,13 +144,19 @@ def create_app(pipeline: RagPipeline, default_collection: str) -> FastMCP:
 
 async def main() -> None:
     """Start the RAG MCP server from config."""
+    from pathlib import Path  # noqa: PLC0415
+
     from archon.config.loader import load_config  # noqa: PLC0415
+    from archon.rag.sync import path_to_collection_name  # noqa: PLC0415
 
     cfg = load_config()
+    history_col = path_to_collection_name(
+        str(Path(cfg.history.directory).expanduser() / "sessions")
+    )
     pipeline = create_pipeline(cfg.rag)
     await pipeline.store.connect()
 
-    app = create_app(pipeline, cfg.rag.history_collection)
+    app = create_app(pipeline, history_col)
 
     try:
         await app.run_http_async(host=cfg.rag.host, port=cfg.rag.port)

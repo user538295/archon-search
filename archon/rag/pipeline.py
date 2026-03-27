@@ -43,7 +43,6 @@ class RagPipeline:
         reranker: Reranker,
         chunker: DocumentChunker,
         parser: DocumentParser,
-        history_collection: str,
         top_k_retrieve: int,
         top_k_return: int,
     ) -> None:
@@ -52,7 +51,6 @@ class RagPipeline:
         self._reranker = reranker
         self._chunker = chunker
         self._parser = parser
-        self._history_collection = history_collection
         self._top_k_retrieve = top_k_retrieve
         self._top_k_return = top_k_return
 
@@ -230,7 +228,6 @@ def create_pipeline(
         reranker=reranker,
         chunker=chunker,
         parser=parser,
-        history_collection=cfg.history_collection,
         top_k_retrieve=cfg.top_k_retrieve,
         top_k_return=cfg.top_k_return,
     )
