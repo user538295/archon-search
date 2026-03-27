@@ -883,6 +883,59 @@ async def test_collection_meta_centroid_none_round_trips(
 
 
 @pytest.mark.asyncio
+async def test_get_all_collections_meta_empty_before_any_update(tmp_path: Path) -> None:
+    """get_all_collections_meta returns [] when no meta rows exist."""
+    store = RagStore(tmp_path / "db_meta_empty")
+    await store.connect()
+    try:
+        result = await store.get_all_collections_meta()
+        assert result == []
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_all_collections_meta_returns_all_rows(tmp_path: Path) -> None:
+    """get_all_collections_meta returns all stored CollectionMeta rows."""
+    from archon.rag.collection_meta import CollectionMeta
+
+    store = RagStore(tmp_path / "db_meta_rows")
+    await store.connect()
+    try:
+        meta1 = CollectionMeta(
+            name="col-a",
+            doc_count=2,
+            chunk_count=10,
+            centroid=[0.1, 0.2],
+            last_indexed=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        meta2 = CollectionMeta(
+            name="col-b",
+            doc_count=5,
+            chunk_count=25,
+            centroid=None,
+        )
+        await store.update_collection_meta(meta1)
+        await store.update_collection_meta(meta2)
+
+        result = await store.get_all_collections_meta()
+        assert len(result) == 2
+        names = {m.name for m in result}
+        assert names == {"col-a", "col-b"}
+
+        col_a = next(m for m in result if m.name == "col-a")
+        assert col_a.centroid == [0.1, 0.2]
+        assert col_a.doc_count == 2
+        assert col_a.last_indexed is not None
+
+        col_b = next(m for m in result if m.name == "col-b")
+        assert col_b.centroid is None
+        assert col_b.doc_count == 5
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_list_collections_excludes_archon_prefix(
     connected_store: RagStore, col_name: str
 ) -> None:

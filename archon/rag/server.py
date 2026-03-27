@@ -22,7 +22,7 @@ logger = logging.getLogger("archon.rag")
 
 
 def create_app(pipeline: RagPipeline, default_collection: str) -> FastMCP:
-    """Create a FastMCP app with 7 RAG tools registered."""
+    """Create a FastMCP app with 9 RAG tools registered."""
     app = FastMCP("archon-rag")
 
     @app.tool()
@@ -102,13 +102,40 @@ def create_app(pipeline: RagPipeline, default_collection: str) -> FastMCP:
 
     @app.tool()
     async def list_collections() -> list[dict[str, Any]]:
-        """List all document collections with doc/chunk counts."""
+        """List all document collections with doc/chunk counts (centroid omitted)."""
         try:
-            results = await pipeline.list_collections()
-            return [asdict(r) for r in results]
+            results = await pipeline.get_all_collections_meta()
+            output = []
+            for r in results:
+                d = asdict(r)
+                d.pop("centroid", None)
+                output.append(d)
+            return output
         except Exception as exc:
             logger.exception("list_collections failed")
             return [{"error": str(exc)}]
+
+    @app.tool()
+    async def get_collections_meta() -> list[dict[str, Any]]:
+        """Return full CollectionMeta for all collections, including centroid vectors."""
+        try:
+            results = await pipeline.get_all_collections_meta()
+            return [asdict(r) for r in results]
+        except Exception as exc:
+            logger.exception("get_collections_meta failed")
+            return [{"error": str(exc)}]
+
+    @app.tool()
+    async def get_collection_meta(name: str) -> dict[str, Any]:
+        """Return full CollectionMeta for one named collection, including centroid."""
+        try:
+            meta = await pipeline.get_collection_meta(name)
+            if meta is None:
+                return {"error": f"Collection {name!r} not found"}
+            return asdict(meta)
+        except Exception as exc:
+            logger.exception("get_collection_meta failed")
+            return {"error": str(exc)}
 
     @app.tool()
     async def list_documents(

@@ -252,6 +252,12 @@ class RagPipeline:
     async def list_collections(self) -> list[CollectionInfo]:
         return await self.store.list_collections()
 
+    async def get_all_collections_meta(self) -> list[CollectionMeta]:
+        return await self.store.get_all_collections_meta()
+
+    async def get_collection_meta(self, name: str) -> CollectionMeta | None:
+        return await self.store.get_collection_meta(name)
+
     async def list_documents(self, collection: str, limit: int = 100) -> list[DocumentInfo]:
         return await self.store.list_documents(collection, limit)
 

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon.rag._types import CollectionInfo, DocumentInfo, IngestResult, SearchResult
+from archon.rag.collection_meta import CollectionMeta
 from archon.rag.pipeline import RagPipeline
 
 
@@ -24,6 +25,8 @@ def _make_pipeline(
     collections: list[CollectionInfo] | None = None,
     documents: list[DocumentInfo] | None = None,
     delete_count: int = 1,
+    all_collections_meta: list[CollectionMeta] | None = None,
+    single_collection_meta: CollectionMeta | None = None,
 ) -> MagicMock:
     pipeline = MagicMock(spec=RagPipeline)
     pipeline.search = AsyncMock(return_value=search_result or [])
@@ -37,6 +40,8 @@ def _make_pipeline(
     pipeline.list_collections = AsyncMock(return_value=collections or [])
     pipeline.list_documents = AsyncMock(return_value=documents or [])
     pipeline.delete_document = AsyncMock(return_value=delete_count)
+    pipeline.get_all_collections_meta = AsyncMock(return_value=all_collections_meta or [])
+    pipeline.get_collection_meta = AsyncMock(return_value=single_collection_meta)
     return pipeline
 
 
@@ -61,7 +66,7 @@ def _dict_data(result: Any) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_create_app_returns_fastmcp_instance() -> None:
-    """create_app returns a FastMCP with 7 registered tools."""
+    """create_app returns a FastMCP with 9 registered tools."""
     from fastmcp import Client, FastMCP
 
     pipeline = _make_pipeline()
@@ -79,6 +84,8 @@ async def test_create_app_returns_fastmcp_instance() -> None:
         "list_collections",
         "list_documents",
         "delete_document",
+        "get_collections_meta",
+        "get_collection_meta",
     }
 
 
@@ -205,11 +212,15 @@ async def test_ingest_directory_tool_wires_progress_cb() -> None:
 
 @pytest.mark.asyncio
 async def test_list_collections_tool() -> None:
-    """list_collections tool serialises CollectionInfo list."""
+    """list_collections tool returns CollectionMeta list (centroid omitted)."""
     from fastmcp import Client
 
-    cols = [CollectionInfo("col1", 2, 10), CollectionInfo("col2", 1, 5)]
-    pipeline = _make_pipeline(collections=cols)
+    metas = [
+        CollectionMeta(name="col1", doc_count=2, chunk_count=10,
+                       centroid=[0.1, 0.2], description="A collection"),
+        CollectionMeta(name="col2", doc_count=1, chunk_count=5),
+    ]
+    pipeline = _make_pipeline(all_collections_meta=metas)
     app = _make_app(pipeline)
 
     async with Client(app) as c:
@@ -530,3 +541,161 @@ async def test_server_starts_even_if_sync_times_out() -> None:
         await main()
 
     mock_app.run_http_async.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Task 1.4 — get_collections_meta / get_collection_meta / list_collections
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_collections_endpoint_returns_list() -> None:
+    """list_collections returns CollectionMeta list from get_all_collections_meta."""
+    from fastmcp import Client
+
+    metas = [
+        CollectionMeta(name="col1", doc_count=3, chunk_count=12),
+        CollectionMeta(name="col2", doc_count=1, chunk_count=4),
+    ]
+    pipeline = _make_pipeline(all_collections_meta=metas)
+    app = _make_app(pipeline)
+
+    async with Client(app) as c:
+        result = await c.call_tool("list_collections", {})
+
+    pipeline.get_all_collections_meta.assert_awaited_once()
+    data = _list_data(result)
+    assert len(data) == 2
+    assert data[0]["name"] == "col1"
+    assert data[1]["name"] == "col2"
+
+
+@pytest.mark.asyncio
+async def test_collections_endpoint_omits_centroid() -> None:
+    """list_collections tool strips centroid from each CollectionMeta."""
+    from fastmcp import Client
+
+    metas = [
+        CollectionMeta(name="col1", doc_count=2, chunk_count=8, centroid=[0.1, 0.2, 0.3]),
+    ]
+    pipeline = _make_pipeline(all_collections_meta=metas)
+    app = _make_app(pipeline)
+
+    async with Client(app) as c:
+        result = await c.call_tool("list_collections", {})
+
+    data = _list_data(result)
+    assert len(data) == 1
+    assert "centroid" not in data[0]
+
+
+@pytest.mark.asyncio
+async def test_collections_meta_bulk_endpoint_returns_centroids() -> None:
+    """get_collections_meta returns full CollectionMeta including centroid."""
+    from fastmcp import Client
+
+    metas = [
+        CollectionMeta(name="col1", doc_count=2, chunk_count=8, centroid=[0.1, 0.2]),
+        CollectionMeta(name="col2", doc_count=1, chunk_count=4, centroid=None),
+    ]
+    pipeline = _make_pipeline(all_collections_meta=metas)
+    app = _make_app(pipeline)
+
+    async with Client(app) as c:
+        result = await c.call_tool("get_collections_meta", {})
+
+    pipeline.get_all_collections_meta.assert_awaited_once()
+    data = _list_data(result)
+    assert len(data) == 2
+    assert data[0]["centroid"] == [0.1, 0.2]
+    assert data[1]["centroid"] is None
+
+
+@pytest.mark.asyncio
+async def test_collection_meta_endpoint_includes_centroid() -> None:
+    """get_collection_meta returns full CollectionMeta including centroid for a named collection."""
+    from fastmcp import Client
+
+    meta = CollectionMeta(name="col1", doc_count=5, chunk_count=20, centroid=[0.5, 0.6])
+    pipeline = _make_pipeline(single_collection_meta=meta)
+    app = _make_app(pipeline)
+
+    async with Client(app) as c:
+        result = await c.call_tool("get_collection_meta", {"name": "col1"})
+
+    pipeline.get_collection_meta.assert_awaited_once_with("col1")
+    data = _dict_data(result)
+    assert data["name"] == "col1"
+    assert data["centroid"] == [0.5, 0.6]
+    assert data["doc_count"] == 5
+
+
+@pytest.mark.asyncio
+async def test_collection_meta_unknown_name_raises_error() -> None:
+    """get_collection_meta returns an error dict when name is unknown."""
+    from fastmcp import Client
+
+    pipeline = _make_pipeline(single_collection_meta=None)
+    app = _make_app(pipeline)
+
+    async with Client(app) as c:
+        result = await c.call_tool("get_collection_meta", {"name": "unknown"})
+
+    data = _dict_data(result)
+    assert "error" in data
+    assert "unknown" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_collection_meta_serializes_datetime_fields() -> None:
+    """datetime fields in CollectionMeta are serialized to ISO strings by MCP transport."""
+    from datetime import UTC, datetime
+    from fastmcp import Client
+
+    ts = datetime(2026, 3, 27, 10, 0, 0, tzinfo=UTC)
+    meta = CollectionMeta(name="col1", doc_count=1, chunk_count=4, last_indexed=ts)
+    pipeline = _make_pipeline(single_collection_meta=meta)
+    app = _make_app(pipeline)
+
+    async with Client(app) as c:
+        result = await c.call_tool("get_collection_meta", {"name": "col1"})
+
+    data = _dict_data(result)
+    assert "last_indexed" in data
+    # Must be a string (ISO format), not a datetime object
+    assert isinstance(data["last_indexed"], str)
+    assert "2026" in data["last_indexed"]
+
+
+@pytest.mark.asyncio
+async def test_get_collections_meta_exception_returns_error() -> None:
+    """Pipeline exception in get_collections_meta → error entry in result."""
+    from fastmcp import Client
+
+    pipeline = _make_pipeline()
+    pipeline.get_all_collections_meta.side_effect = RuntimeError("meta store broken")
+    app = _make_app(pipeline)
+
+    async with Client(app) as c:
+        result = await c.call_tool("get_collections_meta", {})
+
+    data = _list_data(result)
+    assert "error" in data[0]
+    assert "meta store broken" in data[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_get_collection_meta_exception_returns_error() -> None:
+    """Pipeline exception in get_collection_meta → error dict in result."""
+    from fastmcp import Client
+
+    pipeline = _make_pipeline()
+    pipeline.get_collection_meta.side_effect = RuntimeError("store disconnected")
+    app = _make_app(pipeline)
+
+    async with Client(app) as c:
+        result = await c.call_tool("get_collection_meta", {"name": "col1"})
+
+    data = _dict_data(result)
+    assert "error" in data
+    assert "store disconnected" in data["error"]

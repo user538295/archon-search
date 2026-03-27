@@ -181,22 +181,15 @@ class RagStore:
     # Collection metadata (FEAT-022)
     # ------------------------------------------------------------------
 
-    async def get_collection_meta(self, name: str) -> "CollectionMeta | None":
+    @staticmethod
+    def _row_to_meta(row: "dict[str, Any]") -> "CollectionMeta":
         from archon.rag.collection_meta import CollectionMeta  # noqa: PLC0415
 
-        self._validate_collection(name)
-        db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
-        if _META_TABLE not in all_names:
-            return None
-        table = await db.open_table(_META_TABLE)
-        # Fetch all rows and filter in Python to avoid SQL injection concerns
-        rows = await table.query().to_list()
-        matching = [r for r in rows if r["name"] == name]
-        if not matching:
-            return None
-        row = matching[0]
-        centroid = json.loads(row["centroid_json"]) if row["centroid_json"] else None
+        try:
+            centroid = json.loads(row["centroid_json"]) if row["centroid_json"] else None
+        except json.JSONDecodeError:
+            logger.warning("Malformed centroid_json for collection %r — centroid set to None", row.get("name"))
+            centroid = None
         last_indexed = datetime.fromisoformat(row["last_indexed"]) if row["last_indexed"] else None
         last_described = datetime.fromisoformat(row["last_described"]) if row["last_described"] else None
         raw_described_at: int = row["described_at_doc_count"]
@@ -212,6 +205,29 @@ class RagStore:
             last_described=last_described,
             described_at_doc_count=described_at,
         )
+
+    async def get_collection_meta(self, name: str) -> "CollectionMeta | None":
+        self._validate_collection(name)
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return None
+        table = await db.open_table(_META_TABLE)
+        # Fetch all rows and filter in Python to avoid SQL injection concerns
+        rows = await table.query().to_list()
+        matching = [r for r in rows if r["name"] == name]
+        if not matching:
+            return None
+        return self._row_to_meta(matching[0])
+
+    async def get_all_collections_meta(self) -> "list[CollectionMeta]":
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return []
+        table = await db.open_table(_META_TABLE)
+        rows = await table.query().to_list()
+        return [self._row_to_meta(row) for row in rows]
 
     async def update_collection_meta(self, meta: "CollectionMeta") -> None:
         self._validate_collection(meta.name)
