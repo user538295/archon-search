@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from archon.rag._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestResult, SearchResult
 from archon.rag.collection_meta import CollectionMeta
+from archon.rag.description_generator import _should_regenerate, generate_description
 from archon.rag.chunker import DocumentChunker
 from archon.rag.embedder import Embedder, EmbedderBackend, ModelEmbedder
 from archon.rag.parser import DocumentParser, ParseError
@@ -73,6 +74,7 @@ class RagPipeline:
         collection: str,
         rebuild_fts: bool = True,
         _vector_collector: list[list[float]] | None = None,
+        _chunk_collector: list[str] | None = None,
     ) -> IngestResult:
         doc_id = hashlib.sha256(str(path.resolve()).encode()).hexdigest()
 
@@ -90,6 +92,10 @@ class RagPipeline:
         # Assign sequential chunk IDs
         for idx, record in enumerate(records):
             record.chunk_id = f"{doc_id}-{idx:06d}"
+
+        # Collect chunk texts if requested
+        if _chunk_collector is not None:
+            _chunk_collector.extend(r.text for r in records)
 
         # Embed
         vectors = await self._embedder.embed([r.text for r in records])
@@ -137,10 +143,15 @@ class RagPipeline:
         results: list[IngestResult] = []
         total = len(files)
         all_vectors: list[list[float]] = []
+        all_chunks: list[str] = []
 
         for done_count, file_path in enumerate(files, start=1):
             result = await self.ingest_file(
-                file_path, collection, rebuild_fts=False, _vector_collector=all_vectors
+                file_path,
+                collection,
+                rebuild_fts=False,
+                _vector_collector=all_vectors,
+                _chunk_collector=all_chunks,
             )
             results.append(result)
             if progress_cb is not None:
@@ -152,17 +163,36 @@ class RagPipeline:
         if any(r.status == "ok" for r in results):
             await self.store.rebuild_fts_index(collection)
 
-        # Compute and store centroid from this ingest batch
+        # Compute centroid and (conditionally) regenerate description
         if all_vectors:
             centroid = _compute_centroid(all_vectors)
             ok_results = [r for r in results if r.status == "ok"]
+            batch_doc_count = len(ok_results)
+            batch_chunk_count = sum(r.chunks_created for r in ok_results)
+
+            # Read existing meta to preserve description state across ingests
+            existing_meta = await self.store.get_collection_meta(collection)
+            description = existing_meta.description if existing_meta else None
+            described_at = existing_meta.described_at_doc_count if existing_meta else None
+            last_described = existing_meta.last_described if existing_meta else None
+
+            if _should_regenerate(batch_doc_count, batch_chunk_count, described_at):
+                new_desc = await generate_description(all_chunks, collection)
+                if new_desc is not None:
+                    description = new_desc
+                    described_at = batch_doc_count
+                    last_described = datetime.now(UTC)
+
             meta = CollectionMeta(
                 name=collection,
                 centroid=centroid,
-                doc_count=len(ok_results),
-                chunk_count=sum(r.chunks_created for r in ok_results),
+                description=description,
+                doc_count=batch_doc_count,
+                chunk_count=batch_chunk_count,
                 embedding_model=self._embedder.model_name,
                 last_indexed=datetime.now(UTC),
+                last_described=last_described,
+                described_at_doc_count=described_at,
             )
             await self.store.update_collection_meta(meta)
 
