@@ -372,6 +372,7 @@ async def test_server_main_wires_all_components() -> None:
     """main() calls store.connect() and app.run_http_async with correct host/port."""
     from archon.config.loader import RagConfig
     from archon.rag.server import main
+    from archon.rag.sync import SyncResult
 
     mock_store = MagicMock()
     mock_store.connect = AsyncMock()
@@ -384,13 +385,18 @@ async def test_server_main_wires_all_components() -> None:
     mock_app.run_http_async = AsyncMock()
 
     mock_cfg = MagicMock()
-    mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999)
+    mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5)
+    mock_cfg.history.directory = "/tmp/history"
+
+    mock_sync_result = SyncResult(added=[], removed=[], unchanged=[], errors=[], skipped=[])
 
     with (
         patch("archon.config.loader.load_config", return_value=mock_cfg),
         patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
         patch("archon.rag.server.create_app", return_value=mock_app),
+        patch("archon.rag.server.RagCollectionSync") as MockSync,
     ):
+        MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
         await main()
 
     mock_store.connect.assert_awaited_once()
@@ -399,3 +405,128 @@ async def test_server_main_wires_all_components() -> None:
     assert call_kwargs["host"] == "127.0.0.1"
     assert call_kwargs["port"] == 9999
     mock_store.disconnect.assert_awaited_once()  # finally block must always disconnect
+
+
+# ---------------------------------------------------------------------------
+# Task 3.1 — startup sync tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_server_runs_sync_on_startup() -> None:
+    """main() calls RagCollectionSync.sync() before app.run_http_async."""
+    import asyncio
+    from archon.config.loader import RagConfig
+    from archon.rag.server import main
+    from archon.rag.sync import SyncResult
+
+    call_order: list[str] = []
+
+    mock_store = MagicMock()
+    mock_store.connect = AsyncMock(side_effect=lambda: call_order.append("connect"))
+    mock_store.disconnect = AsyncMock()
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.store = mock_store
+
+    mock_sync_result = SyncResult(added=["col1"], removed=[], unchanged=[], errors=[], skipped=[])
+    mock_sync = AsyncMock(side_effect=lambda cols: (call_order.append("sync"), mock_sync_result)[1])
+
+    mock_app = MagicMock()
+    mock_app.run_http_async = AsyncMock(side_effect=lambda **kw: call_order.append("http"))
+
+    mock_cfg = MagicMock()
+    mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5)
+    mock_cfg.history.directory = "/tmp/history"
+
+    with (
+        patch("archon.config.loader.load_config", return_value=mock_cfg),
+        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.rag.server.create_app", return_value=mock_app),
+        patch("archon.rag.server.RagCollectionSync") as MockSync,
+    ):
+        MockSync.return_value.sync = mock_sync
+        await main()
+
+    assert call_order.index("sync") < call_order.index("http"), (
+        "sync must be called before HTTP server starts"
+    )
+    mock_sync.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_server_logs_warning_on_sync_errors(caplog: pytest.LogCaptureFixture) -> None:
+    """main() logs WARNING when sync_result.errors is non-empty."""
+    import logging
+    from archon.config.loader import RagConfig
+    from archon.rag.server import main
+    from archon.rag.sync import SyncResult
+
+    mock_store = MagicMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.store = mock_store
+
+    error_result = SyncResult(
+        added=[], removed=[], unchanged=[], errors=["path does not exist: /bad/path"], skipped=[]
+    )
+    mock_sync = AsyncMock(return_value=error_result)
+
+    mock_app = MagicMock()
+    mock_app.run_http_async = AsyncMock()
+
+    mock_cfg = MagicMock()
+    mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5)
+    mock_cfg.history.directory = "/tmp/history"
+
+    with (
+        patch("archon.config.loader.load_config", return_value=mock_cfg),
+        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.rag.server.create_app", return_value=mock_app),
+        patch("archon.rag.server.RagCollectionSync") as MockSync,
+        caplog.at_level(logging.WARNING),
+    ):
+        MockSync.return_value.sync = mock_sync
+        await main()
+
+    assert any("error" in r.message.lower() or "sync" in r.message.lower()
+               for r in caplog.records if r.levelno >= logging.WARNING)
+
+
+@pytest.mark.asyncio
+async def test_server_starts_even_if_sync_times_out() -> None:
+    """main() starts the HTTP server even when startup sync times out."""
+    import asyncio
+    from archon.config.loader import RagConfig
+    from archon.rag.server import main
+
+    mock_store = MagicMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.store = mock_store
+
+    async def _slow_sync(cols: list[str]) -> None:
+        await asyncio.sleep(10)  # much longer than timeout
+
+    mock_app = MagicMock()
+    http_started = asyncio.Event()
+    mock_app.run_http_async = AsyncMock(side_effect=lambda **kw: http_started.set())
+
+    mock_cfg = MagicMock()
+    mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=1)
+    mock_cfg.history.directory = "/tmp/history"
+
+    with (
+        patch("archon.config.loader.load_config", return_value=mock_cfg),
+        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.rag.server.create_app", return_value=mock_app),
+        patch("archon.rag.server.RagCollectionSync") as MockSync,
+    ):
+        MockSync.return_value.sync = _slow_sync
+        await main()
+
+    mock_app.run_http_async.assert_awaited_once()

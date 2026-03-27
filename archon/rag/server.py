@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from fastmcp import Context, FastMCP
 
 from archon.rag.pipeline import RagPipeline, create_pipeline
+from archon.rag.sync import RagCollectionSync, path_to_collection_name
 
 if TYPE_CHECKING:
     pass
@@ -144,10 +145,9 @@ def create_app(pipeline: RagPipeline, default_collection: str) -> FastMCP:
 
 async def main() -> None:
     """Start the RAG MCP server from config."""
-    from pathlib import Path  # noqa: PLC0415
+    import asyncio  # noqa: PLC0415
 
     from archon.config.loader import load_config  # noqa: PLC0415
-    from archon.rag.sync import path_to_collection_name  # noqa: PLC0415
 
     cfg = load_config()
     history_col = path_to_collection_name(
@@ -155,6 +155,27 @@ async def main() -> None:
     )
     pipeline = create_pipeline(cfg.rag)
     await pipeline.store.connect()
+
+    # Startup sync
+    sync = RagCollectionSync(pipeline)
+    sync_timeout = cfg.rag.sync_timeout_seconds
+    if sync_timeout == 0:
+        asyncio.create_task(sync.sync(cfg.rag.collections))
+        logger.info("Startup sync deferred to background task (sync_timeout_seconds=0).")
+    else:
+        try:
+            result = await asyncio.wait_for(sync.sync(cfg.rag.collections), timeout=sync_timeout)
+            logger.info(
+                "Startup sync complete: %d added, %d removed, %d unchanged, %d errors.",
+                len(result.added), len(result.removed), len(result.unchanged), len(result.errors),
+            )
+            if result.errors:
+                logger.warning("Startup sync errors: %s", result.errors)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Startup sync timed out after %ds — continuing in background.", sync_timeout
+            )
+            asyncio.create_task(sync.sync(cfg.rag.collections))
 
     app = create_app(pipeline, history_col)
 
