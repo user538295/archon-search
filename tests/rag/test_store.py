@@ -539,6 +539,199 @@ async def test_store_list_documents_limit_capped_at_1000(
     assert isinstance(docs, list)
 
 
+# ---------------------------------------------------------------------------
+# drop_collection tests (Task 1.2)
+# ---------------------------------------------------------------------------
+
+
+def test_drop_collection_raises_before_connect(tmp_path: Path) -> None:
+    """drop_collection raises RuntimeError when store is not connected."""
+    import asyncio
+    store = RagStore(tmp_path / "db")
+    with pytest.raises(RuntimeError, match="not connected"):
+        asyncio.run(store.drop_collection("col"))
+
+
+def test_drop_collection_removes_table(tmp_path: Path) -> None:
+    """drop_collection calls _db.drop_table with the correct name."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = RagStore(tmp_path / "db")
+    mock_db = MagicMock()
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col", "other"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.drop_table = AsyncMock()
+    store._db = mock_db
+
+    asyncio.run(store.drop_collection("my-col"))
+
+    mock_db.drop_table.assert_awaited_once_with("my-col")
+
+
+def test_drop_collection_raises_keyerror_on_missing(tmp_path: Path) -> None:
+    """drop_collection raises KeyError when the collection does not exist."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = RagStore(tmp_path / "db")
+    mock_db = MagicMock()
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["other"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    store._db = mock_db
+
+    with pytest.raises(KeyError):
+        asyncio.run(store.drop_collection("nonexistent"))
+
+
+@pytest.mark.asyncio
+async def test_drop_collection_integration(connected_store: RagStore, col_name: str) -> None:
+    """Integration: ingest → drop → collection absent from list_collections."""
+    await _ingest_doc(connected_store, col_name)
+    names_before = [c.name for c in await connected_store.list_collections()]
+    assert col_name in names_before
+
+    await connected_store.drop_collection(col_name)
+
+    names_after = [c.name for c in await connected_store.list_collections()]
+    assert col_name not in names_after
+
+
+# ---------------------------------------------------------------------------
+# rename_collection tests (Task 1.2 — used by migration in Task 1.3)
+# ---------------------------------------------------------------------------
+
+
+def test_rename_collection_raises_before_connect(tmp_path: Path) -> None:
+    """rename_collection raises RuntimeError when store is not connected."""
+    import asyncio
+    store = RagStore(tmp_path / "db")
+    with pytest.raises(RuntimeError, match="not connected"):
+        asyncio.run(store.rename_collection("old", "new"))
+
+
+def test_rename_collection_renames_table(tmp_path: Path) -> None:
+    """rename_collection calls _db.rename_table with old and new names."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = RagStore(tmp_path / "db")
+    mock_db = MagicMock()
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["old-name"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.rename_table = AsyncMock()
+    store._db = mock_db
+
+    asyncio.run(store.rename_collection("old-name", "new-name"))
+
+    mock_db.rename_table.assert_awaited_once_with("old-name", "new-name")
+
+
+def test_rename_collection_raises_keyerror_on_missing(tmp_path: Path) -> None:
+    """rename_collection raises KeyError when the source collection does not exist."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = RagStore(tmp_path / "db")
+    mock_db = MagicMock()
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = []
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    store._db = mock_db
+
+    with pytest.raises(KeyError):
+        asyncio.run(store.rename_collection("nonexistent", "new-name"))
+
+
+def test_rename_collection_raises_not_implemented_on_attribute_error(
+    tmp_path: Path,
+) -> None:
+    """rename_collection raises NotImplementedError when rename_table raises AttributeError."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = RagStore(tmp_path / "db")
+    mock_db = MagicMock()
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["old-name"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.rename_table = AsyncMock(side_effect=AttributeError("no rename_table"))
+    store._db = mock_db
+
+    with pytest.raises(NotImplementedError, match="rename_table not available"):
+        asyncio.run(store.rename_collection("old-name", "new-name"))
+
+
+def test_rename_collection_raises_not_implemented_on_not_implemented_error(
+    tmp_path: Path,
+) -> None:
+    """rename_collection raises NotImplementedError when LanceDB OSS raises NotImplementedError."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = RagStore(tmp_path / "db")
+    mock_db = MagicMock()
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["old-name"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.rename_table = AsyncMock(
+        side_effect=NotImplementedError("rename_table is not supported in LanceDB OSS")
+    )
+    store._db = mock_db
+
+    with pytest.raises(NotImplementedError, match="rename_table not available"):
+        asyncio.run(store.rename_collection("old-name", "new-name"))
+
+
+def test_rename_collection_raises_valueerror_if_target_exists(tmp_path: Path) -> None:
+    """rename_collection raises ValueError when the target name already exists."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = RagStore(tmp_path / "db")
+    mock_db = MagicMock()
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["old-name", "existing"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    store._db = mock_db
+
+    with pytest.raises(ValueError, match="already exists"):
+        asyncio.run(store.rename_collection("old-name", "existing"))
+
+
+def test_rename_collection_raises_valueerror_on_invalid_new_name(tmp_path: Path) -> None:
+    """rename_collection raises ValueError when new name is invalid."""
+    import asyncio
+
+    store = RagStore(tmp_path / "db")
+    # Inject a mock db so we don't need a real connection
+    from unittest.mock import AsyncMock, MagicMock
+    store._db = MagicMock()
+
+    with pytest.raises(ValueError, match="Invalid collection name"):
+        asyncio.run(store.rename_collection("old-name", "../evil"))
+
+
+@pytest.mark.asyncio
+async def test_rename_collection_integration(connected_store: RagStore, col_name: str) -> None:
+    """Integration: rename_collection completes or raises NotImplementedError for OSS LanceDB."""
+    new_name = col_name + "-renamed"
+    await _ingest_doc(connected_store, col_name)
+
+    try:
+        await connected_store.rename_collection(col_name, new_name)
+        # If supported: old absent, new present
+        names = [c.name for c in await connected_store.list_collections()]
+        assert col_name not in names
+        assert new_name in names
+    except NotImplementedError:
+        # LanceDB OSS does not support rename_table — this is expected
+        pass
+
+
 def test_fts_exception_filter_reraises_non_fts_errors() -> None:
     """The FTS exception filter in hybrid_search only catches FTS-related errors."""
     # Errors containing "index" or "fts" should be caught (degraded to vector-only)

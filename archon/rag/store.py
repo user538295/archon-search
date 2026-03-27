@@ -98,6 +98,46 @@ class RagStore:
             exist_ok=True,
         )
 
+    async def drop_collection(self, name: str) -> None:
+        """Drop a LanceDB table by name.
+
+        Raises:
+            RuntimeError: if the store is not connected.
+            KeyError: if *name* does not exist in LanceDB.
+        """
+        db = self._require_connected()
+        names: list[str] = (await db.list_tables()).tables
+        if name not in names:
+            raise KeyError(name)
+        await db.drop_table(name)
+
+    async def rename_collection(self, old: str, new: str) -> None:
+        """Rename a LanceDB table from *old* to *new*.
+
+        The caller is responsible for ensuring *new* does not conflict with an
+        existing collection before calling this method.
+
+        Raises:
+            RuntimeError: if the store is not connected.
+            KeyError: if *old* does not exist in LanceDB.
+            ValueError: if *new* already exists in LanceDB, or if *new* is not
+                a valid collection name.
+            NotImplementedError: if the installed LanceDB version lacks ``rename_table``.
+        """
+        self._validate_collection(new)
+        db = self._require_connected()
+        names: list[str] = (await db.list_tables()).tables
+        if old not in names:
+            raise KeyError(old)
+        if new in names:
+            raise ValueError(f"Target collection already exists: {new!r}")
+        try:
+            await db.rename_table(old, new)
+        except (AttributeError, NotImplementedError) as exc:
+            raise NotImplementedError(
+                "rename_table not available; use copy-ingest + drop"
+            ) from exc
+
     async def list_collections(self) -> list[CollectionInfo]:
         db = self._require_connected()
         names: list[str] = (await db.list_tables()).tables
