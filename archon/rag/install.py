@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 
 import tomlkit
 
-from archon.platform import get_rag_service
+from archon.platform import get_rag_service, get_runtime
+from archon.platform.types import GpuType
 from archon.rag.pipeline import create_pipeline
 
 if TYPE_CHECKING:
@@ -53,35 +54,31 @@ class RagInstaller:
     # GPU detection
     # ------------------------------------------------------------------
 
-    def detect_gpu(self) -> bool:
-        """Return True if nvidia-smi exits 0, False otherwise."""
-        try:
-            result = subprocess.run(["nvidia-smi"], capture_output=True)
-            return result.returncode == 0
-        except FileNotFoundError:
-            return False
+    def detect_gpu(self) -> GpuType:
+        """Return the GPU type detected by the platform runtime."""
+        return get_runtime().detect_gpu_type()
 
     # ------------------------------------------------------------------
     # Dependency installation
     # ------------------------------------------------------------------
 
-    def install_deps(self, gpu: bool) -> None:
+    def install_deps(self, gpu: GpuType) -> None:
         """Install RAG dependencies. No-op when dry_run=True."""
         if self.dry_run:
             return
 
-        if gpu:
+        if gpu == "cuda":
             subprocess.run(
                 ["uv", "pip", "uninstall", "fastembed", "-y"],
                 check=False,
             )
             subprocess.run(
-                ["uv", "pip", "install", "fastembed-gpu>=0.7.4", "onnxruntime-gpu"],
+                ["uv", "pip", "install", "fastembed-gpu>=0.8.0", "onnxruntime-gpu"],
                 check=True,
             )
         else:
             subprocess.run(
-                ["uv", "pip", "install", "fastembed>=0.7.4"],
+                ["uv", "pip", "install", "fastembed>=0.8.0"],
                 check=True,
             )
 
@@ -92,15 +89,61 @@ class RagInstaller:
         )
 
     # ------------------------------------------------------------------
+    # Provider validation
+    # ------------------------------------------------------------------
+
+    def validate_providers(self, providers: list[str]) -> bool:
+        """Check that all non-CPU providers are available and embedding works.
+
+        Returns True only if:
+        1. Every non-CPU provider in `providers` is listed by onnxruntime.get_available_providers().
+        2. TextEmbedding can be instantiated and produces an embedding without error.
+
+        Never raises — caller handles fallback.
+        """
+        non_cpu = [p for p in providers if "CPU" not in p]
+        if non_cpu:
+            try:
+                import onnxruntime  # lazy — not installed on all systems
+                available = onnxruntime.get_available_providers()
+            except Exception as exc:
+                logger.warning("validate_providers: could not query onnxruntime providers: %s", exc)
+                return False
+            missing = [p for p in non_cpu if p not in available]
+            if missing:
+                logger.warning(
+                    "validate_providers: providers not available in onnxruntime: %s", missing
+                )
+                return False
+
+        try:
+            from fastembed import TextEmbedding  # lazy — not installed on all systems
+            model = TextEmbedding(self.cfg.embedding_model, providers=providers)
+            list(model.embed(["archon rag test"]))
+        except Exception as exc:
+            logger.warning("validate_providers: embedding test failed: %s", exc)
+            return False
+
+        return True
+
+    # ------------------------------------------------------------------
     # Provider configuration
     # ------------------------------------------------------------------
 
-    def configure_providers(self, gpu: bool) -> None:
-        """Write providers = ["CUDAExecutionProvider"] to [rag] section via tomlkit.
+    def configure_providers(self, gpu: GpuType) -> None:
+        """Write providers list to [rag] section via tomlkit based on gpu type.
 
-        No-op when gpu=False or dry_run=True.
+        - "cuda": write ["CUDAExecutionProvider"]
+        - "apple_silicon": write ["CoreMLExecutionProvider"]
+        - "none": no-op
+        No-op when dry_run=True.
         """
-        if not gpu or self.dry_run:
+        _provider_map = {
+            "cuda": "CUDAExecutionProvider",
+            "apple_silicon": "CoreMLExecutionProvider",
+        }
+        target_provider = _provider_map.get(gpu)
+        if target_provider is None or self.dry_run:
             return
 
         config_path = Path(self.config_file)
@@ -114,10 +157,10 @@ class RagInstaller:
 
         rag_section = doc["rag"]
         if isinstance(rag_section, dict):
-            providers = rag_section.get("providers")
-            if providers and "CUDAExecutionProvider" in providers:
-                return  # already set
-            rag_section["providers"] = ["CUDAExecutionProvider"]
+            existing_providers = rag_section.get("providers", [])
+            if target_provider in existing_providers:
+                return  # already set — skip to preserve user-extended chains
+            rag_section["providers"] = [target_provider]
 
         config_path.write_text(tomlkit.dumps(doc))
 
@@ -214,8 +257,15 @@ class RagInstaller:
             print(f"Installing missing packages: {', '.join(missing)}")
             self.install_deps(gpu=gpu)
 
-        # Configure CUDA providers if GPU available
-        self.configure_providers(gpu=gpu)
+        # Configure execution providers based on GPU type
+        if not self.dry_run and gpu == "apple_silicon":
+            if self.validate_providers(["CoreMLExecutionProvider"]):
+                self.configure_providers(gpu=gpu)
+                print("CoreML acceleration validated — GPU/Neural Engine active.")
+            else:
+                print("Warning: CoreML validation failed — falling back to CPU. macOS 12+ required.")
+        else:
+            self.configure_providers(gpu=gpu)
 
         # Create data directory
         self.create_data_dir()

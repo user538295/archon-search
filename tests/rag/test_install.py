@@ -100,24 +100,42 @@ class TestCheckDeps:
 
 
 class TestDetectGpu:
-    def test_detect_gpu_returns_true_when_nvidia_smi_succeeds(self, tmp_path: Path) -> None:
+    def test_detect_gpu_delegates_to_platform_runtime(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
-        completed = MagicMock()
-        completed.returncode = 0
-        with patch("subprocess.run", return_value=completed):
-            assert installer.detect_gpu() is True
+        mock_runtime = MagicMock()
+        mock_runtime.detect_gpu_type.return_value = "cuda"
+        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+            result = installer.detect_gpu()
+        assert result == "cuda"
+        mock_runtime.detect_gpu_type.assert_called_once()
 
-    def test_detect_gpu_returns_false_when_nvidia_smi_missing(self, tmp_path: Path) -> None:
+    def test_detect_gpu_returns_cuda(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
-        with patch("subprocess.run", side_effect=FileNotFoundError):
-            assert installer.detect_gpu() is False
+        mock_runtime = MagicMock()
+        mock_runtime.detect_gpu_type.return_value = "cuda"
+        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+            assert installer.detect_gpu() == "cuda"
 
-    def test_detect_gpu_returns_false_when_nvidia_smi_fails(self, tmp_path: Path) -> None:
+    def test_detect_gpu_returns_apple_silicon(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
-        completed = MagicMock()
-        completed.returncode = 1
-        with patch("subprocess.run", return_value=completed):
-            assert installer.detect_gpu() is False
+        mock_runtime = MagicMock()
+        mock_runtime.detect_gpu_type.return_value = "apple_silicon"
+        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+            assert installer.detect_gpu() == "apple_silicon"
+
+    def test_detect_gpu_returns_none_on_intel_mac(self, tmp_path: Path) -> None:
+        installer = _make_installer(tmp_path)
+        mock_runtime = MagicMock()
+        mock_runtime.detect_gpu_type.return_value = "none"
+        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+            assert installer.detect_gpu() == "none"
+
+    def test_detect_gpu_returns_none_on_linux_no_cuda(self, tmp_path: Path) -> None:
+        installer = _make_installer(tmp_path)
+        mock_runtime = MagicMock()
+        mock_runtime.detect_gpu_type.return_value = "none"
+        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+            assert installer.detect_gpu() == "none"
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +144,7 @@ class TestDetectGpu:
 
 
 class TestInstallDeps:
-    def _capture_pip_args(self, tmp_path: Path, gpu: bool) -> list[list[str]]:
+    def _capture_pip_args(self, tmp_path: Path, gpu: str) -> list[list[str]]:
         installer = _make_installer(tmp_path)
         calls: list[list[str]] = []
 
@@ -138,13 +156,20 @@ class TestInstallDeps:
 
         return calls
 
-    def test_install_deps_gpu_installs_fastembed_gpu(self, tmp_path: Path) -> None:
-        calls = self._capture_pip_args(tmp_path, gpu=True)
+    def test_install_deps_cuda_still_installs_gpu_packages(self, tmp_path: Path) -> None:
+        calls = self._capture_pip_args(tmp_path, gpu="cuda")
         all_args = " ".join(arg for cmd in calls for arg in cmd)
         assert "fastembed-gpu" in all_args
+        assert "onnxruntime-gpu" in all_args
 
-    def test_install_deps_cpu_installs_fastembed(self, tmp_path: Path) -> None:
-        calls = self._capture_pip_args(tmp_path, gpu=False)
+    def test_install_deps_apple_silicon_installs_standard_fastembed(self, tmp_path: Path) -> None:
+        calls = self._capture_pip_args(tmp_path, gpu="apple_silicon")
+        all_args = " ".join(arg for cmd in calls for arg in cmd)
+        assert "fastembed" in all_args
+        assert "fastembed-gpu" not in all_args
+
+    def test_install_deps_none_installs_standard_fastembed(self, tmp_path: Path) -> None:
+        calls = self._capture_pip_args(tmp_path, gpu="none")
         all_args = " ".join(arg for cmd in calls for arg in cmd)
         assert "fastembed" in all_args
         assert "fastembed-gpu" not in all_args
@@ -152,7 +177,7 @@ class TestInstallDeps:
     def test_install_deps_dry_run_no_op(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path, dry_run=True)
         with patch("subprocess.run") as mock_run:
-            installer.install_deps(gpu=False)
+            installer.install_deps(gpu="none")
         mock_run.assert_not_called()
 
 
@@ -169,7 +194,7 @@ class TestConfigureProviders:
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
 
-        installer.configure_providers(gpu=True)
+        installer.configure_providers(gpu="cuda")
 
         content = config_file.read_text()
         assert "CUDAExecutionProvider" in content
@@ -182,7 +207,7 @@ class TestConfigureProviders:
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
 
-        installer.configure_providers(gpu=False)
+        installer.configure_providers(gpu="none")
 
         assert config_file.read_text() == original
 
@@ -194,9 +219,93 @@ class TestConfigureProviders:
         installer = _make_installer(tmp_path, dry_run=True)
         installer.config_file = str(config_file)
 
-        installer.configure_providers(gpu=True)
+        installer.configure_providers(gpu="cuda")
 
         assert config_file.read_text() == original
+
+    def test_configure_providers_apple_silicon_writes_coreml(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[rag]\nenabled = true\n")
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="apple_silicon")
+
+        content = config_file.read_text()
+        assert "CoreMLExecutionProvider" in content
+        assert "CUDAExecutionProvider" not in content
+
+    def test_configure_providers_cuda_unchanged(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[rag]\nenabled = true\n")
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="cuda")
+
+        content = config_file.read_text()
+        assert "CUDAExecutionProvider" in content
+
+    def test_configure_providers_none_is_noop(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        original = "[rag]\nenabled = true\n"
+        config_file.write_text(original)
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="none")
+
+        assert config_file.read_text() == original
+
+    def test_configure_providers_idempotent_if_already_set(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[rag]\nenabled = true\n")
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="cuda")
+        content_after_first = config_file.read_text()
+
+        installer.configure_providers(gpu="cuda")
+        content_after_second = config_file.read_text()
+
+        assert content_after_first == content_after_second
+        assert "CUDAExecutionProvider" in content_after_second
+
+    def test_configure_providers_apple_silicon_idempotent_with_fallback_chain(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        # providers already has CoreML + CPU fallback chain
+        config_file.write_text(
+            '[rag]\nenabled = true\nproviders = ["CoreMLExecutionProvider", "CPUExecutionProvider"]\n'
+        )
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="apple_silicon")
+
+        content = config_file.read_text()
+        # must NOT clobber the existing chain
+        assert "CPUExecutionProvider" in content
+        assert "CoreMLExecutionProvider" in content
+
+    def test_configure_providers_replaces_cuda_with_coreml(self, tmp_path: Path) -> None:
+        """Switching from cuda to apple_silicon must fully replace providers list."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[rag]\nenabled = true\nproviders = ["CUDAExecutionProvider"]\n')
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        installer.configure_providers(gpu="apple_silicon")
+
+        content = config_file.read_text()
+        assert "CoreMLExecutionProvider" in content
+        assert "CUDAExecutionProvider" not in content
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +416,7 @@ class TestCreateHistoryCollection:
 
 
 class TestRun:
-    def _base_patches(self, tmp_path: Path, gpu: bool = False) -> dict[str, object]:
+    def _base_patches(self, tmp_path: Path) -> dict[str, object]:
         svc = MagicMock()
         svc.register.return_value = 0
         svc.start.return_value = 0
@@ -325,7 +434,7 @@ class TestRun:
         installer = _make_installer(tmp_path)
 
         with patch("builtins.input", return_value="n"), \
-             patch.object(installer, "detect_gpu", return_value=False), \
+             patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps") as mock_install:
             result = installer.run(non_interactive=False)
@@ -347,7 +456,7 @@ class TestRun:
 
         with patch("archon.rag.install.get_rag_service", return_value=svc), \
              patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch.object(installer, "detect_gpu", return_value=False), \
+             patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "_wait_for_service", return_value=True):
@@ -371,7 +480,7 @@ class TestRun:
 
         with patch("archon.rag.install.get_rag_service", return_value=svc), \
              patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch.object(installer, "detect_gpu", return_value=False), \
+             patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "_wait_for_service", return_value=True), \
@@ -451,6 +560,356 @@ class TestRunUninstall:
 
         assert result == 0
         assert db_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# validate_providers
+# ---------------------------------------------------------------------------
+
+
+class TestValidateProviders:
+    def test_validate_providers_returns_true_on_empty_list(self, tmp_path: Path) -> None:
+        """Empty providers list → no GPU provider check needed → embed test passes → True."""
+        installer = _make_installer(tmp_path)
+
+        mock_model = MagicMock()
+        mock_model.embed.return_value = iter([[0.1, 0.2]])
+        mock_te_module = MagicMock()
+        mock_te_module.TextEmbedding = MagicMock(return_value=mock_model)
+
+        with patch.dict("sys.modules", {"fastembed": mock_te_module}):
+            result = installer.validate_providers([])
+
+        assert result is True
+        mock_te_module.TextEmbedding.assert_called_once_with(
+            installer.cfg.embedding_model, providers=[]
+        )
+
+    def test_validate_providers_returns_true_on_success(self, tmp_path: Path) -> None:
+        """All GPU providers available and embed succeeds → True."""
+        installer = _make_installer(tmp_path)
+
+        mock_model = MagicMock()
+        mock_model.embed.return_value = iter([[0.1, 0.2]])
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        mock_te_module = MagicMock()
+        mock_te_module.TextEmbedding = MagicMock(return_value=mock_model)
+
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+            result = installer.validate_providers(["CUDAExecutionProvider"])
+
+        assert result is True
+
+    def test_validate_providers_returns_false_on_exception(self, tmp_path: Path) -> None:
+        """TextEmbedding constructor raises → False, no exception propagated."""
+        installer = _make_installer(tmp_path)
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        mock_te_module = MagicMock()
+        mock_te_module.TextEmbedding = MagicMock(side_effect=RuntimeError("init failed"))
+
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+            result = installer.validate_providers(["CUDAExecutionProvider"])
+
+        assert result is False
+
+    def test_validate_providers_returns_false_on_embed_exception(self, tmp_path: Path) -> None:
+        """embed() call raises → False, no exception propagated."""
+        installer = _make_installer(tmp_path)
+
+        mock_model = MagicMock()
+        mock_model.embed.side_effect = RuntimeError("embed failed")
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        mock_te_module = MagicMock()
+        mock_te_module.TextEmbedding = MagicMock(return_value=mock_model)
+
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+            result = installer.validate_providers(["CUDAExecutionProvider"])
+
+        assert result is False
+
+    def test_validate_providers_returns_false_when_provider_not_in_available(self, tmp_path: Path) -> None:
+        """GPU provider not in onnxruntime available providers → False immediately."""
+        installer = _make_installer(tmp_path)
+
+        mock_model = MagicMock()
+        mock_model.embed.return_value = iter([[0.1, 0.2]])
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+        mock_te_cls = MagicMock(return_value=mock_model)
+        mock_te_module = MagicMock()
+        mock_te_module.TextEmbedding = mock_te_cls
+
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+            result = installer.validate_providers(["CUDAExecutionProvider"])
+
+        assert result is False
+        # TextEmbedding should NOT be called — returned False early
+        mock_te_cls.assert_not_called()
+
+    def test_validate_providers_returns_false_when_onnxruntime_not_installed(self, tmp_path: Path) -> None:
+        """onnxruntime not importable → False."""
+        installer = _make_installer(tmp_path)
+
+        with patch.dict("sys.modules", {"onnxruntime": None}):
+            result = installer.validate_providers(["CUDAExecutionProvider"])
+
+        assert result is False
+
+    def test_validate_providers_passes_correct_providers_to_text_embedding(self, tmp_path: Path) -> None:
+        """The exact providers list is forwarded to TextEmbedding constructor."""
+        installer = _make_installer(tmp_path)
+        providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+
+        mock_model = MagicMock()
+        mock_model.embed.return_value = iter([[0.1, 0.2]])
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.return_value = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        mock_te_cls = MagicMock(return_value=mock_model)
+        mock_te_module = MagicMock()
+        mock_te_module.TextEmbedding = mock_te_cls
+
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+            result = installer.validate_providers(providers)
+
+        assert result is True
+        mock_te_cls.assert_called_once_with(installer.cfg.embedding_model, providers=providers)
+
+    def test_validate_providers_uses_configured_embedding_model(self, tmp_path: Path) -> None:
+        """validate_providers uses self.cfg.embedding_model, not a hardcoded string."""
+        installer = _make_installer(tmp_path)
+        installer.cfg.embedding_model = "custom/model-v2"
+
+        mock_model = MagicMock()
+        mock_model.embed.return_value = iter([[0.1, 0.2]])
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        mock_te_cls = MagicMock(return_value=mock_model)
+        mock_te_module = MagicMock()
+        mock_te_module.TextEmbedding = mock_te_cls
+
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+            result = installer.validate_providers(["CUDAExecutionProvider"])
+
+        assert result is True
+        mock_te_cls.assert_called_once_with("custom/model-v2", providers=["CUDAExecutionProvider"])
+
+    def test_validate_providers_returns_false_when_fastembed_not_installed(self, tmp_path: Path) -> None:
+        """fastembed not importable → False, no exception propagated."""
+        installer = _make_installer(tmp_path)
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": None}):
+            result = installer.validate_providers(["CUDAExecutionProvider"])
+
+        assert result is False
+
+    def test_validate_providers_cpu_only_skips_onnxruntime(self, tmp_path: Path) -> None:
+        """CPUExecutionProvider-only list → onnxruntime check skipped → embed test still runs."""
+        installer = _make_installer(tmp_path)
+
+        mock_model = MagicMock()
+        mock_model.embed.return_value = iter([[0.1, 0.2]])
+        mock_te_cls = MagicMock(return_value=mock_model)
+        mock_te_module = MagicMock()
+        mock_te_module.TextEmbedding = mock_te_cls
+
+        mock_ort = MagicMock()
+
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+            result = installer.validate_providers(["CPUExecutionProvider"])
+
+        assert result is True
+        # onnxruntime.get_available_providers must NOT have been called — non_cpu is empty
+        mock_ort.get_available_providers.assert_not_called()
+        # but embed test still ran
+        mock_te_cls.assert_called_once()
+
+    def test_validate_providers_returns_false_when_get_available_providers_raises(self, tmp_path: Path) -> None:
+        """onnxruntime imports fine but get_available_providers() raises → False."""
+        installer = _make_installer(tmp_path)
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.side_effect = RuntimeError("ort internal error")
+
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+            result = installer.validate_providers(["CUDAExecutionProvider"])
+
+        assert result is False
+
+    def test_validate_providers_logs_warning_on_missing_provider(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """A warning is logged when a provider is not in onnxruntime's available list."""
+        import logging
+        installer = _make_installer(tmp_path)
+
+        mock_ort = MagicMock()
+        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+
+        with caplog.at_level(logging.WARNING, logger="archon"), \
+             patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+            result = installer.validate_providers(["CUDAExecutionProvider"])
+
+        assert result is False
+        assert any("CUDAExecutionProvider" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# run() — validation-first flow (Task 3.2)
+# ---------------------------------------------------------------------------
+
+
+class TestRunFlow:
+    """Tests for the validation-first flow wired into run()."""
+
+    def test_run_flow_apple_silicon_validation_passes(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """apple_silicon: validate → success → configure_providers called → success message printed."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "validate_providers", return_value=True) as mock_validate, \
+             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        mock_validate.assert_called_once_with(["CoreMLExecutionProvider"])
+        mock_configure.assert_called_once_with(gpu="apple_silicon")
+        captured = capsys.readouterr()
+        assert "CoreML acceleration validated" in captured.out
+        assert "Warning" not in captured.out
+
+    def test_run_flow_apple_silicon_validation_fails_falls_back(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """apple_silicon: validate → failure → configure_providers NOT called → warning printed."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "validate_providers", return_value=False) as mock_validate, \
+             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        mock_validate.assert_called_once_with(["CoreMLExecutionProvider"])
+        mock_configure.assert_not_called()
+        captured = capsys.readouterr()
+        assert "Warning: CoreML validation failed" in captured.out
+
+    def test_run_flow_cuda_skips_validation(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """cuda: validation NOT called → configure_providers called directly, no CoreML messages."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "detect_gpu", return_value="cuda"), \
+             patch.object(installer, "install_deps") as mock_install, \
+             patch.object(installer, "check_deps", return_value=["some-dep"]), \
+             patch.object(installer, "validate_providers") as mock_validate, \
+             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        mock_install.assert_called_once_with(gpu="cuda")
+        mock_validate.assert_not_called()
+        mock_configure.assert_called_once_with(gpu="cuda")
+        captured = capsys.readouterr()
+        assert "CoreML" not in captured.out
+
+    def test_run_flow_no_gpu_unchanged(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """no gpu: validation NOT called → configure_providers called (no-op internally), no CoreML messages."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "install_deps") as mock_install, \
+             patch.object(installer, "check_deps", return_value=["some-dep"]), \
+             patch.object(installer, "validate_providers") as mock_validate, \
+             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        mock_install.assert_called_once_with(gpu="none")
+        mock_validate.assert_not_called()
+        mock_configure.assert_called_once_with(gpu="none")
+        captured = capsys.readouterr()
+        assert "CoreML" not in captured.out
+
+    def test_run_flow_apple_silicon_fallback_does_not_write_providers_to_config(self, tmp_path: Path) -> None:
+        """Fallback path: providers key must be absent from the real config.toml."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[rag]\nenabled = true\n")
+
+        installer = _make_installer(tmp_path)
+        installer.config_file = str(config_file)
+
+        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "validate_providers", return_value=False), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "create_history_collection", new=AsyncMock()), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        import tomlkit
+        doc = tomlkit.parse(config_file.read_text())
+        rag_section = doc.get("rag", {})
+        assert "providers" not in rag_section
+
+    def test_run_flow_dry_run_skips_validation(self, tmp_path: Path) -> None:
+        """dry_run=True: validate_providers skipped, configure_providers called directly."""
+        installer = _make_installer(tmp_path, dry_run=True)
+
+        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "validate_providers") as mock_validate, \
+             patch.object(installer, "configure_providers") as mock_configure, \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        mock_validate.assert_not_called()
+        mock_configure.assert_called_once_with(gpu="apple_silicon")
 
 
 # ---------------------------------------------------------------------------
