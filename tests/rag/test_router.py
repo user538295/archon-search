@@ -182,3 +182,144 @@ async def test_fetch_metadata_empty_returns_empty_routable_names() -> None:
 
     assert result is None
     assert router._last_routable_names == []
+
+
+# ---------------------------------------------------------------------------
+# Tier 3 test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tier3_centroid_preranking_called() -> None:
+    """n_routable > shortlist_size: rank() called, _last_routable_names narrowed to shortlist."""
+    embedder = _make_embedder(vector=[1.0, 0.0])
+    router = _router(shortlist_size=3, embedder=embedder)
+    # 4 routable → exceeds shortlist_size=3 → Tier 3
+    routable = [
+        _meta("col-a", centroid=[1.0, 0.0]),  # most similar to [1,0]
+        _meta("col-b", centroid=[0.0, 1.0]),
+        _meta("col-c", centroid=[0.5, 0.5]),
+        _meta("col-d", centroid=[0.3, 0.7]),
+    ]
+    with patch.object(router, "fetch_metadata", new=AsyncMock(return_value=routable)):
+        result = await router.get_pre_context("test query", pinned_names=[], available_slots=2)
+
+    assert result is not None
+    assert "<rag_collections>" in result
+    assert router._decomposer_was_invoked is True
+    # shortlist_size=3, so only top 3 by similarity should be in _last_routable_names
+    assert len(router._last_routable_names) <= 3
+    # col-a should be first (most similar to [1,0])
+    assert router._last_routable_names[0] == "col-a"
+    # verify embedder was called (Tier 3 needs embedding)
+    embedder.embed_one.assert_awaited_once_with("test query")
+
+
+# ---------------------------------------------------------------------------
+# select() test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_select_embeds_and_ranks() -> None:
+    """select() embeds query, fetches metadata, ranks, and returns shortlist."""
+    embedder = _make_embedder(vector=[1.0, 0.0])
+    router = _router(shortlist_size=5, confidence_threshold=0.0, embedder=embedder)
+    collections = [
+        _meta("col-a", centroid=[1.0, 0.0]),
+        _meta("col-b", centroid=[0.0, 1.0]),
+    ]
+    with patch.object(router, "fetch_metadata", new=AsyncMock(return_value=collections)):
+        result = await router.select("test query")
+
+    embedder.embed_one.assert_awaited_once_with("test query")
+    assert len(result) == 2
+    assert result[0].name == "col-a"
+
+
+# ---------------------------------------------------------------------------
+# Coverage tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_metadata_cached_on_second_call() -> None:
+    """fetch_metadata() is cached — HTTP called only once."""
+    router = _router()
+
+    # Manually set the cache to simulate a successful first fetch
+    router._cached_metadata = [_meta("col-a")]
+
+    # Second call should return cache without HTTP
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        result = await router.fetch_metadata()
+        mock_client_cls.assert_not_called()
+
+    assert len(result) == 1
+    assert result[0].name == "col-a"
+
+
+@pytest.mark.asyncio
+async def test_get_pre_context_splits_pinned_from_routable() -> None:
+    """Pinned collections are excluded from routable_meta and the block."""
+    router = _router(shortlist_size=5)
+    all_meta = [
+        _meta("pinned-col"),
+        _meta("routable-a"),
+        _meta("routable-b"),
+        _meta("routable-c"),
+        _meta("routable-d"),  # 4 routable → Tier 2
+    ]
+    with patch.object(router, "fetch_metadata", new=AsyncMock(return_value=all_meta)):
+        result = await router.get_pre_context("query", pinned_names=["pinned-col"], available_slots=3)
+
+    # 4 routable (Tier 2) → block returned
+    assert result is not None
+    assert "pinned-col" not in result
+    assert "routable-a" in result
+    assert router._last_routable_names == ["routable-a", "routable-b", "routable-c", "routable-d"]
+
+
+@pytest.mark.asyncio
+async def test_get_pre_context_slot_exhaustion_returns_none() -> None:
+    """available_slots <= 0 → slot exhaustion shortcut, returns None."""
+    router = _router(shortlist_size=5)
+    routable = [_meta(f"col-{i}") for i in range(4)]
+    with patch.object(router, "fetch_metadata", new=AsyncMock(return_value=routable)):
+        result = await router.get_pre_context("query", pinned_names=[], available_slots=0)
+
+    assert result is None
+    assert router._decomposer_was_invoked is False
+
+
+def test_rank_all_none_centroid_bypasses_confidence_gate() -> None:
+    """All-None-centroid collections bypass the confidence gate — all returned up to shortlist_size."""
+    router = _router(shortlist_size=5, confidence_threshold=0.99)  # high threshold
+    collections = [
+        _meta("col-a", centroid=None),
+        _meta("col-b", centroid=None),
+        _meta("col-c", centroid=None),
+    ]
+    result = router.rank([1.0, 0.0], collections)
+    # Gate bypassed — all 3 returned
+    assert len(result) == 3
+
+
+@pytest.mark.asyncio
+async def test_tier3_confidence_gate_failure_returns_none() -> None:
+    """Tier 3: rank() returns [] (confidence gate failed) → get_pre_context returns None."""
+    embedder = _make_embedder(vector=[1.0, 0.0])
+    # shortlist_size=2; need 4 routable (> 3 so NOT Tier 1; > shortlist_size=2 so Tier 3)
+    router = _router(shortlist_size=2, confidence_threshold=0.99, embedder=embedder)
+    routable = [
+        _meta("col-a", centroid=[0.1, 0.9]),  # sim to [1,0] ≈ 0.11
+        _meta("col-b", centroid=[0.2, 0.8]),  # sim ≈ 0.24
+        _meta("col-c", centroid=[0.3, 0.7]),  # sim ≈ 0.39
+        _meta("col-d", centroid=[0.4, 0.6]),  # sim ≈ 0.55 — all below 0.99 threshold
+    ]
+    with patch.object(router, "fetch_metadata", new=AsyncMock(return_value=routable)):
+        result = await router.get_pre_context("query", pinned_names=[], available_slots=2)
+
+    assert result is None
+    assert router._decomposer_was_invoked is False
+    assert router._last_routable_names == []

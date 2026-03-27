@@ -1,9 +1,10 @@
 """MultiCollectionRouter — centroid pre-ranking for RAG collection selection (FEAT-022)."""
 from __future__ import annotations
 
+import json
 import logging
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -15,6 +16,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger("archon")
 
 _FETCH_TIMEOUT = 10.0
+
+# Fields used by the router — avoids issues with datetime deserialization
+_ROUTING_FIELDS = {"name", "description", "centroid", "embedding_model", "doc_count", "chunk_count"}
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -65,13 +69,48 @@ class MultiCollectionRouter:
             async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT) as client:
                 response = await client.post(self._rag_url, json=payload)
                 response.raise_for_status()
-                data = response.json()
+                data: dict[str, Any] = response.json()
         except httpx.TimeoutException:
             logger.debug("fetch_metadata: timed out fetching collection metadata")
             return []
+        except httpx.HTTPStatusError as exc:
+            logger.debug("fetch_metadata: HTTP error %s", exc.response.status_code)
+            return []
+        except httpx.HTTPError as exc:
+            logger.debug("fetch_metadata: HTTP error: %s", exc)
+            return []
+        except json.JSONDecodeError as exc:
+            logger.debug("fetch_metadata: JSON decode error: %s", exc)
+            return []
 
-        raw_collections: list[dict] = data.get("result", {}).get("collections", [])
-        result = [CollectionMeta(**col) for col in raw_collections]
+        if "error" in data:
+            logger.debug("fetch_metadata: JSON-RPC error: %s", data["error"])
+            return []
+
+        # FastMCP serialises list[dict] as a single TextContent block whose
+        # .text field is the entire list JSON-encoded.
+        content_blocks: list[dict[str, Any]] = (
+            data.get("result", {}).get("content", [])
+        )
+        if not content_blocks:
+            return []
+
+        first_block = content_blocks[0]
+        if first_block.get("type") != "text":
+            logger.debug("fetch_metadata: unexpected content block type: %s", first_block.get("type"))
+            return []
+
+        try:
+            raw_collections: list[dict[str, Any]] = json.loads(first_block["text"])
+        except (json.JSONDecodeError, KeyError) as exc:
+            logger.debug("fetch_metadata: failed to parse text block: %s", exc)
+            return []
+
+        result = [
+            CollectionMeta(**{k: v for k, v in col.items() if k in _ROUTING_FIELDS})
+            for col in raw_collections
+            if isinstance(col, dict) and "name" in col
+        ]
         self._cached_metadata = result
         return result
 
@@ -154,6 +193,11 @@ class MultiCollectionRouter:
         # Tier 3: n_routable > shortlist_size — centroid pre-ranking, then decomposer
         vector = await self._embedder.embed_one(query)
         shortlist = self.rank(vector, routable_meta)
+        if not shortlist:
+            # Confidence gate failed — no relevant collections found; skip decomposer
+            self._last_routable_names = []
+            self._decomposer_was_invoked = False
+            return None
         self._last_routable_names = [m.name for m in shortlist]
         self._decomposer_was_invoked = True
         return self._build_block(shortlist, available_slots)
