@@ -51,6 +51,16 @@ class MultiCollectionRouter:
         self._last_routable_names: list[str] = []
         self._decomposer_was_invoked: bool = False
 
+    @property
+    def last_routable_names(self) -> list[str]:
+        """Names of routable collections from the last get_pre_context() call."""
+        return self._last_routable_names
+
+    @property
+    def decomposer_was_invoked(self) -> bool:
+        """Whether the decomposer was invoked in the last get_pre_context() call."""
+        return self._decomposer_was_invoked
+
     async def fetch_metadata(self) -> list[CollectionMeta]:
         """Fetch collection metadata via JSON-RPC; result is cached.
 
