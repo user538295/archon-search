@@ -424,18 +424,18 @@ class TestRagCollectionSync:
 
 
 # ---------------------------------------------------------------------------
-# _manifest_lookup_by_path tests
+# manifest_lookup_by_path tests
 # ---------------------------------------------------------------------------
 
 class TestManifestLookupByPath:
     def test_returns_none_when_no_manifest(self, tmp_path):
-        from archon.rag.sync import _manifest_lookup_by_path
+        from archon.rag.sync import manifest_lookup_by_path
 
-        result = _manifest_lookup_by_path(tmp_path / "nonexistent.json", "/some/path")
+        result = manifest_lookup_by_path(tmp_path / "nonexistent.json", "/some/path")
         assert result is None
 
     def test_returns_collection_name_for_known_path(self, tmp_path):
-        from archon.rag.sync import _manifest_lookup_by_path
+        from archon.rag.sync import manifest_lookup_by_path
 
         manifest_path = tmp_path / "sync_manifest.json"
         real_dir = tmp_path / "myproject"
@@ -443,20 +443,20 @@ class TestManifestLookupByPath:
         resolved = str(real_dir.resolve())
         manifest_path.write_text(json.dumps({"myproject": resolved}))
 
-        result = _manifest_lookup_by_path(manifest_path, resolved)
+        result = manifest_lookup_by_path(manifest_path, resolved)
         assert result == "myproject"
 
     def test_returns_none_for_unknown_path(self, tmp_path):
-        from archon.rag.sync import _manifest_lookup_by_path
+        from archon.rag.sync import manifest_lookup_by_path
 
         manifest_path = tmp_path / "sync_manifest.json"
         manifest_path.write_text(json.dumps({"col": "/some/other/path"}))
 
-        result = _manifest_lookup_by_path(manifest_path, "/totally/different/path")
+        result = manifest_lookup_by_path(manifest_path, "/totally/different/path")
         assert result is None
 
     def test_expands_tilde_in_stored_path(self, tmp_path):
-        from archon.rag.sync import _manifest_lookup_by_path
+        from archon.rag.sync import manifest_lookup_by_path
         from pathlib import Path
 
         home_relative = "~/.archon/history/sessions"
@@ -465,7 +465,7 @@ class TestManifestLookupByPath:
         manifest_path = tmp_path / "sync_manifest.json"
         manifest_path.write_text(json.dumps({"sessions": home_relative}))
 
-        result = _manifest_lookup_by_path(manifest_path, resolved)
+        result = manifest_lookup_by_path(manifest_path, resolved)
         assert result == "sessions"
 
 

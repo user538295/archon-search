@@ -54,7 +54,7 @@ class SyncResult:
     skipped: list[str] = field(default_factory=list)
 
 
-def _manifest_lookup_by_path(manifest_path: Path, resolved_path: str) -> str | None:
+def manifest_lookup_by_path(manifest_path: Path, resolved_path: str) -> str | None:
     """Return collection name for path, or None. Used by CLI commands."""
     if not manifest_path.exists():
         return None
