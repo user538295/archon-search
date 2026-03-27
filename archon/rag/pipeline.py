@@ -4,10 +4,12 @@ from __future__ import annotations
 import hashlib
 import inspect
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from archon.rag._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestResult, SearchResult
+from archon.rag.collection_meta import CollectionMeta
 from archon.rag.chunker import DocumentChunker
 from archon.rag.embedder import Embedder, EmbedderBackend, ModelEmbedder
 from archon.rag.parser import DocumentParser, ParseError
@@ -31,6 +33,13 @@ _BINARY_EXTENSIONS = frozenset(
         ".parquet", ".feather", ".wasm", ".dat", ".lance",
     }
 )
+
+
+def _compute_centroid(vectors: list[list[float]]) -> list[float]:
+    """Return element-wise mean of a list of equal-length vectors."""
+    n = len(vectors)
+    dim = len(vectors[0])
+    return [sum(v[i] for v in vectors) / n for i in range(dim)]
 
 
 class RagPipeline:
@@ -59,7 +68,11 @@ class RagPipeline:
     # ------------------------------------------------------------------
 
     async def ingest_file(
-        self, path: Path, collection: str, rebuild_fts: bool = True
+        self,
+        path: Path,
+        collection: str,
+        rebuild_fts: bool = True,
+        _vector_collector: list[list[float]] | None = None,
     ) -> IngestResult:
         doc_id = hashlib.sha256(str(path.resolve()).encode()).hexdigest()
 
@@ -82,6 +95,8 @@ class RagPipeline:
         vectors = await self._embedder.embed([r.text for r in records])
         for record, vector in zip(records, vectors):
             record.vector = vector
+        if _vector_collector is not None:
+            _vector_collector.extend(vectors)
 
         # Persist
         await self.store.ensure_collection(collection, self._embedder.embedding_dim)
@@ -121,9 +136,12 @@ class RagPipeline:
 
         results: list[IngestResult] = []
         total = len(files)
+        all_vectors: list[list[float]] = []
 
         for done_count, file_path in enumerate(files, start=1):
-            result = await self.ingest_file(file_path, collection, rebuild_fts=False)
+            result = await self.ingest_file(
+                file_path, collection, rebuild_fts=False, _vector_collector=all_vectors
+            )
             results.append(result)
             if progress_cb is not None:
                 ret = progress_cb(done_count, total)
@@ -133,6 +151,20 @@ class RagPipeline:
         # Rebuild FTS once if at least one successful ingest
         if any(r.status == "ok" for r in results):
             await self.store.rebuild_fts_index(collection)
+
+        # Compute and store centroid from this ingest batch
+        if all_vectors:
+            centroid = _compute_centroid(all_vectors)
+            ok_results = [r for r in results if r.status == "ok"]
+            meta = CollectionMeta(
+                name=collection,
+                centroid=centroid,
+                doc_count=len(ok_results),
+                chunk_count=sum(r.chunks_created for r in ok_results),
+                embedding_model=self._embedder.model_name,
+                last_indexed=datetime.now(UTC),
+            )
+            await self.store.update_collection_meta(meta)
 
         return results
 

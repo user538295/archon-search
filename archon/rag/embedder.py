@@ -8,6 +8,7 @@ from typing import Any, Protocol, runtime_checkable
 
 @runtime_checkable
 class EmbedderBackend(Protocol):
+    model_name: str
     def encode(self, texts: list[str]) -> list[list[float]]: ...
 
 
@@ -15,7 +16,7 @@ class ModelEmbedder:
     """Lazy-loading fastembed TextEmbedding backend."""
 
     def __init__(self, model_name: str, providers: list[str] | None = None) -> None:
-        self._model_name = model_name
+        self.model_name = model_name
         self._providers = providers or None  # None = CPU default in fastembed
         self._model: Any = None  # loaded on first encode()
         self._lock = threading.Lock()
@@ -26,7 +27,7 @@ class ModelEmbedder:
                 if self._model is None:
                     from fastembed import TextEmbedding  # noqa: PLC0415
 
-                    self._model = TextEmbedding(self._model_name, providers=self._providers)
+                    self._model = TextEmbedding(self.model_name, providers=self._providers)
         # TextEmbedding.embed() returns a generator of 1-D numpy arrays
         return [e.tolist() for e in self._model.embed(texts)]
 
@@ -37,6 +38,10 @@ class Embedder:
     def __init__(self, backend: EmbedderBackend) -> None:
         self._backend = backend
         self._embedding_dim: int | None = None
+
+    @property
+    def model_name(self) -> str:
+        return getattr(self._backend, "model_name", "")
 
     @property
     def embedding_dim(self) -> int:

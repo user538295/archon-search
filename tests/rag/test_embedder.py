@@ -18,6 +18,8 @@ from archon.rag.embedder import Embedder, EmbedderBackend, make_embedder
 class _MockBackend:
     """Deterministic test backend — returns [float(i)] * dim vectors."""
 
+    model_name: str = "mock-backend"
+
     def __init__(self, dim: int = 4) -> None:
         self.dim = dim
         self.call_count = 0

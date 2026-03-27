@@ -21,6 +21,8 @@ from archon.rag.reranker import Reranker, RerankerBackend
 class MockEmbedderBackend:
     """Returns dim=4 vectors for all texts."""
 
+    model_name: str = "mock-embedder"
+
     def encode(self, texts: list[str]) -> list[list[float]]:
         return [[0.1] * 4 for _ in texts]
 
@@ -556,6 +558,116 @@ async def test_pipeline_ingest_directory_skips_binary_extensions(connected_store
 
     assert len(results) == 1
     assert results[0].status == "ok"
+
+
+# ---------------------------------------------------------------------------
+# FEAT-022 Task 1.2 — Centroid computation in ingest_directory
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_computes_centroid_from_all_chunks(connected_store, col_name, tmp_path):
+    """ingest_directory stores centroid = mean of all chunk embeddings from the batch."""
+    from datetime import UTC, datetime
+
+    pipeline = make_pipeline(connected_store)
+    # MockEmbedderBackend returns [0.1, 0.1, 0.1, 0.1] for all texts
+    for i in range(3):
+        (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent for document {i}.\n" * 5)
+
+    before = datetime.now(UTC)
+    results = await pipeline.ingest_directory(tmp_path, col_name)
+    after = datetime.now(UTC)
+    assert all(r.status == "ok" for r in results)
+
+    meta = await connected_store.get_collection_meta(col_name)
+    assert meta is not None
+    assert meta.centroid is not None
+    assert len(meta.centroid) == 4
+    # mean of [0.1]*4 vectors is [0.1]*4
+    for val in meta.centroid:
+        assert abs(val - 0.1) < 1e-9
+    assert meta.doc_count == 3
+    assert meta.chunk_count > 0
+    assert meta.embedding_model == "mock-embedder"
+    assert meta.last_indexed is not None
+    assert before <= meta.last_indexed <= after
+
+
+@pytest.mark.asyncio
+async def test_ingest_centroid_replaced_on_reingest(connected_store, col_name, tmp_path):
+    """Re-ingest replaces the centroid with fresh computation from the new batch."""
+    pipeline = make_pipeline(connected_store)
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.\n" * 5)
+
+    # First ingest — MockEmbedderBackend returns [0.1]*4
+    await pipeline.ingest_directory(tmp_path, col_name)
+    meta1 = await connected_store.get_collection_meta(col_name)
+    assert meta1 is not None and meta1.centroid is not None
+
+    # Swap embedder to one returning [0.5]*4
+    class AltEmbedderBackend:
+        model_name: str = "alt-embedder"
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            return [[0.5] * 4 for _ in texts]
+
+    pipeline._embedder = Embedder(AltEmbedderBackend())
+
+    # Re-ingest
+    await pipeline.ingest_directory(tmp_path, col_name)
+    meta2 = await connected_store.get_collection_meta(col_name)
+    assert meta2 is not None
+    assert meta2.centroid is not None
+    for val in meta2.centroid:
+        assert abs(val - 0.5) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_ingest_centroid_averages_heterogeneous_embeddings(connected_store, col_name, tmp_path):
+    """Centroid is the element-wise mean, verified with non-uniform vectors."""
+    from archon.rag.chunker import DocumentChunker
+    from archon.rag.parser import DocumentParser
+    from archon.rag.pipeline import RagPipeline
+
+    call_count = 0
+
+    class HeteroEmbedderBackend:
+        """Alternate between two distinct 2-d vectors per call batch."""
+
+        model_name: str = "hetero-embedder"
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            nonlocal call_count
+            call_count += 1
+            # odd call → [1.0, 0.0]; even call → [0.0, 1.0]
+            if call_count % 2 == 1:
+                return [[1.0, 0.0] for _ in texts]
+            return [[0.0, 1.0] for _ in texts]
+
+    pipeline = RagPipeline(
+        store=connected_store,
+        embedder=Embedder(HeteroEmbedderBackend()),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=64),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    # Two files → two embed() calls → vectors [1,0] and [0,1]
+    (tmp_path / "a.md").write_text("# A\n\nContent.\n" * 5)
+    (tmp_path / "b.md").write_text("# B\n\nContent.\n" * 5)
+
+    results = await pipeline.ingest_directory(tmp_path, col_name)
+    assert all(r.status == "ok" for r in results)
+
+    meta = await connected_store.get_collection_meta(col_name)
+    assert meta is not None and meta.centroid is not None
+    assert len(meta.centroid) == 2
+    # mean of ([1,0]*n + [0,1]*m) — each file produces k chunks, centroid ≈ [0.5, 0.5]
+    assert abs(meta.centroid[0] - 0.5) < 1e-6
+    assert abs(meta.centroid[1] - 0.5) < 1e-6
 
 
 # ===========================================================================
