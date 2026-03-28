@@ -6,12 +6,17 @@ Supported formats:
 - HTML: .html, .htm — via trafilatura
 - PDF: .pdf — via docling (lazy import)
 - Office: .docx, .pptx, .xlsx — via markitdown (lazy import)
+- Images: .png, .jpg, .jpeg, .tiff, .tif, .bmp, .webp — via docling OCR
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from docling.document_converter import DocumentConverter
 
 
 class ParseError(Exception):
@@ -30,10 +35,16 @@ _PLAIN_EXTENSIONS = {
 _HTML_EXTENSIONS = {".html", ".htm"}
 _PDF_EXTENSIONS = {".pdf"}
 _OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
+# .gif and .svg are intentionally excluded: .gif has animated frames (OCR on frame 0 is
+# misleading) and .svg is XML text (plain-text fallback is more appropriate).
 
 
 class DocumentParser:
     """Parses documents into plain text, routing by file extension."""
+
+    def __init__(self) -> None:
+        self._converter: DocumentConverter | None = None  # lazy-initialised on first docling call
 
     async def parse(self, path: Path) -> str:
         """Parse *path* and return its text content.
@@ -48,6 +59,8 @@ class DocumentParser:
             fn = self._parse_pdf
         elif suffix in _OFFICE_EXTENSIONS:
             fn = self._parse_office
+        elif suffix in _IMAGE_EXTENSIONS:
+            fn = self._parse_image
         else:
             fn = self._parse_plain
 
@@ -79,12 +92,25 @@ class DocumentParser:
         except Exception as exc:
             raise ParseError(path, exc) from exc
 
-    def _parse_pdf(self, path: Path) -> str:
+    def _parse_with_docling(self, path: Path) -> str:
+        # NOT THREAD SAFE: self._converter lazy init has a check-then-set race if
+        # multiple threads call this concurrently (e.g. asyncio.gather over images).
+        # Current RAG pipeline is sequential, so this is an accepted limitation.
+        # If parallel ingestion is added, guard with threading.Lock.
         try:
             from docling.document_converter import DocumentConverter  # noqa: PLC0415
-            return str(DocumentConverter().convert(str(path)).document.export_to_markdown())
+            if self._converter is None:
+                self._converter = DocumentConverter()
+            result = self._converter.convert(str(path)).document.export_to_markdown()
+            return result.strip() if result else ""
         except Exception as exc:
             raise ParseError(path, exc) from exc
+
+    def _parse_pdf(self, path: Path) -> str:
+        return self._parse_with_docling(path)
+
+    def _parse_image(self, path: Path) -> str:
+        return self._parse_with_docling(path)
 
     def _parse_office(self, path: Path) -> str:
         try:
