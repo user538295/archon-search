@@ -120,6 +120,7 @@ class RagPipeline:
         collection: str,
         glob_pattern: str = "**/*",
         progress_cb: Callable[[int, int], None | Awaitable[None]] | None = None,
+        force_regenerate_description: bool = False,
     ) -> list[IngestResult]:
         # Collect and filter files
         files: list[Path] = []
@@ -176,7 +177,7 @@ class RagPipeline:
             described_at = existing_meta.described_at_doc_count if existing_meta else None
             last_described = existing_meta.last_described if existing_meta else None
 
-            if _should_regenerate(batch_doc_count, batch_chunk_count, described_at):
+            if force_regenerate_description or _should_regenerate(batch_doc_count, batch_chunk_count, described_at):
                 new_desc = await generate_description(all_chunks, collection)
                 if new_desc is not None:
                     description = new_desc
