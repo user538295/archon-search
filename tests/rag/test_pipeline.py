@@ -869,6 +869,58 @@ async def test_create_pipeline_does_not_auto_connect():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
+async def test_ingest_calls_progress_callback(connected_store, col_name, tmp_path):
+    """progress_cb(done, total) is called once per file processed in sorted order."""
+    pipeline = make_pipeline(connected_store)
+    # Create files with names that would be out of sort order in typical filesystem order
+    (tmp_path / "z.md").write_text("# Z\n\nContent for file Z.\n" * 5)
+    (tmp_path / "a.md").write_text("# A\n\nContent for file A.\n" * 5)
+
+    calls: list[tuple[int, int]] = []
+    files_seen: list[str] = []
+
+    def _cb(done: int, total: int) -> None:
+        calls.append((done, total))
+
+    # Spy on ingest_file to verify sorted processing order
+    original_ingest_file = pipeline.ingest_file
+
+    async def _spy_ingest_file(path, collection, **kwargs):
+        files_seen.append(path.name)
+        return await original_ingest_file(path, collection, **kwargs)
+
+    pipeline.ingest_file = _spy_ingest_file
+
+    results = await pipeline.ingest_directory(tmp_path, col_name, progress_cb=_cb)
+
+    assert len(results) == 2
+    assert len(calls) == 2
+    # First call: done=1, total=2
+    assert calls[0] == (1, 2)
+    # Second call: done=2, total=2
+    assert calls[1] == (2, 2)
+    # Verify sorted order: a.md processed before z.md
+    assert files_seen == ["a.md", "z.md"], f"Expected sorted order, got {files_seen}"
+
+
+@pytest.mark.asyncio
+async def test_ingest_async_progress_callback(connected_store, col_name, tmp_path):
+    """Async progress_cb is properly awaited (inspect.isawaitable branch)."""
+    pipeline = make_pipeline(connected_store)
+    (tmp_path / "a.md").write_text("# A\n\nContent for async test.\n" * 5)
+
+    calls: list[tuple[int, int]] = []
+
+    async def _async_cb(done: int, total: int) -> None:
+        calls.append((done, total))
+
+    results = await pipeline.ingest_directory(tmp_path, col_name, progress_cb=_async_cb)
+
+    assert len(results) == 1
+    assert calls == [(1, 1)]
+
+
 def test_create_pipeline_no_history_collection_param() -> None:
     """RagPipeline.__init__ must NOT accept history_collection parameter."""
     import inspect

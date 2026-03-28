@@ -8,7 +8,8 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from archon.rag.pipeline import RagPipeline
@@ -71,7 +72,11 @@ class RagCollectionSync:
     def __init__(self, pipeline: RagPipeline) -> None:
         self._pipeline = pipeline
 
-    async def sync(self, collections: list[str]) -> SyncResult:
+    async def sync(
+        self,
+        collections: list[str],
+        progress_cb: Callable[[int, int], None | Awaitable[None]] | None = None,
+    ) -> SyncResult:
         """Synchronise LanceDB collections with the given filesystem paths.
 
         Steps:
@@ -132,7 +137,7 @@ class RagCollectionSync:
                 result.errors.append(f"path does not exist: {path_str}")
                 continue
             try:
-                await self._pipeline.ingest_directory(p, name)
+                await self._pipeline.ingest_directory(p, name, progress_cb=progress_cb)
                 result.added.append(name)
                 successfully_added.add(name)
             except Exception as exc:  # noqa: BLE001

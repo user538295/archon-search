@@ -138,6 +138,8 @@ class RagPipeline:
                 continue
             files.append(file_path)
 
+        files.sort()
+
         if not files:
             return []
 
