@@ -567,4 +567,28 @@ class TestRagCollectionSyncIntegration:
         assert "project_a" in col_names_after
         assert "project_b" not in col_names_after
 
-        await store.disconnect()
+
+# ---------------------------------------------------------------------------
+# manifest_remove_entry tests
+# ---------------------------------------------------------------------------
+
+
+class TestManifestRemoveEntry:
+    def test_manifest_remove_entry_removes_key(self, tmp_path: Path) -> None:
+        from archon.rag.sync import manifest_remove_entry  # noqa: PLC0415
+
+        manifest_path = tmp_path / "sync_manifest.json"
+        manifest_path.write_text(json.dumps({"sessions": "/home/user/.archon/sessions", "other": "/data"}))
+
+        manifest_remove_entry(manifest_path, "sessions")
+
+        data = json.loads(manifest_path.read_text())
+        assert "sessions" not in data
+        assert "other" in data
+
+    def test_manifest_remove_entry_noop_if_missing(self, tmp_path: Path) -> None:
+        from archon.rag.sync import manifest_remove_entry  # noqa: PLC0415
+
+        nonexistent = tmp_path / "no_such_manifest.json"
+        # Must not raise
+        manifest_remove_entry(nonexistent, "sessions")

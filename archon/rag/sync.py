@@ -66,6 +66,18 @@ def manifest_lookup_by_path(manifest_path: Path, resolved_path: str) -> str | No
     return None
 
 
+def manifest_remove_entry(manifest_path: Path, col_name: str) -> None:
+    """Remove col_name from manifest JSON. Best-effort — silently ignores all errors."""
+    if not manifest_path.exists():
+        return
+    try:
+        data = json.loads(manifest_path.read_text())
+        data.pop(col_name, None)
+        manifest_path.write_text(json.dumps(data, indent=2))
+    except (json.JSONDecodeError, OSError):
+        pass
+
+
 class RagCollectionSync:
     """Synchronises LanceDB collections with a declarative list of filesystem paths."""
 
