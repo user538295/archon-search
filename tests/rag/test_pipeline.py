@@ -552,12 +552,69 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
 async def test_pipeline_ingest_directory_skips_binary_extensions(connected_store, col_name, tmp_path):
     pipeline = make_pipeline(connected_store)
     (tmp_path / "data.txt").write_text("Some text content.\n" * 5)
-    (tmp_path / "image.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+    (tmp_path / "image.gif").write_bytes(b"GIF89a" + b"\x00" * 100)
 
     results = await pipeline.ingest_directory(tmp_path, col_name)
 
     assert len(results) == 1
     assert results[0].status == "ok"
+
+
+def test_pipeline_image_extensions_not_in_binary() -> None:
+    from archon.rag.pipeline import _BINARY_EXTENSIONS
+
+    image_exts = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
+    for ext in image_exts:
+        assert ext not in _BINARY_EXTENSIONS, f"{ext} should not be in _BINARY_EXTENSIONS"
+
+
+def test_pipeline_gif_svg_ico_remain_binary() -> None:
+    from archon.rag.pipeline import _BINARY_EXTENSIONS
+
+    for ext in {".gif", ".svg", ".ico"}:
+        assert ext in _BINARY_EXTENSIONS, f"{ext} must remain in _BINARY_EXTENSIONS"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ext", [".gif", ".svg", ".ico"])
+async def test_pipeline_ingest_directory_skips_binary_image(ext: str, connected_store, col_name, tmp_path):
+    pipeline = make_pipeline(connected_store)
+    (tmp_path / f"binary{ext}").write_bytes(b"\x00" * 50)
+
+    results = await pipeline.ingest_directory(tmp_path, col_name)
+
+    assert results == [], f"Binary {ext} file should not be ingested"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_ingest_directory_includes_png(connected_store, col_name, tmp_path):
+    pipeline = make_pipeline(connected_store)
+    png_file = tmp_path / "image.png"
+    png_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+    ocr_text = "Extracted OCR text from image. " * 20
+    pipeline._parser.parse = AsyncMock(return_value=ocr_text)  # type: ignore[method-assign]
+
+    results = await pipeline.ingest_directory(tmp_path, col_name)
+
+    assert len(results) == 1
+    assert results[0].status == "ok"
+    assert results[0].chunks_created > 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_ingest_image_empty_ocr_produces_no_chunk(connected_store, col_name, tmp_path):
+    """Empty OCR result skips store interaction — chunker returns [], no chunks stored."""
+    pipeline = make_pipeline(connected_store)
+    png_file = tmp_path / "blank.png"
+    png_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+    pipeline._parser.parse = AsyncMock(return_value="")  # type: ignore[method-assign]
+
+    result = await pipeline.ingest_file(png_file, col_name)
+
+    assert result.status == "ok"
+    assert result.chunks_created == 0
 
 
 # ---------------------------------------------------------------------------
