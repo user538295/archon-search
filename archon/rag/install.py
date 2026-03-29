@@ -6,6 +6,7 @@ import importlib
 import logging
 import subprocess
 import sys
+import time
 from pathlib import Path
 from shutil import rmtree
 from typing import TYPE_CHECKING
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("archon")
 
 _RAG_PACKAGES = ["lancedb", "fastembed", "docling", "markitdown", "trafilatura", "chonkie", "fastmcp"]
+_WAIT_FOR_SERVICE_TIMEOUT = 60
 
 
 class RagInstaller:
@@ -223,16 +225,22 @@ class RagInstaller:
         except Exception:
             return False
 
-    def _wait_for_service(self, timeout: int = 30) -> bool:
+    def _wait_for_service(self, timeout: int = _WAIT_FOR_SERVICE_TIMEOUT) -> bool:
         """Poll HTTP health endpoint until ready or timeout. Returns True if up."""
-        import time
-
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self._is_service_running():
-                return True
-            time.sleep(1)
-        return False
+        print("Waiting for RAG service", end="", flush=True)
+        try:
+            while time.monotonic() < deadline:
+                if self._is_service_running():
+                    print(" ready.")
+                    return True
+                print(".", end="", flush=True)
+                time.sleep(1)
+            print(" timed out.")
+            return False
+        except KeyboardInterrupt:
+            print()
+            raise
 
     # ------------------------------------------------------------------
     # Full install flow
@@ -297,9 +305,9 @@ class RagInstaller:
 
         # Wait for readiness
         if not self.dry_run:
-            ready = self._wait_for_service(timeout=30)
+            ready = self._wait_for_service()
             if not ready:
-                print("RAG service did not become ready within 30 seconds.")
+                print(f"RAG service did not become ready within {_WAIT_FOR_SERVICE_TIMEOUT} seconds.")
                 return 1
 
         print("RAG service installed and running successfully.")

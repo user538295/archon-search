@@ -1027,6 +1027,192 @@ class TestValidateProviders:
         # but embed test still ran
         mock_te_cls.assert_called_once()
 
+
+# ---------------------------------------------------------------------------
+# _wait_for_service — progress dots and timeout constant
+# ---------------------------------------------------------------------------
+
+
+class TestWaitForService:
+    def test_wait_for_service_default_timeout_is_60(self) -> None:
+        """_WAIT_FOR_SERVICE_TIMEOUT module constant must equal 60."""
+        from archon.rag.install import _WAIT_FOR_SERVICE_TIMEOUT
+
+        assert _WAIT_FOR_SERVICE_TIMEOUT == 60
+
+    def test_wait_for_service_prints_dots_then_ready(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """Prints dots while waiting, then ' ready.' when service comes up."""
+        import time as time_module
+
+        installer = _make_installer(tmp_path)
+
+        # Provide enough monotonic values: first call sets start, then loop checks deadline.
+        # timeout=60 → deadline = start + 60
+        # [0.0] → start=0.0, deadline=60.0
+        # [1.0, 2.0, 3.0] → three while-condition checks (False, False, True → exits)
+        monotonic_values = [0.0, 1.0, 2.0, 3.0]
+
+        with patch.object(installer, "_is_service_running", side_effect=[False, False, True]), \
+             patch.object(time_module, "sleep"), \
+             patch.object(time_module, "monotonic", side_effect=monotonic_values):
+            result = installer._wait_for_service()
+
+        captured = capsys.readouterr()
+        assert result is True
+        assert ".." in captured.out
+        assert "ready." in captured.out
+
+    def test_wait_for_service_prints_timed_out_on_timeout(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """Prints ' timed out.' when deadline is exceeded."""
+        import time as time_module
+
+        installer = _make_installer(tmp_path)
+
+        # monotonic values: start=0.0 (deadline=60.0), then 10.0, 30.0, 70.0 (exceeds deadline)
+        monotonic_values = [0.0, 10.0, 30.0, 70.0]
+
+        with patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(time_module, "sleep"), \
+             patch.object(time_module, "monotonic", side_effect=monotonic_values):
+            result = installer._wait_for_service()
+
+        captured = capsys.readouterr()
+        assert result is False
+        assert "timed out." in captured.out
+
+    def test_wait_for_service_keyboard_interrupt_prints_newline(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """KeyboardInterrupt in the loop must print a newline before re-raising."""
+        import time as time_module
+
+        installer = _make_installer(tmp_path)
+
+        monotonic_values = [0.0, 1.0]
+
+        with patch.object(installer, "_is_service_running", side_effect=KeyboardInterrupt), \
+             patch.object(time_module, "sleep"), \
+             patch.object(time_module, "monotonic", side_effect=monotonic_values):
+            with pytest.raises(KeyboardInterrupt):
+                installer._wait_for_service()
+
+        captured = capsys.readouterr()
+        assert "Waiting for RAG service" in captured.out
+        assert "\n" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# run() — service-readiness error path and call-site changes
+# ---------------------------------------------------------------------------
+
+
+class TestRunServiceReadiness:
+    def _base_run_patches(self, installer: object) -> dict:
+        return {
+            "detect_gpu": MagicMock(return_value="none"),
+            "check_deps": MagicMock(return_value=[]),
+            "install_deps": MagicMock(),
+            "configure_providers": MagicMock(),
+            "validate_providers": MagicMock(return_value=True),
+            "create_data_dir": MagicMock(),
+            "_bootstrap_collections": AsyncMock(),
+            "write_service_file": MagicMock(),
+            "load_service": MagicMock(return_value=0),
+        }
+
+    def test_run_returns_error_code_when_service_not_ready(self, tmp_path: Path) -> None:
+        """run() must return 1 when _wait_for_service returns False."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "_wait_for_service", return_value=False), \
+             patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True)
+
+        assert result == 1
+
+    def test_run_prints_error_message_when_service_not_ready(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """run() error message must mention the timeout value from the constant (60 seconds)."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "_wait_for_service", return_value=False), \
+             patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            installer.run(non_interactive=True)
+
+        captured = capsys.readouterr()
+        assert "within 60 seconds" in captured.out
+
+    def test_run_calls_wait_for_service_without_explicit_timeout(self, tmp_path: Path) -> None:
+        """run() must call _wait_for_service() with no arguments (uses default timeout)."""
+        from unittest.mock import call
+
+        installer = _make_installer(tmp_path)
+
+        mock_wait = MagicMock(return_value=True)
+        with patch.object(installer, "_wait_for_service", mock_wait), \
+             patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            installer.run(non_interactive=True)
+
+        assert mock_wait.call_args == call()
+
+    def test_run_returns_error_code_when_load_service_fails(self, tmp_path: Path) -> None:
+        """run() must return the error code from load_service() and not call _wait_for_service."""
+        installer = _make_installer(tmp_path)
+
+        mock_wait = MagicMock(return_value=True)
+        with patch.object(installer, "_wait_for_service", mock_wait), \
+             patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=2), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True)
+
+        assert result == 2
+        mock_wait.assert_not_called()
+
+    def test_dry_run_does_not_print_wait_for_service_output(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """dry_run=True must not print 'Waiting for RAG service' progress output."""
+        installer = _make_installer(tmp_path, dry_run=True)
+
+        with patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            installer.run(non_interactive=True)
+
+        captured = capsys.readouterr()
+        assert "Waiting for RAG service" not in captured.out
+
     def test_validate_providers_returns_false_when_get_available_providers_raises(self, tmp_path: Path) -> None:
         """onnxruntime imports fine but get_available_providers() raises → False."""
         installer = _make_installer(tmp_path)
