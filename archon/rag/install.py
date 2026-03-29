@@ -258,27 +258,37 @@ class RagInstaller:
         # Dependencies
         missing = self.check_deps()
         if missing:
-            print(f"Installing missing packages: {', '.join(missing)}")
+            print(f"[1/5] Installing packages: {', '.join(missing)} ...")
             self.install_deps(gpu=gpu)
+            print("[1/5] Packages installed.")
+        else:
+            print("[1/5] All packages already installed.")
 
         # Configure execution providers based on GPU type
         if not self.dry_run and gpu == "apple_silicon":
+            print("[2/5] Validating GPU acceleration (first run downloads ~150 MB model data) ...")
             if self.validate_providers(["CoreMLExecutionProvider"]):
                 self.configure_providers(gpu=gpu)
-                print("CoreML acceleration validated — GPU/Neural Engine active.")
+                print("[2/5] CoreML acceleration validated — GPU/Neural Engine active.")
             else:
-                print("Warning: CoreML validation failed — falling back to CPU. macOS 12+ required.")
+                print("[2/5] Warning: CoreML validation failed — falling back to CPU. macOS 12+ required.")
         else:
+            print(f"[2/5] Configuring providers for {gpu} ...")
             self.configure_providers(gpu=gpu)
+            print(f"[2/5] Providers configured for {gpu}.")
 
         # Create data directory
+        print("[3/5] Creating data directory ...")
         self.create_data_dir()
 
         # Bootstrap collections
+        print("[4/5] Bootstrapping collections ...")
         if not self.dry_run:
             asyncio.run(self._bootstrap_collections())
+            print("[4/5] Collections ready.")
 
         # Register and start service
+        print("[5/5] Starting RAG service ...")
         self.write_service_file()
         rc = self.load_service()
         if rc != 0:

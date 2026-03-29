@@ -569,6 +569,220 @@ class TestRun:
         captured = capsys.readouterr()
         assert "running" in captured.out.lower() or "warning" in captured.out.lower() or "already" in captured.out.lower()
 
+    def test_run_prints_step_labels(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """All 5 step labels [1/5]–[5/5] must appear in stdout for a successful run."""
+        installer = _make_installer(tmp_path)
+        svc = MagicMock()
+        svc.register.return_value = 0
+        svc.start.return_value = 0
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = AsyncMock()
+
+        with patch("archon.rag.install.get_rag_service", return_value=svc), \
+             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+             patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "validate_providers", return_value=True), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
+            result = installer.run(non_interactive=True)
+
+        captured = capsys.readouterr()
+        assert result == 0
+        assert "[1/5]" in captured.out
+        assert "[2/5]" in captured.out
+        assert "[3/5]" in captured.out
+        assert "[4/5]" in captured.out
+        assert "[5/5]" in captured.out
+
+    def test_run_prints_validating_message_for_apple_silicon(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """For apple_silicon GPU, stdout must contain '[2/5] Validating GPU acceleration'."""
+        installer = _make_installer(tmp_path)
+        svc = MagicMock()
+        svc.register.return_value = 0
+        svc.start.return_value = 0
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = AsyncMock()
+
+        with patch("archon.rag.install.get_rag_service", return_value=svc), \
+             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+             patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "validate_providers", return_value=True), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
+            result = installer.run(non_interactive=True)
+
+        captured = capsys.readouterr()
+        assert result == 0
+        assert "[2/5] Validating GPU acceleration" in captured.out
+
+    def test_run_prints_coreml_validation_failed_message(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """For apple_silicon GPU where validate_providers returns False, stdout must contain warning message."""
+        installer = _make_installer(tmp_path)
+        svc = MagicMock()
+        svc.register.return_value = 0
+        svc.start.return_value = 0
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = AsyncMock()
+
+        with patch("archon.rag.install.get_rag_service", return_value=svc), \
+             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+             patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "validate_providers", return_value=False), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
+            result = installer.run(non_interactive=True)
+
+        captured = capsys.readouterr()
+        assert result == 0
+        assert "[2/5] Warning: CoreML validation failed" in captured.out
+
+    def test_run_prints_providers_configured_for_non_apple_silicon(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """For non-apple_silicon GPU (e.g. 'none'), stdout must contain '[2/5] Providers configured for none'."""
+        installer = _make_installer(tmp_path)
+        svc = MagicMock()
+        svc.register.return_value = 0
+        svc.start.return_value = 0
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = AsyncMock()
+
+        with patch("archon.rag.install.get_rag_service", return_value=svc), \
+             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+             patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "validate_providers", return_value=True), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
+            result = installer.run(non_interactive=True)
+
+        captured = capsys.readouterr()
+        assert result == 0
+        assert "[2/5] Providers configured for none" in captured.out
+
+    def test_run_prints_packages_already_installed_when_no_missing(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """When check_deps() returns [], stdout must contain 'already installed'."""
+        installer = _make_installer(tmp_path)
+        svc = MagicMock()
+        svc.register.return_value = 0
+        svc.start.return_value = 0
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = AsyncMock()
+
+        with patch("archon.rag.install.get_rag_service", return_value=svc), \
+             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+             patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "validate_providers", return_value=True), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
+            result = installer.run(non_interactive=True)
+
+        captured = capsys.readouterr()
+        assert result == 0
+        assert "already installed" in captured.out
+
+    def test_run_prints_installing_packages_when_missing(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """When check_deps() returns ['lancedb'], stdout must contain '[1/5] Installing packages: lancedb'."""
+        installer = _make_installer(tmp_path)
+        svc = MagicMock()
+        svc.register.return_value = 0
+        svc.start.return_value = 0
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = AsyncMock()
+
+        with patch("archon.rag.install.get_rag_service", return_value=svc), \
+             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+             patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=["lancedb"]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "validate_providers", return_value=True), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
+            result = installer.run(non_interactive=True)
+
+        captured = capsys.readouterr()
+        assert result == 0
+        assert "[1/5] Installing packages: lancedb" in captured.out
+
+    def test_run_prints_packages_installed_confirmation_when_missing(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """When check_deps() returns ['lancedb'], stdout must contain '[1/5] Packages installed.'."""
+        installer = _make_installer(tmp_path)
+        svc = MagicMock()
+        svc.register.return_value = 0
+        svc.start.return_value = 0
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = AsyncMock()
+
+        with patch("archon.rag.install.get_rag_service", return_value=svc), \
+             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+             patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=["lancedb"]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "validate_providers", return_value=True), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
+            result = installer.run(non_interactive=True)
+
+        captured = capsys.readouterr()
+        assert result == 0
+        assert "[1/5] Packages installed." in captured.out
+
 
 # ---------------------------------------------------------------------------
 # run_uninstall()
