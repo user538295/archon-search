@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -217,6 +218,37 @@ class TestInstallDeps:
         installer = _make_installer(tmp_path, dry_run=True)
         with patch("subprocess.run") as mock_run:
             installer.install_deps(gpu="none")
+        mock_run.assert_not_called()
+
+    def test_install_deps_cuda_passes_python_to_all_calls(self, tmp_path: Path) -> None:
+        """All 3 subprocess calls for CUDA path include --python sys.executable."""
+        calls = self._capture_pip_args(tmp_path, gpu="cuda")
+        assert len(calls) == 3  # uninstall fastembed + install fastembed-gpu + install common
+        for cmd in calls:
+            assert "--python" in cmd
+            assert cmd[cmd.index("--python") + 1] == sys.executable
+
+    @pytest.mark.parametrize("gpu", ["none", "apple_silicon"])
+    def test_install_deps_cpu_passes_python_to_all_calls(self, tmp_path: Path, gpu: str) -> None:
+        """All 2 subprocess calls for CPU/Apple Silicon path include --python sys.executable."""
+        calls = self._capture_pip_args(tmp_path, gpu=gpu)
+        assert len(calls) == 2  # install fastembed + install common
+        for cmd in calls:
+            assert "--python" in cmd
+            assert cmd[cmd.index("--python") + 1] == sys.executable
+
+    def test_install_deps_cpu_common_packages_present(self, tmp_path: Path) -> None:
+        """lancedb and docling appear in the flat args of all captured commands for cpu."""
+        calls = self._capture_pip_args(tmp_path, gpu="none")
+        all_args = " ".join(arg for cmd in calls for arg in cmd)
+        assert "lancedb" in all_args
+        assert "docling" in all_args
+
+    def test_install_deps_dry_run_cuda_no_op(self, tmp_path: Path) -> None:
+        """dry_run=True with CUDA GPU skips all subprocess calls."""
+        installer = _make_installer(tmp_path, dry_run=True)
+        with patch("subprocess.run") as mock_run:
+            installer.install_deps(gpu="cuda")
         mock_run.assert_not_called()
 
 

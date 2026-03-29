@@ -5,6 +5,7 @@ import asyncio
 import importlib
 import logging
 import subprocess
+import sys
 from pathlib import Path
 from shutil import rmtree
 from typing import TYPE_CHECKING
@@ -63,27 +64,29 @@ class RagInstaller:
     # ------------------------------------------------------------------
 
     def install_deps(self, gpu: GpuType) -> None:
-        """Install RAG dependencies. No-op when dry_run=True."""
+        """Install RAG dependencies into the same Python that runs this process. No-op when dry_run=True."""
         if self.dry_run:
             return
 
+        python = sys.executable
+
         if gpu == "cuda":
             subprocess.run(
-                ["uv", "pip", "uninstall", "fastembed", "-y"],
+                ["uv", "pip", "uninstall", "--python", python, "fastembed", "-y"],
                 check=False,
             )
             subprocess.run(
-                ["uv", "pip", "install", "fastembed-gpu>=0.8.0", "onnxruntime-gpu"],
+                ["uv", "pip", "install", "--python", python, "fastembed-gpu>=0.8.0", "onnxruntime-gpu"],
                 check=True,
             )
         else:
             subprocess.run(
-                ["uv", "pip", "install", "fastembed>=0.8.0"],
+                ["uv", "pip", "install", "--python", python, "fastembed>=0.8.0"],
                 check=True,
             )
 
         subprocess.run(
-            ["uv", "pip", "install", "lancedb", "docling", "markitdown",
+            ["uv", "pip", "install", "--python", python, "lancedb", "docling", "markitdown",
              "trafilatura", "chonkie", "fastmcp"],
             check=True,
         )
