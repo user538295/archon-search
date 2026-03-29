@@ -176,7 +176,7 @@ async def main() -> None:
 
     from archon.config.loader import load_config  # noqa: PLC0415
 
-    cfg = load_config()
+    cfg = load_config(require_token=False)
     history_col = path_to_collection_name(
         str(Path(cfg.history.directory).expanduser() / "sessions")
     )

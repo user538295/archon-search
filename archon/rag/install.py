@@ -26,13 +26,13 @@ _RAG_PACKAGES = ["lancedb", "fastembed", "docling", "markitdown", "trafilatura",
 class RagInstaller:
     """Installs and manages the RAG service end-to-end."""
 
-    def __init__(self, config_file: str = "config.toml", dry_run: bool = False) -> None:
-        self.config_file = config_file
+    def __init__(self, config_file: str | None = None, dry_run: bool = False) -> None:
+        self.config_file = config_file or str(Path.home() / ".archon" / "config.toml")
         self.dry_run = dry_run
 
-        # Load config
+        # Load config — token not required; RAG commands are independent of the Telegram bot
         from archon.config.loader import load_config
-        cfg = load_config(config_file)
+        cfg = load_config(config_file=self.config_file, require_token=False)
         self.cfg: RagConfig = cfg.rag
         self._full_cfg: Config = cfg
 

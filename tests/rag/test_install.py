@@ -58,6 +58,39 @@ def _make_full_config(tmp_path: Path) -> object:
     return FakeFullConfig()
 
 
+class TestRagInstallerInit:
+    def test_init_succeeds_without_telegram_token(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """RagInstaller.__init__ must not require TELEGRAM_BOT_TOKEN — exercises real load_config path."""
+        from archon.rag.install import RagInstaller
+        from archon.config.loader import load_config
+
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        config_toml = tmp_path / "config.toml"
+        config_toml.write_text(
+            "[access]\nallowed_user_ids = [1]\n[session]\nworking_directory = \"/tmp\"\n"
+        )
+        env_file = tmp_path / ".env"  # empty — no token
+
+        with patch("archon.config.loader.load_config",
+                   side_effect=lambda **kw: load_config(env_file=str(env_file), **kw)):
+            installer = RagInstaller(config_file=str(config_toml))
+
+        assert installer.cfg is not None
+        assert installer._full_cfg.telegram_bot_token is None
+
+    def test_default_config_file_path(self) -> None:
+        """RagInstaller default config_file must point to ~/.archon/config.toml."""
+        from archon.rag.install import RagInstaller
+        from unittest.mock import MagicMock
+
+        fake_cfg = MagicMock()
+        fake_cfg.rag = MagicMock()
+        with patch("archon.config.loader.load_config", return_value=fake_cfg) as mock_load:
+            installer = RagInstaller()
+        assert installer.config_file == str(Path.home() / ".archon" / "config.toml")
+        mock_load.assert_called_once_with(config_file=str(Path.home() / ".archon" / "config.toml"), require_token=False)
+
+
 def _make_installer(tmp_path: Path, dry_run: bool = False) -> object:
     """Create a RagInstaller with a fake config injected."""
     from archon.rag.install import RagInstaller
