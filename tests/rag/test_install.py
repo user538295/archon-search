@@ -1419,3 +1419,34 @@ class TestLoadUnloadService:
 
         assert rc == 0
         svc.stop.assert_called_once_with(dry_run=False)
+
+
+# ---------------------------------------------------------------------------
+# _is_service_running
+# ---------------------------------------------------------------------------
+
+
+class TestIsServiceRunning:
+    def test_is_service_running_returns_true_on_200(self, tmp_path: Path) -> None:
+        """urlopen succeeds → _is_service_running returns True."""
+        installer = _make_installer(tmp_path)
+        cm = MagicMock()
+        with patch("urllib.request.urlopen", return_value=cm) as mock_urlopen:
+            assert installer._is_service_running() is True
+        expected_url = f"http://{installer.cfg.host}:{installer.cfg.port}/health"
+        mock_urlopen.assert_called_once_with(expected_url, timeout=1)
+
+    def test_is_service_running_returns_false_on_http_error(self, tmp_path: Path) -> None:
+        """urlopen raises HTTPError → _is_service_running returns False."""
+        import urllib.error
+        installer = _make_installer(tmp_path)
+        with patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError(
+            url=None, code=404, msg="Not Found", hdrs=None, fp=None  # type: ignore[arg-type]
+        )):
+            assert installer._is_service_running() is False
+
+    def test_is_service_running_returns_false_on_connection_refused(self, tmp_path: Path) -> None:
+        """urlopen raises ConnectionRefusedError → _is_service_running returns False."""
+        installer = _make_installer(tmp_path)
+        with patch("urllib.request.urlopen", side_effect=ConnectionRefusedError()):
+            assert installer._is_service_running() is False
