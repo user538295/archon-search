@@ -699,3 +699,25 @@ async def test_get_collection_meta_exception_returns_error() -> None:
     data = _dict_data(result)
     assert "error" in data
     assert "store disconnected" in data["error"]
+
+
+# ---------------------------------------------------------------------------
+# Task 1.1 — /health endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_200() -> None:
+    """GET /health returns 200 with JSON body {"status": "ok"}."""
+    import httpx
+
+    pipeline = _make_pipeline()
+    app = _make_app(pipeline)
+
+    asgi_app = app.http_app()
+    transport = httpx.ASGITransport(app=asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}

@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context, FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from archon.rag.pipeline import RagPipeline, create_pipeline
 from archon.rag.sync import RagCollectionSync, path_to_collection_name
@@ -166,6 +168,10 @@ def create_app(pipeline: RagPipeline, default_collection: str) -> FastMCP:
         except Exception as exc:
             logger.exception("delete_document failed")
             return {"error": str(exc)}
+
+    @app.custom_route("/health", methods=["GET"])
+    async def health_check(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
 
     return app
 
