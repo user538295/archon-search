@@ -573,6 +573,148 @@ class TestRagCollectionSyncIntegration:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# TestSyncLocking tests
+# ---------------------------------------------------------------------------
+
+
+class TestSyncLocking:
+    def test_get_lock_returns_same_lock_for_same_name(self, tmp_path):
+        """_get_lock('col_a') twice returns the same asyncio.Lock instance."""
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline)
+
+        lock1 = syncer._get_lock("col_a")
+        lock2 = syncer._get_lock("col_a")
+
+        assert lock1 is lock2
+
+    def test_get_lock_returns_different_lock_for_different_name(self, tmp_path):
+        """_get_lock('col_a') and _get_lock('col_b') return different instances."""
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline)
+
+        lock_a = syncer._get_lock("col_a")
+        lock_b = syncer._get_lock("col_b")
+
+        assert lock_a is not lock_b
+
+    @pytest.mark.asyncio
+    async def test_sync_acquires_lock_per_collection(self, tmp_path):
+        """Lock is acquired during sync for the collection being ingested."""
+        import asyncio
+        from archon.rag.sync import RagCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+
+        lock_was_locked_during_ingest = False
+
+        async def fake_ingest(path, name, progress_cb=None):
+            nonlocal lock_was_locked_during_ingest
+            lock = syncer._get_lock(name)
+            lock_was_locked_during_ingest = lock.locked()
+
+        pipeline.ingest_directory = fake_ingest
+
+        syncer = RagCollectionSync(pipeline)
+        await syncer.sync([str(new_dir)])
+
+        assert lock_was_locked_during_ingest
+
+    @pytest.mark.asyncio
+    async def test_concurrent_sync_same_collection_serialized(self, tmp_path):
+        """Two concurrent sync() calls on the same collection are serialized."""
+        import asyncio
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "shared"
+        col_dir.mkdir()
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+
+        execution_log: list[str] = []
+        start_event = asyncio.Event()
+
+        call_count = 0
+
+        async def fake_ingest(path, name, progress_cb=None):
+            nonlocal call_count
+            call_count += 1
+            current_call = call_count
+            execution_log.append(f"start_{current_call}")
+            await asyncio.sleep(0.02)  # simulate work
+            execution_log.append(f"end_{current_call}")
+
+        pipeline.ingest_directory = fake_ingest
+
+        syncer = RagCollectionSync(pipeline)
+
+        # Run two sync calls concurrently on the same collection
+        await asyncio.gather(
+            syncer.sync([str(col_dir)]),
+            syncer.sync([str(col_dir)]),
+        )
+
+        # The log must show non-overlapping execution:
+        # start_1, end_1, start_2, end_2  (or vice versa)
+        assert len(execution_log) == 4
+        first_start = execution_log[0]
+        first_end = execution_log[1]
+        second_start = execution_log[2]
+        second_end = execution_log[3]
+        assert first_start.startswith("start_")
+        assert first_end.startswith("end_")
+        assert second_start.startswith("start_")
+        assert second_end.startswith("end_")
+        # Verify ordering: first must end before second starts
+        assert first_end < second_start or (
+            first_start[6:] == second_end[4:]  # same number means same call
+        ), f"Overlapping execution detected: {execution_log}"
+        # More direct check: after end_N, next must be start_M (no interleaving)
+        assert execution_log[1].startswith("end_")
+        assert execution_log[2].startswith("start_")
+
+    @pytest.mark.asyncio
+    async def test_concurrent_sync_different_collections_parallel(self, tmp_path):
+        """Two concurrent sync() calls on different collections run concurrently."""
+        import asyncio
+        from archon.rag.sync import RagCollectionSync
+
+        dir_a = tmp_path / "col_a"
+        dir_b = tmp_path / "col_b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+
+        started: list[str] = []
+        both_started = asyncio.Event()
+
+        async def fake_ingest(path, name, progress_cb=None):
+            started.append(name)
+            if len(started) == 2:
+                both_started.set()
+            # Wait until both have started (proving concurrency)
+            await asyncio.wait_for(both_started.wait(), timeout=1.0)
+
+        pipeline.ingest_directory = fake_ingest
+
+        syncer = RagCollectionSync(pipeline)
+
+        await asyncio.gather(
+            syncer.sync([str(dir_a)]),
+            syncer.sync([str(dir_b)]),
+        )
+
+        # both_started was set → both ingests ran concurrently
+        assert both_started.is_set()
+        assert len(started) == 2
+
+
 class TestManifestRemoveEntry:
     def test_manifest_remove_entry_removes_key(self, tmp_path: Path) -> None:
         from archon.rag.sync import manifest_remove_entry  # noqa: PLC0415

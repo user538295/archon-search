@@ -1,6 +1,7 @@
 """RAG collection synchronisation utilities."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -83,6 +84,7 @@ class RagCollectionSync:
 
     def __init__(self, pipeline: RagPipeline) -> None:
         self._pipeline = pipeline
+        self._collection_locks: dict[str, asyncio.Lock] = {}
 
     async def sync(
         self,
@@ -148,12 +150,13 @@ class RagCollectionSync:
             if not p.exists():
                 result.errors.append(f"path does not exist: {path_str}")
                 continue
-            try:
-                await self._pipeline.ingest_directory(p, name, progress_cb=progress_cb)
-                result.added.append(name)
-                successfully_added.add(name)
-            except Exception as exc:  # noqa: BLE001
-                result.errors.append(str(exc))
+            async with self._get_lock(name):
+                try:
+                    await self._pipeline.ingest_directory(p, name, progress_cb=progress_cb)
+                    result.added.append(name)
+                    successfully_added.add(name)
+                except Exception as exc:  # noqa: BLE001
+                    result.errors.append(str(exc))
 
         # Step 7: unchanged = existing ∩ desired
         unchanged = existing & desired.keys()
@@ -167,6 +170,16 @@ class RagCollectionSync:
         self._write_manifest(manifest_path, new_manifest)
 
         return result
+
+    # ------------------------------------------------------------------
+    # Lock helpers
+    # ------------------------------------------------------------------
+
+    def _get_lock(self, name: str) -> asyncio.Lock:
+        """Return the per-collection lock, creating it on first access."""
+        if name not in self._collection_locks:
+            self._collection_locks[name] = asyncio.Lock()
+        return self._collection_locks[name]
 
     # ------------------------------------------------------------------
     # Internal helpers
