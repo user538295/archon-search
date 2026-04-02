@@ -8,12 +8,14 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from archon.rag.pipeline import RagPipeline
+    from archon.rag.progress import CollectionProgress, IndexingStateStore
 
 logger = logging.getLogger("archon")
 
@@ -82,8 +84,9 @@ def manifest_remove_entry(manifest_path: Path, col_name: str) -> None:
 class RagCollectionSync:
     """Synchronises LanceDB collections with a declarative list of filesystem paths."""
 
-    def __init__(self, pipeline: RagPipeline) -> None:
+    def __init__(self, pipeline: RagPipeline, state_store: IndexingStateStore | None = None) -> None:
         self._pipeline = pipeline
+        self._state_store = state_store
         self._collection_locks: dict[str, asyncio.Lock] = {}
 
     async def sync(
@@ -104,9 +107,14 @@ class RagCollectionSync:
         7. Unchanged = existing ∩ desired.
         8. Update manifest atomically.
         """
+        from archon.rag.progress import CollectionProgress, IndexingStatus
+
         result = SyncResult()
         store = self._pipeline.store
         manifest_path = store._db_path / "sync_manifest.json"
+
+        # Crash recovery: reset stale IN_PROGRESS → PENDING
+        self._reset_stale_in_progress()
 
         # Step 0: migration
         existing_info = await store.list_collections()
@@ -128,6 +136,8 @@ class RagCollectionSync:
             try:
                 await store.drop_collection(name)
                 result.removed.append(name)
+                # Clean removed collection from state
+                self._safe_state_remove(name)
             except KeyError:
                 logger.warning(
                     "Collection %r in manifest but not in LanceDB; skipping drop", name
@@ -151,11 +161,78 @@ class RagCollectionSync:
                 result.errors.append(f"path does not exist: {path_str}")
                 continue
             async with self._get_lock(name):
+                # Write PENDING state
+                self._safe_state_update(name, CollectionProgress(
+                    status=IndexingStatus.PENDING, total_files=0,
+                ))
+                # Transition to IN_PROGRESS
+                started_at = datetime.now(UTC).isoformat()
+                self._safe_state_update(name, CollectionProgress(
+                    status=IndexingStatus.IN_PROGRESS,
+                    total_files=0,
+                    started_at=started_at,
+                ))
+
+                # Track total_files from callback
+                cb_total_files = 0
+
+                def _make_progress_wrapper(col_name: str):
+                    """Build a progress wrapper that captures total from callbacks."""
+                    nonlocal cb_total_files
+                    total_captured = False
+
+                    def wrapper(done_count: int, total: int):
+                        nonlocal cb_total_files, total_captured
+                        if not total_captured:
+                            cb_total_files = total
+                            total_captured = True
+                            # Update total_files from first callback
+                            self._safe_state_update(col_name, CollectionProgress(
+                                status=IndexingStatus.IN_PROGRESS,
+                                total_files=total,
+                                processed_files=0,
+                                started_at=started_at,
+                            ))
+                        if done_count % 50 == 0:
+                            self._safe_state_update(col_name, CollectionProgress(
+                                status=IndexingStatus.IN_PROGRESS,
+                                total_files=total,
+                                processed_files=done_count,
+                                started_at=started_at,
+                            ))
+                        # Call caller's callback
+                        if progress_cb is not None:
+                            return progress_cb(done_count, total)
+                        return None
+
+                    return wrapper
+
+                wrapped_cb = _make_progress_wrapper(name)
+
                 try:
-                    await self._pipeline.ingest_directory(p, name, progress_cb=progress_cb)
+                    results = await self._pipeline.ingest_directory(
+                        p, name, progress_cb=wrapped_cb,
+                    )
+                    ok_count = sum(1 for r in results if r.status == "ok")
+                    error_count = sum(1 for r in results if r.status != "ok")
+                    self._safe_state_update(name, CollectionProgress(
+                        status=IndexingStatus.DONE,
+                        total_files=len(results),
+                        processed_files=ok_count,
+                        error_count=error_count,
+                        started_at=started_at,
+                        completed_at=datetime.now(UTC).isoformat(),
+                    ))
                     result.added.append(name)
                     successfully_added.add(name)
                 except Exception as exc:  # noqa: BLE001
+                    self._safe_state_update(name, CollectionProgress(
+                        status=IndexingStatus.FAILED,
+                        total_files=cb_total_files,
+                        started_at=started_at,
+                        completed_at=datetime.now(UTC).isoformat(),
+                        error=str(exc),
+                    ))
                     result.errors.append(str(exc))
 
         # Step 7: unchanged = existing ∩ desired
@@ -170,6 +247,49 @@ class RagCollectionSync:
         self._write_manifest(manifest_path, new_manifest)
 
         return result
+
+    # ------------------------------------------------------------------
+    # State store helpers (all writes are safe — never abort sync)
+    # ------------------------------------------------------------------
+
+    def _safe_state_update(self, name: str, progress: CollectionProgress) -> None:
+        """Update collection progress in state store. Swallows all errors."""
+        if self._state_store is None:
+            return
+        try:
+            self._state_store.update_collection(name, progress)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to write indexing state for %r", name, exc_info=True)
+
+    def _safe_state_remove(self, name: str) -> None:
+        """Remove collection from state store. Swallows all errors."""
+        if self._state_store is None:
+            return
+        try:
+            self._state_store.remove_collection(name)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to remove indexing state for %r", name, exc_info=True)
+
+    def _reset_stale_in_progress(self) -> None:
+        """Reset any IN_PROGRESS entries to PENDING (crash recovery)."""
+        if self._state_store is None:
+            return
+        try:
+            from archon.rag.progress import CollectionProgress, IndexingStatus
+
+            state = self._state_store.read()
+            if state is None:
+                return
+            for name, cp in state.collections.items():
+                if cp.status == IndexingStatus.IN_PROGRESS:
+                    state.collections[name] = CollectionProgress(
+                        status=IndexingStatus.PENDING,
+                        total_files=cp.total_files,
+                        processed_files=cp.processed_files,
+                    )
+            self._state_store.write(state)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to reset stale IN_PROGRESS states", exc_info=True)
 
     # ------------------------------------------------------------------
     # Lock helpers
