@@ -84,9 +84,15 @@ def manifest_remove_entry(manifest_path: Path, col_name: str) -> None:
 class RagCollectionSync:
     """Synchronises LanceDB collections with a declarative list of filesystem paths."""
 
-    def __init__(self, pipeline: RagPipeline, state_store: IndexingStateStore | None = None) -> None:
+    def __init__(
+        self,
+        pipeline: RagPipeline,
+        state_store: IndexingStateStore | None = None,
+        pinned_collections: list[str] | None = None,
+    ) -> None:
         self._pipeline = pipeline
         self._state_store = state_store
+        self._pinned_collections = pinned_collections or []
         self._collection_locks: dict[str, asyncio.Lock] = {}
 
     async def sync(
@@ -153,9 +159,9 @@ class RagCollectionSync:
         # Step 6: ingest new collections
         to_add = desired.keys() - existing
         successfully_added: set[str] = set()
-        for name, path_str in desired.items():
-            if name not in to_add:
-                continue
+        sorted_to_add = self._sort_ingestion_order(to_add, desired)
+        for name in sorted_to_add:
+            path_str = desired[name]
             p = Path(path_str)
             if not p.exists():
                 result.errors.append(f"path does not exist: {path_str}")
@@ -304,6 +310,28 @@ class RagCollectionSync:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _sort_ingestion_order(
+        self, to_add: set[str], desired: dict[str, str],
+    ) -> list[str]:
+        """Sort collections for ingestion: pinned first (declaration order), then alphabetical."""
+        if not self._pinned_collections:
+            return sorted(to_add)
+
+        # Reverse lookup: resolved_path → collection name
+        path_to_name = {resolved: name for name, resolved in desired.items()}
+
+        # Resolve pinned paths and map to collection names (preserving declaration order)
+        pinned_names: list[str] = []
+        for p in self._pinned_collections:
+            resolved = str(Path(p).expanduser().resolve())
+            name = path_to_name.get(resolved)
+            if name is not None and name in to_add and name not in pinned_names:
+                pinned_names.append(name)
+
+        # Non-pinned: alphabetical
+        non_pinned = sorted(to_add - set(pinned_names))
+        return pinned_names + non_pinned
 
     async def _maybe_migrate(
         self, store, existing: set[str], manifest_path: Path

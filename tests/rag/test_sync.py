@@ -1465,3 +1465,203 @@ class TestSyncProgress:
         assert "project_b" in state.collections
         assert state.collections["project_b"].status == IndexingStatus.FAILED
         assert "project_b failed" in state.collections["project_b"].error
+
+
+# ---------------------------------------------------------------------------
+# Pinned-first ordering in sync()
+# ---------------------------------------------------------------------------
+
+class TestSyncPinnedOrder:
+    """Tests for pinned-first collection ordering in sync()."""
+
+    @pytest.mark.asyncio
+    async def test_sync_pinned_first_ordering(self, tmp_path):
+        """Pinned collections are ingested before non-pinned ones."""
+        from archon.rag.sync import RagCollectionSync
+
+        alpha = tmp_path / "alpha"
+        beta = tmp_path / "beta"
+        gamma = tmp_path / "gamma"
+        for d in (alpha, beta, gamma):
+            d.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+
+        ingestion_order: list[str] = []
+        orig_ingest = pipeline.ingest_directory
+
+        async def track_ingest(path, name, **kw):
+            ingestion_order.append(name)
+            return await orig_ingest(path, name, **kw)
+
+        pipeline.ingest_directory = AsyncMock(side_effect=track_ingest)
+
+        # Pin only gamma — it should be ingested first
+        syncer = RagCollectionSync(pipeline, pinned_collections=[str(gamma)])
+        await syncer.sync([str(alpha), str(beta), str(gamma)])
+
+        assert ingestion_order[0] == "gamma"
+        # Remaining should be alphabetical
+        assert ingestion_order[1:] == ["alpha", "beta"]
+
+    @pytest.mark.asyncio
+    async def test_sync_pinned_preserves_declaration_order(self, tmp_path):
+        """Pinned collections follow config declaration order, not alphabetical."""
+        from archon.rag.sync import RagCollectionSync
+
+        aaa = tmp_path / "aaa"
+        bbb = tmp_path / "bbb"
+        ccc = tmp_path / "ccc"
+        for d in (aaa, bbb, ccc):
+            d.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+
+        ingestion_order: list[str] = []
+        orig_ingest = pipeline.ingest_directory
+
+        async def track_ingest(path, name, **kw):
+            ingestion_order.append(name)
+            return await orig_ingest(path, name, **kw)
+
+        pipeline.ingest_directory = AsyncMock(side_effect=track_ingest)
+
+        # Pinned in reverse-alpha order: ccc, bbb
+        syncer = RagCollectionSync(pipeline, pinned_collections=[str(ccc), str(bbb)])
+        await syncer.sync([str(aaa), str(bbb), str(ccc)])
+
+        assert ingestion_order == ["ccc", "bbb", "aaa"]
+
+    @pytest.mark.asyncio
+    async def test_sync_non_pinned_alphabetical(self, tmp_path):
+        """Non-pinned collections are sorted alphabetically by collection name."""
+        from archon.rag.sync import RagCollectionSync
+
+        zebra = tmp_path / "zebra"
+        apple = tmp_path / "apple"
+        mango = tmp_path / "mango"
+        for d in (zebra, apple, mango):
+            d.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+
+        ingestion_order: list[str] = []
+        orig_ingest = pipeline.ingest_directory
+
+        async def track_ingest(path, name, **kw):
+            ingestion_order.append(name)
+            return await orig_ingest(path, name, **kw)
+
+        pipeline.ingest_directory = AsyncMock(side_effect=track_ingest)
+
+        syncer = RagCollectionSync(pipeline, pinned_collections=[])
+        await syncer.sync([str(zebra), str(apple), str(mango)])
+
+        assert ingestion_order == ["apple", "mango", "zebra"]
+
+    @pytest.mark.asyncio
+    async def test_sync_pinned_not_in_desired_ignored(self, tmp_path):
+        """Pinned path not in collections list does not cause error."""
+        from archon.rag.sync import RagCollectionSync
+
+        alpha = tmp_path / "alpha"
+        alpha.mkdir()
+        nonexistent_pinned = tmp_path / "not_a_collection"
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+
+        syncer = RagCollectionSync(pipeline, pinned_collections=[str(nonexistent_pinned)])
+        result = await syncer.sync([str(alpha)])
+
+        assert "alpha" in result.added
+        assert result.errors == []
+
+    @pytest.mark.asyncio
+    async def test_sync_all_pinned(self, tmp_path):
+        """All collections are pinned — order matches config declaration order."""
+        from archon.rag.sync import RagCollectionSync
+
+        charlie = tmp_path / "charlie"
+        alice = tmp_path / "alice"
+        bob = tmp_path / "bob"
+        for d in (charlie, alice, bob):
+            d.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+
+        ingestion_order: list[str] = []
+        orig_ingest = pipeline.ingest_directory
+
+        async def track_ingest(path, name, **kw):
+            ingestion_order.append(name)
+            return await orig_ingest(path, name, **kw)
+
+        pipeline.ingest_directory = AsyncMock(side_effect=track_ingest)
+
+        syncer = RagCollectionSync(
+            pipeline,
+            pinned_collections=[str(charlie), str(alice), str(bob)],
+        )
+        await syncer.sync([str(charlie), str(alice), str(bob)])
+
+        assert ingestion_order == ["charlie", "alice", "bob"]
+
+    @pytest.mark.asyncio
+    async def test_sync_no_pinned(self, tmp_path):
+        """Empty pinned list — alphabetical fallback."""
+        from archon.rag.sync import RagCollectionSync
+
+        delta = tmp_path / "delta"
+        bravo = tmp_path / "bravo"
+        for d in (delta, bravo):
+            d.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+
+        ingestion_order: list[str] = []
+        orig_ingest = pipeline.ingest_directory
+
+        async def track_ingest(path, name, **kw):
+            ingestion_order.append(name)
+            return await orig_ingest(path, name, **kw)
+
+        pipeline.ingest_directory = AsyncMock(side_effect=track_ingest)
+
+        syncer = RagCollectionSync(pipeline)
+        await syncer.sync([str(delta), str(bravo)])
+
+        assert ingestion_order == ["bravo", "delta"]
+
+    @pytest.mark.asyncio
+    async def test_sync_pinned_tilde_expansion(self, tmp_path, monkeypatch):
+        """Pinned path with ~ correctly matches resolved desired path."""
+        from archon.rag.sync import RagCollectionSync
+
+        # Force HOME to tmp_path so ~/mydata resolves deterministically
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        target = tmp_path / "mydata"
+        target.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+
+        ingestion_order: list[str] = []
+        orig_ingest = pipeline.ingest_directory
+
+        async def track_ingest(path, name, **kw):
+            ingestion_order.append(name)
+            return await orig_ingest(path, name, **kw)
+
+        pipeline.ingest_directory = AsyncMock(side_effect=track_ingest)
+
+        other = tmp_path / "other"
+        other.mkdir()
+
+        syncer = RagCollectionSync(
+            pipeline,
+            pinned_collections=["~/mydata"],
+        )
+        await syncer.sync([str(target), str(other)])
+
+        # target (pinned via tilde path) should come first
+        assert ingestion_order[0] == "mydata"
