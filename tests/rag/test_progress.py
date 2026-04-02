@@ -1,0 +1,185 @@
+"""Tests for archon.rag.progress — CollectionProgress and IndexingState dataclasses."""
+from __future__ import annotations
+
+import pytest
+
+from archon.rag.progress import (
+    CollectionProgress,
+    IndexingState,
+    IndexingStatus,
+    from_dict,
+    to_dict,
+)
+
+
+class TestDataclasses:
+    def test_indexing_status_is_str_enum(self) -> None:
+        assert IndexingStatus.PENDING == "pending"
+        assert IndexingStatus.IN_PROGRESS == "in_progress"
+        assert IndexingStatus.DONE == "done"
+        assert IndexingStatus.FAILED == "failed"
+        assert isinstance(IndexingStatus.PENDING, str)
+
+    def test_collection_progress_defaults(self) -> None:
+        cp = CollectionProgress(status=IndexingStatus.PENDING)
+        assert cp.total_files == 0
+        assert cp.processed_files == 0
+        assert cp.started_at is None
+        assert cp.completed_at is None
+        assert cp.error is None
+        assert cp.error_count == 0
+
+    def test_indexing_state_construction(self) -> None:
+        cp = CollectionProgress(
+            status=IndexingStatus.DONE,
+            total_files=5,
+            processed_files=5,
+            started_at="2026-01-01T00:00:00Z",
+            completed_at="2026-01-01T00:01:00Z",
+        )
+        state = IndexingState(
+            collections={"my_col": cp},
+            last_updated="2026-01-01T00:01:00Z",
+        )
+        assert "my_col" in state.collections
+        assert state.collections["my_col"].status == IndexingStatus.DONE
+        assert state.last_updated == "2026-01-01T00:01:00Z"
+
+    def test_to_dict_serialization(self) -> None:
+        cp = CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=10,
+            processed_files=3,
+            started_at="2026-01-01T00:00:00Z",
+            error="some error",
+            error_count=2,
+        )
+        state = IndexingState(
+            collections={"col1": cp},
+            last_updated="2026-01-01T00:05:00Z",
+        )
+        d = to_dict(state)
+        assert d["last_updated"] == "2026-01-01T00:05:00Z"
+        col = d["collections"]["col1"]
+        assert col["status"] == "in_progress"  # serialized as string
+        assert col["total_files"] == 10
+        assert col["processed_files"] == 3
+        assert col["started_at"] == "2026-01-01T00:00:00Z"
+        assert col["completed_at"] is None
+        assert col["error"] == "some error"
+        assert col["error_count"] == 2
+
+    def test_from_dict_valid(self) -> None:
+        d = {
+            "last_updated": "2026-01-01T00:01:00Z",
+            "collections": {
+                "my_col": {
+                    "status": "done",
+                    "total_files": 7,
+                    "processed_files": 7,
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "completed_at": "2026-01-01T00:01:00Z",
+                    "error": None,
+                    "error_count": 0,
+                }
+            },
+        }
+        state = from_dict(d)
+        assert state.last_updated == "2026-01-01T00:01:00Z"
+        col = state.collections["my_col"]
+        assert col.status == IndexingStatus.DONE
+        assert col.total_files == 7
+        assert col.processed_files == 7
+
+    def test_from_dict_malformed(self) -> None:
+        # Garbage input — must not raise, return empty state
+        result = from_dict("not a dict")  # type: ignore[arg-type]
+        assert isinstance(result, IndexingState)
+        assert result.collections == {}
+
+        result2 = from_dict(None)  # type: ignore[arg-type]
+        assert isinstance(result2, IndexingState)
+        assert result2.collections == {}
+
+        result3 = from_dict({"collections": "bad"})
+        assert isinstance(result3, IndexingState)
+        assert result3.collections == {}
+
+    def test_from_dict_missing_fields(self) -> None:
+        # Only status provided — other fields get defaults
+        d = {
+            "last_updated": "2026-01-01T00:00:00Z",
+            "collections": {
+                "col": {"status": "pending"}
+            },
+        }
+        state = from_dict(d)
+        col = state.collections["col"]
+        assert col.status == IndexingStatus.PENDING
+        assert col.total_files == 0
+        assert col.processed_files == 0
+        assert col.started_at is None
+        assert col.completed_at is None
+        assert col.error is None
+        assert col.error_count == 0
+
+    def test_from_dict_unknown_status(self) -> None:
+        d = {
+            "last_updated": "2026-01-01T00:00:00Z",
+            "collections": {
+                "col": {"status": "nonexistent_status"}
+            },
+        }
+        state = from_dict(d)
+        assert state.collections["col"].status == IndexingStatus.PENDING
+
+    def test_from_dict_partial_corruption(self) -> None:
+        # One valid dict entry + one invalid (non-dict) entry — valid one preserved, invalid skipped
+        d = {
+            "collections": {
+                "good": {"status": "done"},
+                "bad": 42,
+            }
+        }
+        state = from_dict(d)
+        assert "good" in state.collections
+        assert state.collections["good"].status == IndexingStatus.DONE
+        assert "bad" not in state.collections
+
+    def test_from_dict_non_int_fields(self) -> None:
+        # null and string values for int fields should default to 0
+        d = {
+            "collections": {
+                "col": {
+                    "status": "pending",
+                    "total_files": None,
+                    "error_count": "bad",
+                }
+            }
+        }
+        state = from_dict(d)
+        col = state.collections["col"]
+        assert col.total_files == 0
+        assert col.error_count == 0
+
+    def test_from_dict_non_string_status(self) -> None:
+        # Non-string status values (int, None) should default to PENDING
+        for bad_status in (42, None):
+            d = {"collections": {"col": {"status": bad_status}}}
+            state = from_dict(d)
+            assert state.collections["col"].status == IndexingStatus.PENDING
+
+    def test_from_dict_extra_fields_ignored(self) -> None:
+        d = {
+            "last_updated": "2026-01-01T00:00:00Z",
+            "future_field": "something",
+            "collections": {
+                "col": {
+                    "status": "done",
+                    "unknown_new_field": 42,
+                }
+            },
+        }
+        state = from_dict(d)
+        assert state.collections["col"].status == IndexingStatus.DONE
+        assert not hasattr(state.collections["col"], "unknown_new_field")
