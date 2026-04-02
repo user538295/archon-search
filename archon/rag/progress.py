@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import enum
+import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 logger = logging.getLogger("archon")
 
@@ -57,6 +60,68 @@ def to_dict(state: IndexingState) -> dict:
             for name, cp in state.collections.items()
         },
     }
+
+
+class IndexingStateStore:
+    """Persistent store for IndexingState, backed by a JSON file with atomic writes.
+
+    Note: concurrent callers must provide external synchronization. This class is not
+    thread-safe on its own — locks live at RagCollectionSync level, not here.
+    """
+
+    def __init__(self, state_dir: Path) -> None:
+        self._state_dir = state_dir
+        self._state_file = state_dir / ".indexing_state.json"
+
+    def read(self) -> IndexingState | None:
+        """Read and deserialize state file. Returns None if missing, unreadable, or corrupt."""
+        try:
+            content = self._state_file.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            logger.warning("IndexingStateStore: failed to read state file: %s", exc)
+            return None
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as exc:
+            logger.warning("IndexingStateStore: corrupt JSON in state file: %s", exc)
+            return None
+        except Exception as exc:
+            logger.warning("IndexingStateStore: unexpected read error: %s", exc)
+            return None
+        return from_dict(data)
+
+    def write(self, state: IndexingState) -> None:
+        """Serialize and atomically write state to disk. Re-raises on failure."""
+        self._state_dir.mkdir(parents=True, exist_ok=True)
+        tmp_path = self._state_file.with_suffix(".json.tmp")
+        try:
+            tmp_path.write_text(json.dumps(to_dict(state), indent=2), encoding="utf-8")
+            os.replace(tmp_path, self._state_file)
+        except Exception as exc:
+            logger.error("IndexingStateStore: failed to write state file: %s", exc)
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+
+    def update_collection(self, name: str, progress: CollectionProgress) -> None:
+        """Update a single collection entry, creating state if absent."""
+        state = self.read() or IndexingState()
+        state.collections[name] = progress
+        state.last_updated = datetime.now(UTC).isoformat()
+        self.write(state)
+
+    def remove_collection(self, name: str) -> None:
+        """Remove a collection entry. No-op if missing or state file absent."""
+        state = self.read()
+        if state is None or name not in state.collections:
+            return
+        del state.collections[name]
+        state.last_updated = datetime.now(UTC).isoformat()
+        self.write(state)
 
 
 def from_dict(data: dict) -> IndexingState:
