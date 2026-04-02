@@ -192,7 +192,7 @@ async def main() -> None:
 
     # Startup sync
     state_store = IndexingStateStore(Path(cfg.rag.db_path))
-    sync = RagCollectionSync(pipeline, state_store=state_store)
+    sync = RagCollectionSync(pipeline, state_store=state_store, pinned_collections=cfg.rag.pinned_collections)
     sync_timeout = cfg.rag.sync_timeout_seconds
     if sync_timeout == 0:
         asyncio.create_task(sync.sync(cfg.rag.collections))

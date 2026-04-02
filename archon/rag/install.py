@@ -202,12 +202,19 @@ class RagInstaller:
 
     async def _bootstrap_collections(self) -> None:
         """Sync configured collections into the RAG store."""
+        from archon.rag.progress import IndexingStateStore  # noqa: PLC0415
         from archon.rag.sync import RagCollectionSync  # noqa: PLC0415
 
         pipeline = create_pipeline(self.cfg)
         try:
             await pipeline.store.connect()
-            await RagCollectionSync(pipeline).sync(self._full_cfg.rag.collections)
+            state_store = IndexingStateStore(Path(self.cfg.db_path))
+            sync = RagCollectionSync(
+                pipeline,
+                state_store=state_store,
+                pinned_collections=self._full_cfg.rag.pinned_collections,
+            )
+            await sync.sync(self._full_cfg.rag.collections)
         finally:
             await pipeline.store.disconnect()
 

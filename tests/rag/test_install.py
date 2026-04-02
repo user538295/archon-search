@@ -46,6 +46,7 @@ def _make_full_config(tmp_path: Path) -> object:
     @dataclass
     class FakeRagConfigInner:
         collections: list[str] = field(default_factory=list)
+        pinned_collections: list[str] = field(default_factory=list)
 
     @dataclass
     class FakeFullConfig:

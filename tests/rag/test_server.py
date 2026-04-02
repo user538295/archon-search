@@ -785,7 +785,55 @@ class TestServerStateStore:
             MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
             await main()
 
-            MockSync.assert_called_once_with(mock_pipeline, state_store=sentinel_state_store)
+            # Verify state_store is passed; pinned_collections will have RagConfig defaults
+            call_kwargs = MockSync.call_args[1]
+            assert call_kwargs["state_store"] is sentinel_state_store
+            assert "pinned_collections" in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_main_passes_pinned_collections_to_sync(self) -> None:
+        """main() passes cfg.rag.pinned_collections to RagCollectionSync."""
+        from archon.config.loader import RagConfig
+        from archon.rag.server import main
+        from archon.rag.sync import SyncResult
+
+        mock_store = MagicMock()
+        mock_store.connect = AsyncMock()
+        mock_store.disconnect = AsyncMock()
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = mock_store
+
+        mock_app = MagicMock()
+        mock_app.run_http_async = AsyncMock()
+
+        db_path = "/tmp/test-rag-db"
+        pinned = ["~/docs/notes", "~/docs/wiki"]
+        mock_cfg = MagicMock()
+        mock_cfg.rag = RagConfig(
+            host="127.0.0.1", port=9999, sync_timeout_seconds=5,
+            db_path=db_path, pinned_collections=pinned,
+        )
+        mock_cfg.history.directory = "/tmp/history"
+
+        mock_sync_result = SyncResult(added=[], removed=[], unchanged=[], errors=[], skipped=[])
+        sentinel_state_store = MagicMock()
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.rag.server.create_app", return_value=mock_app),
+            patch("archon.rag.server.RagCollectionSync") as MockSync,
+            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+        ):
+            MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+            await main()
+
+            MockSync.assert_called_once_with(
+                mock_pipeline,
+                state_store=sentinel_state_store,
+                pinned_collections=pinned,
+            )
 
 
 @pytest.mark.asyncio
