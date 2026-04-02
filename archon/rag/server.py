@@ -15,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from archon.rag.pipeline import RagPipeline, create_pipeline
+from archon.rag.progress import IndexingStateStore
 from archon.rag.sync import RagCollectionSync, path_to_collection_name
 
 if TYPE_CHECKING:
@@ -190,7 +191,8 @@ async def main() -> None:
     await pipeline.store.connect()
 
     # Startup sync
-    sync = RagCollectionSync(pipeline)
+    state_store = IndexingStateStore(Path(cfg.rag.db_path))
+    sync = RagCollectionSync(pipeline, state_store=state_store)
     sync_timeout = cfg.rag.sync_timeout_seconds
     if sync_timeout == 0:
         asyncio.create_task(sync.sync(cfg.rag.collections))

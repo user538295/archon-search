@@ -706,6 +706,88 @@ async def test_get_collection_meta_exception_returns_error() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Task 1.5 — state store wiring in main()
+# ---------------------------------------------------------------------------
+
+
+class TestServerStateStore:
+    """Verify main() creates IndexingStateStore and passes it to RagCollectionSync."""
+
+    @pytest.mark.asyncio
+    async def test_main_creates_state_store(self) -> None:
+        """main() instantiates IndexingStateStore with cfg.rag.db_path."""
+        from archon.config.loader import RagConfig
+        from archon.rag.server import main
+        from archon.rag.sync import SyncResult
+
+        mock_store = MagicMock()
+        mock_store.connect = AsyncMock()
+        mock_store.disconnect = AsyncMock()
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = mock_store
+
+        mock_app = MagicMock()
+        mock_app.run_http_async = AsyncMock()
+
+        db_path = "/tmp/test-rag-db"
+        mock_cfg = MagicMock()
+        mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5, db_path=db_path)
+        mock_cfg.history.directory = "/tmp/history"
+
+        mock_sync_result = SyncResult(added=[], removed=[], unchanged=[], errors=[], skipped=[])
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.rag.server.create_app", return_value=mock_app),
+            patch("archon.rag.server.RagCollectionSync") as MockSync,
+            patch("archon.rag.server.IndexingStateStore") as MockStateStore,
+        ):
+            MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+            await main()
+
+            MockStateStore.assert_called_once_with(Path(db_path))
+
+    @pytest.mark.asyncio
+    async def test_main_passes_state_store_to_sync(self) -> None:
+        """main() passes the created state_store to RagCollectionSync."""
+        from archon.config.loader import RagConfig
+        from archon.rag.server import main
+        from archon.rag.sync import SyncResult
+
+        mock_store = MagicMock()
+        mock_store.connect = AsyncMock()
+        mock_store.disconnect = AsyncMock()
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = mock_store
+
+        mock_app = MagicMock()
+        mock_app.run_http_async = AsyncMock()
+
+        db_path = "/tmp/test-rag-db"
+        mock_cfg = MagicMock()
+        mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5, db_path=db_path)
+        mock_cfg.history.directory = "/tmp/history"
+
+        mock_sync_result = SyncResult(added=[], removed=[], unchanged=[], errors=[], skipped=[])
+        sentinel_state_store = MagicMock()
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.rag.server.create_app", return_value=mock_app),
+            patch("archon.rag.server.RagCollectionSync") as MockSync,
+            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+        ):
+            MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+            await main()
+
+            MockSync.assert_called_once_with(mock_pipeline, state_store=sentinel_state_store)
+
+
 @pytest.mark.asyncio
 async def test_health_endpoint_returns_200() -> None:
     """GET /health returns 200 with JSON body {"status": "ok"}."""
