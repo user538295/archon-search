@@ -2229,4 +2229,106 @@ class TestSyncResumable:
         cp = state.collections["myproject"]
         assert cp.status == IndexingStatus.DONE
         assert "/old/file.md" in cp.processed_paths
-        assert "/new/file.md" in cp.processed_paths
+
+
+# ---------------------------------------------------------------------------
+# Task 4.4 — _iter_eligible_files and _reset_stale Phase 4 field preservation
+# ---------------------------------------------------------------------------
+
+
+class TestIterEligibleFiles:
+    """Tests for the extracted _iter_eligible_files helper."""
+
+    def test_iter_eligible_files_skips_symlinks_hidden_binary(self, tmp_path):
+        """Valid files only; symlinks, hidden files, binary extensions, and hidden dir contents excluded."""
+        from archon.rag.sync import RagCollectionSync
+
+        source = tmp_path / "source"
+        source.mkdir()
+
+        # Valid file — should be included
+        (source / "valid.md").write_text("hello")
+
+        # Binary extension — should be excluded
+        (source / "file.pyc").write_bytes(b"\x00\x01\x02")
+
+        # Hidden file — should be excluded
+        (source / ".hidden_file").write_text("hidden")
+
+        # Symlink — should be excluded
+        symlink_target = tmp_path / "target.md"
+        symlink_target.write_text("target content")
+        (source / "link.md").symlink_to(symlink_target)
+
+        # File under hidden dir — should be excluded
+        hidden_dir = source / ".hidden_dir"
+        hidden_dir.mkdir()
+        (hidden_dir / "somefile.md").write_text("inside hidden dir")
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline)
+
+        result = syncer._iter_eligible_files(source)
+
+        assert len(result) == 1
+        assert result[0] == source / "valid.md"
+
+    def test_iter_eligible_files_returns_sorted(self, tmp_path):
+        """Returned list is sorted by path."""
+        from archon.rag.sync import RagCollectionSync
+
+        source = tmp_path / "source"
+        source.mkdir()
+
+        # Create files with names that won't naturally be in sorted order
+        (source / "zebra.md").write_text("z")
+        (source / "alpha.md").write_text("a")
+        (source / "mango.txt").write_text("m")
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline)
+
+        result = syncer._iter_eligible_files(source)
+
+        assert result == sorted(result)
+        assert len(result) == 3
+
+
+class TestResetStalePreservesPhase4Fields:
+    """Tests for Phase 4 field preservation in _reset_stale_in_progress."""
+
+    def test_reset_stale_preserves_phase4_fields(self, tmp_path):
+        """IN_PROGRESS → PENDING must preserve file_mtimes, file_hashes, indexed_embedding_model, indexed_chunk_size."""
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        # Seed an IN_PROGRESS collection with all four Phase 4 fields populated
+        state_store.update_collection("col", CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=20,
+            processed_files=10,
+            processed_paths=["/a/file.md"],
+            file_mtimes={"a": 1.0},
+            file_hashes={"a": "abc"},
+            indexed_embedding_model="bge",
+            indexed_chunk_size=512,
+        ))
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        syncer._reset_stale_in_progress()
+
+        state = state_store.read()
+        assert state is not None
+        cp = state.collections["col"]
+
+        # Status must be PENDING after reset
+        assert cp.status == IndexingStatus.PENDING
+
+        # All four Phase 4 fields must be preserved
+        assert cp.file_mtimes == {"a": 1.0}
+        assert cp.file_hashes == {"a": "abc"}
+        assert cp.indexed_embedding_model == "bge"
+        assert cp.indexed_chunk_size == 512

@@ -254,6 +254,10 @@ class RagCollectionSync:
                         total_files=cp.total_files,
                         processed_files=cp.processed_files,
                         processed_paths=cp.processed_paths,
+                        file_mtimes=cp.file_mtimes,
+                        file_hashes=cp.file_hashes,
+                        indexed_embedding_model=cp.indexed_embedding_model,
+                        indexed_chunk_size=cp.indexed_chunk_size,
                     )
             self._state_store.write(state)
         except Exception:  # noqa: BLE001
@@ -275,6 +279,26 @@ class RagCollectionSync:
     # Collection ingestion (shared by to_add and to_resume)
     # ------------------------------------------------------------------
 
+    def _iter_eligible_files(self, path: Path) -> list[Path]:
+        """Return sorted list of eligible files under path, applying the standard filter.
+
+        Excludes: symlinks, non-files, hidden path components (starting with '.'),
+        and binary extensions (as defined in archon.rag.pipeline._BINARY_EXTENSIONS).
+        """
+        from archon.rag.pipeline import _BINARY_EXTENSIONS
+
+        result: list[Path] = []
+        for file_path in path.glob("**/*"):
+            if file_path.is_symlink() or not file_path.is_file():
+                continue
+            rel_parts = file_path.relative_to(path).parts
+            if any(part.startswith(".") for part in rel_parts):
+                continue
+            if file_path.suffix.lower() in _BINARY_EXTENSIONS:
+                continue
+            result.append(file_path)
+        return sorted(result)
+
     async def _ingest_collection(
         self,
         name: str,
@@ -289,18 +313,7 @@ class RagCollectionSync:
         exclude_set = frozenset(resume_paths)
 
         # Compute total_new by enumerating the source directory (same filter as ingest_directory)
-        from archon.rag.pipeline import _BINARY_EXTENSIONS
-        all_files: list[Path] = []
-        for file_path in p.glob("**/*"):
-            if file_path.is_symlink() or not file_path.is_file():
-                continue
-            rel_parts = file_path.relative_to(p).parts
-            if any(part.startswith(".") for part in rel_parts):
-                continue
-            if file_path.suffix.lower() in _BINARY_EXTENSIONS:
-                continue
-            if str(file_path) not in exclude_set:
-                all_files.append(file_path)
+        all_files = [f for f in self._iter_eligible_files(p) if str(f) not in exclude_set]
         total_new = len(all_files)
 
         new_paths: list[str] = []
