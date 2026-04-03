@@ -586,3 +586,92 @@ class TestCollectionProgressNewFields:
         }
         state = from_dict(d)
         assert state.collections["col"].file_mtimes == {}
+
+
+class TestTriggerField:
+    def test_trigger_field_default(self) -> None:
+        state = IndexingState()
+        assert state.trigger is None
+
+    def test_to_dict_includes_trigger_none(self) -> None:
+        state = IndexingState()
+        d = to_dict(state)
+        assert "trigger" in d
+        assert d["trigger"] is None
+
+    def test_to_dict_includes_trigger_set(self) -> None:
+        state = IndexingState()
+        state.trigger = "install"
+        d = to_dict(state)
+        assert d["trigger"] == "install"
+
+    def test_from_dict_reads_trigger(self) -> None:
+        d = {"trigger": "install", "collections": {}}
+        state = from_dict(d)
+        assert state.trigger == "install"
+
+    def test_from_dict_invalid_trigger_type_int(self) -> None:
+        d = {"trigger": 42, "collections": {}}
+        state = from_dict(d)
+        assert state.trigger is None
+
+    def test_from_dict_invalid_trigger_type_bool(self) -> None:
+        # bool is subclass of int — isinstance(True, str) is False, so must map to None
+        d = {"trigger": True, "collections": {}}
+        state = from_dict(d)
+        assert state.trigger is None
+
+    def test_from_dict_invalid_trigger_type_list(self) -> None:
+        d = {"trigger": [], "collections": {}}
+        state = from_dict(d)
+        assert state.trigger is None
+
+    def test_from_dict_trigger_missing(self) -> None:
+        d = {"collections": {}}
+        state = from_dict(d)
+        assert state.trigger is None
+
+    def test_from_dict_trigger_empty_string(self) -> None:
+        # Empty string is a valid str — must NOT be coerced to None
+        d = {"trigger": "", "collections": {}}
+        state = from_dict(d)
+        assert state.trigger == ""
+
+
+class TestSetTrigger:
+    def test_set_trigger_creates_state(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        store.set_trigger("install")
+        result = store.read()
+        assert result is not None
+        assert result.trigger == "install"
+        assert result.collections == {}
+        # Verify raw JSON serialization
+        raw = json.loads(store._state_file.read_text())
+        assert raw["trigger"] == "install"
+
+    def test_set_trigger_updates_existing(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        cp = CollectionProgress(status=IndexingStatus.DONE, total_files=5)
+        old_ts = "2020-01-01T00:00:00+00:00"
+        state = IndexingState(collections={"col": cp}, last_updated=old_ts)
+        store.write(state)
+        store.set_trigger("manual")
+        result = store.read()
+        assert result is not None
+        assert result.trigger == "manual"
+        assert "col" in result.collections
+        assert result.collections["col"].total_files == 5
+        # set_trigger must update last_updated (like update_collection / remove_collection)
+        assert result.last_updated != old_ts
+
+    def test_set_trigger_clears_trigger(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        store.set_trigger("install")
+        store.set_trigger(None)
+        result = store.read()
+        assert result is not None
+        assert result.trigger is None
+        # Verify JSON has null
+        raw = json.loads(store._state_file.read_text())
+        assert raw["trigger"] is None

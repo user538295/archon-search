@@ -46,12 +46,14 @@ class CollectionProgress:
 class IndexingState:
     collections: dict[str, CollectionProgress] = field(default_factory=dict)
     last_updated: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    trigger: str | None = None
 
 
 def to_dict(state: IndexingState) -> dict:
     """Serialize IndexingState to a JSON-compatible dict."""
     return {
         "last_updated": state.last_updated,
+        "trigger": state.trigger,
         "collections": {
             name: {
                 "status": str(cp.status),
@@ -124,6 +126,13 @@ class IndexingStateStore:
         state.last_updated = datetime.now(UTC).isoformat()
         self.write(state)
 
+    def set_trigger(self, trigger: str | None) -> None:
+        """Read current state (or create empty state if absent), set trigger field, write atomically."""
+        state = self.read() or IndexingState()
+        state.trigger = trigger
+        state.last_updated = datetime.now(UTC).isoformat()
+        self.write(state)
+
     def remove_collection(self, name: str) -> None:
         """Remove a collection entry. No-op if missing or state file absent."""
         state = self.read()
@@ -191,7 +200,9 @@ def from_dict(data: dict) -> IndexingState:
                 indexed_chunk_size=_safe_int(raw.get("indexed_chunk_size", 0)),
             )
         last_updated = data.get("last_updated", datetime.now(UTC).isoformat())
-        return IndexingState(collections=collections, last_updated=last_updated)
+        raw_trigger = data.get("trigger")
+        trigger = raw_trigger if isinstance(raw_trigger, str) else None
+        return IndexingState(collections=collections, last_updated=last_updated, trigger=trigger)
     except Exception:
         logger.debug("from_dict: failed to parse IndexingState", exc_info=True)
         return IndexingState()
