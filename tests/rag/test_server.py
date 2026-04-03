@@ -891,6 +891,134 @@ async def test_server_sync_passes_config_params() -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Task 5.3 — server.py sets install trigger before sync
+# ---------------------------------------------------------------------------
+
+
+def _make_server_mocks(sync_timeout: int = 5, db_path: str = "/tmp/test-rag-db"):
+    """Return common mocks needed for main() trigger tests."""
+    from archon.config.loader import RagConfig
+    from archon.rag.sync import SyncResult
+
+    mock_store = MagicMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.store = mock_store
+
+    mock_app = MagicMock()
+    mock_app.run_http_async = AsyncMock()
+
+    mock_cfg = MagicMock()
+    mock_cfg.rag = RagConfig(
+        host="127.0.0.1", port=9999, sync_timeout_seconds=sync_timeout, db_path=db_path
+    )
+    mock_cfg.history.directory = "/tmp/history"
+
+    mock_sync_result = SyncResult(added=[], removed=[], unchanged=[], errors=[], skipped=[])
+    return mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result
+
+
+class TestServerInstallTrigger:
+    @pytest.mark.asyncio
+    async def test_server_startup_sync_sets_install_trigger(self) -> None:
+        """main() calls state_store.set_trigger('install') before sync.sync() (normal path)."""
+        from archon.rag.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
+        sentinel_state_store = MagicMock()
+        call_order: list[str] = []
+        sentinel_state_store.set_trigger.side_effect = lambda t: call_order.append(f"set_trigger:{t}")
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.rag.server.create_app", return_value=mock_app),
+            patch("archon.rag.server.RagCollectionSync") as MockSync,
+            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+        ):
+            MockSync.return_value.sync = AsyncMock(
+                side_effect=lambda cols: (call_order.append("sync"), mock_sync_result)[1]
+            )
+            await main()
+
+        sentinel_state_store.set_trigger.assert_called_once_with("install")
+        assert call_order.index("set_trigger:install") < call_order.index("sync")
+
+    @pytest.mark.asyncio
+    async def test_server_background_path_sets_install_trigger(self) -> None:
+        """main() calls set_trigger('install') even when sync_timeout_seconds=0 (background path)."""
+        from archon.rag.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, _ = _make_server_mocks(sync_timeout=0)
+        sentinel_state_store = MagicMock()
+        call_order: list[str] = []
+        sentinel_state_store.set_trigger.side_effect = lambda t: call_order.append(f"set_trigger:{t}")
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.rag.server.create_app", return_value=mock_app),
+            patch("archon.rag.server.RagCollectionSync") as MockSync,
+            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+            patch("asyncio.create_task", side_effect=lambda coro, **kw: (call_order.append("create_task"), coro.close(), None)[2]),
+        ):
+            MockSync.return_value.sync = AsyncMock()
+            await main()
+
+        sentinel_state_store.set_trigger.assert_called_once_with("install")
+        assert call_order.index("set_trigger:install") < call_order.index("create_task")
+
+    @pytest.mark.asyncio
+    async def test_server_timeout_fallback_path_sets_install_trigger(self) -> None:
+        """main() calls set_trigger('install') before any branch — also covers timeout-fallback path."""
+        import asyncio as _asyncio
+        from archon.rag.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, _ = _make_server_mocks(sync_timeout=1)
+        sentinel_state_store = MagicMock()
+
+        async def _slow_sync(cols):
+            await _asyncio.sleep(10)
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.rag.server.create_app", return_value=mock_app),
+            patch("archon.rag.server.RagCollectionSync") as MockSync,
+            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+            patch("asyncio.create_task", side_effect=lambda coro, **kw: coro.close()),
+        ):
+            MockSync.return_value.sync = _slow_sync
+            await main()
+
+        sentinel_state_store.set_trigger.assert_called_once_with("install")
+
+    @pytest.mark.asyncio
+    async def test_server_startup_set_trigger_failure_does_not_crash(self) -> None:
+        """If set_trigger('install') raises, main() logs a warning and continues — server still starts."""
+        from archon.rag.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
+        sentinel_state_store = MagicMock()
+        sentinel_state_store.set_trigger.side_effect = OSError("disk full")
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.rag.server.create_app", return_value=mock_app),
+            patch("archon.rag.server.RagCollectionSync") as MockSync,
+            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+        ):
+            MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+            await main()  # must not raise
+
+        mock_app.run_http_async.assert_awaited_once()
+        MockSync.return_value.sync.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_health_endpoint_returns_200() -> None:
     """GET /health returns 200 with JSON body {"status": "ok"}."""

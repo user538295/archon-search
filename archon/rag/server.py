@@ -200,6 +200,10 @@ async def main() -> None:
         chunk_size=cfg.rag.chunk_size,
         auto_reindex_on_chunk_size_change=cfg.rag.auto_reindex_on_chunk_size_change,
     )
+    try:
+        state_store.set_trigger("install")
+    except Exception as exc:
+        logger.warning("Startup sync: failed to write install trigger (notification may not fire): %s", exc)
     sync_timeout = cfg.rag.sync_timeout_seconds
     if sync_timeout == 0:
         asyncio.create_task(sync.sync(cfg.rag.collections))
