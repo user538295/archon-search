@@ -2332,3 +2332,409 @@ class TestResetStalePreservesPhase4Fields:
         assert cp.file_hashes == {"a": "abc"}
         assert cp.indexed_embedding_model == "bge"
         assert cp.indexed_chunk_size == 512
+
+
+# ---------------------------------------------------------------------------
+# TestTask45 — FEAT-027-P4 Task 4.5
+# ---------------------------------------------------------------------------
+
+
+class TestTask45:
+    """Tests for SyncResult.updated, constructor params, _load_file_mtimes, _check_collection_changes."""
+
+    # --- Part 1: SyncResult.updated ---
+
+    def test_sync_result_has_updated_field(self):
+        """SyncResult() default-constructs with updated=[]."""
+        from archon.rag.sync import SyncResult
+
+        result = SyncResult()
+        assert result.updated == []
+
+    # --- Part 2 & 3: _load_file_mtimes ---
+
+    def test_load_file_mtimes_state_store_none(self, tmp_path):
+        """When state_store=None, _load_file_mtimes returns {}."""
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline, state_store=None)
+        assert syncer._load_file_mtimes("my_col") == {}
+
+    def test_load_file_mtimes_no_state_file(self, tmp_path):
+        """When state store has no data (file absent), returns {}."""
+        from archon.rag.progress import IndexingStateStore
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        store = IndexingStateStore(tmp_path / "state_empty")
+        syncer = RagCollectionSync(pipeline, state_store=store)
+        assert syncer._load_file_mtimes("my_col") == {}
+
+    def test_load_file_mtimes_collection_absent(self, tmp_path):
+        """State exists but collection name is not in it — returns {}."""
+        from archon.rag.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        store = IndexingStateStore(tmp_path / "state")
+        store.update_collection("other_col", CollectionProgress(status=IndexingStatus.DONE))
+        syncer = RagCollectionSync(pipeline, state_store=store)
+        assert syncer._load_file_mtimes("missing_col") == {}
+
+    def test_load_file_mtimes_from_provided_state(self, tmp_path):
+        """When state is passed directly, returns its file_mtimes for the named collection."""
+        from archon.rag.progress import CollectionProgress, IndexingState, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline)
+
+        state = IndexingState(collections={
+            "col_a": CollectionProgress(
+                status=IndexingStatus.DONE,
+                file_mtimes={"a/file.md": 1.0, "b/file.md": 2.5},
+            )
+        })
+        result = syncer._load_file_mtimes("col_a", state=state)
+        assert result == {"a/file.md": 1.0, "b/file.md": 2.5}
+
+    def test_load_file_mtimes_provided_state_collection_absent(self, tmp_path):
+        """When state is passed but collection absent, returns {}."""
+        from archon.rag.progress import IndexingState
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline)
+        state = IndexingState(collections={})
+        assert syncer._load_file_mtimes("nonexistent", state=state) == {}
+
+    # --- Part 4: _check_collection_changes ---
+
+    def _make_syncer(self, tmp_path, embedding_model="", chunk_size=0, auto_reindex=False):
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        return RagCollectionSync(
+            pipeline,
+            embedding_model=embedding_model,
+            chunk_size=chunk_size,
+            auto_reindex_on_chunk_size_change=auto_reindex,
+        )
+
+    def test_check_collection_changes_no_changes(self, tmp_path):
+        """File on disk with matching mtime → ([], [], [])."""
+        from archon.rag.sync import RagCollectionSync
+
+        source = tmp_path / "src"
+        source.mkdir()
+        f = source / "readme.md"
+        f.write_text("hello")
+        mtime = f.stat().st_mtime
+
+        syncer = self._make_syncer(tmp_path)
+        key = str(f.resolve())
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {key: mtime}, "", 0
+        )
+        assert new_files == []
+        assert changed_files == []
+        assert deleted == []
+
+    def test_check_collection_changes_new_file(self, tmp_path):
+        """File on disk NOT in mtimes dict → in new_files."""
+        from archon.rag.sync import RagCollectionSync
+
+        source = tmp_path / "src"
+        source.mkdir()
+        f = source / "readme.md"
+        f.write_text("hello")
+
+        syncer = self._make_syncer(tmp_path)
+        # Empty mtimes — file is "new"
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {}, "", 0
+        )
+        assert f.resolve() in new_files
+        assert changed_files == []
+        assert deleted == []
+
+    def test_check_collection_changes_changed_mtime(self, tmp_path):
+        """File in mtimes but mtime differs → in changed_files."""
+        from archon.rag.sync import RagCollectionSync
+
+        source = tmp_path / "src"
+        source.mkdir()
+        f = source / "readme.md"
+        f.write_text("hello")
+        key = str(f.resolve())
+
+        syncer = self._make_syncer(tmp_path)
+        # Use an mtime that won't match the actual file mtime
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {key: 0.0}, "", 0
+        )
+        assert new_files == []
+        assert f.resolve() in changed_files
+        assert deleted == []
+
+    def test_check_collection_changes_deleted_file(self, tmp_path):
+        """Path in mtimes but not on disk → in deleted_paths."""
+        from archon.rag.sync import RagCollectionSync
+
+        source = tmp_path / "src"
+        source.mkdir()
+
+        syncer = self._make_syncer(tmp_path)
+        ghost_key = str(source / "ghost.md")
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {ghost_key: 1.0}, "", 0
+        )
+        assert new_files == []
+        assert changed_files == []
+        assert ghost_key in deleted
+
+    def test_check_collection_changes_embedding_model_changed(self, tmp_path):
+        """Embedding model changed → force_full_reindex: all eligible files in changed_files."""
+        from archon.rag.sync import RagCollectionSync
+
+        source = tmp_path / "src"
+        source.mkdir()
+        f = source / "readme.md"
+        f.write_text("hello")
+
+        # syncer has new model; indexed with old model
+        syncer = self._make_syncer(tmp_path, embedding_model="new-model")
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {}, "old-model", 0
+        )
+        # force_full_reindex → eligible files go to changed_files, new_files empty
+        assert f.resolve() in changed_files
+        assert new_files == []
+
+    def test_check_collection_changes_chunk_size_auto_reindex(self, tmp_path):
+        """Chunk size mismatch + auto_reindex=True → force_full_reindex."""
+        source = tmp_path / "src"
+        source.mkdir()
+        f = source / "readme.md"
+        f.write_text("hello")
+
+        syncer = self._make_syncer(tmp_path, chunk_size=1024, auto_reindex=True)
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {}, "", 512
+        )
+        assert f.resolve() in changed_files
+        assert new_files == []
+
+    def test_check_collection_changes_chunk_size_no_auto_reindex(self, tmp_path, caplog):
+        """Chunk size mismatch + auto_reindex=False → warning logged, normal per-file detection."""
+        import logging
+
+        source = tmp_path / "src"
+        source.mkdir()
+        f = source / "readme.md"
+        f.write_text("hello")
+        key = str(f.resolve())
+        mtime = f.stat().st_mtime
+
+        syncer = self._make_syncer(tmp_path, chunk_size=1024, auto_reindex=False)
+        with caplog.at_level(logging.WARNING, logger="archon"):
+            new_files, changed_files, deleted = syncer._check_collection_changes(
+                "col", source, {key: mtime}, "", 512
+            )
+
+        # No force_full_reindex → no changes detected for this file
+        assert new_files == []
+        assert changed_files == []
+        # Warning must be logged
+        assert any("mismatch" in msg.lower() or "chunk" in msg.lower() for msg in caplog.messages)
+
+    def test_check_collection_changes_first_sync_model_guard_skipped(self, tmp_path):
+        """indexed_embedding_model='' → embedding model guard skipped, no full re-index."""
+        source = tmp_path / "src"
+        source.mkdir()
+        f = source / "readme.md"
+        f.write_text("hello")
+        key = str(f.resolve())
+        mtime = f.stat().st_mtime
+
+        # syncer has a model set, but indexed_embedding_model is "" (first sync)
+        syncer = self._make_syncer(tmp_path, embedding_model="some-model")
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {key: mtime}, "", 0
+        )
+        # Guard skipped → no force_full_reindex, file is unchanged
+        assert new_files == []
+        assert changed_files == []
+
+    def test_check_collection_changes_first_sync_chunk_guard_skipped(self, tmp_path):
+        """indexed_chunk_size=0 → chunk size guard skipped, no warning, normal detection."""
+        source = tmp_path / "src"
+        source.mkdir()
+        f = source / "readme.md"
+        f.write_text("hello")
+        key = str(f.resolve())
+        mtime = f.stat().st_mtime
+
+        syncer = self._make_syncer(tmp_path, chunk_size=1024)
+        # indexed_chunk_size=0 means first sync — guard should be skipped
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {key: mtime}, "", 0
+        )
+        assert new_files == []
+        assert changed_files == []
+
+    def test_constructor_stores_params(self, tmp_path):
+        """New constructor params are stored as instance attributes."""
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(
+            pipeline,
+            embedding_model="bge-small",
+            chunk_size=256,
+            auto_reindex_on_chunk_size_change=True,
+        )
+        assert syncer._embedding_model == "bge-small"
+        assert syncer._chunk_size == 256
+        assert syncer._auto_reindex_on_chunk_size_change is True
+
+    # --- Additional tests (Fix 5) ---
+
+    def test_check_collection_changes_deleted_symlink(self, tmp_path):
+        """File previously indexed is replaced by a symlink → treated as deleted."""
+        source = tmp_path / "src"
+        source.mkdir()
+        target = tmp_path / "target.md"
+        target.write_text("target content")
+
+        # Create a regular file, record its resolved path
+        f = source / "readme.md"
+        f.write_text("hello")
+        key = str(f.resolve())
+        mtime = f.stat().st_mtime
+
+        # Replace with a symlink
+        f.unlink()
+        f.symlink_to(target)
+
+        syncer = self._make_syncer(tmp_path)
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {key: mtime}, "", 0
+        )
+        # Symlinks are excluded from eligible → path not in eligible_keys → deleted
+        assert key in deleted
+        assert new_files == []
+        assert changed_files == []
+
+    def test_load_file_mtimes_from_state_store_success(self, tmp_path):
+        """When state_store has data for the collection, returns its file_mtimes."""
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        store = IndexingStateStore(tmp_path / "state")
+        cp = CollectionProgress(
+            status=IndexingStatus.DONE,
+            file_mtimes={"/a/file.md": 1700000000.0},
+        )
+        store.update_collection("my_col", cp)
+        syncer = RagCollectionSync(pipeline, state_store=store)
+        result = syncer._load_file_mtimes("my_col")
+        assert result == {"/a/file.md": 1700000000.0}
+
+    def test_check_collection_changes_stat_oserror_treated_as_changed(self, tmp_path):
+        """OSError from stat() causes file to be treated as changed, not skipped."""
+        source = tmp_path / "src"
+        source.mkdir()
+        f = source / "readme.md"
+        f.write_text("hello")
+        key = str(f.resolve())
+
+        syncer = self._make_syncer(tmp_path)
+        # Intercept _iter_eligible_files to return the real list, then replace the
+        # syncer method with one that pre-fetches the list and raises on the stat
+        # call that happens in the mtime-check loop.
+        real_iter = syncer._iter_eligible_files
+
+        # We override stat on file objects returned from iter by wrapping the loop
+        # with a controlled _iter_eligible_files that returns real paths AND separately
+        # monkey-patches the stat check via a controlled version of the inner loop.
+        # Simplest approach: override _check_collection_changes's inner behavior by
+        # subclassing is error-prone. Instead, use a sentinel mtime file trick:
+        # put the key in file_mtimes with mtime=0.0 so it differs from real mtime,
+        # BUT instead test OSError by writing a wrapper around _iter_eligible_files
+        # that returns a fake Path whose stat() raises OSError while is_file/is_symlink work.
+
+        class FakePath:
+            """Wraps a real Path but stat() raises OSError."""
+            def __init__(self, real: Path):
+                self._real = real
+
+            def stat(self):
+                raise OSError("permission denied")
+
+            def resolve(self):
+                return self._real.resolve()
+
+            def __fspath__(self):
+                return str(self._real)
+
+            def __str__(self):
+                return str(self._real)
+
+        def patched_iter(path):
+            return [FakePath(p) for p in real_iter(path)]
+
+        syncer._iter_eligible_files = patched_iter
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {key: 1.0}, "", 0
+        )
+        # changed_files contains FakePath objects; check by resolved string
+        assert any(str(p.resolve()) == key for p in changed_files)
+        assert new_files == []
+
+    def test_check_collection_changes_same_embedding_model_no_reindex(self, tmp_path):
+        """Same embedding model as indexed → no force_full_reindex."""
+        source = tmp_path / "src"
+        source.mkdir()
+        f = source / "readme.md"
+        f.write_text("hello")
+        key = str(f.resolve())
+        mtime = f.stat().st_mtime
+
+        syncer = self._make_syncer(tmp_path, embedding_model="bge-small")
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {key: mtime}, "bge-small", 0
+        )
+        # Same model → no force_full_reindex → file with matching mtime is unchanged
+        assert new_files == []
+        assert changed_files == []
+        assert deleted == []
+
+    def test_load_file_mtimes_exception_returns_empty(self, tmp_path):
+        """If state_store.read() raises, _load_file_mtimes returns {}."""
+        from unittest.mock import MagicMock
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        bad_store = MagicMock()
+        bad_store.read.side_effect = RuntimeError("corrupted")
+        syncer = RagCollectionSync(pipeline, state_store=bad_store)
+        result = syncer._load_file_mtimes("col")
+        assert result == {}
+
+    def test_check_collection_changes_embedding_model_changed_deleted_empty(self, tmp_path):
+        """Embedding model changed with empty file_mtimes → deleted == []."""
+        source = tmp_path / "src"
+        source.mkdir()
+        f = source / "readme.md"
+        f.write_text("hello")
+
+        syncer = self._make_syncer(tmp_path, embedding_model="new-model")
+        new_files, changed_files, deleted = syncer._check_collection_changes(
+            "col", source, {}, "old-model", 0
+        )
+        assert f.resolve() in changed_files
+        assert new_files == []
+        assert deleted == []

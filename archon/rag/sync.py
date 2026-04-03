@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from archon.rag.pipeline import RagPipeline
-    from archon.rag.progress import CollectionProgress, IndexingStateStore
+    from archon.rag.progress import CollectionProgress, IndexingState, IndexingStateStore
 
 logger = logging.getLogger("archon")
 
@@ -56,6 +56,7 @@ class SyncResult:
     unchanged: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    updated: list[str] = field(default_factory=list)
 
 
 def manifest_lookup_by_path(manifest_path: Path, resolved_path: str) -> str | None:
@@ -89,11 +90,17 @@ class RagCollectionSync:
         pipeline: RagPipeline,
         state_store: IndexingStateStore | None = None,
         pinned_collections: list[str] | None = None,
+        embedding_model: str = "",
+        chunk_size: int = 0,
+        auto_reindex_on_chunk_size_change: bool = False,
     ) -> None:
         self._pipeline = pipeline
         self._state_store = state_store
         self._pinned_collections = pinned_collections or []
         self._collection_locks: dict[str, asyncio.Lock] = {}
+        self._embedding_model = embedding_model
+        self._chunk_size = chunk_size
+        self._auto_reindex_on_chunk_size_change = auto_reindex_on_chunk_size_change
 
     async def sync(
         self,
@@ -274,6 +281,92 @@ class RagCollectionSync:
             return state.collections[name].processed_paths
         except Exception:  # noqa: BLE001
             return []
+
+    def _load_file_mtimes(self, name: str, state: "IndexingState | None" = None) -> dict[str, float]:
+        """Return file_mtimes for collection from state, or {} on any failure/absence.
+
+        If state is provided, use it directly. Otherwise read from state_store.
+        """
+        if state is not None:
+            cp = state.collections.get(name)
+            return dict(cp.file_mtimes) if cp is not None else {}
+        if self._state_store is None:
+            return {}
+        try:
+            loaded = self._state_store.read()
+            if loaded is None or name not in loaded.collections:
+                return {}
+            return dict(loaded.collections[name].file_mtimes)
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _check_collection_changes(
+        self,
+        name: str,
+        source_path: Path,
+        file_mtimes: dict[str, float],
+        indexed_embedding_model: str,
+        indexed_chunk_size: int,
+    ) -> tuple[list[Path], list[Path], list[str]]:
+        """Detect new, changed, and deleted files compared to stored file_mtimes.
+
+        Returns (new_files, changed_files, deleted_paths).
+        """
+        force_full_reindex = False
+
+        # Embedding model guard
+        if self._embedding_model != indexed_embedding_model and indexed_embedding_model != "":
+            logger.info(
+                "Embedding model changed (%s → %s), triggering full re-index of '%s'",
+                indexed_embedding_model,
+                self._embedding_model,
+                name,
+            )
+            force_full_reindex = True
+
+        # Chunk size guard
+        if self._chunk_size != indexed_chunk_size and indexed_chunk_size != 0:
+            if self._auto_reindex_on_chunk_size_change:
+                logger.info(
+                    "Chunk size changed (%d → %d), triggering full re-index of '%s'",
+                    indexed_chunk_size,
+                    self._chunk_size,
+                    name,
+                )
+                force_full_reindex = True
+            else:
+                logger.warning(
+                    "Chunk size mismatch for '%s' (indexed: %d, config: %d) — run `archon rag reindex` to update",
+                    name,
+                    indexed_chunk_size,
+                    self._chunk_size,
+                )
+
+        eligible_raw = self._iter_eligible_files(source_path)
+        eligible: list[tuple[Path, str]] = [(p, str(p.resolve())) for p in eligible_raw]
+        eligible_keys = {key for _, key in eligible}
+
+        # Deleted: in file_mtimes but not in eligible (symlinks and non-files excluded by _iter_eligible_files)
+        deleted_paths = [p for p in file_mtimes if p not in eligible_keys]
+
+        if force_full_reindex:
+            return [], [p for p, _ in eligible], deleted_paths
+
+        new_files: list[Path] = []
+        changed_files: list[Path] = []
+        for file, key in eligible:
+            if key not in file_mtimes:
+                new_files.append(file)
+            else:
+                try:
+                    mtime = file.stat().st_mtime
+                except OSError:
+                    changed_files.append(file)
+                    continue
+                if mtime != file_mtimes[key]:
+                    changed_files.append(file)
+
+        return new_files, changed_files, deleted_paths
 
     # ------------------------------------------------------------------
     # Collection ingestion (shared by to_add and to_resume)
