@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -390,6 +391,17 @@ class RagStore:
             return 0
         await table.delete(f"doc_id = '{doc_id}'")
         return count
+
+    async def delete_by_source_path(self, collection: str, source_path: str) -> int:
+        """Delete all chunks for a source file by computing its doc_id.
+
+        ``source_path`` must be an absolute, resolved path — the same form
+        produced by ``str(path.resolve())`` at ingest time.  Relative paths
+        will resolve against the current working directory at call time and
+        may not match the stored doc_id.
+        """
+        doc_id = hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
+        return await self.delete_document(collection, doc_id)
 
     # ------------------------------------------------------------------
     # List documents

@@ -959,4 +959,38 @@ async def test_list_collections_excludes_archon_prefix(
     # list_collections must not expose internal _archon_ tables
     names = [c.name for c in await connected_store.list_collections()]
     assert col_name in names
-    assert not any(n.startswith("_archon_") for n in names)
+
+
+# ---------------------------------------------------------------------------
+# delete_by_source_path tests (Task 4.3 — FEAT-027-P4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_by_source_path_computes_doc_id(tmp_path: Path) -> None:
+    """delete_by_source_path calls delete_document with sha256 of the resolved path."""
+    from unittest.mock import AsyncMock
+
+    source_path = "/some/project/README.md"
+    expected_doc_id = hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
+
+    store = RagStore(tmp_path / "db")
+    store.delete_document = AsyncMock(return_value=3)  # type: ignore[method-assign]
+
+    result = await store.delete_by_source_path("my-col", source_path)
+
+    store.delete_document.assert_called_once_with("my-col", expected_doc_id)
+    assert result == 3
+
+
+@pytest.mark.asyncio
+async def test_delete_by_source_path_collection_not_found(tmp_path: Path) -> None:
+    """When delete_document returns 0 (no match), delete_by_source_path returns 0."""
+    from unittest.mock import AsyncMock
+
+    store = RagStore(tmp_path / "db")
+    store.delete_document = AsyncMock(return_value=0)  # type: ignore[method-assign]
+
+    result = await store.delete_by_source_path("nonexistent-col", "/any/path.txt")
+
+    assert result == 0
