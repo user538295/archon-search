@@ -47,6 +47,9 @@ def _make_full_config(tmp_path: Path) -> object:
     class FakeRagConfigInner:
         collections: list[str] = field(default_factory=list)
         pinned_collections: list[str] = field(default_factory=list)
+        embedding_model: str = "BAAI/bge-small-en-v1.5"
+        chunk_size: int = 512
+        auto_reindex_on_chunk_size_change: bool = True
 
     @dataclass
     class FakeFullConfig:
@@ -483,6 +486,25 @@ class TestBootstrapCollections:
                 asyncio.run(installer._bootstrap_collections())
 
         mock_store.disconnect.assert_called_once()
+
+    def test_bootstrap_collections_passes_config_params(self, tmp_path: Path) -> None:
+        """RagCollectionSync must receive embedding_model, chunk_size, auto_reindex_on_chunk_size_change."""
+        installer = _make_installer(tmp_path)
+
+        mock_store = AsyncMock()
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = mock_store
+
+        with patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.rag.sync.RagCollectionSync") as MockSync:
+            MockSync.return_value.sync = AsyncMock()
+            asyncio.run(installer._bootstrap_collections())
+
+        MockSync.assert_called_once()
+        _, kwargs = MockSync.call_args
+        assert kwargs["embedding_model"] == installer._full_cfg.rag.embedding_model
+        assert kwargs["chunk_size"] == installer._full_cfg.rag.chunk_size
+        assert kwargs["auto_reindex_on_chunk_size_change"] == installer._full_cfg.rag.auto_reindex_on_chunk_size_change
 
 
 # ---------------------------------------------------------------------------

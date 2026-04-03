@@ -213,6 +213,9 @@ class RagInstaller:
                 pipeline,
                 state_store=state_store,
                 pinned_collections=self._full_cfg.rag.pinned_collections,
+                embedding_model=self._full_cfg.rag.embedding_model,
+                chunk_size=self._full_cfg.rag.chunk_size,
+                auto_reindex_on_chunk_size_change=self._full_cfg.rag.auto_reindex_on_chunk_size_change,
             )
             await sync.sync(self._full_cfg.rag.collections)
         finally:

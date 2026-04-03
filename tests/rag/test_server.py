@@ -833,7 +833,62 @@ class TestServerStateStore:
                 mock_pipeline,
                 state_store=sentinel_state_store,
                 pinned_collections=pinned,
+                embedding_model=mock_cfg.rag.embedding_model,
+                chunk_size=mock_cfg.rag.chunk_size,
+                auto_reindex_on_chunk_size_change=mock_cfg.rag.auto_reindex_on_chunk_size_change,
             )
+
+
+@pytest.mark.asyncio
+async def test_server_sync_passes_config_params() -> None:
+    """main() passes embedding_model, chunk_size, auto_reindex_on_chunk_size_change to RagCollectionSync."""
+    from archon.config.loader import RagConfig
+    from archon.rag.server import main
+    from archon.rag.sync import SyncResult
+
+    mock_store = MagicMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.store = mock_store
+
+    mock_app = MagicMock()
+    mock_app.run_http_async = AsyncMock()
+
+    mock_cfg = MagicMock()
+    mock_cfg.rag = RagConfig(
+        host="127.0.0.1",
+        port=9999,
+        sync_timeout_seconds=5,
+        db_path="/tmp/test-rag-db",
+        embedding_model="custom-embed-model",
+        chunk_size=512,
+        auto_reindex_on_chunk_size_change=True,
+    )
+    mock_cfg.history.directory = "/tmp/history"
+
+    mock_sync_result = SyncResult(added=[], removed=[], unchanged=[], errors=[], skipped=[])
+    sentinel_state_store = MagicMock()
+
+    with (
+        patch("archon.config.loader.load_config", return_value=mock_cfg),
+        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.rag.server.create_app", return_value=mock_app),
+        patch("archon.rag.server.RagCollectionSync") as MockSync,
+        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+    ):
+        MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+        await main()
+
+        MockSync.assert_called_once_with(
+            mock_pipeline,
+            state_store=sentinel_state_store,
+            pinned_collections=mock_cfg.rag.pinned_collections,
+            embedding_model="custom-embed-model",
+            chunk_size=512,
+            auto_reindex_on_chunk_size_change=True,
+        )
 
 
 @pytest.mark.asyncio
