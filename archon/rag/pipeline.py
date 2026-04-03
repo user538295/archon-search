@@ -122,6 +122,8 @@ class RagPipeline:
         glob_pattern: str = "**/*",
         progress_cb: Callable[[int, int], None | Awaitable[None]] | None = None,
         force_regenerate_description: bool = False,
+        exclude_paths: frozenset[str] | None = None,
+        on_file_complete: Callable[[Path], None] | None = None,
     ) -> list[IngestResult]:
         # Collect and filter files
         files: list[Path] = []
@@ -141,6 +143,9 @@ class RagPipeline:
 
         files.sort()
 
+        if exclude_paths is not None:
+            files = [f for f in files if str(f) not in exclude_paths]
+
         if not files:
             return []
 
@@ -158,6 +163,8 @@ class RagPipeline:
                 _chunk_collector=all_chunks,
             )
             results.append(result)
+            if on_file_complete is not None and result.status == "ok":
+                on_file_complete(file_path)
             if progress_cb is not None:
                 ret = progress_cb(done_count, total)
                 if inspect.isawaitable(ret):

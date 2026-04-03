@@ -1019,3 +1019,120 @@ def test_ragpipeline_has_no_history_collection_attr() -> None:
     assert not hasattr(pipeline, "_history_collection"), (
         "_history_collection attribute still present on RagPipeline"
     )
+
+
+# ===========================================================================
+# Task 3.2 — exclude_paths and on_file_complete tests
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_exclude_paths_skips_files(connected_store, col_name, tmp_path):
+    """exclude_paths containing a file's absolute path → that file not in results."""
+    pipeline = make_pipeline(connected_store)
+    for i in range(3):
+        (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent for document {i}.\n" * 5)
+
+    exclude = frozenset({str(tmp_path / "doc1.md")})
+    results = await pipeline.ingest_directory(tmp_path, col_name, exclude_paths=exclude)
+
+    assert len(results) == 2
+    assert all(r.status == "ok" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_exclude_paths_adjusts_total(connected_store, col_name, tmp_path):
+    """progress_cb receives total equal to non-excluded file count."""
+    pipeline = make_pipeline(connected_store)
+    for i in range(3):
+        (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent.\n" * 5)
+
+    calls: list[tuple[int, int]] = []
+
+    def progress_cb(done: int, total: int) -> None:
+        calls.append((done, total))
+
+    exclude = frozenset({str(tmp_path / "doc1.md")})
+    await pipeline.ingest_directory(tmp_path, col_name, progress_cb=progress_cb, exclude_paths=exclude)
+
+    assert len(calls) == 2
+    assert all(total == 2 for _, total in calls)
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_on_file_complete_called_per_file(connected_store, col_name, tmp_path):
+    """Callback fired once for each successfully processed file with correct Path."""
+    pipeline = make_pipeline(connected_store)
+    for i in range(3):
+        (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent for document {i}.\n" * 5)
+
+    completed: list[Path] = []
+    results = await pipeline.ingest_directory(
+        tmp_path, col_name, on_file_complete=lambda p: completed.append(p),
+    )
+
+    assert len(completed) == 3
+    assert all(isinstance(p, Path) for p in completed)
+    # All three files were OK
+    assert all(r.status == "ok" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_on_file_complete_only_for_ok_results(connected_store, col_name, tmp_path):
+    """Callback NOT called for files where ingest_file returns status='error'."""
+    from archon.rag.parser import ParseError
+
+    pipeline = make_pipeline(connected_store)
+    for i in range(3):
+        (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent.\n" * 5)
+
+    original_parse = pipeline._parser.parse
+
+    async def _selective_fail(path: Path) -> str:
+        if path.name == "doc1.md":
+            raise ParseError(path, Exception("forced failure"))
+        return await original_parse(path)
+
+    pipeline._parser.parse = _selective_fail  # type: ignore[method-assign]
+
+    completed: list[Path] = []
+    results = await pipeline.ingest_directory(
+        tmp_path, col_name, on_file_complete=lambda p: completed.append(p),
+    )
+
+    error_results = [r for r in results if r.status == "error"]
+    assert len(error_results) == 1
+    assert len(completed) == 2
+    # doc1.md must NOT be in completed
+    assert not any(p.name == "doc1.md" for p in completed)
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_no_new_files_returns_empty(connected_store, col_name, tmp_path):
+    """All files excluded → empty result, progress_cb never called."""
+    pipeline = make_pipeline(connected_store)
+    for i in range(2):
+        (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent.\n" * 5)
+
+    exclude = frozenset({str(tmp_path / "doc0.md"), str(tmp_path / "doc1.md")})
+    calls: list[tuple[int, int]] = []
+
+    results = await pipeline.ingest_directory(
+        tmp_path, col_name, progress_cb=lambda d, t: calls.append((d, t)), exclude_paths=exclude,
+    )
+
+    assert results == []
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_no_exclude_paths_unchanged(connected_store, col_name, tmp_path):
+    """exclude_paths=None → identical to current behaviour (no filtering)."""
+    pipeline = make_pipeline(connected_store)
+    for i in range(3):
+        (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent for document {i}.\n" * 5)
+
+    results = await pipeline.ingest_directory(tmp_path, col_name, exclude_paths=None)
+
+    assert len(results) == 3
+    assert all(r.status == "ok" for r in results)
