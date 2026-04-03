@@ -74,6 +74,7 @@ class TestDataclasses:
         assert col["completed_at"] is None
         assert col["error"] == "some error"
         assert col["error_count"] == 2
+        assert col["processed_paths"] == []
 
     def test_from_dict_valid(self) -> None:
         d = {
@@ -285,6 +286,7 @@ class TestIndexingStateStore:
             completed_at="2026-01-01T00:01:00+00:00",
             error=None,
             error_count=0,
+            processed_paths=["/a/file.md", "/b/file.md"],
         )
         state = IndexingState(
             collections={"my_col": cp},
@@ -303,6 +305,7 @@ class TestIndexingStateStore:
         assert col.completed_at == "2026-01-01T00:01:00+00:00"
         assert col.error is None
         assert col.error_count == 0
+        assert col.processed_paths == ["/a/file.md", "/b/file.md"]
 
     def test_update_collection_existing_state(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)

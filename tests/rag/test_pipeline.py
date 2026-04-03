@@ -1073,6 +1073,8 @@ async def test_ingest_directory_on_file_complete_called_per_file(connected_store
 
     assert len(completed) == 3
     assert all(isinstance(p, Path) for p in completed)
+    expected = {tmp_path / f"doc{i}.md" for i in range(3)}
+    assert set(completed) == expected
     # All three files were OK
     assert all(r.status == "ok" for r in results)
 
@@ -1136,3 +1138,35 @@ async def test_ingest_directory_no_exclude_paths_unchanged(connected_store, col_
 
     assert len(results) == 3
     assert all(r.status == "ok" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_exclude_and_on_file_complete_combined(connected_store, col_name, tmp_path):
+    """exclude_paths + on_file_complete + parse error: callback fires only for non-excluded ok files."""
+    from archon.rag.parser import ParseError
+
+    pipeline = make_pipeline(connected_store)
+    for i in range(3):
+        (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent for document {i}.\n" * 5)
+
+    original_parse = pipeline._parser.parse
+
+    async def _selective_fail(path: Path) -> str:
+        if path.name == "doc1.md":
+            raise ParseError(path, Exception("forced failure"))
+        return await original_parse(path)
+
+    pipeline._parser.parse = _selective_fail  # type: ignore[method-assign]
+
+    exclude = frozenset({str(tmp_path / "doc0.md")})
+    completed: list[Path] = []
+    results = await pipeline.ingest_directory(
+        tmp_path, col_name,
+        exclude_paths=exclude,
+        on_file_complete=lambda p: completed.append(p),
+    )
+
+    # doc0 excluded, doc1 errored, doc2 ok → callback only for doc2
+    assert len(results) == 2  # doc1 + doc2 (doc0 excluded)
+    assert len(completed) == 1
+    assert completed[0] == tmp_path / "doc2.md"

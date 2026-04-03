@@ -1994,6 +1994,7 @@ class TestSyncResumable:
         cp = state.collections["myproject"]
         assert cp.status == IndexingStatus.FAILED
         assert len(cp.processed_paths) == 3
+        assert cp.processed_files == 3  # not 0
 
     @pytest.mark.asyncio
     async def test_sync_no_resume_on_empty_processed_paths(self, tmp_path):
@@ -2051,6 +2052,7 @@ class TestSyncResumable:
         assert cp.status == IndexingStatus.DONE
         assert cp.total_files == 3  # resume_offset
         assert cp.processed_files == 3  # resume_offset
+        assert cp.processed_paths == ["/a", "/b", "/c"]  # preserved
 
     @pytest.mark.asyncio
     async def test_sync_errored_file_not_in_processed_paths(self, tmp_path):
@@ -2180,3 +2182,51 @@ class TestSyncResumable:
         # project_b was PENDING → resumed → in added, NOT unchanged
         assert "project_b" in result.added
         assert "project_b" not in result.unchanged
+
+    @pytest.mark.asyncio
+    async def test_sync_resumes_existing_collection_with_failed_status(self, tmp_path):
+        """FAILED collection in existing & desired → Step 6.5 resumes it."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        existing_dir = tmp_path / "myproject"
+        existing_dir.mkdir()
+        resolved = str(existing_dir.resolve())
+
+        manifest = {"myproject": resolved}
+        pipeline = make_mock_pipeline(
+            tmp_path,
+            existing_collections=["myproject"],
+            manifest=manifest,
+        )
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        state_store.update_collection("myproject", CollectionProgress(
+            status=IndexingStatus.FAILED,
+            processed_paths=["/old/file.md"],
+            error="previous crash",
+        ))
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            exclude = kwargs.get("exclude_paths")
+            # Verify resume state is passed through
+            assert "/old/file.md" in exclude
+            results = [IngestResult(doc_id="d0", chunks_created=1, status="ok")]
+            if on_file_complete:
+                on_file_complete(Path("/new/file.md"))
+            return results
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        result = await syncer.sync([str(existing_dir)])
+
+        assert "myproject" in result.added
+        assert "myproject" not in result.unchanged
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        assert "/old/file.md" in cp.processed_paths
+        assert "/new/file.md" in cp.processed_paths

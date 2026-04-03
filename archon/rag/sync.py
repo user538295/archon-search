@@ -380,6 +380,7 @@ class RagCollectionSync:
                 self._safe_state_update(name, CollectionProgress(
                     status=IndexingStatus.FAILED,
                     total_files=resume_offset + total_new,
+                    processed_files=resume_offset + len(new_paths),
                     started_at=started_at,
                     completed_at=datetime.now(UTC).isoformat(),
                     error=str(exc),
