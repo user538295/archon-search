@@ -2738,3 +2738,926 @@ class TestTask45:
         assert f.resolve() in changed_files
         assert new_files == []
         assert deleted == []
+
+
+# ---------------------------------------------------------------------------
+# TestTask46 — Phase 4 core: _apply_collection_changes + sync() Step 7
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_pipeline_with_ingest_file(tmp_path, existing_collections=None, manifest=None):
+    """Extended mock pipeline that also mocks ingest_file, rebuild_fts_index,
+    delete_by_source_path, and recompute_collection_meta."""
+    pipeline = make_mock_pipeline(tmp_path, existing_collections=existing_collections, manifest=manifest)
+    pipeline.ingest_file = AsyncMock(return_value=MagicMock(status="ok"))
+    pipeline.store.rebuild_fts_index = AsyncMock()
+    pipeline.store.delete_by_source_path = AsyncMock(return_value=1)
+    pipeline.recompute_collection_meta = AsyncMock()
+    return pipeline
+
+
+def _make_done_state(tmp_path, collection_name, file_mtimes, embedding_model="model-a", chunk_size=512):
+    """Write a DONE state with file_mtimes to the state store."""
+    from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+
+    state_store = IndexingStateStore(tmp_path / "state")
+    state_store.update_collection(collection_name, CollectionProgress(
+        status=IndexingStatus.DONE,
+        total_files=len(file_mtimes),
+        processed_files=len(file_mtimes),
+        processed_paths=list(file_mtimes.keys()),
+        file_mtimes=file_mtimes,
+        indexed_embedding_model=embedding_model,
+        indexed_chunk_size=chunk_size,
+    ))
+    return state_store
+
+
+class TestTask46:
+    """Tests for Task 4.6: _apply_collection_changes, _ingest_collection file_mtimes, and sync() Step 7."""
+
+    # ------------------------------------------------------------------
+    # Test 1: sync detects new files in existing DONE collection
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_detects_new_files_in_existing_collection(self, tmp_path):
+        """DONE collection + new file on disk → result.updated contains collection name."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        new_file = col_dir / "new_doc.md"
+        new_file.write_text("new content")
+
+        resolved = str(col_dir.resolve())
+        manifest = {"myproject": resolved}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # State: DONE with empty file_mtimes (no files tracked yet)
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        assert "myproject" in result.updated
+        assert "myproject" not in result.unchanged
+        assert result.errors == []
+
+    # ------------------------------------------------------------------
+    # Test 2: changed files are re-ingested
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_detects_changed_files(self, tmp_path):
+        """Existing file with different mtime in state → ingest_file called for that file."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "readme.md"
+        doc.write_text("content")
+        real_key = str(doc.resolve())
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # State: file tracked but with stale mtime (0.0)
+        state_store = _make_done_state(tmp_path, "myproject", {real_key: 0.0})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        assert "myproject" in result.updated
+        pipeline.ingest_file.assert_called()
+        assert result.errors == []
+
+    # ------------------------------------------------------------------
+    # Test 3: deleted files have their chunks removed
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_detects_deleted_files(self, tmp_path):
+        """File in state but not on disk → delete_by_source_path called."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        # No files on disk, but state has a file tracked
+        ghost_path = str((col_dir / "ghost.md").resolve())
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        state_store = _make_done_state(tmp_path, "myproject", {ghost_path: 1234567.0})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        pipeline.store.delete_by_source_path.assert_called_once_with("myproject", ghost_path)
+        assert "myproject" in result.updated
+        assert result.errors == []
+
+    # ------------------------------------------------------------------
+    # Test 4: unchanged files are skipped
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_skips_unchanged_files(self, tmp_path):
+        """File mtime matches state → ingest_file NOT called."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "readme.md"
+        doc.write_text("content")
+        real_key = str(doc.resolve())
+        real_mtime = doc.stat().st_mtime
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # State: file tracked with exact current mtime
+        state_store = _make_done_state(tmp_path, "myproject", {real_key: real_mtime})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        pipeline.ingest_file.assert_not_called()
+        pipeline.store.delete_by_source_path.assert_not_called()
+        assert "myproject" in result.unchanged
+        assert "myproject" not in result.updated
+
+    # ------------------------------------------------------------------
+    # Test 5: result.updated contains the changed collection
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_result_includes_updated(self, tmp_path):
+        """After applying changes, collection name appears in result.updated."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        new_file = col_dir / "doc.md"
+        new_file.write_text("hello")
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        assert "myproject" in result.updated
+        assert "myproject" not in result.added
+
+    # ------------------------------------------------------------------
+    # Test 6: unchanged collection not in updated
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_unchanged_collection_not_in_updated(self, tmp_path):
+        """No file changes → collection in result.unchanged, not result.updated."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "readme.md"
+        doc.write_text("content")
+        real_key = str(doc.resolve())
+        real_mtime = doc.stat().st_mtime
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        state_store = _make_done_state(tmp_path, "myproject", {real_key: real_mtime})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        assert "myproject" in result.unchanged
+        assert "myproject" not in result.updated
+        assert result.errors == []
+
+    # ------------------------------------------------------------------
+    # Test 7: state updated with correct file_mtimes after sync
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_updates_file_mtimes_in_state(self, tmp_path):
+        """After apply, state.file_mtimes reflects actual file mtimes on disk."""
+        from archon.rag.progress import IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "doc.md"
+        doc.write_text("new content")
+        real_key = str(doc.resolve())
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # State with empty mtimes (file appears as new)
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        await syncer.sync([str(col_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        assert real_key in cp.file_mtimes
+        assert cp.file_mtimes[real_key] == pytest.approx(doc.stat().st_mtime)
+
+    # ------------------------------------------------------------------
+    # Test 8: state stores indexed_embedding_model and indexed_chunk_size
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_stores_indexed_model_and_chunk_size(self, tmp_path):
+        """DONE state after apply contains correct indexed_embedding_model and indexed_chunk_size."""
+        from archon.rag.progress import IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "doc.md"
+        doc.write_text("content")
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        state_store = _make_done_state(tmp_path, "myproject", {}, embedding_model="model-a", chunk_size=512)
+
+        syncer = RagCollectionSync(
+            pipeline, state_store=state_store, embedding_model="model-b", chunk_size=1024
+        )
+        await syncer.sync([str(col_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.indexed_embedding_model == "model-b"
+        assert cp.indexed_chunk_size == 1024
+
+    # ------------------------------------------------------------------
+    # Test 9: FTS rebuilt once at end
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_fts_rebuilt_once(self, tmp_path):
+        """rebuild_fts_index called exactly once after all file operations."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        for i in range(3):
+            (col_dir / f"doc{i}.md").write_text(f"content {i}")
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        await syncer.sync([str(col_dir)])
+
+        pipeline.store.rebuild_fts_index.assert_called_once_with("myproject")
+
+    # ------------------------------------------------------------------
+    # Test 10: recompute_collection_meta called after FTS rebuild
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_updates_collection_meta(self, tmp_path):
+        """After _apply_collection_changes, pipeline.recompute_collection_meta is called."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        (col_dir / "doc.md").write_text("content")
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        await syncer.sync([str(col_dir)])
+
+        pipeline.recompute_collection_meta.assert_called_once_with("myproject")
+
+    # ------------------------------------------------------------------
+    # Test 11: new collection ingest populates file_mtimes
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_new_collection_populates_file_mtimes(self, tmp_path):
+        """New collection DONE state has file_mtimes populated from ingested files."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "newproject"
+        col_dir.mkdir()
+        doc = col_dir / "readme.md"
+        doc.write_text("hello")
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        real_path = str(doc.resolve())
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            if on_file_complete:
+                on_file_complete(doc)
+            return [IngestResult(doc_id="d0", chunks_created=1, status="ok")]
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(
+            pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512
+        )
+        await syncer.sync([str(col_dir)])
+
+        state = state_store.read()
+        cp = state.collections["newproject"]
+        assert cp.status == IndexingStatus.DONE
+        assert real_path in cp.file_mtimes
+        assert cp.file_mtimes[real_path] == pytest.approx(doc.stat().st_mtime)
+        assert cp.indexed_embedding_model == "model-a"
+        assert cp.indexed_chunk_size == 512
+
+    # ------------------------------------------------------------------
+    # Test 12: exception mid-apply → FAILED state with partial file_mtimes
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_failed_midway(self, tmp_path):
+        """Exception during ingest_file → FAILED state with partial file_mtimes."""
+        from archon.rag.progress import IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc1 = col_dir / "a.md"
+        doc2 = col_dir / "b.md"
+        doc1.write_text("content a")
+        doc2.write_text("content b")
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # First ingest_file succeeds, second raises
+        pipeline.ingest_file.side_effect = [
+            MagicMock(status="ok", chunks_created=1),
+            RuntimeError("disk full"),
+        ]
+
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        assert len(result.errors) == 1
+        assert "disk full" in result.errors[0]
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.FAILED
+        assert "disk full" in cp.error
+        # First file was successfully processed — its mtime should be in file_mtimes
+        doc1_key = str(doc1.resolve())
+        doc2_key = str(doc2.resolve())
+        assert doc1_key in cp.file_mtimes, "successfully processed file should have mtime saved"
+        assert doc2_key not in cp.file_mtimes, "failed file should not have mtime saved"
+
+    # ------------------------------------------------------------------
+    # Test 13: embedding model change triggers full re-index
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_embedding_model_change_triggers_full_reindex(self, tmp_path):
+        """Embedding model mismatch → all files treated as changed, ingest_file called for each."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "readme.md"
+        doc.write_text("content")
+        real_key = str(doc.resolve())
+        real_mtime = doc.stat().st_mtime
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # State: file with correct mtime BUT different embedding model
+        state_store = _make_done_state(
+            tmp_path, "myproject", {real_key: real_mtime},
+            embedding_model="model-old", chunk_size=512,
+        )
+
+        # Syncer uses a different model → full re-index
+        syncer = RagCollectionSync(
+            pipeline, state_store=state_store, embedding_model="model-new", chunk_size=512
+        )
+        result = await syncer.sync([str(col_dir)])
+
+        pipeline.ingest_file.assert_called()
+        assert "myproject" in result.updated
+        assert result.errors == []
+
+    # ------------------------------------------------------------------
+    # Test 14: chunk size mismatch with auto_reindex=False → warning only
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_chunk_size_change_warns_only(self, tmp_path, caplog):
+        """Chunk size mismatch + auto_reindex=False → warning logged, no re-ingest."""
+        import logging
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "readme.md"
+        doc.write_text("content")
+        real_key = str(doc.resolve())
+        real_mtime = doc.stat().st_mtime
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # State: same model, different chunk size
+        state_store = _make_done_state(
+            tmp_path, "myproject", {real_key: real_mtime},
+            embedding_model="model-a", chunk_size=512,
+        )
+
+        syncer = RagCollectionSync(
+            pipeline, state_store=state_store, embedding_model="model-a", chunk_size=1024,
+            auto_reindex_on_chunk_size_change=False,
+        )
+        with caplog.at_level(logging.WARNING, logger="archon"):
+            result = await syncer.sync([str(col_dir)])
+
+        pipeline.ingest_file.assert_not_called()
+        assert "myproject" in result.unchanged
+        assert any("chunk size" in r.message.lower() or "mismatch" in r.message.lower() for r in caplog.records)
+
+    # ------------------------------------------------------------------
+    # Test 15: chunk size mismatch with auto_reindex=True → full re-ingest
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_chunk_size_change_auto_reindex(self, tmp_path):
+        """Chunk size mismatch + auto_reindex=True → all files re-ingested."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "readme.md"
+        doc.write_text("content")
+        real_key = str(doc.resolve())
+        real_mtime = doc.stat().st_mtime
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # State: same model, different chunk size
+        state_store = _make_done_state(
+            tmp_path, "myproject", {real_key: real_mtime},
+            embedding_model="model-a", chunk_size=512,
+        )
+
+        syncer = RagCollectionSync(
+            pipeline, state_store=state_store, embedding_model="model-a", chunk_size=1024,
+            auto_reindex_on_chunk_size_change=True,
+        )
+        result = await syncer.sync([str(col_dir)])
+
+        pipeline.ingest_file.assert_called()
+        assert "myproject" in result.updated
+        assert result.errors == []
+
+    # ------------------------------------------------------------------
+    # Test 16: batched state writes every 50 files
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_batched_state_writes(self, tmp_path):
+        """Processing 51 new files → IN_PROGRESS state written at 50-file boundary."""
+        from unittest.mock import patch
+        from archon.rag.progress import IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        for i in range(51):
+            (col_dir / f"doc{i:03d}.md").write_text(f"content {i}")
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+
+        in_progress_writes: list = []
+        original_update = syncer._safe_state_update
+
+        def tracking_update(name, cp):
+            if cp.status == IndexingStatus.IN_PROGRESS:
+                in_progress_writes.append(cp)
+            return original_update(name, cp)
+
+        with patch.object(syncer, "_safe_state_update", side_effect=tracking_update):
+            await syncer.sync([str(col_dir)])
+
+        # At least 2 IN_PROGRESS writes: initial + 1 batch (at file 50)
+        # Exactly 2 IN_PROGRESS writes: 1 initial (start of apply) + 1 batch (at file 50)
+        assert len(in_progress_writes) == 2
+
+    # ------------------------------------------------------------------
+    # Test 17: mixed changes (new + changed + deleted + unchanged)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_mixed_changes(self, tmp_path):
+        """One new, one changed, one deleted, two unchanged files → all handled correctly."""
+        from archon.rag.progress import IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+
+        # two unchanged files
+        unchanged1 = col_dir / "unchanged1.md"
+        unchanged2 = col_dir / "unchanged2.md"
+        unchanged1.write_text("stable 1")
+        unchanged2.write_text("stable 2")
+        key1 = str(unchanged1.resolve())
+        key2 = str(unchanged2.resolve())
+        mtime1 = unchanged1.stat().st_mtime
+        mtime2 = unchanged2.stat().st_mtime
+
+        # changed file
+        changed = col_dir / "changed.md"
+        changed.write_text("changed content")
+        changed_key = str(changed.resolve())
+
+        # new file (not in state)
+        new_file = col_dir / "new.md"
+        new_file.write_text("new content")
+
+        # deleted file (in state, but NOT on disk)
+        deleted_key = str((col_dir / "deleted.md").resolve())
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        file_mtimes = {
+            key1: mtime1,
+            key2: mtime2,
+            changed_key: 0.0,  # stale mtime → treated as changed
+            deleted_key: 123456.0,  # path not on disk → deleted
+        }
+        state_store = _make_done_state(tmp_path, "myproject", file_mtimes)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        assert "myproject" in result.updated
+        assert result.errors == []
+
+        # ingest_file called for changed and new files (2 calls)
+        assert pipeline.ingest_file.call_count == 2
+
+        # delete_by_source_path called for deleted file
+        pipeline.store.delete_by_source_path.assert_called_once_with("myproject", deleted_key)
+
+        # Final state should have correct file_mtimes
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        assert key1 in cp.file_mtimes
+        assert key2 in cp.file_mtimes
+        assert changed_key in cp.file_mtimes
+        assert str(new_file.resolve()) in cp.file_mtimes
+        assert deleted_key not in cp.file_mtimes
+        # total_files and processed_files reflect post-change collection size (len(file_mtimes))
+        expected_file_count = len(cp.file_mtimes)
+        assert cp.total_files == expected_file_count
+        assert cp.processed_files == expected_file_count
+
+    # ------------------------------------------------------------------
+    # Test 18: deletions only → rebuild_fts called, ingest_file NOT called
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_deletion_only(self, tmp_path):
+        """Only deletions, no new/changed files → rebuild_fts called once, ingest_file NOT called."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        # No files on disk, but state has a file tracked
+        ghost_path = str((col_dir / "ghost.md").resolve())
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        state_store = _make_done_state(tmp_path, "myproject", {ghost_path: 1234567.0})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        await syncer.sync([str(col_dir)])
+
+        pipeline.ingest_file.assert_not_called()
+        pipeline.store.rebuild_fts_index.assert_called_once_with("myproject")
+
+    # ------------------------------------------------------------------
+    # Test 19: processed_paths consistent with file_mtimes after apply
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_processed_paths_consistent(self, tmp_path):
+        """After successful apply, every key in file_mtimes is in processed_paths."""
+        from archon.rag.progress import IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "doc.md"
+        doc.write_text("content")
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        await syncer.sync([str(col_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        for path_key in cp.file_mtimes:
+            assert path_key in cp.processed_paths, f"{path_key} in file_mtimes but not in processed_paths"
+
+    # ------------------------------------------------------------------
+    # Test 20: failed apply → not in result.unchanged
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_error_not_in_unchanged(self, tmp_path):
+        """Collection with detected changes but failed apply: in result.errors, NOT in result.unchanged."""
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        (col_dir / "doc.md").write_text("content")
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+        pipeline.ingest_file.side_effect = RuntimeError("failure")
+
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        assert len(result.errors) == 1
+        assert "myproject" not in result.unchanged
+        assert "myproject" not in result.updated
+
+    # ------------------------------------------------------------------
+    # Test 21: ingest_file soft error preserves old mtime
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_ingest_failure_preserves_old_mtime(self, tmp_path):
+        """ingest_file returns error status (not raises) → old mtime preserved in file_mtimes."""
+        from archon.rag.progress import IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "readme.md"
+        doc.write_text("content")
+        real_key = str(doc.resolve())
+        old_mtime = 0.0  # stale mtime → treated as changed
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+        # Return soft error (no raise)
+        pipeline.ingest_file.return_value = MagicMock(status="error", chunks_created=0)
+
+        state_store = _make_done_state(tmp_path, "myproject", {real_key: old_mtime})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        # Verify the change-detection path was actually exercised
+        pipeline.ingest_file.assert_called_once()
+        assert "myproject" in result.updated
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        # Soft error keeps the collection in DONE state (not FAILED)
+        assert cp.status == IndexingStatus.DONE
+        # Old mtime should be preserved (file should be retried on next sync)
+        assert real_key in cp.file_mtimes
+        assert cp.file_mtimes[real_key] == old_mtime
+
+    # ------------------------------------------------------------------
+    # Test 22: _ingest_collection FAILED state has partial file_mtimes
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_ingest_collection_failed_state_has_partial_file_mtimes(self, tmp_path):
+        """_ingest_collection exception mid-ingest: FAILED state has file_mtimes for successfully ingested files."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "newproject"
+        col_dir.mkdir()
+        doc = col_dir / "first.md"
+        doc.write_text("first file content")
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        real_path = str(doc.resolve())
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            if on_file_complete:
+                on_file_complete(doc)
+            raise RuntimeError("ingest failure after first file")
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(
+            pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512
+        )
+        result = await syncer.sync([str(col_dir)])
+
+        assert len(result.errors) == 1
+
+        state = state_store.read()
+        cp = state.collections["newproject"]
+        assert cp.status == IndexingStatus.FAILED
+        # The first file was reported via on_file_complete → should be in file_mtimes
+        assert real_path in cp.file_mtimes
+
+    # ------------------------------------------------------------------
+    # Test 23: file vanishes between _check_collection_changes and _apply_collection_changes
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_file_vanishes_between_check_and_apply(self, tmp_path):
+        """File ingested successfully but stat() raises OSError during mtime write.
+
+        Acceptance criterion: file.stat().st_mtime wrapped in try/except OSError for new files;
+        on OSError, skip the mtime entry (file appears as new on next sync) but apply continues.
+        """
+        from archon.rag.progress import IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        stable_doc = col_dir / "stable.md"
+        stable_doc.write_text("stable content")
+        vanishing_doc = col_dir / "vanishing.md"
+        vanishing_doc.write_text("content")
+        stable_key = str(stable_doc.resolve())
+        vanishing_key = str(vanishing_doc.resolve())
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # After ingest_file succeeds, delete the vanishing file so that
+        # file.stat() raises OSError (FileNotFoundError is a subclass of OSError)
+        async def ingest_and_conditionally_delete(file, name, **kwargs):
+            if file.name == "vanishing.md":
+                vanishing_doc.unlink()  # delete file after ingest, before stat
+            return MagicMock(status="ok", chunks_created=1)
+
+        pipeline.ingest_file.side_effect = ingest_and_conditionally_delete
+
+        # Both files are new (empty file_mtimes)
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        # Apply should SUCCEED (DONE state) despite the vanished file's stat() raising OSError
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        # Stable file has its mtime recorded
+        assert stable_key in cp.file_mtimes
+        # Vanishing file has NO mtime (stat raised OSError after ingest) → will appear new on next sync
+        assert vanishing_key not in cp.file_mtimes
+        # No errors in result (OSError during stat is handled gracefully per-file)
+        assert result.errors == []
+
+    # ------------------------------------------------------------------
+    # Test 24: resume then change detection works correctly
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_resume_then_change_detection(self, tmp_path):
+        """After a resumed ingest populates file_mtimes, next sync skips unchanged files."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "newproject"
+        col_dir.mkdir()
+        doc = col_dir / "doc.md"
+        doc.write_text("original content")
+        real_path = str(doc.resolve())
+
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        # First sync: successful ingest, DONE state with file_mtimes populated
+        pipeline1 = make_mock_pipeline(tmp_path, existing_collections=[])
+
+        async def fake_ingest_ok(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            if on_file_complete:
+                on_file_complete(doc)
+            return [IngestResult(doc_id="d0", chunks_created=1, status="ok")]
+
+        pipeline1.ingest_directory = AsyncMock(side_effect=fake_ingest_ok)
+
+        syncer1 = RagCollectionSync(
+            pipeline1, state_store=state_store, embedding_model="model-a", chunk_size=512
+        )
+        await syncer1.sync([str(col_dir)])
+
+        state_after_first = state_store.read()
+        assert state_after_first.collections["newproject"].status == IndexingStatus.DONE
+        assert real_path in state_after_first.collections["newproject"].file_mtimes
+
+        # Second sync: same file, same mtime → should be detected as DONE + no changes
+        manifest = {"newproject": str(col_dir.resolve())}
+        pipeline2 = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["newproject"], manifest=manifest
+        )
+
+        syncer2 = RagCollectionSync(
+            pipeline2, state_store=state_store, embedding_model="model-a", chunk_size=512
+        )
+        result2 = await syncer2.sync([str(col_dir)])
+
+        # No changes → collection should be in unchanged, not updated
+        assert "newproject" in result2.unchanged
+        assert "newproject" not in result2.updated
+        pipeline2.ingest_file.assert_not_called()

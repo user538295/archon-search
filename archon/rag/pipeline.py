@@ -272,6 +272,40 @@ class RagPipeline:
     async def list_documents(self, collection: str, limit: int = 100) -> list[DocumentInfo]:
         return await self.store.list_documents(collection, limit)
 
+    async def recompute_collection_meta(self, collection: str) -> None:
+        """Recompute and persist CollectionMeta (centroid, doc/chunk counts) for a collection.
+
+        Reads all vectors from the store, recomputes the centroid, and updates the
+        collection metadata.  Preserves any existing description and last_described fields.
+        No-op if the collection is empty.
+        """
+        existing_meta = await self.store.get_collection_meta(collection)
+        vectors = await self.store.get_all_vectors(collection)
+        if not vectors:
+            return
+        centroid = _compute_centroid(vectors)
+        # chunk_count is exact: get_all_vectors returns one vector per chunk (no cap)
+        chunk_count = len(vectors)
+        # doc_count via a dedicated uncapped count method
+        doc_count = await self.store.count_documents(collection)
+
+        description = existing_meta.description if existing_meta else None
+        last_described = existing_meta.last_described if existing_meta else None
+        described_at = existing_meta.described_at_doc_count if existing_meta else None
+
+        meta = CollectionMeta(
+            name=collection,
+            centroid=centroid,
+            description=description,
+            doc_count=doc_count,
+            chunk_count=chunk_count,
+            embedding_model=self._embedder.model_name,
+            last_indexed=datetime.now(UTC),
+            last_described=last_described,
+            described_at_doc_count=described_at,
+        )
+        await self.store.update_collection_meta(meta)
+
 
 # ---------------------------------------------------------------------------
 # Factory

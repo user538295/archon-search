@@ -209,14 +209,47 @@ class RagCollectionSync:
             else:
                 result.errors.append(error)
 
-        # Step 7: unchanged = (existing ∩ desired) - to_resume
-        unchanged = existing_and_desired - to_resume
+        # Step 7: check existing DONE collections for file changes
+        # (only when state_store is available; without it we can't track mtimes)
+        to_check = existing_and_desired - to_resume
+        to_update: set[str] = set()
+        if self._state_store is not None:
+            sorted_to_check = self._sort_ingestion_order(to_check, desired)
+            # Read state once for all Step 7 collections (avoids O(n) JSON reads)
+            state = self._state_store.read()
+            for name in sorted_to_check:
+                path_str = desired[name]
+                p = Path(path_str)
+                if not p.exists():
+                    result.errors.append(f"path does not exist: {path_str}")
+                    continue
+                file_mtimes = self._load_file_mtimes(name, state=state)
+                cp = state.collections.get(name) if state else None
+                indexed_model = cp.indexed_embedding_model if cp else ""
+                indexed_cs = cp.indexed_chunk_size if cp else 0
+                new_f, changed_f, deleted_p = self._check_collection_changes(
+                    name, p, file_mtimes,
+                    indexed_embedding_model=indexed_model,
+                    indexed_chunk_size=indexed_cs,
+                )
+                if new_f or changed_f or deleted_p:
+                    to_update.add(name)
+                    error = await self._apply_collection_changes(
+                        name, p, new_f, changed_f, deleted_p, file_mtimes, progress_cb,
+                    )
+                    if error is None:
+                        result.updated.append(name)
+                    else:
+                        result.errors.append(error)
+
+        # Step 8: unchanged
+        unchanged = to_check - to_update
         result.unchanged.extend(sorted(unchanged))
 
-        # Step 8: update manifest atomically
+        # Step 9: update manifest atomically
         new_manifest: dict[str, str] = {}
         for name, path_str in desired.items():
-            if name in successfully_added or name in unchanged:
+            if name in successfully_added or name in unchanged or name in to_update:
                 new_manifest[name] = path_str
         self._write_manifest(manifest_path, new_manifest)
 
@@ -459,6 +492,16 @@ class RagCollectionSync:
                     on_file_complete=on_complete,
                 )
 
+                # Compute file_mtimes for all successfully ingested paths
+                all_ingested_paths = resume_paths + new_paths
+                partial_mtimes: dict[str, float] = {}
+                for p_str in all_ingested_paths:
+                    try:
+                        resolved = str(Path(p_str).resolve())
+                        partial_mtimes[resolved] = Path(resolved).stat().st_mtime
+                    except OSError:
+                        pass
+
                 # Handle full-resume overlap (all files excluded)
                 if not results and resume_offset > 0:
                     self._safe_state_update(name, CollectionProgress(
@@ -468,6 +511,9 @@ class RagCollectionSync:
                         started_at=started_at,
                         completed_at=datetime.now(UTC).isoformat(),
                         processed_paths=resume_paths,
+                        file_mtimes=partial_mtimes,
+                        indexed_embedding_model=self._embedding_model,
+                        indexed_chunk_size=self._chunk_size,
                     ))
                 else:
                     ok_count = sum(1 for r in results if r.status == "ok")
@@ -480,9 +526,21 @@ class RagCollectionSync:
                         started_at=started_at,
                         completed_at=datetime.now(UTC).isoformat(),
                         processed_paths=resume_paths + new_paths,
+                        file_mtimes=partial_mtimes,
+                        indexed_embedding_model=self._embedding_model,
+                        indexed_chunk_size=self._chunk_size,
                     ))
                 return None
             except Exception as exc:  # noqa: BLE001
+                # Compute partial file_mtimes for files processed before the exception
+                all_ingested_paths = resume_paths + new_paths
+                partial_mtimes: dict[str, float] = {}
+                for p_str in all_ingested_paths:
+                    try:
+                        resolved = str(Path(p_str).resolve())
+                        partial_mtimes[resolved] = Path(resolved).stat().st_mtime
+                    except OSError:
+                        pass
                 self._safe_state_update(name, CollectionProgress(
                     status=IndexingStatus.FAILED,
                     total_files=resume_offset + total_new,
@@ -491,6 +549,147 @@ class RagCollectionSync:
                     completed_at=datetime.now(UTC).isoformat(),
                     error=str(exc),
                     processed_paths=resume_paths + new_paths,
+                    file_mtimes=partial_mtimes,
+                    indexed_embedding_model=self._embedding_model,
+                    indexed_chunk_size=self._chunk_size,
+                ))
+                return str(exc)
+
+    async def _apply_collection_changes(
+        self,
+        name: str,
+        source_path: Path,
+        new_files: list[Path],
+        changed_files: list[Path],
+        deleted_paths: list[str],
+        file_mtimes: dict[str, float],
+        progress_cb=None,
+    ) -> str | None:
+        """Apply incremental file changes (add/update/delete) to an existing collection.
+
+        Returns None on success, an error string on failure.
+        """
+        from archon.rag.progress import CollectionProgress, IndexingStatus
+
+        async with self._get_lock(name):
+            # Read current state and get processed_paths
+            state = self._state_store.read() if self._state_store else None
+            cp = state.collections.get(name) if state else None
+            processed_paths: list[str] = list(cp.processed_paths) if cp else []
+
+            # Write IN_PROGRESS, preserving current file_mtimes and processed_paths
+            self._safe_state_update(name, CollectionProgress(
+                status=IndexingStatus.IN_PROGRESS,
+                total_files=len(file_mtimes),
+                processed_files=len(file_mtimes),
+                processed_paths=processed_paths,
+                file_mtimes=dict(file_mtimes),
+                indexed_embedding_model=self._embedding_model,
+                indexed_chunk_size=self._chunk_size,
+            ))
+
+            file_count = 0
+
+            try:
+                # Deletions
+                for path in deleted_paths:
+                    await self._pipeline.store.delete_by_source_path(name, path)
+                    file_mtimes.pop(path, None)
+                    if path in processed_paths:
+                        processed_paths.remove(path)
+                    file_count += 1
+                    if file_count % 50 == 0:
+                        self._safe_state_update(name, CollectionProgress(
+                            status=IndexingStatus.IN_PROGRESS,
+                            total_files=len(file_mtimes),
+                            processed_files=len(file_mtimes),
+                            processed_paths=processed_paths,
+                            file_mtimes=dict(file_mtimes),
+                            indexed_embedding_model=self._embedding_model,
+                            indexed_chunk_size=self._chunk_size,
+                        ))
+
+                # Changed files
+                for file in changed_files:
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False)
+                    if ingest_result.status == "ok":
+                        try:
+                            file_mtimes[str(file.resolve())] = file.stat().st_mtime
+                        except OSError:
+                            pass  # keep old mtime
+                    resolved_str = str(file.resolve())
+                    if resolved_str not in processed_paths:
+                        processed_paths.append(resolved_str)
+                    file_count += 1
+                    if file_count % 50 == 0:
+                        self._safe_state_update(name, CollectionProgress(
+                            status=IndexingStatus.IN_PROGRESS,
+                            total_files=len(file_mtimes),
+                            processed_files=len(file_mtimes),
+                            processed_paths=processed_paths,
+                            file_mtimes=dict(file_mtimes),
+                            indexed_embedding_model=self._embedding_model,
+                            indexed_chunk_size=self._chunk_size,
+                        ))
+
+                # New files
+                for file in new_files:
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False)
+                    if ingest_result.status == "ok":
+                        try:
+                            file_mtimes[str(file.resolve())] = file.stat().st_mtime
+                        except OSError:
+                            pass  # file won't be in mtimes → treated as new on next sync
+                    resolved_str = str(file.resolve())
+                    if resolved_str not in processed_paths:
+                        processed_paths.append(resolved_str)
+                    file_count += 1
+                    if file_count % 50 == 0:
+                        self._safe_state_update(name, CollectionProgress(
+                            status=IndexingStatus.IN_PROGRESS,
+                            total_files=len(file_mtimes),
+                            processed_files=len(file_mtimes),
+                            processed_paths=processed_paths,
+                            file_mtimes=dict(file_mtimes),
+                            indexed_embedding_model=self._embedding_model,
+                            indexed_chunk_size=self._chunk_size,
+                        ))
+
+                # Rebuild FTS once after all file operations
+                await self._pipeline.store.rebuild_fts_index(name)
+
+                # Recompute collection meta (centroid, doc/chunk counts)
+                try:
+                    await self._pipeline.recompute_collection_meta(name)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to recompute collection meta for %r after sync; centroid may be stale",
+                        name,
+                        exc_info=True,
+                    )
+
+                # Write DONE state
+                self._safe_state_update(name, CollectionProgress(
+                    status=IndexingStatus.DONE,
+                    total_files=len(file_mtimes),
+                    processed_files=len(file_mtimes),
+                    processed_paths=processed_paths,
+                    file_mtimes=file_mtimes,
+                    indexed_embedding_model=self._embedding_model,
+                    indexed_chunk_size=self._chunk_size,
+                ))
+                return None
+
+            except Exception as exc:  # noqa: BLE001
+                self._safe_state_update(name, CollectionProgress(
+                    status=IndexingStatus.FAILED,
+                    total_files=len(file_mtimes),
+                    processed_files=len(file_mtimes),
+                    error=str(exc),
+                    processed_paths=processed_paths,
+                    file_mtimes=dict(file_mtimes),
+                    indexed_embedding_model=self._embedding_model,
+                    indexed_chunk_size=self._chunk_size,
                 ))
                 return str(exc)
 

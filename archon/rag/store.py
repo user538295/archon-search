@@ -498,3 +498,34 @@ class RagStore:
         ]
         result.sort(key=lambda c: c.chunk_id)
         return result
+
+    async def get_all_vectors(self, collection: str) -> list[list[float]]:
+        """Return all embedding vectors stored in the collection.
+
+        Returns an empty list if the collection does not exist.
+        Used by :meth:`RagPipeline.recompute_collection_meta`.
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return []
+        rows = await table.query().select(["vector"]).to_list()
+        return [list(r["vector"]) for r in rows if r.get("vector") is not None]
+
+    async def count_documents(self, collection: str) -> int:
+        """Return the number of distinct documents (by doc_id) in a collection.
+
+        Unlike :meth:`list_documents`, this method has no upper bound and is
+        accurate for collections of any size.  Returns 0 if the collection does
+        not exist.
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return 0
+        rows = await table.query().select(["doc_id"]).to_list()
+        return len({r["doc_id"] for r in rows})
