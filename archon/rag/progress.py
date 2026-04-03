@@ -35,6 +35,7 @@ class CollectionProgress:
     completed_at: str | None = None
     error: str | None = None
     error_count: int = 0
+    processed_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -56,6 +57,7 @@ def to_dict(state: IndexingState) -> dict:
                 "completed_at": cp.completed_at,
                 "error": cp.error,
                 "error_count": cp.error_count,
+                "processed_paths": cp.processed_paths,
             }
             for name, cp in state.collections.items()
         },
@@ -141,6 +143,11 @@ def from_dict(data: dict) -> IndexingState:
                 status = IndexingStatus(status_str)
             except (ValueError, TypeError):
                 status = IndexingStatus.PENDING
+            raw_paths = raw.get("processed_paths", [])
+            if isinstance(raw_paths, list) and all(isinstance(p, str) for p in raw_paths):
+                processed_paths = raw_paths
+            else:
+                processed_paths = []
             collections[name] = CollectionProgress(
                 status=status,
                 total_files=_safe_int(raw.get("total_files", 0)),
@@ -149,6 +156,7 @@ def from_dict(data: dict) -> IndexingState:
                 completed_at=raw.get("completed_at"),
                 error=raw.get("error"),
                 error_count=_safe_int(raw.get("error_count", 0)),
+                processed_paths=processed_paths,
             )
         last_updated = data.get("last_updated", datetime.now(UTC).isoformat())
         return IndexingState(collections=collections, last_updated=last_updated)

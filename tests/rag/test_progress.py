@@ -175,6 +175,49 @@ class TestDataclasses:
             state = from_dict(d)
             assert state.collections["col"].status == IndexingStatus.PENDING
 
+    def test_collection_progress_processed_paths_default(self) -> None:
+        cp = CollectionProgress(status=IndexingStatus.PENDING)
+        assert cp.processed_paths == []
+
+    def test_to_dict_includes_processed_paths(self) -> None:
+        cp = CollectionProgress(
+            status=IndexingStatus.DONE,
+            processed_paths=["/a/file.md", "/b/file.md"],
+        )
+        state = IndexingState(collections={"col": cp})
+        d = to_dict(state)
+        assert d["collections"]["col"]["processed_paths"] == ["/a/file.md", "/b/file.md"]
+
+    def test_from_dict_parses_processed_paths(self) -> None:
+        d = {
+            "collections": {
+                "col": {
+                    "status": "done",
+                    "processed_paths": ["/a/file.md", "/b/file.md"],
+                }
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].processed_paths == ["/a/file.md", "/b/file.md"]
+
+    def test_from_dict_invalid_processed_paths_type_falls_back(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "processed_paths": 42}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].processed_paths == []
+
+    def test_from_dict_mixed_type_processed_paths_falls_back(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "processed_paths": ["/valid", 42, None]}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].processed_paths == []
+
     def test_from_dict_extra_fields_ignored(self) -> None:
         d = {
             "last_updated": "2026-01-01T00:00:00Z",
