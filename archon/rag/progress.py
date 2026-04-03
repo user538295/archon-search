@@ -36,6 +36,10 @@ class CollectionProgress:
     error: str | None = None
     error_count: int = 0
     processed_paths: list[str] = field(default_factory=list)
+    file_mtimes: dict[str, float] = field(default_factory=dict)
+    file_hashes: dict[str, str] = field(default_factory=dict)
+    indexed_embedding_model: str = ""
+    indexed_chunk_size: int = 0
 
 
 @dataclass
@@ -58,6 +62,10 @@ def to_dict(state: IndexingState) -> dict:
                 "error": cp.error,
                 "error_count": cp.error_count,
                 "processed_paths": cp.processed_paths,
+                "file_mtimes": cp.file_mtimes,
+                "file_hashes": cp.file_hashes,
+                "indexed_embedding_model": cp.indexed_embedding_model,
+                "indexed_chunk_size": cp.indexed_chunk_size,
             }
             for name, cp in state.collections.items()
         },
@@ -148,6 +156,26 @@ def from_dict(data: dict) -> IndexingState:
                 processed_paths = raw_paths
             else:
                 processed_paths = []
+            raw_mtimes = raw.get("file_mtimes", {})
+            if (
+                isinstance(raw_mtimes, dict)
+                and all(isinstance(k, str) for k in raw_mtimes)
+                and all(isinstance(v, (float, int)) and not isinstance(v, bool) for v in raw_mtimes.values())
+            ):
+                file_mtimes = {k: float(v) for k, v in raw_mtimes.items()}
+            else:
+                file_mtimes = {}
+            raw_hashes = raw.get("file_hashes", {})
+            if (
+                isinstance(raw_hashes, dict)
+                and all(isinstance(k, str) for k in raw_hashes)
+                and all(isinstance(v, str) for v in raw_hashes.values())
+            ):
+                file_hashes = dict(raw_hashes)
+            else:
+                file_hashes = {}
+            raw_model = raw.get("indexed_embedding_model", "")
+            indexed_embedding_model = raw_model if isinstance(raw_model, str) else ""
             collections[name] = CollectionProgress(
                 status=status,
                 total_files=_safe_int(raw.get("total_files", 0)),
@@ -157,6 +185,10 @@ def from_dict(data: dict) -> IndexingState:
                 error=raw.get("error"),
                 error_count=_safe_int(raw.get("error_count", 0)),
                 processed_paths=processed_paths,
+                file_mtimes=file_mtimes,
+                file_hashes=file_hashes,
+                indexed_embedding_model=indexed_embedding_model,
+                indexed_chunk_size=_safe_int(raw.get("indexed_chunk_size", 0)),
             )
         last_updated = data.get("last_updated", datetime.now(UTC).isoformat())
         return IndexingState(collections=collections, last_updated=last_updated)

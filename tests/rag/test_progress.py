@@ -363,3 +363,226 @@ class TestIndexingStateStore:
         store = IndexingStateStore(tmp_path)
         # Should not raise — no-op
         store.remove_collection("col_a")
+
+    def test_write_then_read_roundtrip_with_phase4_fields(self, tmp_path: Path) -> None:
+        """New Phase 4 fields survive write() -> read() through actual disk I/O."""
+        store = IndexingStateStore(tmp_path)
+        cp = CollectionProgress(
+            status=IndexingStatus.DONE,
+            total_files=3,
+            processed_files=3,
+            file_mtimes={"/a/file.md": 1700000000.5, "/b/doc.txt": 1700000001.0},
+            file_hashes={"/a/file.md": "abc123def456"},
+            indexed_embedding_model="BAAI/bge-small-en-v1.5",
+            indexed_chunk_size=512,
+        )
+        state = IndexingState(collections={"my_col": cp})
+        store.write(state)
+        loaded = store.read()
+        loaded_cp = loaded.collections["my_col"]
+        assert loaded_cp.file_mtimes == {"/a/file.md": 1700000000.5, "/b/doc.txt": 1700000001.0}
+        assert loaded_cp.file_hashes == {"/a/file.md": "abc123def456"}
+        assert loaded_cp.indexed_embedding_model == "BAAI/bge-small-en-v1.5"
+        assert loaded_cp.indexed_chunk_size == 512
+
+    def test_update_collection_roundtrip_with_phase4_fields(self, tmp_path: Path) -> None:
+        """update_collection() preserves Phase 4 fields through actual disk I/O."""
+        store = IndexingStateStore(tmp_path)
+        cp = CollectionProgress(
+            status=IndexingStatus.DONE,
+            total_files=2,
+            processed_files=2,
+            file_mtimes={"/a/file.md": 1700000000.0},
+            indexed_embedding_model="BAAI/bge-small-en-v1.5",
+            indexed_chunk_size=256,
+        )
+        store.update_collection("col_a", cp)
+        loaded = store.read()
+        loaded_cp = loaded.collections["col_a"]
+        assert loaded_cp.file_mtimes == {"/a/file.md": 1700000000.0}
+        assert loaded_cp.indexed_embedding_model == "BAAI/bge-small-en-v1.5"
+        assert loaded_cp.indexed_chunk_size == 256
+
+
+class TestCollectionProgressNewFields:
+    # --- Default values ---
+
+    def test_collection_progress_file_mtimes_default(self) -> None:
+        cp = CollectionProgress(status=IndexingStatus.PENDING)
+        assert cp.file_mtimes == {}
+
+    def test_collection_progress_file_hashes_default(self) -> None:
+        cp = CollectionProgress(status=IndexingStatus.PENDING)
+        assert cp.file_hashes == {}
+
+    def test_collection_progress_indexed_embedding_model_default(self) -> None:
+        cp = CollectionProgress(status=IndexingStatus.PENDING)
+        assert cp.indexed_embedding_model == ""
+
+    def test_collection_progress_indexed_chunk_size_default(self) -> None:
+        cp = CollectionProgress(status=IndexingStatus.PENDING)
+        assert cp.indexed_chunk_size == 0
+
+    # --- to_dict includes new fields ---
+
+    def test_to_dict_includes_file_mtimes(self) -> None:
+        cp = CollectionProgress(
+            status=IndexingStatus.DONE,
+            file_mtimes={"/a/file.md": 1700000000.0},
+        )
+        state = IndexingState(collections={"col": cp})
+        d = to_dict(state)
+        assert d["collections"]["col"]["file_mtimes"] == {"/a/file.md": 1700000000.0}
+
+    def test_to_dict_includes_file_hashes(self) -> None:
+        cp = CollectionProgress(
+            status=IndexingStatus.DONE,
+            file_hashes={"/a/file.md": "abc123"},
+        )
+        state = IndexingState(collections={"col": cp})
+        d = to_dict(state)
+        assert d["collections"]["col"]["file_hashes"] == {"/a/file.md": "abc123"}
+
+    def test_to_dict_includes_indexed_embedding_model(self) -> None:
+        cp = CollectionProgress(
+            status=IndexingStatus.DONE,
+            indexed_embedding_model="BAAI/bge-small-en-v1.5",
+        )
+        state = IndexingState(collections={"col": cp})
+        d = to_dict(state)
+        assert d["collections"]["col"]["indexed_embedding_model"] == "BAAI/bge-small-en-v1.5"
+
+    def test_to_dict_includes_indexed_chunk_size(self) -> None:
+        cp = CollectionProgress(
+            status=IndexingStatus.DONE,
+            indexed_chunk_size=512,
+        )
+        state = IndexingState(collections={"col": cp})
+        d = to_dict(state)
+        assert d["collections"]["col"]["indexed_chunk_size"] == 512
+
+    # --- from_dict round-trips ---
+
+    def test_from_dict_parses_file_mtimes(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "file_mtimes": {"/a/file.md": 1.0}}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].file_mtimes == {"/a/file.md": 1.0}
+
+    def test_from_dict_parses_file_hashes(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "file_hashes": {"/a/file.md": "abc123"}}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].file_hashes == {"/a/file.md": "abc123"}
+
+    def test_from_dict_parses_indexed_embedding_model(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "indexed_embedding_model": "BAAI/bge-small-en-v1.5"}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].indexed_embedding_model == "BAAI/bge-small-en-v1.5"
+
+    def test_from_dict_parses_indexed_chunk_size(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "indexed_chunk_size": 512}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].indexed_chunk_size == 512
+
+    # --- Invalid type fallbacks ---
+
+    def test_from_dict_invalid_file_mtimes_type(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "file_mtimes": "not_a_dict"}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].file_mtimes == {}
+
+    def test_from_dict_invalid_file_hashes_type(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "file_hashes": 42}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].file_hashes == {}
+
+    def test_from_dict_invalid_indexed_embedding_model_type(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "indexed_embedding_model": 42}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].indexed_embedding_model == ""
+
+    def test_from_dict_invalid_indexed_chunk_size_type(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "indexed_chunk_size": "abc"}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].indexed_chunk_size == 0
+
+    def test_from_dict_file_mtimes_with_non_float_values(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "file_mtimes": {"/a/file.md": "bad"}}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].file_mtimes == {}
+
+    def test_from_dict_file_mtimes_with_int_values(self) -> None:
+        # int mtime values must be accepted and converted to float
+        d = {
+            "collections": {
+                "col": {"status": "done", "file_mtimes": {"/a/file.md": 1}}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].file_mtimes == {"/a/file.md": 1.0}
+        assert isinstance(state.collections["col"].file_mtimes["/a/file.md"], float)
+
+    def test_file_mtimes_default_not_shared_between_instances(self) -> None:
+        cp1 = CollectionProgress(status=IndexingStatus.PENDING)
+        cp2 = CollectionProgress(status=IndexingStatus.PENDING)
+        cp1.file_mtimes["/a/file.md"] = 1.0
+        assert cp2.file_mtimes == {}
+
+    def test_file_hashes_default_not_shared_between_instances(self) -> None:
+        cp1 = CollectionProgress(status=IndexingStatus.PENDING)
+        cp2 = CollectionProgress(status=IndexingStatus.PENDING)
+        cp1.file_hashes["/a/file.md"] = "abc"
+        assert cp2.file_hashes == {}
+
+    def test_from_dict_file_hashes_with_non_string_values(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "file_hashes": {"/a/file.md": 123}}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].file_hashes == {}
+
+    def test_from_dict_file_mtimes_with_bool_values(self) -> None:
+        d = {
+            "collections": {
+                "col": {"status": "done", "file_mtimes": {"/a/file.md": True}}
+            }
+        }
+        state = from_dict(d)
+        assert state.collections["col"].file_mtimes == {}
