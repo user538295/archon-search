@@ -166,83 +166,44 @@ class RagCollectionSync:
             if not p.exists():
                 result.errors.append(f"path does not exist: {path_str}")
                 continue
-            async with self._get_lock(name):
-                # Write PENDING state
-                self._safe_state_update(name, CollectionProgress(
-                    status=IndexingStatus.PENDING, total_files=0,
-                ))
-                # Transition to IN_PROGRESS
-                started_at = datetime.now(UTC).isoformat()
-                self._safe_state_update(name, CollectionProgress(
-                    status=IndexingStatus.IN_PROGRESS,
-                    total_files=0,
-                    started_at=started_at,
-                ))
+            error = await self._ingest_collection(
+                name, p, progress_cb, CollectionProgress, IndexingStatus,
+            )
+            if error is None:
+                result.added.append(name)
+                successfully_added.add(name)
+            else:
+                result.errors.append(error)
 
-                # Track total_files from callback
-                cb_total_files = 0
+        # Step 6.5: resume incomplete existing collections
+        to_resume: set[str] = set()
+        existing_and_desired = existing & desired.keys()
+        for name in existing_and_desired:
+            try:
+                state = self._state_store.read() if self._state_store else None
+                if state and name in state.collections:
+                    if state.collections[name].status != IndexingStatus.DONE:
+                        to_resume.add(name)
+            except Exception:  # noqa: BLE001
+                pass  # treat as DONE on read failure
 
-                def _make_progress_wrapper(col_name: str):
-                    """Build a progress wrapper that captures total from callbacks."""
-                    nonlocal cb_total_files
-                    total_captured = False
+        for name in sorted(to_resume):
+            path_str = desired[name]
+            p = Path(path_str)
+            if not p.exists():
+                result.errors.append(f"path does not exist: {path_str}")
+                continue
+            error = await self._ingest_collection(
+                name, p, progress_cb, CollectionProgress, IndexingStatus,
+            )
+            if error is None:
+                result.added.append(name)
+                successfully_added.add(name)
+            else:
+                result.errors.append(error)
 
-                    def wrapper(done_count: int, total: int):
-                        nonlocal cb_total_files, total_captured
-                        if not total_captured:
-                            cb_total_files = total
-                            total_captured = True
-                            # Update total_files from first callback
-                            self._safe_state_update(col_name, CollectionProgress(
-                                status=IndexingStatus.IN_PROGRESS,
-                                total_files=total,
-                                processed_files=0,
-                                started_at=started_at,
-                            ))
-                        if done_count % 50 == 0:
-                            self._safe_state_update(col_name, CollectionProgress(
-                                status=IndexingStatus.IN_PROGRESS,
-                                total_files=total,
-                                processed_files=done_count,
-                                started_at=started_at,
-                            ))
-                        # Call caller's callback
-                        if progress_cb is not None:
-                            return progress_cb(done_count, total)
-                        return None
-
-                    return wrapper
-
-                wrapped_cb = _make_progress_wrapper(name)
-
-                try:
-                    results = await self._pipeline.ingest_directory(
-                        p, name, progress_cb=wrapped_cb,
-                    )
-                    ok_count = sum(1 for r in results if r.status == "ok")
-                    error_count = sum(1 for r in results if r.status != "ok")
-                    self._safe_state_update(name, CollectionProgress(
-                        status=IndexingStatus.DONE,
-                        total_files=len(results),
-                        processed_files=ok_count,
-                        error_count=error_count,
-                        started_at=started_at,
-                        completed_at=datetime.now(UTC).isoformat(),
-                    ))
-                    result.added.append(name)
-                    successfully_added.add(name)
-                except Exception as exc:  # noqa: BLE001
-                    self._safe_state_update(name, CollectionProgress(
-                        status=IndexingStatus.FAILED,
-                        total_files=cb_total_files,
-                        started_at=started_at,
-                        completed_at=datetime.now(UTC).isoformat(),
-                        error=str(exc),
-                    ))
-                    result.errors.append(str(exc))
-
-        # Step 7: unchanged = existing ∩ desired
-        unchanged = existing & desired.keys()
+        # Step 7: unchanged = (existing ∩ desired) - to_resume
+        unchanged = existing_and_desired - to_resume
         result.unchanged.extend(sorted(unchanged))
 
         # Step 8: update manifest atomically
@@ -292,10 +253,139 @@ class RagCollectionSync:
                         status=IndexingStatus.PENDING,
                         total_files=cp.total_files,
                         processed_files=cp.processed_files,
+                        processed_paths=cp.processed_paths,
                     )
             self._state_store.write(state)
         except Exception:  # noqa: BLE001
             logger.warning("Failed to reset stale IN_PROGRESS states", exc_info=True)
+
+    def _load_processed_paths(self, name: str) -> list[str]:
+        """Return processed_paths for a collection from state, or [] on any failure."""
+        if self._state_store is None:
+            return []
+        try:
+            state = self._state_store.read()
+            if state is None or name not in state.collections:
+                return []
+            return state.collections[name].processed_paths
+        except Exception:  # noqa: BLE001
+            return []
+
+    # ------------------------------------------------------------------
+    # Collection ingestion (shared by to_add and to_resume)
+    # ------------------------------------------------------------------
+
+    async def _ingest_collection(
+        self,
+        name: str,
+        p: Path,
+        progress_cb: Callable[[int, int], None | Awaitable[None]] | None,
+        CollectionProgress: type,  # noqa: N803 — forwarded from caller
+        IndexingStatus: type,  # noqa: N803
+    ) -> str | None:
+        """Ingest a single collection with resume support. Returns None on success, error string on failure."""
+        resume_paths = self._load_processed_paths(name)
+        resume_offset = len(resume_paths)
+        exclude_set = frozenset(resume_paths)
+
+        # Compute total_new by enumerating the source directory (same filter as ingest_directory)
+        from archon.rag.pipeline import _BINARY_EXTENSIONS
+        all_files: list[Path] = []
+        for file_path in p.glob("**/*"):
+            if file_path.is_symlink() or not file_path.is_file():
+                continue
+            rel_parts = file_path.relative_to(p).parts
+            if any(part.startswith(".") for part in rel_parts):
+                continue
+            if file_path.suffix.lower() in _BINARY_EXTENSIONS:
+                continue
+            if str(file_path) not in exclude_set:
+                all_files.append(file_path)
+        total_new = len(all_files)
+
+        new_paths: list[str] = []
+
+        async with self._get_lock(name):
+            # Write PENDING state (for fresh collections)
+            if not resume_paths:
+                self._safe_state_update(name, CollectionProgress(
+                    status=IndexingStatus.PENDING, total_files=0,
+                ))
+
+            # Transition to IN_PROGRESS — preserve resume state
+            started_at = datetime.now(UTC).isoformat()
+            self._safe_state_update(name, CollectionProgress(
+                status=IndexingStatus.IN_PROGRESS,
+                total_files=resume_offset,
+                processed_files=resume_offset,
+                started_at=started_at,
+                processed_paths=resume_paths,
+            ))
+
+            def _make_on_file_complete(col_name: str):
+                def callback(file_path: Path) -> None:
+                    new_paths.append(str(file_path))
+                    if len(new_paths) % 50 == 0:
+                        self._safe_state_update(col_name, CollectionProgress(
+                            status=IndexingStatus.IN_PROGRESS,
+                            total_files=resume_offset + total_new,
+                            processed_files=resume_offset + len(new_paths),
+                            started_at=started_at,
+                            processed_paths=resume_paths + new_paths,
+                        ))
+                return callback
+
+            def _make_progress_wrapper(col_name: str):
+                def wrapper(done_count: int, total: int):
+                    if progress_cb is not None:
+                        return progress_cb(done_count, total)
+                    return None
+                return wrapper
+
+            on_complete = _make_on_file_complete(name)
+            wrapped_cb = _make_progress_wrapper(name)
+
+            try:
+                results = await self._pipeline.ingest_directory(
+                    p, name,
+                    progress_cb=wrapped_cb,
+                    exclude_paths=exclude_set,
+                    on_file_complete=on_complete,
+                )
+
+                # Handle full-resume overlap (all files excluded)
+                if not results and resume_offset > 0:
+                    self._safe_state_update(name, CollectionProgress(
+                        status=IndexingStatus.DONE,
+                        total_files=resume_offset,
+                        processed_files=resume_offset,
+                        started_at=started_at,
+                        completed_at=datetime.now(UTC).isoformat(),
+                        processed_paths=resume_paths,
+                    ))
+                else:
+                    ok_count = sum(1 for r in results if r.status == "ok")
+                    error_count = sum(1 for r in results if r.status != "ok")
+                    self._safe_state_update(name, CollectionProgress(
+                        status=IndexingStatus.DONE,
+                        total_files=resume_offset + len(results),
+                        processed_files=resume_offset + ok_count,
+                        error_count=error_count,
+                        started_at=started_at,
+                        completed_at=datetime.now(UTC).isoformat(),
+                        processed_paths=resume_paths + new_paths,
+                    ))
+                return None
+            except Exception as exc:  # noqa: BLE001
+                self._safe_state_update(name, CollectionProgress(
+                    status=IndexingStatus.FAILED,
+                    total_files=resume_offset + total_new,
+                    started_at=started_at,
+                    completed_at=datetime.now(UTC).isoformat(),
+                    error=str(exc),
+                    processed_paths=resume_paths + new_paths,
+                ))
+                return str(exc)
 
     # ------------------------------------------------------------------
     # Lock helpers

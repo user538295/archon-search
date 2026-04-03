@@ -615,7 +615,8 @@ class TestSyncLocking:
 
         lock_was_locked_during_ingest = False
 
-        async def fake_ingest(path, name, progress_cb=None):
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
             nonlocal lock_was_locked_during_ingest
             lock = syncer._get_lock(name)
             lock_was_locked_during_ingest = lock.locked()
@@ -642,7 +643,8 @@ class TestSyncLocking:
 
         call_count = 0
 
-        async def fake_ingest(path, name, progress_cb=None):
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
             nonlocal call_count
             call_count += 1
             current_call = call_count
@@ -694,7 +696,8 @@ class TestSyncLocking:
         started: list[str] = []
         both_started = asyncio.Event()
 
-        async def fake_ingest(path, name, progress_cb=None):
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
             started.append(name)
             if len(started) == 2:
                 both_started.set()
@@ -758,12 +761,18 @@ class TestSyncProgress:
             IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)
         ]
 
-        async def fake_ingest(path, name, progress_cb=None):
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
+            on_file_complete = kwargs.get("on_file_complete")
             if progress_cb:
                 for i in range(1, len(results) + 1):
                     cb_result = progress_cb(i, len(results))
                     if asyncio.iscoroutine(cb_result):
                         await cb_result
+            if on_file_complete:
+                for r in results:
+                    if r.status == "ok":
+                        on_file_complete(Path(f"/fake/{r.doc_id}.md"))
             return results
 
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
@@ -821,7 +830,8 @@ class TestSyncProgress:
 
         captured_status = None
 
-        async def fake_ingest(path, name, progress_cb=None):
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
             nonlocal captured_status
             state = state_store.read()
             if state and name in state.collections:
@@ -836,37 +846,31 @@ class TestSyncProgress:
         assert captured_status == IndexingStatus.IN_PROGRESS
 
     @pytest.mark.asyncio
-    async def test_sync_total_files_set_from_first_callback(self, tmp_path):
-        """total_files should be set from the first progress callback's total arg."""
-        import asyncio
+    async def test_sync_total_files_set_from_file_enumeration(self, tmp_path):
+        """total_files should be set from file enumeration, not from callback."""
         from archon.rag._types import IngestResult
         from archon.rag.progress import IndexingStateStore, IndexingStatus
         from archon.rag.sync import RagCollectionSync
 
         new_dir = tmp_path / "myproject"
         new_dir.mkdir()
+        # Create 10 real files so enumeration counts them
+        for i in range(10):
+            (new_dir / f"file{i}.md").write_text(f"content {i}")
 
         pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
         state_store = IndexingStateStore(tmp_path / "state")
 
-        total_files_after_first_cb = None
-
-        async def fake_ingest(path, name, progress_cb=None):
-            nonlocal total_files_after_first_cb
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
+            on_file_complete = kwargs.get("on_file_complete")
             results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(10)]
+            if on_file_complete:
+                for i in range(10):
+                    on_file_complete(Path(f"/fake/file{i}.md"))
             if progress_cb:
-                cb_result = progress_cb(1, 10)
-                if asyncio.iscoroutine(cb_result):
-                    await cb_result
-                # Check state after first callback
-                state = state_store.read()
-                if state and name in state.collections:
-                    total_files_after_first_cb = state.collections[name].total_files
-                # Continue remaining callbacks
-                for i in range(2, 11):
-                    cb_result = progress_cb(i, 10)
-                    if asyncio.iscoroutine(cb_result):
-                        await cb_result
+                for i in range(1, 11):
+                    progress_cb(i, 10)
             return results
 
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
@@ -874,7 +878,10 @@ class TestSyncProgress:
         syncer = RagCollectionSync(pipeline, state_store=state_store)
         await syncer.sync([str(new_dir)])
 
-        assert total_files_after_first_cb == 10
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.total_files == 10
+        assert cp.status == IndexingStatus.DONE
 
     @pytest.mark.asyncio
     async def test_sync_writes_done_after_success(self, tmp_path):
@@ -964,10 +971,9 @@ class TestSyncProgress:
 
     @pytest.mark.asyncio
     async def test_sync_batched_writes_every_50(self, tmp_path):
-        """State writes during progress should happen every 50 files."""
-        import asyncio
+        """State writes during on_file_complete should happen every 50 files."""
         from archon.rag._types import IngestResult
-        from archon.rag.progress import IndexingStateStore
+        from archon.rag.progress import IndexingStateStore, IndexingStatus
         from archon.rag.sync import RagCollectionSync
 
         new_dir = tmp_path / "myproject"
@@ -975,8 +981,6 @@ class TestSyncProgress:
 
         pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
         state_store = IndexingStateStore(tmp_path / "state")
-
-        from archon.rag.progress import IndexingStatus
 
         write_calls: list[tuple[str, int]] = []
         original_write = state_store.update_collection
@@ -988,14 +992,16 @@ class TestSyncProgress:
         state_store.update_collection = tracking_update
 
         N = 150
-        results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
 
-        async def fake_ingest(path, name, progress_cb=None):
-            if progress_cb:
-                for i in range(1, N + 1):
-                    cb_result = progress_cb(i, N)
-                    if asyncio.iscoroutine(cb_result):
-                        await cb_result
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
+            on_file_complete = kwargs.get("on_file_complete")
+            results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
+            for i in range(N):
+                if on_file_complete:
+                    on_file_complete(Path(f"/fake/file{i}.md"))
+                if progress_cb:
+                    progress_cb(i + 1, N)
             return results
 
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
@@ -1003,8 +1009,7 @@ class TestSyncProgress:
         syncer = RagCollectionSync(pipeline, state_store=state_store)
         await syncer.sync([str(new_dir)])
 
-        # Filter for IN_PROGRESS batched writes (processed_files > 0)
-        # The callback writes happen at done_count % 50 == 0, so at 50, 100, 150
+        # Batched writes from on_file_complete at every 50 files
         in_progress_status = str(IndexingStatus.IN_PROGRESS)
         batched = [pf for st, pf in write_calls if st == in_progress_status and pf > 0]
         assert batched == [50, 100, 150], f"Expected exactly [50, 100, 150], got {batched}"
@@ -1036,7 +1041,8 @@ class TestSyncProgress:
         N = 49
         results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
 
-        async def fake_ingest(path, name, progress_cb=None):
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
             if progress_cb:
                 for i in range(1, N + 1):
                     cb_result = progress_cb(i, N)
@@ -1055,8 +1061,7 @@ class TestSyncProgress:
 
     @pytest.mark.asyncio
     async def test_sync_batched_writes_boundary_50_files(self, tmp_path):
-        """With exactly 50 files, one batched progress write should happen."""
-        import asyncio
+        """With exactly 50 files, one batched write from on_file_complete."""
         from archon.rag._types import IngestResult
         from archon.rag.progress import IndexingStateStore, IndexingStatus
         from archon.rag.sync import RagCollectionSync
@@ -1078,14 +1083,14 @@ class TestSyncProgress:
         state_store.update_collection = tracking_update
 
         N = 50
-        results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
 
-        async def fake_ingest(path, name, progress_cb=None):
-            if progress_cb:
-                for i in range(1, N + 1):
-                    cb_result = progress_cb(i, N)
-                    if asyncio.iscoroutine(cb_result):
-                        await cb_result
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
+            on_file_complete = kwargs.get("on_file_complete")
+            results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
+            for i in range(N):
+                if on_file_complete:
+                    on_file_complete(Path(f"/fake/file{i}.md"))
             return results
 
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
@@ -1098,8 +1103,7 @@ class TestSyncProgress:
 
     @pytest.mark.asyncio
     async def test_sync_batched_writes_boundary_51_files(self, tmp_path):
-        """With 51 files, one batched progress write at 50."""
-        import asyncio
+        """With 51 files, one batched write at 50 from on_file_complete."""
         from archon.rag._types import IngestResult
         from archon.rag.progress import IndexingStateStore, IndexingStatus
         from archon.rag.sync import RagCollectionSync
@@ -1121,14 +1125,14 @@ class TestSyncProgress:
         state_store.update_collection = tracking_update
 
         N = 51
-        results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
 
-        async def fake_ingest(path, name, progress_cb=None):
-            if progress_cb:
-                for i in range(1, N + 1):
-                    cb_result = progress_cb(i, N)
-                    if asyncio.iscoroutine(cb_result):
-                        await cb_result
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
+            on_file_complete = kwargs.get("on_file_complete")
+            results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
+            for i in range(N):
+                if on_file_complete:
+                    on_file_complete(Path(f"/fake/file{i}.md"))
             return results
 
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
@@ -1164,7 +1168,8 @@ class TestSyncProgress:
 
         results = [IngestResult(doc_id="d0", chunks_created=1, status="ok")]
 
-        async def fake_ingest(path, name, progress_cb=None):
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
             if progress_cb:
                 cb_result = progress_cb(1, 1)
                 if asyncio.iscoroutine(cb_result):
@@ -1236,7 +1241,8 @@ class TestSyncProgress:
         N = 3
         results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
 
-        async def fake_ingest(path, name, progress_cb=None):
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
             if progress_cb:
                 for i in range(1, N + 1):
                     cb_result = progress_cb(i, N)
@@ -1379,28 +1385,25 @@ class TestSyncProgress:
         assert cp.total_files == 5
 
     @pytest.mark.asyncio
-    async def test_sync_failed_preserves_total_files_from_callback(self, tmp_path):
-        """On FAILED, total_files should be preserved from callback data."""
-        import asyncio
-        from archon.rag._types import IngestResult
+    async def test_sync_failed_preserves_total_files_from_enumeration(self, tmp_path):
+        """On FAILED, total_files should be preserved from file enumeration."""
         from archon.rag.progress import IndexingStateStore, IndexingStatus
         from archon.rag.sync import RagCollectionSync
 
         new_dir = tmp_path / "myproject"
         new_dir.mkdir()
+        # Create 100 real files so enumeration counts them
+        for i in range(100):
+            (new_dir / f"file{i}.md").write_text(f"content {i}")
 
         pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
         state_store = IndexingStateStore(tmp_path / "state")
 
-        async def fake_ingest(path, name, progress_cb=None):
-            if progress_cb:
-                # Report some progress before crashing
-                cb_result = progress_cb(1, 100)
-                if asyncio.iscoroutine(cb_result):
-                    await cb_result
-                cb_result = progress_cb(2, 100)
-                if asyncio.iscoroutine(cb_result):
-                    await cb_result
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            if on_file_complete:
+                on_file_complete(Path("/fake/file0.md"))
+                on_file_complete(Path("/fake/file1.md"))
             raise RuntimeError("crash mid-ingest")
 
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
@@ -1411,8 +1414,9 @@ class TestSyncProgress:
         state = state_store.read()
         cp = state.collections["myproject"]
         assert cp.status == IndexingStatus.FAILED
-        assert cp.total_files == 100  # from callback
+        assert cp.total_files == 100  # from enumeration
         assert "crash mid-ingest" in cp.error
+        assert len(cp.processed_paths) == 2  # partial progress retained
 
     @pytest.mark.asyncio
     async def test_sync_multiple_collections_mixed_results(self, tmp_path):
@@ -1432,7 +1436,8 @@ class TestSyncProgress:
 
         call_count = 0
 
-        async def fake_ingest(path, name, progress_cb=None):
+        async def fake_ingest(path, name, **kwargs):
+            progress_cb = kwargs.get("progress_cb")
             nonlocal call_count
             call_count += 1
             if "project_a" in str(path):
@@ -1665,3 +1670,513 @@ class TestSyncPinnedOrder:
 
         # target (pinned via tilde path) should come first
         assert ingestion_order[0] == "mydata"
+
+
+# ---------------------------------------------------------------------------
+# Task 3.3 — Resumable indexing tests
+# ---------------------------------------------------------------------------
+
+
+class TestSyncResumable:
+    """Tests for resumable indexing (processed_paths) in RagCollectionSync."""
+
+    @pytest.mark.asyncio
+    async def test_reset_stale_preserves_processed_paths(self, tmp_path):
+        """IN_PROGRESS state with processed_paths → after reset, PENDING with paths preserved."""
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        pipeline.ingest_directory = AsyncMock(return_value=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        state_store.update_collection("col", CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=10,
+            processed_files=5,
+            processed_paths=["/a", "/b"],
+        ))
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([])
+
+        state = state_store.read()
+        cp = state.collections["col"]
+        assert cp.status == IndexingStatus.PENDING
+        assert cp.processed_paths == ["/a", "/b"]
+        assert cp.total_files == 10
+        assert cp.processed_files == 5
+
+    @pytest.mark.asyncio
+    async def test_load_processed_paths_state_store_none(self, tmp_path):
+        """_state_store=None → _load_processed_paths returns []."""
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        syncer = RagCollectionSync(pipeline, state_store=None)
+        assert syncer._load_processed_paths("col") == []
+
+    @pytest.mark.asyncio
+    async def test_load_processed_paths_no_state_file(self, tmp_path):
+        """State file missing → returns []."""
+        from archon.rag.progress import IndexingStateStore
+        from archon.rag.sync import RagCollectionSync
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        assert syncer._load_processed_paths("col") == []
+
+    @pytest.mark.asyncio
+    async def test_load_processed_paths_collection_absent(self, tmp_path):
+        """Collection not in state → returns []."""
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        state_store.update_collection("other", CollectionProgress(
+            status=IndexingStatus.DONE,
+            processed_paths=["/x"],
+        ))
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        assert syncer._load_processed_paths("col") == []
+
+    @pytest.mark.asyncio
+    async def test_sync_resumes_from_processed_paths(self, tmp_path):
+        """State with processed_paths → exclude_paths passed to ingest_directory."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        # Pre-seed state with processed_paths
+        state_store.update_collection("myproject", CollectionProgress(
+            status=IndexingStatus.PENDING,
+            processed_paths=["/a/file.md"],
+        ))
+
+        captured_kwargs: dict = {}
+
+        async def fake_ingest(path, name, **kwargs):
+            captured_kwargs.update(kwargs)
+            return [IngestResult(doc_id="d0", chunks_created=1, status="ok")]
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(new_dir)])
+
+        assert "exclude_paths" in captured_kwargs
+        assert "/a/file.md" in captured_kwargs["exclude_paths"]
+
+    @pytest.mark.asyncio
+    async def test_sync_accumulates_new_paths_in_state(self, tmp_path):
+        """After sync, state processed_paths contains newly processed file paths."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            results = []
+            for i in range(3):
+                r = IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok")
+                results.append(r)
+                if on_file_complete:
+                    on_file_complete(Path(f"/fake/file{i}.md"))
+            return results
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(new_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        assert len(cp.processed_paths) == 3
+        assert "/fake/file0.md" in cp.processed_paths
+
+    @pytest.mark.asyncio
+    async def test_sync_processed_files_offset_correct(self, tmp_path):
+        """resume_offset=5, 3 new files: state shows processed_files=8."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        # Pre-seed with 5 already-processed paths
+        state_store.update_collection("myproject", CollectionProgress(
+            status=IndexingStatus.PENDING,
+            processed_paths=[f"/old/file{i}.md" for i in range(5)],
+        ))
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            results = []
+            for i in range(3):
+                r = IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok")
+                results.append(r)
+                if on_file_complete:
+                    on_file_complete(Path(f"/new/file{i}.md"))
+            return results
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(new_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.processed_files == 8  # 5 + 3
+
+    @pytest.mark.asyncio
+    async def test_sync_total_files_correct_with_resume(self, tmp_path):
+        """resume_offset=5, total_new=3: state shows total_files=8."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+        # Create 3 real files so _count_files can find them
+        for i in range(3):
+            (new_dir / f"file{i}.md").write_text(f"content {i}")
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        state_store.update_collection("myproject", CollectionProgress(
+            status=IndexingStatus.PENDING,
+            processed_paths=[f"/old/file{i}.md" for i in range(5)],
+        ))
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            results = []
+            for i in range(3):
+                r = IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok")
+                results.append(r)
+                if on_file_complete:
+                    on_file_complete(Path(f"/new/file{i}.md"))
+            return results
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(new_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.total_files == 8  # 5 + 3
+
+    @pytest.mark.asyncio
+    async def test_sync_batched_path_flush_every_50_files(self, tmp_path):
+        """100 files: state write at file 50 with 50 paths; final write with 100."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        write_path_counts: list[int] = []
+        original_update = state_store.update_collection
+
+        def tracking_update(name, progress):
+            if progress.processed_paths is not None:
+                write_path_counts.append(len(progress.processed_paths))
+            return original_update(name, progress)
+
+        state_store.update_collection = tracking_update
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            results = []
+            for i in range(100):
+                r = IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok")
+                results.append(r)
+                if on_file_complete:
+                    on_file_complete(Path(f"/fake/file{i}.md"))
+            return results
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(new_dir)])
+
+        # Should have a write with 50 paths (batch) and final with 100 paths (DONE)
+        assert 50 in write_path_counts
+        assert 100 in write_path_counts
+
+    @pytest.mark.asyncio
+    async def test_sync_final_state_contains_all_paths(self, tmp_path):
+        """DONE state has processed_paths listing all ingested files."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            results = []
+            for i in range(5):
+                r = IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok")
+                results.append(r)
+                if on_file_complete:
+                    on_file_complete(Path(f"/fake/file{i}.md"))
+            return results
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(new_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        assert len(cp.processed_paths) == 5
+        for i in range(5):
+            assert f"/fake/file{i}.md" in cp.processed_paths
+
+    @pytest.mark.asyncio
+    async def test_sync_failed_state_contains_paths_processed_before_failure(self, tmp_path):
+        """On FAILED, paths from before failure are retained."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            # Process 3 files, then crash
+            for i in range(3):
+                if on_file_complete:
+                    on_file_complete(Path(f"/fake/file{i}.md"))
+            raise RuntimeError("crash at file 4")
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(new_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.FAILED
+        assert len(cp.processed_paths) == 3
+
+    @pytest.mark.asyncio
+    async def test_sync_no_resume_on_empty_processed_paths(self, tmp_path):
+        """Fresh collection (no state): exclude_paths is empty frozenset."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import IndexingStateStore
+        from archon.rag.sync import RagCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        captured_kwargs: dict = {}
+
+        async def fake_ingest(path, name, **kwargs):
+            captured_kwargs.update(kwargs)
+            return [IngestResult(doc_id="d0", chunks_created=1, status="ok")]
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(new_dir)])
+
+        exclude = captured_kwargs.get("exclude_paths")
+        assert exclude is not None
+        assert len(exclude) == 0
+
+    @pytest.mark.asyncio
+    async def test_sync_all_files_already_processed_state_correct(self, tmp_path):
+        """All files excluded → DONE with total_files=resume_offset, processed_files=resume_offset."""
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        state_store.update_collection("myproject", CollectionProgress(
+            status=IndexingStatus.PENDING,
+            processed_paths=["/a", "/b", "/c"],
+        ))
+
+        # ingest_directory returns empty (all excluded)
+        pipeline.ingest_directory = AsyncMock(return_value=[])
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(new_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        assert cp.total_files == 3  # resume_offset
+        assert cp.processed_files == 3  # resume_offset
+
+    @pytest.mark.asyncio
+    async def test_sync_errored_file_not_in_processed_paths(self, tmp_path):
+        """ingest_file error → that file NOT in processed_paths (retried next sync)."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        # on_file_complete is called only for ok results (handled by ingest_directory)
+        # So we simulate: 2 ok, 1 error — on_file_complete called only twice
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            results = [
+                IngestResult(doc_id="d0", chunks_created=1, status="ok"),
+                IngestResult(doc_id="d1", chunks_created=0, status="error"),
+                IngestResult(doc_id="d2", chunks_created=1, status="ok"),
+            ]
+            # on_file_complete only for ok files
+            if on_file_complete:
+                on_file_complete(Path("/fake/ok1.md"))
+                on_file_complete(Path("/fake/ok2.md"))
+            return results
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(new_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert len(cp.processed_paths) == 2
+        assert "/fake/ok1.md" in cp.processed_paths
+        assert "/fake/ok2.md" in cp.processed_paths
+
+    @pytest.mark.asyncio
+    async def test_sync_resumes_existing_collection_with_pending_status(self, tmp_path):
+        """Collection in existing with PENDING status → Step 6.5 resumes it."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        existing_dir = tmp_path / "myproject"
+        existing_dir.mkdir()
+        resolved = str(existing_dir.resolve())
+
+        manifest = {"myproject": resolved}
+        pipeline = make_mock_pipeline(
+            tmp_path,
+            existing_collections=["myproject"],
+            manifest=manifest,
+        )
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        # Pre-seed PENDING status (e.g. crashed mid-ingest)
+        state_store.update_collection("myproject", CollectionProgress(
+            status=IndexingStatus.PENDING,
+            processed_paths=["/old/file.md"],
+        ))
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            results = [IngestResult(doc_id="d0", chunks_created=1, status="ok")]
+            if on_file_complete:
+                on_file_complete(Path("/new/file.md"))
+            return results
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        result = await syncer.sync([str(existing_dir)])
+
+        # Should be in added (resumed), NOT unchanged
+        assert "myproject" in result.added
+        assert "myproject" not in result.unchanged
+
+    @pytest.mark.asyncio
+    async def test_sync_resumed_collection_not_in_unchanged(self, tmp_path):
+        """PENDING collection in existing & desired → NOT in result.unchanged."""
+        from archon.rag._types import IngestResult
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        dir_a = tmp_path / "project_a"
+        dir_b = tmp_path / "project_b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        resolved_a = str(dir_a.resolve())
+        resolved_b = str(dir_b.resolve())
+
+        manifest = {"project_a": resolved_a, "project_b": resolved_b}
+        pipeline = make_mock_pipeline(
+            tmp_path,
+            existing_collections=["project_a", "project_b"],
+            manifest=manifest,
+        )
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        # project_a is DONE, project_b is PENDING (needs resume)
+        state_store.update_collection("project_a", CollectionProgress(
+            status=IndexingStatus.DONE,
+        ))
+        state_store.update_collection("project_b", CollectionProgress(
+            status=IndexingStatus.PENDING,
+            processed_paths=["/old/b.md"],
+        ))
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            r = IngestResult(doc_id="d0", chunks_created=1, status="ok")
+            if on_file_complete:
+                on_file_complete(Path("/new/b.md"))
+            return [r]
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        result = await syncer.sync([str(dir_a), str(dir_b)])
+
+        # project_a is DONE → unchanged
+        assert "project_a" in result.unchanged
+        # project_b was PENDING → resumed → in added, NOT unchanged
+        assert "project_b" in result.added
+        assert "project_b" not in result.unchanged
