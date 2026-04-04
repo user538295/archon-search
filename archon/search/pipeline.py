@@ -15,7 +15,7 @@ from archon.search.chunker import DocumentChunker
 from archon.search.embedder import Embedder, EmbedderBackend, ModelEmbedder
 from archon.search.parser import DocumentParser, ParseError
 from archon.search.reranker import ModelReranker, Reranker, RerankerBackend
-from archon.search.store import RagStore
+from archon.search.store import SearchStore
 
 if TYPE_CHECKING:
     from archon.config.loader import SearchConfig
@@ -49,7 +49,7 @@ class RagPipeline:
 
     def __init__(
         self,
-        store: RagStore,
+        store: SearchStore,
         embedder: Embedder,
         reranker: Reranker,
         chunker: DocumentChunker,
@@ -321,7 +321,7 @@ def create_pipeline(
 
     Does NOT call store.connect() — caller is responsible for connecting.
     """
-    store = RagStore(cfg.db_path)
+    store = SearchStore(cfg.db_path)
     _embedder_backend: EmbedderBackend = embedder_backend or ModelEmbedder(
         cfg.embedding_model,
         providers=cfg.providers,

@@ -485,7 +485,7 @@ class TestRagCollectionSyncIntegration:
         from archon.search.parser import DocumentParser
         from archon.search.pipeline import RagPipeline
         from archon.search.reranker import Reranker, RerankerBackend
-        from archon.search.store import RagStore
+        from archon.search.store import SearchStore
         from archon.search.sync import RagCollectionSync
 
         # Stub embedder — uses synchronous encode() as required by EmbedderBackend protocol
@@ -515,7 +515,7 @@ class TestRagCollectionSyncIntegration:
                 )]
 
         db_path = tmp_path / "lancedb"
-        store = RagStore(db_path)
+        store = SearchStore(db_path)
         await store.connect()
 
         embedder = Embedder(StubEmbedderBackend())

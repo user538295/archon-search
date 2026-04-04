@@ -1,4 +1,4 @@
-"""RagStore — LanceDB-backed vector + FTS store for Archon RAG (FEAT-019)."""
+"""SearchStore — LanceDB-backed vector + FTS store for Archon RAG (FEAT-019)."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def _rrf_score(rank: int) -> float:
     return 1.0 / (_RRF_K + rank + 1)
 
 
-class RagStore:
+class SearchStore:
     """Async LanceDB store for chunked document embeddings."""
 
     def __init__(self, db_path: str | Path) -> None:
@@ -68,7 +68,7 @@ class RagStore:
 
     def _require_connected(self) -> lancedb.db.AsyncConnection:
         if self._db is None:
-            raise RuntimeError("RagStore not connected")
+            raise RuntimeError("SearchStore not connected")
         return self._db
 
     # ------------------------------------------------------------------
@@ -503,7 +503,7 @@ class RagStore:
         """Return all embedding vectors stored in the collection.
 
         Returns an empty list if the collection does not exist.
-        Used by :meth:`RagPipeline.recompute_collection_meta`.
+        Used by :meth:`SearchPipeline.recompute_collection_meta`.
         """
         self._validate_collection(collection)
         db = self._require_connected()

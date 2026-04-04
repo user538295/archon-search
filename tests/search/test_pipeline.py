@@ -363,7 +363,7 @@ async def test_pipeline_ingest_directory_rebuilds_fts_once(connected_store, col_
     from archon.search.chunker import DocumentChunker
     from archon.search.parser import DocumentParser
     from archon.search.pipeline import RagPipeline
-    from archon.search.store import RagStore
+    from archon.search.store import SearchStore
 
     rebuild_calls = 0
     original_rebuild = connected_store.rebuild_fts_index
@@ -877,7 +877,7 @@ async def test_create_pipeline_wires_all_components():
         patch("archon.search.pipeline.ModelReranker") as MockMR,
         patch("archon.search.pipeline.DocumentChunker") as MockChunker,
         patch("archon.search.pipeline.DocumentParser") as MockParser,
-        patch("archon.search.pipeline.RagStore") as MockStore,
+        patch("archon.search.pipeline.SearchStore") as MockStore,
     ):
         MockME.return_value = MockEmbedderBackend()
         MockMR.return_value = MockRerankerBackend()
@@ -906,18 +906,18 @@ async def test_create_pipeline_does_not_auto_connect():
         patch("archon.search.pipeline.ModelReranker") as MockMR,
         patch("archon.search.pipeline.DocumentChunker"),
         patch("archon.search.pipeline.DocumentParser"),
-        patch("archon.search.pipeline.RagStore") as MockStore,
+        patch("archon.search.pipeline.SearchStore") as MockStore,
     ):
         MockME.return_value = MockEmbedderBackend()
         MockMR.return_value = MockRerankerBackend()
-        # Real RagStore that is NOT connected
-        from archon.search.store import RagStore
-        real_store = RagStore("/tmp/test_no_connect_rag")
+        # Real SearchStore that is NOT connected
+        from archon.search.store import SearchStore
+        real_store = SearchStore("/tmp/test_no_connect_rag")
         MockStore.return_value = real_store
 
         pipeline = create_pipeline(cfg)
 
-    with pytest.raises(RuntimeError, match="RagStore not connected"):
+    with pytest.raises(RuntimeError, match="SearchStore not connected"):
         await pipeline.list_collections()
 
 

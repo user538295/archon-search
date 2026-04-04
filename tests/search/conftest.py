@@ -66,17 +66,17 @@ if "onnxruntime" not in sys.modules:
 
 @pytest.fixture(scope="module")
 def connected_store(tmp_path_factory: pytest.TempPathFactory):  # type: ignore[no-untyped-def]
-    """One shared RagStore per test module (sync connect/disconnect via asyncio.run).
+    """One shared SearchStore per test module (sync connect/disconnect via asyncio.run).
 
     LanceDB's Rust/Tokio runtime is independent of the Python asyncio event loop,
     so the connected store is safely reusable across test-function event loops.
     """
     import asyncio
 
-    from archon.search.store import RagStore
+    from archon.search.store import SearchStore
 
     tmp_path = tmp_path_factory.mktemp("rag_db")
-    store = RagStore(tmp_path)
+    store = SearchStore(tmp_path)
     asyncio.run(store.connect())
     yield store
     asyncio.run(store.disconnect())

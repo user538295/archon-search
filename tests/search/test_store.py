@@ -1,4 +1,4 @@
-"""tests/rag/test_store.py — unit + integration tests for RagStore."""
+"""tests/search/test_store.py — unit + integration tests for SearchStore."""
 from __future__ import annotations
 
 import hashlib
@@ -11,7 +11,7 @@ import pytest
 import pytest_asyncio
 
 from archon.search._types import ChunkRecord
-from archon.search.store import RagStore
+from archon.search.store import SearchStore
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,7 +41,7 @@ def _chunk(doc_id: str, idx: int, text: str = "hello", dim: int = _DIM) -> Chunk
 
 
 def test_store_methods_raise_before_connect_ingest_chunks(tmp_path: Path) -> None:
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     with pytest.raises(RuntimeError, match="not connected"):
         import asyncio
 
@@ -49,7 +49,7 @@ def test_store_methods_raise_before_connect_ingest_chunks(tmp_path: Path) -> Non
 
 
 def test_store_methods_raise_before_connect_hybrid_search(tmp_path: Path) -> None:
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     with pytest.raises(RuntimeError, match="not connected"):
         import asyncio
 
@@ -57,7 +57,7 @@ def test_store_methods_raise_before_connect_hybrid_search(tmp_path: Path) -> Non
 
 
 def test_store_methods_raise_before_connect_delete_document(tmp_path: Path) -> None:
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     doc_id = _doc_id()
     with pytest.raises(RuntimeError, match="not connected"):
         import asyncio
@@ -66,7 +66,7 @@ def test_store_methods_raise_before_connect_delete_document(tmp_path: Path) -> N
 
 
 def test_store_methods_raise_before_connect_list_documents(tmp_path: Path) -> None:
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     with pytest.raises(RuntimeError, match="not connected"):
         import asyncio
 
@@ -74,7 +74,7 @@ def test_store_methods_raise_before_connect_list_documents(tmp_path: Path) -> No
 
 
 def test_store_methods_raise_before_connect_list_collections(tmp_path: Path) -> None:
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     with pytest.raises(RuntimeError, match="not connected"):
         import asyncio
 
@@ -82,7 +82,7 @@ def test_store_methods_raise_before_connect_list_collections(tmp_path: Path) -> 
 
 
 def test_store_methods_raise_before_connect_ensure_collection(tmp_path: Path) -> None:
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     with pytest.raises(RuntimeError, match="not connected"):
         import asyncio
 
@@ -90,7 +90,7 @@ def test_store_methods_raise_before_connect_ensure_collection(tmp_path: Path) ->
 
 
 def test_store_methods_raise_before_connect_rebuild_fts(tmp_path: Path) -> None:
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     with pytest.raises(RuntimeError, match="not connected"):
         import asyncio
 
@@ -98,7 +98,7 @@ def test_store_methods_raise_before_connect_rebuild_fts(tmp_path: Path) -> None:
 
 
 def test_store_methods_raise_before_connect_fetch_adjacent(tmp_path: Path) -> None:
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     doc_id = _doc_id()
     with pytest.raises(RuntimeError, match="not connected"):
         import asyncio
@@ -108,7 +108,7 @@ def test_store_methods_raise_before_connect_fetch_adjacent(tmp_path: Path) -> No
 
 def test_store_delete_document_invalid_doc_id_raises(tmp_path: Path) -> None:
     """doc_id not matching ^[a-f0-9]{64}$ raises ValueError before any DB call."""
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     import asyncio
 
     asyncio.run(store.connect())
@@ -121,7 +121,7 @@ def test_store_delete_document_invalid_doc_id_raises(tmp_path: Path) -> None:
 
 def test_store_ingest_chunks_rejects_empty_chunk_id(tmp_path: Path) -> None:
     """chunk_id = '' raises ValueError — malformed."""
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     import asyncio
 
     asyncio.run(store.connect())
@@ -144,7 +144,7 @@ def test_store_ingest_chunks_rejects_empty_chunk_id(tmp_path: Path) -> None:
 
 def test_store_ingest_chunks_rejects_uuid_chunk_id(tmp_path: Path) -> None:
     """chunk_id = UUID string raises ValueError — must be {doc_id}-{idx:06d}."""
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     import asyncio
 
     asyncio.run(store.connect())
@@ -167,7 +167,7 @@ def test_store_ingest_chunks_rejects_uuid_chunk_id(tmp_path: Path) -> None:
 
 def test_store_invalid_collection_name_raises(tmp_path: Path) -> None:
     """Collection names containing unsafe chars raise ValueError."""
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     import asyncio
 
     asyncio.run(store.connect())
@@ -180,7 +180,7 @@ def test_store_invalid_collection_name_raises(tmp_path: Path) -> None:
 
 def test_store_disconnect_clears_connection(tmp_path: Path) -> None:
     """After disconnect, ingest_chunks raises RuntimeError."""
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     import asyncio
 
     asyncio.run(store.connect())
@@ -191,7 +191,7 @@ def test_store_disconnect_clears_connection(tmp_path: Path) -> None:
 
 def test_store_double_disconnect_safe(tmp_path: Path) -> None:
     """Calling disconnect() twice does not raise."""
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     import asyncio
 
     asyncio.run(store.connect())
@@ -205,7 +205,7 @@ def test_store_double_disconnect_safe(tmp_path: Path) -> None:
 
 
 async def _ingest_doc(
-    store: RagStore,
+    store: SearchStore,
     col: str,
     n_chunks: int = 2,
     text_prefix: str = "text",
@@ -222,7 +222,7 @@ async def _ingest_doc(
 async def test_store_connect_creates_db_dir(tmp_path: Path) -> None:
     db_path = tmp_path / "newdb"
     assert not db_path.exists()
-    store = RagStore(db_path)
+    store = SearchStore(db_path)
     await store.connect()
     assert db_path.exists()
     await store.disconnect()
@@ -230,7 +230,7 @@ async def test_store_connect_creates_db_dir(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_store_ensure_collection_idempotent(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     """Calling ensure_collection twice does not raise."""
     await connected_store.ensure_collection(col_name, _DIM)
@@ -239,7 +239,7 @@ async def test_store_ensure_collection_idempotent(
 
 @pytest.mark.asyncio
 async def test_store_ingest_and_list_documents(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     doc_id, _ = await _ingest_doc(connected_store, col_name, n_chunks=2)
     docs = await connected_store.list_documents(col_name)
@@ -250,7 +250,7 @@ async def test_store_ingest_and_list_documents(
 
 @pytest.mark.asyncio
 async def test_store_hybrid_search_returns_results(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     await _ingest_doc(connected_store, col_name, text_prefix="searchable")
     await connected_store.rebuild_fts_index(col_name)
@@ -262,7 +262,7 @@ async def test_store_hybrid_search_returns_results(
 
 @pytest.mark.asyncio
 async def test_store_hybrid_search_unknown_collection_returns_empty(
-    connected_store: RagStore,
+    connected_store: SearchStore,
 ) -> None:
     results = await connected_store.hybrid_search(
         "nonexistent-xyz", [0.0] * _DIM, "q", top_k=5
@@ -272,7 +272,7 @@ async def test_store_hybrid_search_unknown_collection_returns_empty(
 
 @pytest.mark.asyncio
 async def test_store_delete_document_removes_chunks(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     doc_id, _ = await _ingest_doc(connected_store, col_name)
     count = await connected_store.delete_document(col_name, doc_id)
@@ -283,7 +283,7 @@ async def test_store_delete_document_removes_chunks(
 
 @pytest.mark.asyncio
 async def test_store_delete_nonexistent_doc_returns_zero(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     await connected_store.ensure_collection(col_name, _DIM)
     fake_id = _doc_id()
@@ -293,7 +293,7 @@ async def test_store_delete_nonexistent_doc_returns_zero(
 
 @pytest.mark.asyncio
 async def test_store_list_collections_includes_ingested(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     await _ingest_doc(connected_store, col_name)
     collections = await connected_store.list_collections()
@@ -305,7 +305,7 @@ async def test_store_list_collections_includes_ingested(
 async def test_store_list_collections_empty_database_returns_empty(
     tmp_path: Path,
 ) -> None:
-    store = RagStore(tmp_path / "empty_db")
+    store = SearchStore(tmp_path / "empty_db")
     await store.connect()
     try:
         cols = await store.list_collections()
@@ -316,7 +316,7 @@ async def test_store_list_collections_empty_database_returns_empty(
 
 @pytest.mark.asyncio
 async def test_store_list_documents_nonexistent_collection_returns_empty(
-    connected_store: RagStore,
+    connected_store: SearchStore,
 ) -> None:
     docs = await connected_store.list_documents("no-such-collection-xyz", limit=10)
     assert docs == []
@@ -324,7 +324,7 @@ async def test_store_list_documents_nonexistent_collection_returns_empty(
 
 @pytest.mark.asyncio
 async def test_store_delete_document_injection_safe(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     """doc_id with SQL-special chars raises ValueError; document B still intact."""
     doc_b_id, _ = await _ingest_doc(connected_store, col_name)
@@ -336,7 +336,7 @@ async def test_store_delete_document_injection_safe(
 
 @pytest.mark.asyncio
 async def test_store_fetch_adjacent_chunks_returns_neighbors(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     """3-chunk doc, center_idx=1 → returns chunks at idx 0 and 2."""
     doc_id = _doc_id()
@@ -353,7 +353,7 @@ async def test_store_fetch_adjacent_chunks_returns_neighbors(
 
 @pytest.mark.asyncio
 async def test_store_fetch_adjacent_chunks_at_boundary_returns_partial(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     """center_idx=0, window=2 → only right neighbors (idx 1, 2)."""
     doc_id = _doc_id()
@@ -374,7 +374,7 @@ async def test_store_fetch_adjacent_chunks_at_boundary_returns_partial(
 
 @pytest.mark.asyncio
 async def test_store_fetch_adjacent_chunks_window_zero_returns_empty(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     """window=0 means no neighbors; returns []."""
     doc_id = _doc_id()
@@ -387,7 +387,7 @@ async def test_store_fetch_adjacent_chunks_window_zero_returns_empty(
 
 @pytest.mark.asyncio
 async def test_store_list_documents_respects_limit(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     """3 docs ingested → list_documents(limit=1) returns exactly 1."""
     for _ in range(3):
@@ -401,7 +401,7 @@ async def test_store_list_documents_respects_limit(
 
 @pytest.mark.asyncio
 async def test_store_hybrid_search_degrades_gracefully_without_fts_index(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     """No FTS index → returns vector-only results, no exception raised."""
     await _ingest_doc(connected_store, col_name, text_prefix="keyword")
@@ -414,7 +414,7 @@ async def test_store_hybrid_search_degrades_gracefully_without_fts_index(
 
 @pytest.mark.asyncio
 async def test_store_rebuild_fts_index_makes_text_searchable(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     unique_word = f"zaphod{uuid.uuid4().hex[:6]}"
     doc_id = _doc_id()
@@ -432,7 +432,7 @@ async def test_store_rebuild_fts_index_makes_text_searchable(
 
 @pytest.mark.asyncio
 async def test_store_rebuild_fts_index_idempotent(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     """Calling rebuild_fts_index twice does not raise."""
     await _ingest_doc(connected_store, col_name)
@@ -442,7 +442,7 @@ async def test_store_rebuild_fts_index_idempotent(
 
 @pytest.mark.asyncio
 async def test_store_list_collections_returns_correct_counts(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     """2 docs × 3 chunks each → doc_count=2, chunk_count=6."""
     for _ in range(2):
@@ -459,7 +459,7 @@ async def test_store_list_collections_returns_correct_counts(
 
 @pytest.mark.asyncio
 async def test_store_hybrid_search_rrf_ranking_correct(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     """Doc matching both vector + keyword should outscore doc matching only vector."""
     await connected_store.ensure_collection(col_name, _DIM)
@@ -500,7 +500,7 @@ async def test_store_hybrid_search_rrf_ranking_correct(
 
 @pytest.mark.asyncio
 async def test_store_delete_document_nonexistent_collection_returns_zero(
-    connected_store: RagStore,
+    connected_store: SearchStore,
 ) -> None:
     """delete_document on a collection that does not exist returns 0."""
     doc_id = _doc_id()
@@ -510,7 +510,7 @@ async def test_store_delete_document_nonexistent_collection_returns_zero(
 
 @pytest.mark.asyncio
 async def test_store_fetch_adjacent_nonexistent_collection_returns_empty(
-    connected_store: RagStore,
+    connected_store: SearchStore,
 ) -> None:
     """fetch_adjacent_chunks on a nonexistent collection returns []."""
     doc_id = _doc_id()
@@ -520,7 +520,7 @@ async def test_store_fetch_adjacent_nonexistent_collection_returns_empty(
 
 @pytest.mark.asyncio
 async def test_store_ingest_empty_list_returns_zero(
-    connected_store: RagStore, col_name: str,
+    connected_store: SearchStore, col_name: str,
 ) -> None:
     """ingest_chunks with empty list returns 0 without touching the table."""
     await connected_store.ensure_collection(col_name, _DIM)
@@ -530,7 +530,7 @@ async def test_store_ingest_empty_list_returns_zero(
 
 @pytest.mark.asyncio
 async def test_store_list_documents_limit_capped_at_1000(
-    connected_store: RagStore, col_name: str,
+    connected_store: SearchStore, col_name: str,
 ) -> None:
     """list_documents caps limit at 1000 — requesting more does not OOM."""
     await connected_store.ensure_collection(col_name, _DIM)
@@ -547,7 +547,7 @@ async def test_store_list_documents_limit_capped_at_1000(
 def test_drop_collection_raises_before_connect(tmp_path: Path) -> None:
     """drop_collection raises RuntimeError when store is not connected."""
     import asyncio
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     with pytest.raises(RuntimeError, match="not connected"):
         asyncio.run(store.drop_collection("col"))
 
@@ -557,7 +557,7 @@ def test_drop_collection_removes_table(tmp_path: Path) -> None:
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
     list_tables_resp.tables = ["my-col", "other"]
@@ -575,7 +575,7 @@ def test_drop_collection_raises_keyerror_on_missing(tmp_path: Path) -> None:
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
     list_tables_resp.tables = ["other"]
@@ -587,7 +587,7 @@ def test_drop_collection_raises_keyerror_on_missing(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_drop_collection_integration(connected_store: RagStore, col_name: str) -> None:
+async def test_drop_collection_integration(connected_store: SearchStore, col_name: str) -> None:
     """Integration: ingest → drop → collection absent from list_collections."""
     await _ingest_doc(connected_store, col_name)
     names_before = [c.name for c in await connected_store.list_collections()]
@@ -607,7 +607,7 @@ async def test_drop_collection_integration(connected_store: RagStore, col_name: 
 def test_rename_collection_raises_before_connect(tmp_path: Path) -> None:
     """rename_collection raises RuntimeError when store is not connected."""
     import asyncio
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     with pytest.raises(RuntimeError, match="not connected"):
         asyncio.run(store.rename_collection("old", "new"))
 
@@ -617,7 +617,7 @@ def test_rename_collection_renames_table(tmp_path: Path) -> None:
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
     list_tables_resp.tables = ["old-name"]
@@ -635,7 +635,7 @@ def test_rename_collection_raises_keyerror_on_missing(tmp_path: Path) -> None:
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
     list_tables_resp.tables = []
@@ -653,7 +653,7 @@ def test_rename_collection_raises_not_implemented_on_attribute_error(
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
     list_tables_resp.tables = ["old-name"]
@@ -672,7 +672,7 @@ def test_rename_collection_raises_not_implemented_on_not_implemented_error(
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
     list_tables_resp.tables = ["old-name"]
@@ -691,7 +691,7 @@ def test_rename_collection_raises_valueerror_if_target_exists(tmp_path: Path) ->
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     mock_db = MagicMock()
     list_tables_resp = MagicMock()
     list_tables_resp.tables = ["old-name", "existing"]
@@ -706,7 +706,7 @@ def test_rename_collection_raises_valueerror_on_invalid_new_name(tmp_path: Path)
     """rename_collection raises ValueError when new name is invalid."""
     import asyncio
 
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     # Inject a mock db so we don't need a real connection
     from unittest.mock import AsyncMock, MagicMock
     store._db = MagicMock()
@@ -716,7 +716,7 @@ def test_rename_collection_raises_valueerror_on_invalid_new_name(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_rename_collection_integration(connected_store: RagStore, col_name: str) -> None:
+async def test_rename_collection_integration(connected_store: SearchStore, col_name: str) -> None:
     """Integration: rename_collection completes or raises NotImplementedError for OSS LanceDB."""
     new_name = col_name + "-renamed"
     await _ingest_doc(connected_store, col_name)
@@ -752,7 +752,7 @@ def test_fts_exception_filter_reraises_non_fts_errors() -> None:
 
 @pytest.mark.asyncio
 async def test_collection_meta_get_missing_returns_none(
-    connected_store: RagStore,
+    connected_store: SearchStore,
 ) -> None:
     """get_collection_meta returns None for a name not yet stored."""
     result = await connected_store.get_collection_meta("nonexistent-xyz-meta")
@@ -760,7 +760,7 @@ async def test_collection_meta_get_missing_returns_none(
 
 
 @pytest.mark.asyncio
-async def test_collection_meta_upsert(connected_store: RagStore) -> None:
+async def test_collection_meta_upsert(connected_store: SearchStore) -> None:
     """update_collection_meta stores metadata; get_collection_meta retrieves it."""
     from archon.search.collection_meta import CollectionMeta
 
@@ -790,7 +790,7 @@ async def test_collection_meta_upsert(connected_store: RagStore) -> None:
 
 @pytest.mark.asyncio
 async def test_collection_meta_upsert_includes_described_at_doc_count(
-    connected_store: RagStore,
+    connected_store: SearchStore,
 ) -> None:
     """update_collection_meta persists described_at_doc_count; None round-trips."""
     from archon.search.collection_meta import CollectionMeta
@@ -825,7 +825,7 @@ async def test_collection_meta_upsert_includes_described_at_doc_count(
 
 @pytest.mark.asyncio
 async def test_collection_meta_upsert_overwrites_on_same_name(
-    connected_store: RagStore,
+    connected_store: SearchStore,
 ) -> None:
     """Second update_collection_meta with same name replaces the first (upsert semantics)."""
     from archon.search.collection_meta import CollectionMeta
@@ -863,7 +863,7 @@ async def test_collection_meta_upsert_overwrites_on_same_name(
 
 @pytest.mark.asyncio
 async def test_collection_meta_centroid_none_round_trips(
-    connected_store: RagStore,
+    connected_store: SearchStore,
 ) -> None:
     """CollectionMeta with centroid=None round-trips as None (not a zero vector)."""
     from archon.search.collection_meta import CollectionMeta
@@ -885,7 +885,7 @@ async def test_collection_meta_centroid_none_round_trips(
 @pytest.mark.asyncio
 async def test_get_all_collections_meta_empty_before_any_update(tmp_path: Path) -> None:
     """get_all_collections_meta returns [] when no meta rows exist."""
-    store = RagStore(tmp_path / "db_meta_empty")
+    store = SearchStore(tmp_path / "db_meta_empty")
     await store.connect()
     try:
         result = await store.get_all_collections_meta()
@@ -899,7 +899,7 @@ async def test_get_all_collections_meta_returns_all_rows(tmp_path: Path) -> None
     """get_all_collections_meta returns all stored CollectionMeta rows."""
     from archon.search.collection_meta import CollectionMeta
 
-    store = RagStore(tmp_path / "db_meta_rows")
+    store = SearchStore(tmp_path / "db_meta_rows")
     await store.connect()
     try:
         meta1 = CollectionMeta(
@@ -937,7 +937,7 @@ async def test_get_all_collections_meta_returns_all_rows(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_list_collections_excludes_archon_prefix(
-    connected_store: RagStore, col_name: str
+    connected_store: SearchStore, col_name: str
 ) -> None:
     """list_collections() must not include internal _archon_ tables."""
     from archon.search.collection_meta import CollectionMeta
@@ -974,7 +974,7 @@ async def test_delete_by_source_path_computes_doc_id(tmp_path: Path) -> None:
     source_path = "/some/project/README.md"
     expected_doc_id = hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
 
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     store.delete_document = AsyncMock(return_value=3)  # type: ignore[method-assign]
 
     result = await store.delete_by_source_path("my-col", source_path)
@@ -988,7 +988,7 @@ async def test_delete_by_source_path_collection_not_found(tmp_path: Path) -> Non
     """When delete_document returns 0 (no match), delete_by_source_path returns 0."""
     from unittest.mock import AsyncMock
 
-    store = RagStore(tmp_path / "db")
+    store = SearchStore(tmp_path / "db")
     store.delete_document = AsyncMock(return_value=0)  # type: ignore[method-assign]
 
     result = await store.delete_by_source_path("nonexistent-col", "/any/path.txt")
