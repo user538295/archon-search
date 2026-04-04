@@ -730,7 +730,9 @@ class TestComputeEtaSeconds:
             started_at=started,
         )
         # fps = 50/50 = 1.0, remaining = 50, eta = int(50/1.0) = 50
-        assert compute_eta_seconds(cp, now=now) == 50
+        result = compute_eta_seconds(cp, now=now)
+        assert result == 50
+        assert isinstance(result, int)  # must be int, not float
 
     def test_compute_eta_accepts_custom_now(self) -> None:
         from archon.rag.progress import IndexingStatus, compute_eta_seconds
