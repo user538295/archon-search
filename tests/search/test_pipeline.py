@@ -1,4 +1,4 @@
-"""tests/rag/test_pipeline.py — TDD tests for RagPipeline (FEAT-019 Task 4.1)."""
+"""tests/search/test_pipeline.py — TDD tests for SearchPipeline (FEAT-019 Task 4.1)."""
 from __future__ import annotations
 
 import re
@@ -43,15 +43,15 @@ def make_reranker() -> Reranker:
 
 
 # ---------------------------------------------------------------------------
-# Helper: build a RagPipeline with connected_store
+# Helper: build a SearchPipeline with connected_store
 # ---------------------------------------------------------------------------
 
 def make_pipeline(store):  # type: ignore[no-untyped-def]
     from archon.search.chunker import DocumentChunker
     from archon.search.parser import DocumentParser
-    from archon.search.pipeline import RagPipeline
+    from archon.search.pipeline import SearchPipeline
 
-    return RagPipeline(
+    return SearchPipeline(
         store=store,
         embedder=make_embedder(),
         reranker=make_reranker(),
@@ -119,7 +119,7 @@ async def test_pipeline_ingest_is_idempotent(connected_store, col_name, tmp_path
 async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_name, tmp_path):
     from archon.search.chunker import DocumentChunker
     from archon.search.parser import DocumentParser
-    from archon.search.pipeline import RagPipeline
+    from archon.search.pipeline import SearchPipeline
 
     captured_records: list[ChunkRecord] = []
 
@@ -137,7 +137,7 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
 
-    pipeline = RagPipeline(
+    pipeline = SearchPipeline(
         store=CapturingStore(),  # type: ignore[arg-type]
         embedder=make_embedder(),
         reranker=make_reranker(),
@@ -163,7 +163,7 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
 async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_name, tmp_path):
     from archon.search.chunker import DocumentChunker
     from archon.search.parser import DocumentParser
-    from archon.search.pipeline import RagPipeline
+    from archon.search.pipeline import SearchPipeline
 
     captured_records: list[ChunkRecord] = []
 
@@ -181,7 +181,7 @@ async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_na
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
 
-    pipeline = RagPipeline(
+    pipeline = SearchPipeline(
         store=CapturingStore(),  # type: ignore[arg-type]
         embedder=make_embedder(),
         reranker=make_reranker(),
@@ -249,9 +249,9 @@ async def test_pipeline_search_with_context_returns_neighbors(connected_store, c
     # Use small chunk_size to force multiple chunks
     from archon.search.chunker import DocumentChunker
     from archon.search.parser import DocumentParser
-    from archon.search.pipeline import RagPipeline
+    from archon.search.pipeline import SearchPipeline
 
-    pipeline2 = RagPipeline(
+    pipeline2 = SearchPipeline(
         store=connected_store,
         embedder=make_embedder(),
         reranker=make_reranker(),
@@ -362,7 +362,7 @@ async def test_pipeline_ingest_directory_partial_failure(connected_store, col_na
 async def test_pipeline_ingest_directory_rebuilds_fts_once(connected_store, col_name, tmp_path):
     from archon.search.chunker import DocumentChunker
     from archon.search.parser import DocumentParser
-    from archon.search.pipeline import RagPipeline
+    from archon.search.pipeline import SearchPipeline
     from archon.search.store import SearchStore
 
     rebuild_calls = 0
@@ -376,7 +376,7 @@ async def test_pipeline_ingest_directory_rebuilds_fts_once(connected_store, col_
     connected_store.rebuild_fts_index = counting_rebuild  # type: ignore[method-assign]
 
     try:
-        pipeline = RagPipeline(
+        pipeline = SearchPipeline(
             store=connected_store,
             embedder=make_embedder(),
             reranker=make_reranker(),
@@ -505,7 +505,7 @@ async def test_pipeline_ingest_file_empty_content_preserves_existing_chunks(conn
 async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connected_store, col_name, tmp_path):
     from archon.search.chunker import DocumentChunker
     from archon.search.parser import DocumentParser, ParseError
-    from archon.search.pipeline import RagPipeline
+    from archon.search.pipeline import SearchPipeline
 
     rebuild_called = False
 
@@ -523,7 +523,7 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
             nonlocal rebuild_called
             rebuild_called = True
 
-    pipeline = RagPipeline(
+    pipeline = SearchPipeline(
         store=TrackingStore(),  # type: ignore[arg-type]
         embedder=make_embedder(),
         reranker=make_reranker(),
@@ -685,7 +685,7 @@ async def test_ingest_centroid_averages_heterogeneous_embeddings(connected_store
     """Centroid is the element-wise mean, verified with non-uniform vectors."""
     from archon.search.chunker import DocumentChunker
     from archon.search.parser import DocumentParser
-    from archon.search.pipeline import RagPipeline
+    from archon.search.pipeline import SearchPipeline
 
     call_count = 0
 
@@ -702,7 +702,7 @@ async def test_ingest_centroid_averages_heterogeneous_embeddings(connected_store
                 return [[1.0, 0.0] for _ in texts]
             return [[0.0, 1.0] for _ in texts]
 
-    pipeline = RagPipeline(
+    pipeline = SearchPipeline(
         store=connected_store,
         embedder=Embedder(HeteroEmbedderBackend()),
         reranker=make_reranker(),
@@ -826,7 +826,7 @@ async def test_ingest_directory_sets_described_at_doc_count_on_success(
 async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
     from archon.search.chunker import DocumentChunker
     from archon.search.parser import DocumentParser
-    from archon.search.pipeline import RagPipeline
+    from archon.search.pipeline import SearchPipeline
 
     malformed_result = SearchResult(
         doc_id="a" * 64,
@@ -843,7 +843,7 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
         async def fetch_adjacent_chunks(self, *a: Any, **kw: Any) -> list[ChunkRecord]:
             return []
 
-    pipeline = RagPipeline(
+    pipeline = SearchPipeline(
         store=MockStore(),  # type: ignore[arg-type]
         embedder=make_embedder(),
         reranker=make_reranker(),
@@ -979,18 +979,18 @@ async def test_ingest_async_progress_callback(connected_store, col_name, tmp_pat
 
 
 def test_create_pipeline_no_history_collection_param() -> None:
-    """RagPipeline.__init__ must NOT accept history_collection parameter."""
+    """SearchPipeline.__init__ must NOT accept history_collection parameter."""
     import inspect
-    from archon.search.pipeline import RagPipeline
+    from archon.search.pipeline import SearchPipeline
 
-    sig = inspect.signature(RagPipeline.__init__)
+    sig = inspect.signature(SearchPipeline.__init__)
     assert "history_collection" not in sig.parameters, (
-        "history_collection parameter still present in RagPipeline.__init__"
+        "history_collection parameter still present in SearchPipeline.__init__"
     )
 
 
 def test_create_pipeline_factory_no_history_collection_param() -> None:
-    """create_pipeline() must NOT pass history_collection to RagPipeline."""
+    """create_pipeline() must NOT pass history_collection to SearchPipeline."""
     import inspect
     from archon.search.pipeline import create_pipeline
 
@@ -1001,13 +1001,13 @@ def test_create_pipeline_factory_no_history_collection_param() -> None:
 
 
 def test_ragpipeline_has_no_history_collection_attr() -> None:
-    """RagPipeline instance must NOT have _history_collection attribute."""
+    """SearchPipeline instance must NOT have _history_collection attribute."""
     from unittest.mock import MagicMock
     from archon.search.embedder import Embedder
-    from archon.search.pipeline import RagPipeline
+    from archon.search.pipeline import SearchPipeline
     from archon.search.reranker import Reranker
 
-    pipeline = RagPipeline(
+    pipeline = SearchPipeline(
         store=MagicMock(),
         embedder=Embedder(MockEmbedderBackend()),
         reranker=Reranker(MockRerankerBackend()),
@@ -1017,7 +1017,7 @@ def test_ragpipeline_has_no_history_collection_attr() -> None:
         top_k_return=5,
     )
     assert not hasattr(pipeline, "_history_collection"), (
-        "_history_collection attribute still present on RagPipeline"
+        "_history_collection attribute still present on SearchPipeline"
     )
 
 

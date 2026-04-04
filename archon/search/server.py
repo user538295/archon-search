@@ -14,7 +14,7 @@ from fastmcp import Context, FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from archon.search.pipeline import RagPipeline, create_pipeline
+from archon.search.pipeline import SearchPipeline, create_pipeline
 from archon.search.progress import IndexingStateStore
 from archon.search.sync import RagCollectionSync, path_to_collection_name
 
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("archon.rag")
 
 
-def create_app(pipeline: RagPipeline, default_collection: str) -> FastMCP:
+def create_app(pipeline: SearchPipeline, default_collection: str) -> FastMCP:
     """Create a FastMCP app with 9 RAG tools registered."""
     app = FastMCP("archon-rag")
 

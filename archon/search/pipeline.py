@@ -1,4 +1,4 @@
-"""RagPipeline — orchestrates ingest, search, and context retrieval (FEAT-019 Task 4.1)."""
+"""SearchPipeline — orchestrates ingest, search, and context retrieval (FEAT-019 Task 4.1)."""
 from __future__ import annotations
 
 import hashlib
@@ -44,7 +44,7 @@ def _compute_centroid(vectors: list[list[float]]) -> list[float]:
     return [sum(v[i] for v in vectors) / n for i in range(dim)]
 
 
-class RagPipeline:
+class SearchPipeline:
     """Orchestrates document ingest, vector search, and context retrieval."""
 
     def __init__(
@@ -316,8 +316,8 @@ def create_pipeline(
     cfg: SearchConfig,
     embedder_backend: EmbedderBackend | None = None,
     reranker_backend: RerankerBackend | None = None,
-) -> RagPipeline:
-    """Build a RagPipeline from a SearchConfig.
+) -> SearchPipeline:
+    """Build a SearchPipeline from a SearchConfig.
 
     Does NOT call store.connect() — caller is responsible for connecting.
     """
@@ -335,7 +335,7 @@ def create_pipeline(
     chunker = DocumentChunker(cfg.chunk_size)
     parser = DocumentParser()
 
-    return RagPipeline(
+    return SearchPipeline(
         store=store,
         embedder=embedder,
         reranker=reranker,

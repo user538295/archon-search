@@ -10,7 +10,7 @@ import pytest
 
 from archon.search._types import CollectionInfo, DocumentInfo, IngestResult, SearchResult
 from archon.search.collection_meta import CollectionMeta
-from archon.search.pipeline import RagPipeline
+from archon.search.pipeline import SearchPipeline
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@ def _make_pipeline(
     all_collections_meta: list[CollectionMeta] | None = None,
     single_collection_meta: CollectionMeta | None = None,
 ) -> MagicMock:
-    pipeline = MagicMock(spec=RagPipeline)
+    pipeline = MagicMock(spec=SearchPipeline)
     pipeline.search = AsyncMock(return_value=search_result or [])
     pipeline.search_with_context = AsyncMock(return_value=swc_result or [])
     pipeline.ingest_file = AsyncMock(
@@ -317,7 +317,7 @@ async def test_server_search_tool_with_real_pipeline(
         def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
             return [0.5] * len(pairs)
 
-    pipeline = RagPipeline(
+    pipeline = SearchPipeline(
         store=connected_store,
         embedder=Embedder(_FakeEmbed()),
         reranker=Reranker(_FakeRerank()),
@@ -354,7 +354,7 @@ async def test_server_error_serialization_through_mcp_transport(
         def encode(self, texts: list[str]) -> list[list[float]]:
             raise RuntimeError("boom")
 
-    pipeline = RagPipeline(
+    pipeline = SearchPipeline(
         store=connected_store,
         embedder=Embedder(_FailEmbed()),
         reranker=Reranker(MagicMock()),

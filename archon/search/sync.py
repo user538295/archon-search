@@ -14,7 +14,7 @@ from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from archon.search.pipeline import RagPipeline
+    from archon.search.pipeline import SearchPipeline
     from archon.search.progress import CollectionProgress, IndexingState, IndexingStateStore
 
 logger = logging.getLogger("archon")
@@ -87,7 +87,7 @@ class RagCollectionSync:
 
     def __init__(
         self,
-        pipeline: RagPipeline,
+        pipeline: SearchPipeline,
         state_store: IndexingStateStore | None = None,
         pinned_collections: list[str] | None = None,
         embedding_model: str = "",

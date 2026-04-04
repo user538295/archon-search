@@ -483,7 +483,7 @@ class TestRagCollectionSyncIntegration:
         from archon.search._types import ChunkRecord
         from archon.search.embedder import Embedder, EmbedderBackend
         from archon.search.parser import DocumentParser
-        from archon.search.pipeline import RagPipeline
+        from archon.search.pipeline import SearchPipeline
         from archon.search.reranker import Reranker, RerankerBackend
         from archon.search.store import SearchStore
         from archon.search.sync import RagCollectionSync
@@ -523,7 +523,7 @@ class TestRagCollectionSyncIntegration:
         chunker = StubChunker()
         parser = DocumentParser()
 
-        pipeline = RagPipeline(
+        pipeline = SearchPipeline(
             store=store,
             embedder=embedder,
             reranker=reranker,
