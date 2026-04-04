@@ -1,4 +1,4 @@
-"""RagInstaller — install, configure, and manage the RAG service (Task 7.1)."""
+"""SearchInstaller — install, configure, and manage the search service (Task 7.1)."""
 from __future__ import annotations
 
 import asyncio
@@ -22,12 +22,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("archon")
 
-_RAG_PACKAGES = ["lancedb", "fastembed", "docling", "markitdown", "trafilatura", "chonkie", "fastmcp"]
+_SEARCH_PACKAGES = ["lancedb", "fastembed", "docling", "markitdown", "trafilatura", "chonkie", "fastmcp"]
 _WAIT_FOR_SERVICE_TIMEOUT = 60
 
 
-class RagInstaller:
-    """Installs and manages the RAG service end-to-end."""
+class SearchInstaller:
+    """Installs and manages the search service end-to-end."""
 
     def __init__(self, config_file: str | None = None, dry_run: bool = False) -> None:
         self.config_file = config_file or str(Path.home() / ".archon" / "config.toml")
@@ -46,7 +46,7 @@ class RagInstaller:
     def check_deps(self) -> list[str]:
         """Return list of package names that cannot be imported."""
         missing: list[str] = []
-        for pkg in _RAG_PACKAGES:
+        for pkg in _SEARCH_PACKAGES:
             try:
                 importlib.import_module(pkg)
             except ImportError:
@@ -66,7 +66,7 @@ class RagInstaller:
     # ------------------------------------------------------------------
 
     def install_deps(self, gpu: GpuType) -> None:
-        """Install RAG dependencies into the same Python that runs this process. No-op when dry_run=True."""
+        """Install search dependencies into the same Python that runs this process. No-op when dry_run=True."""
         if self.dry_run:
             return
 
@@ -124,7 +124,7 @@ class RagInstaller:
         try:
             from fastembed import TextEmbedding  # lazy — not installed on all systems
             model = TextEmbedding(self.cfg.embedding_model, providers=providers)
-            list(model.embed(["archon rag test"]))
+            list(model.embed(["archon search test"]))
         except Exception as exc:
             logger.warning("validate_providers: embedding test failed: %s", exc)
             return False
@@ -174,7 +174,7 @@ class RagInstaller:
     # ------------------------------------------------------------------
 
     def create_data_dir(self) -> None:
-        """Create the RAG database directory. No-op when dry_run=True."""
+        """Create the search database directory. No-op when dry_run=True."""
         if self.dry_run:
             return
         db_path = Path(self.cfg.db_path).expanduser()
@@ -201,7 +201,7 @@ class RagInstaller:
     # ------------------------------------------------------------------
 
     async def _bootstrap_collections(self) -> None:
-        """Sync configured collections into the RAG store."""
+        """Sync configured collections into the search store."""
         from archon.search.progress import IndexingStateStore  # noqa: PLC0415
         from archon.search.sync import RagCollectionSync  # noqa: PLC0415
 
@@ -226,7 +226,7 @@ class RagInstaller:
     # ------------------------------------------------------------------
 
     def _is_service_running(self) -> bool:
-        """Check if the RAG HTTP service is already running."""
+        """Check if the search HTTP service is already running."""
         try:
             import urllib.request
             url = f"http://{self.cfg.host}:{self.cfg.port}/health"
@@ -238,7 +238,7 @@ class RagInstaller:
     def _wait_for_service(self, timeout: int = _WAIT_FOR_SERVICE_TIMEOUT) -> bool:
         """Poll HTTP health endpoint until ready or timeout. Returns True if up."""
         deadline = time.monotonic() + timeout
-        print("Waiting for RAG service", end="", flush=True)
+        print("Waiting for search service", end="", flush=True)
         try:
             while time.monotonic() < deadline:
                 if self._is_service_running():
@@ -260,7 +260,7 @@ class RagInstaller:
         """Execute the full install flow. Returns 0 on success."""
         gpu = self.detect_gpu()
 
-        print(f"RAG installer — GPU detected: {gpu}")
+        print(f"Search installer — GPU detected: {gpu}")
         print("Note: first run will download ~150MB of model data.")
 
         if not non_interactive:
@@ -271,7 +271,7 @@ class RagInstaller:
 
         # Warn if service already running
         if self._is_service_running():
-            print("Warning: RAG service is already running. Proceeding anyway.")
+            print("Warning: Search service is already running. Proceeding anyway.")
 
         # Dependencies
         missing = self.check_deps()
@@ -306,7 +306,7 @@ class RagInstaller:
             print("[4/5] Collections ready.")
 
         # Register and start service
-        print("[5/5] Starting RAG service ...")
+        print("[5/5] Starting search service ...")
         self.write_service_file()
         rc = self.load_service()
         if rc != 0:
@@ -317,10 +317,10 @@ class RagInstaller:
         if not self.dry_run:
             ready = self._wait_for_service()
             if not ready:
-                print(f"RAG service did not become ready within {_WAIT_FOR_SERVICE_TIMEOUT} seconds.")
+                print(f"Search service did not become ready within {_WAIT_FOR_SERVICE_TIMEOUT} seconds.")
                 return 1
 
-        print("RAG service installed and running successfully.")
+        print("Search service installed and running successfully.")
         return 0
 
     # ------------------------------------------------------------------
@@ -328,7 +328,7 @@ class RagInstaller:
     # ------------------------------------------------------------------
 
     def run_uninstall(self, delete_db: bool = False) -> int:
-        """Stop and unregister the RAG service. Optionally delete the database."""
+        """Stop and unregister the search service. Optionally delete the database."""
         rag_svc = get_search_service()
         rag_svc.stop(dry_run=self.dry_run)
         rag_svc.unregister(dry_run=self.dry_run)
@@ -338,7 +338,7 @@ class RagInstaller:
             if db_path.exists():
                 if not self.dry_run:
                     rmtree(db_path)
-                    print(f"Deleted RAG database at {db_path}.")
+                    print(f"Deleted search database at {db_path}.")
 
-        print("RAG service uninstalled. Remove [search] section from config.toml to disable.")
+        print("Search service uninstalled. Remove [search] section from config.toml to disable.")
         return 0

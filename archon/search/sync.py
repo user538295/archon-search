@@ -407,7 +407,7 @@ class RagCollectionSync:
                 force_full_reindex = True
             else:
                 logger.warning(
-                    "Chunk size mismatch for '%s' (indexed: %d, config: %d) — run `archon rag reindex` to update",
+                    "Chunk size mismatch for '%s' (indexed: %d, config: %d) — run `archon search reindex` to update",
                     name,
                     indexed_chunk_size,
                     self._chunk_size,

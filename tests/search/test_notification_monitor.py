@@ -128,7 +128,7 @@ class TestCheckAndNotify:
         state = _terminal_state(done=2, failed=0, trigger="install")
         monitor, store, bot = _make_monitor(state=state)
         await monitor._check_and_notify()
-        expected = "✅ RAG indexing complete — all 2 collection(s) ready."
+        expected = "✅ Search indexing complete — all 2 collection(s) ready."
         assert bot.send_message.call_count == 2
         bot.send_message.assert_any_call(111, expected, parse_mode="HTML")
         bot.send_message.assert_any_call(222, expected, parse_mode="HTML")
@@ -138,7 +138,7 @@ class TestCheckAndNotify:
         state = _terminal_state(done=1, failed=1, trigger="install")
         monitor, store, bot = _make_monitor(state=state)
         await monitor._check_and_notify()
-        expected = "⚠️ RAG indexing finished — 1 collection(s) failed. Run <code>archon rag status</code> for details."
+        expected = "⚠️ Search indexing finished — 1 collection(s) failed. Run <code>archon search status</code> for details."
         assert bot.send_message.call_count == 2
         bot.send_message.assert_any_call(111, expected, parse_mode="HTML")
         bot.send_message.assert_any_call(222, expected, parse_mode="HTML")
@@ -148,7 +148,7 @@ class TestCheckAndNotify:
         state = _terminal_state(done=0, failed=2, trigger="install")
         monitor, store, bot = _make_monitor(state=state)
         await monitor._check_and_notify()
-        expected = "❌ RAG indexing failed — no collections are ready. Run <code>archon rag status</code> for details."
+        expected = "❌ Search indexing failed — no collections are ready. Run <code>archon search status</code> for details."
         assert bot.send_message.call_count == 2
         bot.send_message.assert_any_call(111, expected, parse_mode="HTML")
         bot.send_message.assert_any_call(222, expected, parse_mode="HTML")
@@ -281,19 +281,19 @@ class TestBuildMessage:
         monitor = self._monitor()
         state = _terminal_state(done=3, failed=0)
         msg = monitor._build_message(state)
-        assert msg == "✅ RAG indexing complete — all 3 collection(s) ready."
+        assert msg == "✅ Search indexing complete — all 3 collection(s) ready."
 
     def test_build_message_partial_failure(self) -> None:
         monitor = self._monitor()
         state = _terminal_state(done=2, failed=1)
         msg = monitor._build_message(state)
-        assert msg == "⚠️ RAG indexing finished — 1 collection(s) failed. Run <code>archon rag status</code> for details."
+        assert msg == "⚠️ Search indexing finished — 1 collection(s) failed. Run <code>archon search status</code> for details."
 
     def test_build_message_total_failure(self) -> None:
         monitor = self._monitor()
         state = _terminal_state(done=0, failed=2)
         msg = monitor._build_message(state)
-        assert msg == "❌ RAG indexing failed — no collections are ready. Run <code>archon rag status</code> for details."
+        assert msg == "❌ Search indexing failed — no collections are ready. Run <code>archon search status</code> for details."
 
 
 class TestRunLoop:

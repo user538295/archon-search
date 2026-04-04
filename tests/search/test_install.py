@@ -1,4 +1,4 @@
-"""Tests for RagInstaller (Task 7.1) — TDD first (RED phase)."""
+"""Tests for SearchInstaller (Task 7.1) — TDD first (RED phase)."""
 from __future__ import annotations
 
 import asyncio
@@ -14,12 +14,12 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _make_rag_config(tmp_path: Path) -> object:
-    """Build a minimal RagConfig-like object for tests."""
+def _make_search_config(tmp_path: Path) -> object:
+    """Build a minimal SearchConfig-like object for tests."""
     from dataclasses import dataclass, field
 
     @dataclass
-    class FakeRagConfig:
+    class FakeSearchConfig:
         enabled: bool = True
         host: str = "localhost"
         port: int = 8282
@@ -32,7 +32,7 @@ def _make_rag_config(tmp_path: Path) -> object:
         chunk_size: int = 512
         collections: list[str] = field(default_factory=list)
 
-    return FakeRagConfig()
+    return FakeSearchConfig()
 
 
 def _make_full_config(tmp_path: Path) -> object:
@@ -44,7 +44,7 @@ def _make_full_config(tmp_path: Path) -> object:
         directory: str = str(tmp_path / "history")
 
     @dataclass
-    class FakeRagConfigInner:
+    class FakeSearchConfigInner:
         collections: list[str] = field(default_factory=list)
         pinned_collections: list[str] = field(default_factory=list)
         embedding_model: str = "BAAI/bge-small-en-v1.5"
@@ -54,19 +54,19 @@ def _make_full_config(tmp_path: Path) -> object:
     @dataclass
     class FakeFullConfig:
         history: FakeHistoryConfig = None  # type: ignore[assignment]
-        search: FakeRagConfigInner = None  # type: ignore[assignment]
+        search: FakeSearchConfigInner = None  # type: ignore[assignment]
 
         def __post_init__(self) -> None:
             self.history = FakeHistoryConfig()
-            self.search = FakeRagConfigInner()
+            self.search = FakeSearchConfigInner()
 
     return FakeFullConfig()
 
 
-class TestRagInstallerInit:
+class TestSearchInstallerInit:
     def test_init_succeeds_without_telegram_token(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """RagInstaller.__init__ must not require TELEGRAM_BOT_TOKEN — exercises real load_config path."""
-        from archon.search.install import RagInstaller
+        """SearchInstaller.__init__ must not require TELEGRAM_BOT_TOKEN — exercises real load_config path."""
+        from archon.search.install import SearchInstaller
         from archon.config.loader import load_config
 
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
@@ -78,31 +78,31 @@ class TestRagInstallerInit:
 
         with patch("archon.config.loader.load_config",
                    side_effect=lambda **kw: load_config(env_file=str(env_file), **kw)):
-            installer = RagInstaller(config_file=str(config_toml))
+            installer = SearchInstaller(config_file=str(config_toml))
 
         assert installer.cfg is not None
         assert installer._full_cfg.telegram_bot_token is None
 
     def test_default_config_file_path(self) -> None:
-        """RagInstaller default config_file must point to ~/.archon/config.toml."""
-        from archon.search.install import RagInstaller
+        """SearchInstaller default config_file must point to ~/.archon/config.toml."""
+        from archon.search.install import SearchInstaller
         from unittest.mock import MagicMock
 
         fake_cfg = MagicMock()
         fake_cfg.search = MagicMock()
         with patch("archon.config.loader.load_config", return_value=fake_cfg) as mock_load:
-            installer = RagInstaller()
+            installer = SearchInstaller()
         assert installer.config_file == str(Path.home() / ".archon" / "config.toml")
         mock_load.assert_called_once_with(config_file=str(Path.home() / ".archon" / "config.toml"), require_token=False)
 
 
 def _make_installer(tmp_path: Path, dry_run: bool = False) -> object:
-    """Create a RagInstaller with a fake config injected."""
-    from archon.search.install import RagInstaller
+    """Create a SearchInstaller with a fake config injected."""
+    from archon.search.install import SearchInstaller
 
-    installer = RagInstaller.__new__(RagInstaller)
+    installer = SearchInstaller.__new__(SearchInstaller)
     installer.dry_run = dry_run
-    installer.cfg = _make_rag_config(tmp_path)
+    installer.cfg = _make_search_config(tmp_path)
     installer._full_cfg = _make_full_config(tmp_path)
     installer.config_file = str(tmp_path / "config.toml")
     return installer
@@ -1118,7 +1118,7 @@ class TestWaitForService:
                 installer._wait_for_service()
 
         captured = capsys.readouterr()
-        assert "Waiting for RAG service" in captured.out
+        assert "Waiting for search service" in captured.out
         assert "\n" in captured.out
 
 
@@ -1220,7 +1220,7 @@ class TestRunServiceReadiness:
         mock_wait.assert_not_called()
 
     def test_dry_run_does_not_print_wait_for_service_output(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """dry_run=True must not print 'Waiting for RAG service' progress output."""
+        """dry_run=True must not print 'Waiting for search service' progress output."""
         installer = _make_installer(tmp_path, dry_run=True)
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
@@ -1234,7 +1234,7 @@ class TestRunServiceReadiness:
             installer.run(non_interactive=True)
 
         captured = capsys.readouterr()
-        assert "Waiting for RAG service" not in captured.out
+        assert "Waiting for search service" not in captured.out
 
     def test_validate_providers_returns_false_when_get_available_providers_raises(self, tmp_path: Path) -> None:
         """onnxruntime imports fine but get_available_providers() raises → False."""

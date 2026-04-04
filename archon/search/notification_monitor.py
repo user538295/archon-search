@@ -74,10 +74,10 @@ class IndexingNotificationMonitor:
         done = [name for name, cp in state.collections.items() if cp.status == IndexingStatus.DONE]
 
         if not failed:
-            return f"✅ RAG indexing complete — all {len(done)} collection(s) ready."
+            return f"✅ Search indexing complete — all {len(done)} collection(s) ready."
         if not done:
-            return "❌ RAG indexing failed — no collections are ready. Run <code>archon rag status</code> for details."
-        return f"⚠️ RAG indexing finished — {len(failed)} collection(s) failed. Run <code>archon rag status</code> for details."
+            return "❌ Search indexing failed — no collections are ready. Run <code>archon search status</code> for details."
+        return f"⚠️ Search indexing finished — {len(failed)} collection(s) failed. Run <code>archon search status</code> for details."
 
     async def _send_to_all(self, message: str) -> None:
         """Send message to all allowed_user_ids; log and continue on failure."""
@@ -96,4 +96,4 @@ class IndexingNotificationMonitor:
                     exc,
                 )
         if sent:
-            logger.info("IndexingNotificationMonitor: sent RAG completion notification to %d user(s)", sent)
+            logger.info("IndexingNotificationMonitor: sent search completion notification to %d user(s)", sent)
