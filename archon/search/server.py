@@ -21,12 +21,12 @@ from archon.search.sync import SearchCollectionSync, path_to_collection_name
 if TYPE_CHECKING:
     pass
 
-logger = logging.getLogger("archon.rag")
+logger = logging.getLogger("archon.search")
 
 
 def create_app(pipeline: SearchPipeline, default_collection: str) -> FastMCP:
     """Create a FastMCP app with 9 RAG tools registered."""
-    app = FastMCP("archon-rag")
+    app = FastMCP("archon-search")
 
     @app.tool()
     async def search(
