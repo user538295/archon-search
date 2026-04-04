@@ -3661,3 +3661,284 @@ class TestTask46:
         assert "newproject" in result2.unchanged
         assert "newproject" not in result2.updated
         pipeline2.ingest_file.assert_not_called()
+
+# ---------------------------------------------------------------------------
+# TestSyncCollectionMethod — FEAT-027 Phase 8 Task 8.4: watch-triggered sync
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDesiredPublic:
+    """Verify build_desired is accessible as a public method."""
+
+    def test_build_desired_public(self, tmp_path):
+        """build_desired (without leading underscore) is callable on RagCollectionSync."""
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline)
+
+        real_dir = tmp_path / "myproject"
+        real_dir.mkdir()
+
+        result = syncer.build_desired([str(real_dir)])
+        assert isinstance(result, dict)
+        assert "myproject" in result
+
+
+class TestSyncCollectionMethod:
+    """Tests for the public sync_collection() method (watch-triggered incremental sync)."""
+
+    def _make_syncer(self, tmp_path, *, with_state_store=True):
+        from archon.rag.progress import IndexingStateStore
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        state_store = IndexingStateStore(tmp_path / "state") if with_state_store else None
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+        return syncer, pipeline
+
+    @pytest.mark.asyncio
+    async def test_sync_collection_no_state_store(self, tmp_path):
+        """sync_collection returns without error when state_store is None; _check_collection_changes NOT called."""
+        from archon.rag.sync import RagCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline, state_store=None)
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+
+        with patch.object(syncer, "_check_collection_changes") as mock_check:
+            await syncer.sync_collection("myproject", col_dir)
+
+        mock_check.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sync_collection_no_changes(self, tmp_path):
+        """When _check_collection_changes returns no diffs, _apply_collection_changes is NOT called."""
+        from archon.rag.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        # Seed state so read() returns something
+        from archon.rag.progress import IndexingState
+        state_store.write(IndexingState(collections={
+            "myproject": CollectionProgress(status=IndexingStatus.DONE)
+        }))
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+
+        with patch.object(syncer, "_check_collection_changes", return_value=([], [], [])) as mock_check, \
+             patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock) as mock_apply:
+            await syncer.sync_collection("myproject", col_dir)
+
+        mock_check.assert_called_once()
+        mock_apply.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sync_collection_with_new_file(self, tmp_path):
+        """When new files detected, _apply_collection_changes is called with new_files."""
+        from archon.rag.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        new_file = Path("new.md")
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        state_store.write(IndexingState(collections={
+            "myproject": CollectionProgress(status=IndexingStatus.DONE)
+        }))
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+
+        with patch.object(syncer, "_check_collection_changes", return_value=([new_file], [], [])), \
+             patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock, return_value=None) as mock_apply:
+            await syncer.sync_collection("myproject", col_dir)
+
+        mock_apply.assert_called_once()
+        call_kwargs = mock_apply.call_args
+        # new_files is the 3rd positional arg (after name, source_path)
+        assert call_kwargs[0][2] == [new_file]
+
+    @pytest.mark.asyncio
+    async def test_sync_collection_with_deleted_file(self, tmp_path):
+        """When deleted paths detected, _apply_collection_changes is called with deleted_paths."""
+        from archon.rag.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        deleted = "/old/file.md"
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        state_store.write(IndexingState(collections={
+            "myproject": CollectionProgress(status=IndexingStatus.DONE)
+        }))
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+
+        with patch.object(syncer, "_check_collection_changes", return_value=([], [], [deleted])), \
+             patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock, return_value=None) as mock_apply:
+            await syncer.sync_collection("myproject", col_dir)
+
+        mock_apply.assert_called_once()
+        call_kwargs = mock_apply.call_args
+        # deleted_paths is the 5th positional arg (after name, source_path, new_files, changed_files)
+        assert call_kwargs[0][4] == [deleted]
+
+    @pytest.mark.asyncio
+    async def test_sync_collection_lock_respected(self, tmp_path):
+        """Only one sync_collection call runs at a time for the same collection name."""
+        import asyncio
+
+        from archon.rag.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        new_file = Path("new.md")
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        state_store.write(IndexingState(collections={
+            "myproject": CollectionProgress(status=IndexingStatus.DONE)
+        }))
+
+        pipeline = make_mock_pipeline(tmp_path)
+        pipeline.store.rebuild_fts_index = AsyncMock()
+        pipeline.store.delete_by_source_path = AsyncMock()
+        pipeline.ingest_file = AsyncMock()
+        pipeline.recompute_collection_meta = AsyncMock()
+
+        execution_log: list[str] = []
+        lock_event = asyncio.Event()
+
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+
+        # The mock acquires the per-collection lock itself (mimicking real _apply_collection_changes)
+        # so that concurrency is serialized via the same lock sync_collection uses.
+        async def slow_apply(name, source_path, new_files, changed_files, deleted_paths, file_mtimes):
+            async with syncer._get_lock(name):
+                execution_log.append("start")
+                lock_event.set()
+                await asyncio.sleep(0.02)
+                execution_log.append("end")
+            return None
+
+        with patch.object(syncer, "_check_collection_changes", return_value=([new_file], [], [])), \
+             patch.object(syncer, "_apply_collection_changes", side_effect=slow_apply):
+            task1 = asyncio.create_task(syncer.sync_collection("myproject", col_dir))
+            await lock_event.wait()  # wait until first call has started
+            task2 = asyncio.create_task(syncer.sync_collection("myproject", col_dir))
+            await asyncio.gather(task1, task2)
+
+        # Both ran, but they must be serialized (end before start for same lock)
+        assert len(execution_log) == 4
+        assert execution_log[1] == "end"
+        assert execution_log[2] == "start"
+
+    @pytest.mark.asyncio
+    async def test_sync_collection_state_read_returns_none(self, tmp_path):
+        """When state_store.read() returns None, sync_collection returns early without calling _check."""
+        from archon.rag.progress import IndexingStateStore
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        # Do NOT write any state — read() returns None
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+
+        with patch.object(syncer, "_check_collection_changes") as mock_check:
+            await syncer.sync_collection("myproject", col_dir)
+
+        mock_check.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sync_collection_apply_returns_error_logs_warning(self, tmp_path, caplog):
+        """When _apply_collection_changes returns a non-None string, a warning is logged."""
+        import logging
+
+        from archon.rag.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        state_store.write(IndexingState(collections={
+            "myproject": CollectionProgress(status=IndexingStatus.DONE)
+        }))
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+
+        with patch.object(syncer, "_check_collection_changes", return_value=([Path("new.md")], [], [])), \
+             patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock, return_value="partial failure") as mock_apply, \
+             caplog.at_level(logging.WARNING, logger="archon.rag.sync"):
+            await syncer.sync_collection("myproject", col_dir)
+
+        mock_apply.assert_called_once()
+        assert any("partial failure" in r.message for r in caplog.records if r.levelno == logging.WARNING)
+
+    @pytest.mark.asyncio
+    async def test_sync_collection_with_changed_file(self, tmp_path):
+        """When changed files detected, _apply_collection_changes is called with changed_files."""
+        from archon.rag.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        changed = Path("changed.md")
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        state_store.write(IndexingState(collections={
+            "myproject": CollectionProgress(status=IndexingStatus.DONE)
+        }))
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+
+        with patch.object(syncer, "_check_collection_changes", return_value=([], [changed], [])), \
+             patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock, return_value=None) as mock_apply:
+            await syncer.sync_collection("myproject", col_dir)
+
+        mock_apply.assert_called_once()
+        call_args = mock_apply.call_args[0]
+        # changed_files is the 4th positional arg
+        assert call_args[3] == [changed]
+
+    @pytest.mark.asyncio
+    async def test_sync_collection_collection_not_in_state_uses_defaults(self, tmp_path):
+        """When collection has no progress entry in state, defaults ('', 0) are used for model/chunk_size."""
+        from archon.rag.progress import IndexingState, IndexingStateStore
+        from archon.rag.sync import RagCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        # Write state without "myproject" entry
+        state_store.write(IndexingState(collections={}))
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = RagCollectionSync(pipeline, state_store=state_store)
+
+        with patch.object(syncer, "_check_collection_changes", return_value=([], [], [])) as mock_check, \
+             patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock):
+            await syncer.sync_collection("myproject", col_dir)
+
+        # Verify defaults were used: indexed_embedding_model="" and indexed_chunk_size=0
+        mock_check.assert_called_once()
+        _, kwargs = mock_check.call_args
+        assert kwargs.get("indexed_embedding_model") == ""
+        assert kwargs.get("indexed_chunk_size") == 0

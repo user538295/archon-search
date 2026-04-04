@@ -138,7 +138,7 @@ class RagCollectionSync:
         existing = {c.name for c in existing_info}
 
         # Step 1: build desired {name: resolved_path}
-        desired = self._build_desired(collections)
+        desired = self.build_desired(collections)
 
         # Step 3: load manifest
         managed_names = self._load_manifest_names(manifest_path)
@@ -254,6 +254,44 @@ class RagCollectionSync:
         self._write_manifest(manifest_path, new_manifest)
 
         return result
+
+    async def sync_collection(self, collection_name: str, source_path: Path) -> None:
+        """Perform a watch-triggered incremental sync for a single collection.
+
+        No-op if no state_store is configured (change detection requires it).
+        """
+        if self._state_store is None:
+            return
+
+        logger.info("Watch-triggered sync for collection %r", collection_name)
+
+        state = self._state_store.read()
+        if state is None:
+            return
+
+        file_mtimes = self._load_file_mtimes(collection_name, state=state)
+        cp = state.collections.get(collection_name)
+        indexed_embedding_model = cp.indexed_embedding_model if cp else ""
+        indexed_chunk_size = cp.indexed_chunk_size if cp else 0
+
+        new_f, changed_f, deleted_p = self._check_collection_changes(
+            collection_name,
+            source_path,
+            file_mtimes,
+            indexed_embedding_model=indexed_embedding_model,
+            indexed_chunk_size=indexed_chunk_size,
+        )
+
+        if new_f or changed_f or deleted_p:
+            result = await self._apply_collection_changes(
+                collection_name, source_path, new_f, changed_f, deleted_p, file_mtimes
+            )
+            if result is not None:
+                logger.warning(
+                    "Watch-triggered sync error for collection %r: %s", collection_name, result
+                )
+        else:
+            logger.debug("No changes detected for %r (watcher)", collection_name)
 
     # ------------------------------------------------------------------
     # State store helpers (all writes are safe — never abort sync)
@@ -772,7 +810,7 @@ class RagCollectionSync:
                 _LEGACY_COLLECTION,
             )
 
-    def _build_desired(self, collections: list[str]) -> dict[str, str]:
+    def build_desired(self, collections: list[str]) -> dict[str, str]:
         """Return {collection_name: resolved_path} with collision resolution."""
         if not collections:
             return {}
