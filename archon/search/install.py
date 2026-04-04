@@ -15,7 +15,7 @@ import tomlkit
 
 from archon.platform import get_rag_service, get_runtime
 from archon.platform.types import GpuType
-from archon.rag.pipeline import create_pipeline
+from archon.search.pipeline import create_pipeline
 
 if TYPE_CHECKING:
     from archon.config.loader import Config, RagConfig
@@ -202,8 +202,8 @@ class RagInstaller:
 
     async def _bootstrap_collections(self) -> None:
         """Sync configured collections into the RAG store."""
-        from archon.rag.progress import IndexingStateStore  # noqa: PLC0415
-        from archon.rag.sync import RagCollectionSync  # noqa: PLC0415
+        from archon.search.progress import IndexingStateStore  # noqa: PLC0415
+        from archon.search.sync import RagCollectionSync  # noqa: PLC0415
 
         pipeline = create_pipeline(self.cfg)
         try:

@@ -5,7 +5,7 @@ import asyncio
 import threading
 from typing import Any, Protocol, runtime_checkable
 
-from archon.rag._types import SearchResult
+from archon.search._types import SearchResult
 
 
 @runtime_checkable

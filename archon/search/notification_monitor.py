@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from archon.config.loader import NotificationsConfig
-from archon.rag.progress import IndexingState, IndexingStateStore, IndexingStatus
+from archon.search.progress import IndexingState, IndexingStateStore, IndexingStatus
 
 if TYPE_CHECKING:
     from aiogram import Bot

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from archon.rag._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
+from archon.search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
 
 if TYPE_CHECKING:
     import lancedb
@@ -184,7 +184,7 @@ class RagStore:
 
     @staticmethod
     def _row_to_meta(row: "dict[str, Any]") -> "CollectionMeta":
-        from archon.rag.collection_meta import CollectionMeta  # noqa: PLC0415
+        from archon.search.collection_meta import CollectionMeta  # noqa: PLC0415
 
         try:
             centroid = json.loads(row["centroid_json"]) if row["centroid_json"] else None

@@ -14,8 +14,8 @@ from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from archon.rag.pipeline import RagPipeline
-    from archon.rag.progress import CollectionProgress, IndexingState, IndexingStateStore
+    from archon.search.pipeline import RagPipeline
+    from archon.search.progress import CollectionProgress, IndexingState, IndexingStateStore
 
 logger = logging.getLogger("archon")
 
@@ -120,7 +120,7 @@ class RagCollectionSync:
         7. Unchanged = existing ∩ desired.
         8. Update manifest atomically.
         """
-        from archon.rag.progress import CollectionProgress, IndexingStatus
+        from archon.search.progress import CollectionProgress, IndexingStatus
 
         result = SyncResult()
         store = self._pipeline.store
@@ -320,7 +320,7 @@ class RagCollectionSync:
         if self._state_store is None:
             return
         try:
-            from archon.rag.progress import CollectionProgress, IndexingStatus
+            from archon.search.progress import CollectionProgress, IndexingStatus
 
             state = self._state_store.read()
             if state is None:
@@ -447,9 +447,9 @@ class RagCollectionSync:
         """Return sorted list of eligible files under path, applying the standard filter.
 
         Excludes: symlinks, non-files, hidden path components (starting with '.'),
-        and binary extensions (as defined in archon.rag.pipeline._BINARY_EXTENSIONS).
+        and binary extensions (as defined in archon.search.pipeline._BINARY_EXTENSIONS).
         """
-        from archon.rag.pipeline import _BINARY_EXTENSIONS
+        from archon.search.pipeline import _BINARY_EXTENSIONS
 
         result: list[Path] = []
         for file_path in path.glob("**/*"):
@@ -607,7 +607,7 @@ class RagCollectionSync:
 
         Returns None on success, an error string on failure.
         """
-        from archon.rag.progress import CollectionProgress, IndexingStatus
+        from archon.search.progress import CollectionProgress, IndexingStatus
 
         async with self._get_lock(name):
             # Read current state and get processed_paths

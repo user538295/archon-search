@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from archon.rag._types import ChunkRecord
+from archon.search._types import ChunkRecord
 
 
 class DocumentChunker:

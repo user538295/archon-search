@@ -1,7 +1,7 @@
 """FastMCP HTTP server for Archon RAG (FEAT-019 Task 5.1).
 
 Usage:
-    python -m archon.rag.server
+    python -m archon.search.server
 """
 from __future__ import annotations
 
@@ -14,9 +14,9 @@ from fastmcp import Context, FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from archon.rag.pipeline import RagPipeline, create_pipeline
-from archon.rag.progress import IndexingStateStore
-from archon.rag.sync import RagCollectionSync, path_to_collection_name
+from archon.search.pipeline import RagPipeline, create_pipeline
+from archon.search.progress import IndexingStateStore
+from archon.search.sync import RagCollectionSync, path_to_collection_name
 
 if TYPE_CHECKING:
     pass
@@ -225,7 +225,7 @@ async def main() -> None:
 
     watcher_manager = None
     if cfg.rag.watch:
-        from archon.rag.watcher import WatcherManager  # lazy import — watchdog may not be installed
+        from archon.search.watcher import WatcherManager  # lazy import — watchdog may not be installed
         desired = sync.build_desired(cfg.rag.collections)
         loop = asyncio.get_running_loop()
 

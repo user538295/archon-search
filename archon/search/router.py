@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from archon.rag.collection_meta import CollectionMeta
+from archon.search.collection_meta import CollectionMeta
 
 if TYPE_CHECKING:
-    from archon.rag.embedder import Embedder
+    from archon.search.embedder import Embedder
 
 logger = logging.getLogger("archon")
 
