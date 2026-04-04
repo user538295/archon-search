@@ -78,7 +78,7 @@ class IndexingStateStore:
     """Persistent store for IndexingState, backed by a JSON file with atomic writes.
 
     Note: concurrent callers must provide external synchronization. This class is not
-    thread-safe on its own — locks live at RagCollectionSync level, not here.
+    thread-safe on its own — locks live at SearchCollectionSync level, not here.
     """
 
     def __init__(self, state_dir: Path) -> None:

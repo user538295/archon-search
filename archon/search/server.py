@@ -16,7 +16,7 @@ from starlette.responses import JSONResponse
 
 from archon.search.pipeline import SearchPipeline, create_pipeline
 from archon.search.progress import IndexingStateStore
-from archon.search.sync import RagCollectionSync, path_to_collection_name
+from archon.search.sync import SearchCollectionSync, path_to_collection_name
 
 if TYPE_CHECKING:
     pass
@@ -192,7 +192,7 @@ async def main() -> None:
 
     # Startup sync
     state_store = IndexingStateStore(Path(cfg.search.db_path))
-    sync = RagCollectionSync(
+    sync = SearchCollectionSync(
         pipeline,
         state_store=state_store,
         pinned_collections=cfg.search.pinned_collections,

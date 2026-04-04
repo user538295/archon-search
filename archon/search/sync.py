@@ -34,7 +34,7 @@ def path_to_collection_name(path: str) -> str:
     - Fall back to ``"collection"`` if the result is empty.
 
     This function is collision-unaware by design.  Collision resolution is
-    applied in :class:`RagCollectionSync`.
+    applied in :class:`SearchCollectionSync`.
     """
     resolved = Path(path).expanduser().resolve()
     name = resolved.name.lower()
@@ -82,7 +82,7 @@ def manifest_remove_entry(manifest_path: Path, col_name: str) -> None:
         pass
 
 
-class RagCollectionSync:
+class SearchCollectionSync:
     """Synchronises LanceDB collections with a declarative list of filesystem paths."""
 
     def __init__(

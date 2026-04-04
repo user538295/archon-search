@@ -462,7 +462,7 @@ class TestBootstrapCollections:
         mock_sync = AsyncMock(side_effect=lambda *a, **kw: (call_order.append("sync"), mock_sync_result)[1])
 
         with patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync:
+             patch("archon.search.sync.SearchCollectionSync") as MockSync:
             MockSync.return_value.sync = mock_sync
             asyncio.run(installer._bootstrap_collections())
 
@@ -480,7 +480,7 @@ class TestBootstrapCollections:
         mock_pipeline.store = mock_store
 
         with patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync:
+             patch("archon.search.sync.SearchCollectionSync") as MockSync:
             MockSync.return_value.sync = AsyncMock(side_effect=RuntimeError("boom"))
             with pytest.raises(RuntimeError, match="boom"):
                 asyncio.run(installer._bootstrap_collections())
@@ -488,7 +488,7 @@ class TestBootstrapCollections:
         mock_store.disconnect.assert_called_once()
 
     def test_bootstrap_collections_passes_config_params(self, tmp_path: Path) -> None:
-        """RagCollectionSync must receive embedding_model, chunk_size, auto_reindex_on_chunk_size_change."""
+        """SearchCollectionSync must receive embedding_model, chunk_size, auto_reindex_on_chunk_size_change."""
         installer = _make_installer(tmp_path)
 
         mock_store = AsyncMock()
@@ -496,7 +496,7 @@ class TestBootstrapCollections:
         mock_pipeline.store = mock_store
 
         with patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync:
+             patch("archon.search.sync.SearchCollectionSync") as MockSync:
             MockSync.return_value.sync = AsyncMock()
             asyncio.run(installer._bootstrap_collections())
 
@@ -554,7 +554,7 @@ class TestRun:
 
         with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync, \
+             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -579,7 +579,7 @@ class TestRun:
 
         with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync, \
+             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -604,7 +604,7 @@ class TestRun:
 
         with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync, \
+             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -638,7 +638,7 @@ class TestRun:
 
         with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync, \
+             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -668,7 +668,7 @@ class TestRun:
 
         with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync, \
+             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -698,7 +698,7 @@ class TestRun:
 
         with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync, \
+             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -728,7 +728,7 @@ class TestRun:
 
         with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync, \
+             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -758,7 +758,7 @@ class TestRun:
 
         with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync, \
+             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=["lancedb"]), \
              patch.object(installer, "install_deps"), \
@@ -788,7 +788,7 @@ class TestRun:
 
         with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.RagCollectionSync") as MockSync, \
+             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=["lancedb"]), \
              patch.object(installer, "install_deps"), \
