@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import tomlkit
 
-from archon.platform import get_rag_service, get_runtime
+from archon.platform import get_search_service, get_runtime
 from archon.platform.types import GpuType
 from archon.search.pipeline import create_pipeline
 
@@ -185,16 +185,16 @@ class RagInstaller:
     # ------------------------------------------------------------------
 
     def write_service_file(self) -> None:
-        """Delegate to get_rag_service().register()."""
-        get_rag_service().register(dry_run=self.dry_run)
+        """Delegate to get_search_service().register()."""
+        get_search_service().register(dry_run=self.dry_run)
 
     def load_service(self) -> int:
-        """Delegate to get_rag_service().start()."""
-        return get_rag_service().start(dry_run=self.dry_run)
+        """Delegate to get_search_service().start()."""
+        return get_search_service().start(dry_run=self.dry_run)
 
     def unload_service(self) -> int:
-        """Delegate to get_rag_service().stop()."""
-        return get_rag_service().stop(dry_run=self.dry_run)
+        """Delegate to get_search_service().stop()."""
+        return get_search_service().stop(dry_run=self.dry_run)
 
     # ------------------------------------------------------------------
     # History collection bootstrap
@@ -329,7 +329,7 @@ class RagInstaller:
 
     def run_uninstall(self, delete_db: bool = False) -> int:
         """Stop and unregister the RAG service. Optionally delete the database."""
-        rag_svc = get_rag_service()
+        rag_svc = get_search_service()
         rag_svc.stop(dry_run=self.dry_run)
         rag_svc.unregister(dry_run=self.dry_run)
 

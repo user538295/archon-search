@@ -426,7 +426,7 @@ class TestServiceDelegation:
         installer = _make_installer(tmp_path)
         svc = self._mock_rag_service()
 
-        with patch("archon.search.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_search_service", return_value=svc):
             installer.write_service_file()
 
         svc.register.assert_called_once_with(dry_run=False)
@@ -435,7 +435,7 @@ class TestServiceDelegation:
         installer = _make_installer(tmp_path, dry_run=True)
         svc = self._mock_rag_service()
 
-        with patch("archon.search.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_search_service", return_value=svc):
             installer.write_service_file()
 
         svc.register.assert_called_once_with(dry_run=True)
@@ -518,7 +518,7 @@ class TestRun:
         svc.register.return_value = 0
         svc.start.return_value = 0
         return {
-            "archon.search.install.get_rag_service": MagicMock(return_value=svc),
+            "archon.search.install.get_search_service": MagicMock(return_value=svc),
             "archon.search.install.create_pipeline": MagicMock(
                 return_value=MagicMock(
                     store=AsyncMock(),
@@ -552,7 +552,7 @@ class TestRun:
 
         mock_sync = AsyncMock(return_value=MagicMock())
 
-        with patch("archon.search.install.get_rag_service", return_value=svc), \
+        with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
              patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
@@ -577,7 +577,7 @@ class TestRun:
         mock_store = AsyncMock()
         mock_pipeline.store = mock_store
 
-        with patch("archon.search.install.get_rag_service", return_value=svc), \
+        with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
              patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
@@ -602,7 +602,7 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_rag_service", return_value=svc), \
+        with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
              patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
@@ -636,7 +636,7 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_rag_service", return_value=svc), \
+        with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
              patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
@@ -666,7 +666,7 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_rag_service", return_value=svc), \
+        with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
              patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
@@ -696,7 +696,7 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_rag_service", return_value=svc), \
+        with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
              patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
@@ -726,7 +726,7 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_rag_service", return_value=svc), \
+        with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
              patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
@@ -756,7 +756,7 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_rag_service", return_value=svc), \
+        with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
              patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
@@ -786,7 +786,7 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_rag_service", return_value=svc), \
+        with patch("archon.search.install.get_search_service", return_value=svc), \
              patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
              patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
@@ -820,7 +820,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -837,7 +837,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
@@ -853,7 +853,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -870,7 +870,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
@@ -1425,7 +1425,7 @@ class TestLoadUnloadService:
         svc = MagicMock()
         svc.start.return_value = 0
 
-        with patch("archon.search.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_search_service", return_value=svc):
             rc = installer.load_service()
 
         assert rc == 0
@@ -1437,7 +1437,7 @@ class TestLoadUnloadService:
         svc = MagicMock()
         svc.stop.return_value = 0
 
-        with patch("archon.search.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_search_service", return_value=svc):
             rc = installer.unload_service()
 
         assert rc == 0
