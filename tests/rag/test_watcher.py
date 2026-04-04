@@ -373,6 +373,240 @@ class TestCollectionWatcher:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# WatcherManager tests
+# ---------------------------------------------------------------------------
+
+
+class TestWatcherManager:
+    def test_watcher_manager_add_starts_watcher(self, tmp_path: Path):
+        """add(name, path) starts the CollectionWatcher; is_watching returns True."""
+        loop = asyncio.new_event_loop()
+
+        async def _on_change(col: str) -> None:
+            pass
+
+        mock_watcher = MagicMock()
+        mock_watcher.is_alive.return_value = True
+
+        with patch("archon.rag.watcher.CollectionWatcher", return_value=mock_watcher) as mock_cls:
+            from archon.rag.watcher import WatcherManager
+
+            mgr = WatcherManager(on_change=_on_change, loop=loop, debounce_seconds=5.0)
+            mgr.add("col1", tmp_path)
+
+            mock_cls.assert_called_once()
+            mock_watcher.start.assert_called_once()
+            assert mgr.is_watching("col1") is True
+
+        loop.close()
+
+    def test_watcher_manager_add_is_idempotent(self, tmp_path: Path):
+        """add(name, path) called twice only creates and starts one CollectionWatcher."""
+        loop = asyncio.new_event_loop()
+
+        async def _on_change(col: str) -> None:
+            pass
+
+        mock_watcher = MagicMock()
+        mock_watcher.is_alive.return_value = True
+
+        with patch("archon.rag.watcher.CollectionWatcher", return_value=mock_watcher) as mock_cls:
+            from archon.rag.watcher import WatcherManager
+
+            mgr = WatcherManager(on_change=_on_change, loop=loop, debounce_seconds=5.0)
+            mgr.add("col1", tmp_path)
+            mgr.add("col1", tmp_path)  # second call must be a no-op
+
+            mock_cls.assert_called_once()
+            mock_watcher.start.assert_called_once()
+
+        loop.close()
+
+    @pytest.mark.asyncio
+    async def test_watcher_manager_stop_all(self, tmp_path: Path):
+        """stop_all() calls stop() on all watchers and clears watching_names()."""
+        loop = asyncio.get_event_loop()
+
+        async def _on_change(col: str) -> None:
+            pass
+
+        mock_watcher1 = MagicMock()
+        mock_watcher1.is_alive.return_value = False
+        mock_watcher2 = MagicMock()
+        mock_watcher2.is_alive.return_value = False
+
+        watchers = [mock_watcher1, mock_watcher2]
+
+        with patch("archon.rag.watcher.CollectionWatcher", side_effect=watchers):
+            from archon.rag.watcher import WatcherManager
+
+            mgr = WatcherManager(on_change=_on_change, loop=loop, debounce_seconds=5.0)
+            mgr.add("col1", tmp_path)
+            mgr.add("col2", tmp_path)
+
+            await mgr.stop_all()
+
+            mock_watcher1.stop.assert_called_once()
+            mock_watcher2.stop.assert_called_once()
+            assert mgr.watching_names() == set()
+
+    def test_watcher_manager_watching_names(self, tmp_path: Path):
+        """watching_names() returns only collection names whose watcher is_alive()."""
+        loop = asyncio.new_event_loop()
+
+        async def _on_change(col: str) -> None:
+            pass
+
+        mock_alive = MagicMock()
+        mock_alive.is_alive.return_value = True
+        mock_dead = MagicMock()
+        mock_dead.is_alive.return_value = False
+
+        with patch("archon.rag.watcher.CollectionWatcher", side_effect=[mock_alive, mock_dead]):
+            from archon.rag.watcher import WatcherManager
+
+            mgr = WatcherManager(on_change=_on_change, loop=loop, debounce_seconds=5.0)
+            mgr.add("live_col", tmp_path)
+            mgr.add("dead_col", tmp_path)
+
+            assert mgr.watching_names() == {"live_col"}
+
+        loop.close()
+
+
+    @pytest.mark.asyncio
+    async def test_wrapped_callback_shutdown_guard(self, tmp_path):
+        """_wrapped_callback returns without calling on_change when _shutting_down=True."""
+        calls = []
+        async def _on_change(col): calls.append(col)
+        loop = asyncio.get_event_loop()
+        from archon.rag.watcher import WatcherManager
+        mgr = WatcherManager(on_change=_on_change, loop=loop)
+        mgr._shutting_down = True
+        await mgr._wrapped_callback("col1")
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_wrapped_callback_swallows_on_change_exception(self, tmp_path, caplog):
+        """_wrapped_callback logs errors from on_change and does not propagate them; _active_syncs is empty after."""
+        async def _failing_on_change(col): raise RuntimeError("sync failed")
+        loop = asyncio.get_event_loop()
+        from archon.rag.watcher import WatcherManager
+        mgr = WatcherManager(on_change=_failing_on_change, loop=loop)
+        with caplog.at_level(logging.ERROR, logger="archon"):
+            await mgr._wrapped_callback("col1")  # must not raise
+        assert any("sync failed" in r.message or "RuntimeError" in r.message for r in caplog.records if r.levelno == logging.ERROR)
+        assert len(mgr._active_syncs) == 0
+
+    @pytest.mark.asyncio
+    async def test_wrapped_callback_tracks_active_syncs(self, tmp_path):
+        """_wrapped_callback adds task to _active_syncs and removes it on completion."""
+        import asyncio
+        syncing = asyncio.Event()
+        proceed = asyncio.Event()
+
+        async def _slow_on_change(col):
+            syncing.set()
+            await proceed.wait()
+
+        loop = asyncio.get_event_loop()
+        from archon.rag.watcher import WatcherManager
+        mgr = WatcherManager(on_change=_slow_on_change, loop=loop)
+
+        # Start callback but don't let it finish yet
+        cb_task = asyncio.create_task(mgr._wrapped_callback("col1"))
+        await syncing.wait()  # wait until on_change has started
+        assert len(mgr._active_syncs) == 1  # task in flight
+
+        proceed.set()  # let on_change finish
+        await cb_task
+        assert len(mgr._active_syncs) == 0  # cleaned up
+
+    def test_add_during_shutdown_is_noop(self, tmp_path):
+        """add() is a no-op when _shutting_down=True."""
+        async def _on_change(col): pass
+        loop = asyncio.new_event_loop()
+        from archon.rag.watcher import WatcherManager
+        mgr = WatcherManager(on_change=_on_change, loop=loop)
+        mgr._shutting_down = True
+        with patch("archon.rag.watcher.CollectionWatcher") as mock_cls:
+            mgr.add("col1", tmp_path)
+            mock_cls.assert_not_called()
+        assert "col1" not in mgr._watchers
+        loop.close()
+
+    @pytest.mark.asyncio
+    async def test_stop_all_empty_manager(self):
+        """stop_all() on a manager with no watchers does not raise."""
+        async def _on_change(col): pass
+        loop = asyncio.get_event_loop()
+        from archon.rag.watcher import WatcherManager
+        mgr = WatcherManager(on_change=_on_change, loop=loop)
+        await mgr.stop_all()  # must not raise
+        assert mgr.watching_names() == set()
+
+    def test_is_watching_unknown_name_returns_false(self, tmp_path):
+        """is_watching() returns False for a name not in _watchers."""
+        async def _on_change(col): pass
+        loop = asyncio.new_event_loop()
+        from archon.rag.watcher import WatcherManager
+        mgr = WatcherManager(on_change=_on_change, loop=loop)
+        assert mgr.is_watching("nonexistent") is False
+        loop.close()
+
+    def test_watching_names_all_dead_returns_empty(self, tmp_path):
+        """watching_names() returns empty set when all watchers are dead."""
+        async def _on_change(col): pass
+        loop = asyncio.new_event_loop()
+        mock_dead1 = MagicMock()
+        mock_dead1.is_alive.return_value = False
+        mock_dead2 = MagicMock()
+        mock_dead2.is_alive.return_value = False
+        with patch("archon.rag.watcher.CollectionWatcher", side_effect=[mock_dead1, mock_dead2]):
+            from archon.rag.watcher import WatcherManager
+            mgr = WatcherManager(on_change=_on_change, loop=loop)
+            mgr.add("col1", tmp_path)
+            mgr.add("col2", tmp_path)
+        assert mgr.watching_names() == set()
+        loop.close()
+
+    @pytest.mark.asyncio
+    async def test_stop_all_cancels_active_syncs(self, tmp_path: Path):
+        """stop_all() cancels in-flight sync tasks that exceed the timeout."""
+        syncing = asyncio.Event()
+
+        async def _slow_on_change(col: str) -> None:
+            syncing.set()
+            await asyncio.sleep(60)  # simulate long-running sync
+
+        loop = asyncio.get_event_loop()
+        from archon.rag.watcher import WatcherManager
+
+        mgr = WatcherManager(on_change=_slow_on_change, loop=loop)
+        # Directly invoke _wrapped_callback to populate _active_syncs
+        cb_task = asyncio.create_task(mgr._wrapped_callback("col1"))
+        await syncing.wait()  # sync is in-flight
+        assert len(mgr._active_syncs) == 1
+
+        # stop_all with a very short timeout — forces the cancel path
+        import unittest.mock
+        with unittest.mock.patch.object(type(mgr), "stop_all", wraps=mgr.stop_all):
+            # Patch asyncio.wait to use timeout=0.01 for speed
+            original_wait = asyncio.wait
+
+            async def fast_wait(fs, *, timeout=None):
+                return await original_wait(fs, timeout=0.01)
+
+            with unittest.mock.patch("archon.rag.watcher.asyncio.wait", fast_wait):
+                await mgr.stop_all()
+
+        # All active syncs must be cleared after stop_all
+        assert len(mgr._active_syncs) == 0
+        # The cb_task should be done (cancelled)
+        assert cb_task.done()
+
+
 @pytest.mark.integration
 def test_collection_watcher_integration(tmp_path: Path):
     """Real watcher: write a file, verify on_change is called within 0.5s."""

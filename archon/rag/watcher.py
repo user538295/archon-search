@@ -205,3 +205,76 @@ class CollectionWatcher:
     def is_alive(self) -> bool:
         """Return True if the observer thread is running."""
         return self._observer is not None and self._observer.is_alive()  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# WatcherManager
+# ---------------------------------------------------------------------------
+
+
+class WatcherManager:
+    """Manages multiple CollectionWatchers and their lifecycle."""
+
+    def __init__(
+        self,
+        on_change: Callable[[str], Coroutine],
+        loop: asyncio.AbstractEventLoop,
+        debounce_seconds: float = 5.0,
+    ) -> None:
+        self._on_change = on_change
+        self._loop = loop
+        self._debounce_seconds = debounce_seconds
+        self._watchers: dict[str, CollectionWatcher] = {}
+        self._active_syncs: set[asyncio.Task[None]] = set()
+        self._shutting_down: bool = False
+
+        async def _wrapped_callback(col_name: str) -> None:
+            if self._shutting_down:
+                return
+            task: asyncio.Task[None] = asyncio.create_task(on_change(col_name))
+            self._active_syncs.add(task)
+            try:
+                await task
+            except Exception as exc:
+                _log.error("Watch-triggered sync for %r raised: %r", col_name, exc)
+            finally:
+                self._active_syncs.discard(task)
+
+        self._wrapped_callback = _wrapped_callback
+
+    def add(self, collection_name: str, source_path: Path) -> None:
+        """Start watching *source_path* for *collection_name*. No-op if already watching."""
+        if self._shutting_down:
+            return
+        if collection_name in self._watchers:
+            return
+        watcher = CollectionWatcher(
+            collection_name,
+            source_path,
+            self._wrapped_callback,
+            self._loop,
+            self._debounce_seconds,
+        )
+        watcher.start()
+        self._watchers[collection_name] = watcher
+
+    async def stop_all(self) -> None:
+        """Stop all watchers and wait for in-flight syncs to complete."""
+        self._shutting_down = True
+        await asyncio.gather(*(asyncio.to_thread(w.stop) for w in self._watchers.values()))
+        if self._active_syncs:
+            _, pending = await asyncio.wait(self._active_syncs, timeout=10.0)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        self._watchers.clear()
+
+    def is_watching(self, collection_name: str) -> bool:
+        """Return True if *collection_name* has a live watcher."""
+        watcher = self._watchers.get(collection_name)
+        return watcher is not None and watcher.is_alive()
+
+    def watching_names(self) -> set[str]:
+        """Return the set of collection names with live watchers."""
+        return {name for name, w in self._watchers.items() if w.is_alive()}
