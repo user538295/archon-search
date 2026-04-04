@@ -18,7 +18,7 @@ from archon.platform.types import GpuType
 from archon.search.pipeline import create_pipeline
 
 if TYPE_CHECKING:
-    from archon.config.loader import Config, RagConfig
+    from archon.config.loader import Config, SearchConfig
 
 logger = logging.getLogger("archon")
 
@@ -36,7 +36,7 @@ class RagInstaller:
         # Load config — token not required; RAG commands are independent of the Telegram bot
         from archon.config.loader import load_config
         cfg = load_config(config_file=self.config_file, require_token=False)
-        self.cfg: RagConfig = cfg.rag
+        self.cfg: SearchConfig = cfg.search
         self._full_cfg: Config = cfg
 
     # ------------------------------------------------------------------
@@ -136,7 +136,7 @@ class RagInstaller:
     # ------------------------------------------------------------------
 
     def configure_providers(self, gpu: GpuType) -> None:
-        """Write providers list to [rag] section via tomlkit based on gpu type.
+        """Write providers list to [search] section via tomlkit based on gpu type.
 
         - "cuda": write ["CUDAExecutionProvider"]
         - "apple_silicon": write ["CoreMLExecutionProvider"]
@@ -157,15 +157,15 @@ class RagInstaller:
             return
 
         doc = tomlkit.parse(config_path.read_text())
-        if "rag" not in doc:
-            doc["rag"] = tomlkit.table()
+        if "search" not in doc:
+            doc["search"] = tomlkit.table()
 
-        rag_section = doc["rag"]
-        if isinstance(rag_section, dict):
-            existing_providers = rag_section.get("providers", [])
+        search_section = doc["search"]
+        if isinstance(search_section, dict):
+            existing_providers = search_section.get("providers", [])
             if target_provider in existing_providers:
                 return  # already set — skip to preserve user-extended chains
-            rag_section["providers"] = [target_provider]
+            search_section["providers"] = [target_provider]
 
         config_path.write_text(tomlkit.dumps(doc))
 
@@ -212,12 +212,12 @@ class RagInstaller:
             sync = RagCollectionSync(
                 pipeline,
                 state_store=state_store,
-                pinned_collections=self._full_cfg.rag.pinned_collections,
-                embedding_model=self._full_cfg.rag.embedding_model,
-                chunk_size=self._full_cfg.rag.chunk_size,
-                auto_reindex_on_chunk_size_change=self._full_cfg.rag.auto_reindex_on_chunk_size_change,
+                pinned_collections=self._full_cfg.search.pinned_collections,
+                embedding_model=self._full_cfg.search.embedding_model,
+                chunk_size=self._full_cfg.search.chunk_size,
+                auto_reindex_on_chunk_size_change=self._full_cfg.search.auto_reindex_on_chunk_size_change,
             )
-            await sync.sync(self._full_cfg.rag.collections)
+            await sync.sync(self._full_cfg.search.collections)
         finally:
             await pipeline.store.disconnect()
 
@@ -340,5 +340,5 @@ class RagInstaller:
                     rmtree(db_path)
                     print(f"Deleted RAG database at {db_path}.")
 
-        print("RAG service uninstalled. Remove [rag] section from config.toml to disable.")
+        print("RAG service uninstalled. Remove [search] section from config.toml to disable.")
         return 0

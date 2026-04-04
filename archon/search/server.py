@@ -187,30 +187,30 @@ async def main() -> None:
     history_col = path_to_collection_name(
         str(Path(cfg.history.directory).expanduser() / "sessions")
     )
-    pipeline = create_pipeline(cfg.rag)
+    pipeline = create_pipeline(cfg.search)
     await pipeline.store.connect()
 
     # Startup sync
-    state_store = IndexingStateStore(Path(cfg.rag.db_path))
+    state_store = IndexingStateStore(Path(cfg.search.db_path))
     sync = RagCollectionSync(
         pipeline,
         state_store=state_store,
-        pinned_collections=cfg.rag.pinned_collections,
-        embedding_model=cfg.rag.embedding_model,
-        chunk_size=cfg.rag.chunk_size,
-        auto_reindex_on_chunk_size_change=cfg.rag.auto_reindex_on_chunk_size_change,
+        pinned_collections=cfg.search.pinned_collections,
+        embedding_model=cfg.search.embedding_model,
+        chunk_size=cfg.search.chunk_size,
+        auto_reindex_on_chunk_size_change=cfg.search.auto_reindex_on_chunk_size_change,
     )
     try:
         state_store.set_trigger("install")
     except Exception as exc:
         logger.warning("Startup sync: failed to write install trigger (notification may not fire): %s", exc)
-    sync_timeout = cfg.rag.sync_timeout_seconds
+    sync_timeout = cfg.search.sync_timeout_seconds
     if sync_timeout == 0:
-        asyncio.create_task(sync.sync(cfg.rag.collections))
+        asyncio.create_task(sync.sync(cfg.search.collections))
         logger.info("Startup sync deferred to background task (sync_timeout_seconds=0).")
     else:
         try:
-            result = await asyncio.wait_for(sync.sync(cfg.rag.collections), timeout=sync_timeout)
+            result = await asyncio.wait_for(sync.sync(cfg.search.collections), timeout=sync_timeout)
             logger.info(
                 "Startup sync complete: %d added, %d removed, %d unchanged, %d errors.",
                 len(result.added), len(result.removed), len(result.unchanged), len(result.errors),
@@ -221,12 +221,12 @@ async def main() -> None:
             logger.warning(
                 "Startup sync timed out after %ds — continuing in background.", sync_timeout
             )
-            asyncio.create_task(sync.sync(cfg.rag.collections))
+            asyncio.create_task(sync.sync(cfg.search.collections))
 
     watcher_manager = None
-    if cfg.rag.watch:
+    if cfg.search.watch:
         from archon.search.watcher import WatcherManager  # lazy import — watchdog may not be installed
-        desired = sync.build_desired(cfg.rag.collections)
+        desired = sync.build_desired(cfg.search.collections)
         loop = asyncio.get_running_loop()
 
         async def _on_change(col_name: str) -> None:
@@ -248,7 +248,7 @@ async def main() -> None:
     app = create_app(pipeline, history_col)
 
     try:
-        await app.run_http_async(host=cfg.rag.host, port=cfg.rag.port)
+        await app.run_http_async(host=cfg.search.host, port=cfg.search.port)
     finally:
         if watcher_manager is not None:
             try:

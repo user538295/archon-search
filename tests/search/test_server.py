@@ -381,7 +381,7 @@ async def test_server_error_serialization_through_mcp_transport(
 @pytest.mark.asyncio
 async def test_server_main_wires_all_components() -> None:
     """main() calls store.connect() and app.run_http_async with correct host/port."""
-    from archon.config.loader import RagConfig
+    from archon.config.loader import SearchConfig
     from archon.search.server import main
     from archon.search.sync import SyncResult
 
@@ -396,7 +396,7 @@ async def test_server_main_wires_all_components() -> None:
     mock_app.run_http_async = AsyncMock()
 
     mock_cfg = MagicMock()
-    mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5)
+    mock_cfg.search = SearchConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5)
     mock_cfg.history.directory = "/tmp/history"
 
     mock_sync_result = SyncResult(added=[], removed=[], unchanged=[], errors=[], skipped=[])
@@ -427,7 +427,7 @@ async def test_server_main_wires_all_components() -> None:
 async def test_server_runs_sync_on_startup() -> None:
     """main() calls RagCollectionSync.sync() before app.run_http_async."""
     import asyncio
-    from archon.config.loader import RagConfig
+    from archon.config.loader import SearchConfig
     from archon.search.server import main
     from archon.search.sync import SyncResult
 
@@ -447,7 +447,7 @@ async def test_server_runs_sync_on_startup() -> None:
     mock_app.run_http_async = AsyncMock(side_effect=lambda **kw: call_order.append("http"))
 
     mock_cfg = MagicMock()
-    mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5)
+    mock_cfg.search = SearchConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5)
     mock_cfg.history.directory = "/tmp/history"
 
     with (
@@ -469,7 +469,7 @@ async def test_server_runs_sync_on_startup() -> None:
 async def test_server_logs_warning_on_sync_errors(caplog: pytest.LogCaptureFixture) -> None:
     """main() logs WARNING when sync_result.errors is non-empty."""
     import logging
-    from archon.config.loader import RagConfig
+    from archon.config.loader import SearchConfig
     from archon.search.server import main
     from archon.search.sync import SyncResult
 
@@ -489,7 +489,7 @@ async def test_server_logs_warning_on_sync_errors(caplog: pytest.LogCaptureFixtu
     mock_app.run_http_async = AsyncMock()
 
     mock_cfg = MagicMock()
-    mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5)
+    mock_cfg.search = SearchConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5)
     mock_cfg.history.directory = "/tmp/history"
 
     with (
@@ -510,7 +510,7 @@ async def test_server_logs_warning_on_sync_errors(caplog: pytest.LogCaptureFixtu
 async def test_server_starts_even_if_sync_times_out() -> None:
     """main() starts the HTTP server even when startup sync times out."""
     import asyncio
-    from archon.config.loader import RagConfig
+    from archon.config.loader import SearchConfig
     from archon.search.server import main
 
     mock_store = MagicMock()
@@ -528,7 +528,7 @@ async def test_server_starts_even_if_sync_times_out() -> None:
     mock_app.run_http_async = AsyncMock(side_effect=lambda **kw: http_started.set())
 
     mock_cfg = MagicMock()
-    mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=1)
+    mock_cfg.search = SearchConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=1)
     mock_cfg.history.directory = "/tmp/history"
 
     with (
@@ -717,7 +717,7 @@ class TestServerStateStore:
     @pytest.mark.asyncio
     async def test_main_creates_state_store(self) -> None:
         """main() instantiates IndexingStateStore with cfg.rag.db_path."""
-        from archon.config.loader import RagConfig
+        from archon.config.loader import SearchConfig
         from archon.search.server import main
         from archon.search.sync import SyncResult
 
@@ -733,7 +733,7 @@ class TestServerStateStore:
 
         db_path = "/tmp/test-rag-db"
         mock_cfg = MagicMock()
-        mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5, db_path=db_path)
+        mock_cfg.search = SearchConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5, db_path=db_path)
         mock_cfg.history.directory = "/tmp/history"
 
         mock_sync_result = SyncResult(added=[], removed=[], unchanged=[], errors=[], skipped=[])
@@ -753,7 +753,7 @@ class TestServerStateStore:
     @pytest.mark.asyncio
     async def test_main_passes_state_store_to_sync(self) -> None:
         """main() passes the created state_store to RagCollectionSync."""
-        from archon.config.loader import RagConfig
+        from archon.config.loader import SearchConfig
         from archon.search.server import main
         from archon.search.sync import SyncResult
 
@@ -769,7 +769,7 @@ class TestServerStateStore:
 
         db_path = "/tmp/test-rag-db"
         mock_cfg = MagicMock()
-        mock_cfg.rag = RagConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5, db_path=db_path)
+        mock_cfg.search = SearchConfig(host="127.0.0.1", port=9999, sync_timeout_seconds=5, db_path=db_path)
         mock_cfg.history.directory = "/tmp/history"
 
         mock_sync_result = SyncResult(added=[], removed=[], unchanged=[], errors=[], skipped=[])
@@ -785,7 +785,7 @@ class TestServerStateStore:
             MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
             await main()
 
-            # Verify state_store is passed; pinned_collections will have RagConfig defaults
+            # Verify state_store is passed; pinned_collections will have SearchConfig defaults
             call_kwargs = MockSync.call_args[1]
             assert call_kwargs["state_store"] is sentinel_state_store
             assert "pinned_collections" in call_kwargs
@@ -793,7 +793,7 @@ class TestServerStateStore:
     @pytest.mark.asyncio
     async def test_main_passes_pinned_collections_to_sync(self) -> None:
         """main() passes cfg.rag.pinned_collections to RagCollectionSync."""
-        from archon.config.loader import RagConfig
+        from archon.config.loader import SearchConfig
         from archon.search.server import main
         from archon.search.sync import SyncResult
 
@@ -810,7 +810,7 @@ class TestServerStateStore:
         db_path = "/tmp/test-rag-db"
         pinned = ["~/docs/notes", "~/docs/wiki"]
         mock_cfg = MagicMock()
-        mock_cfg.rag = RagConfig(
+        mock_cfg.search = SearchConfig(
             host="127.0.0.1", port=9999, sync_timeout_seconds=5,
             db_path=db_path, pinned_collections=pinned,
         )
@@ -833,16 +833,16 @@ class TestServerStateStore:
                 mock_pipeline,
                 state_store=sentinel_state_store,
                 pinned_collections=pinned,
-                embedding_model=mock_cfg.rag.embedding_model,
-                chunk_size=mock_cfg.rag.chunk_size,
-                auto_reindex_on_chunk_size_change=mock_cfg.rag.auto_reindex_on_chunk_size_change,
+                embedding_model=mock_cfg.search.embedding_model,
+                chunk_size=mock_cfg.search.chunk_size,
+                auto_reindex_on_chunk_size_change=mock_cfg.search.auto_reindex_on_chunk_size_change,
             )
 
 
 @pytest.mark.asyncio
 async def test_server_sync_passes_config_params() -> None:
     """main() passes embedding_model, chunk_size, auto_reindex_on_chunk_size_change to RagCollectionSync."""
-    from archon.config.loader import RagConfig
+    from archon.config.loader import SearchConfig
     from archon.search.server import main
     from archon.search.sync import SyncResult
 
@@ -857,7 +857,7 @@ async def test_server_sync_passes_config_params() -> None:
     mock_app.run_http_async = AsyncMock()
 
     mock_cfg = MagicMock()
-    mock_cfg.rag = RagConfig(
+    mock_cfg.search = SearchConfig(
         host="127.0.0.1",
         port=9999,
         sync_timeout_seconds=5,
@@ -884,7 +884,7 @@ async def test_server_sync_passes_config_params() -> None:
         MockSync.assert_called_once_with(
             mock_pipeline,
             state_store=sentinel_state_store,
-            pinned_collections=mock_cfg.rag.pinned_collections,
+            pinned_collections=mock_cfg.search.pinned_collections,
             embedding_model="custom-embed-model",
             chunk_size=512,
             auto_reindex_on_chunk_size_change=True,
@@ -898,7 +898,7 @@ async def test_server_sync_passes_config_params() -> None:
 
 def _make_server_mocks(sync_timeout: int = 5, db_path: str = "/tmp/test-rag-db"):
     """Return common mocks needed for main() trigger tests."""
-    from archon.config.loader import RagConfig
+    from archon.config.loader import SearchConfig
     from archon.search.sync import SyncResult
 
     mock_store = MagicMock()
@@ -912,7 +912,7 @@ def _make_server_mocks(sync_timeout: int = 5, db_path: str = "/tmp/test-rag-db")
     mock_app.run_http_async = AsyncMock()
 
     mock_cfg = MagicMock()
-    mock_cfg.rag = RagConfig(
+    mock_cfg.search = SearchConfig(
         host="127.0.0.1", port=9999, sync_timeout_seconds=sync_timeout, db_path=db_path
     )
     mock_cfg.history.directory = "/tmp/history"
@@ -1030,7 +1030,7 @@ def _make_server_mocks_with_collections(
     sync_timeout: int = 5,
 ) -> tuple:
     """Return common mocks for watcher integration tests."""
-    from archon.config.loader import RagConfig
+    from archon.config.loader import SearchConfig
     from archon.search.sync import SyncResult
 
     mock_store = MagicMock()
@@ -1044,7 +1044,7 @@ def _make_server_mocks_with_collections(
     mock_app.run_http_async = AsyncMock()
 
     mock_cfg = MagicMock()
-    mock_cfg.rag = RagConfig(
+    mock_cfg.search = SearchConfig(
         host="127.0.0.1",
         port=9999,
         sync_timeout_seconds=sync_timeout,

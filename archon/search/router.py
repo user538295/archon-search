@@ -35,13 +35,13 @@ class MultiCollectionRouter:
 
     def __init__(
         self,
-        rag_url: str,
+        search_url: str,
         embedder: "Embedder",
         shortlist_size: int,
         confidence_threshold: float,
         embedding_model: str,
     ) -> None:
-        self._rag_url = rag_url
+        self._search_url = search_url
         self._embedder = embedder
         self._shortlist_size = shortlist_size
         self._confidence_threshold = confidence_threshold
@@ -77,7 +77,7 @@ class MultiCollectionRouter:
         }
         try:
             async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT) as client:
-                response = await client.post(self._rag_url, json=payload)
+                response = await client.post(self._search_url, json=payload)
                 response.raise_for_status()
                 data: dict[str, Any] = response.json()
         except httpx.TimeoutException:
@@ -168,7 +168,7 @@ class MultiCollectionRouter:
     async def get_pre_context(
         self, query: str, pinned_names: list[str], available_slots: int
     ) -> str | None:
-        """Build the <rag_collections> context block for the decomposer.
+        """Build the <search_collections> context block for the decomposer.
 
         Sets _last_routable_names and _decomposer_was_invoked as a side-effect.
         Returns None when the decomposer should not be involved, the block otherwise.
@@ -215,14 +215,14 @@ class MultiCollectionRouter:
     def _build_block(self, collections: list[CollectionMeta], available_slots: int) -> str:
         effective_slots = max(1, available_slots)
         lines = [
-            "<rag_collections>",
+            "<search_collections>",
             f"Available collections (select 1\u2013{effective_slots} most relevant for this query,"
             " output their names in",
-            "<rag_selected_collections>name1, name2</rag_selected_collections>"
+            "<search_selected_collections>name1, name2</search_selected_collections>"
             " tags at the end of your routing decision):",
         ]
         for col in collections:
             desc = col.description if col.description else "(no description)"
             lines.append(f"- {col.name}: {desc}")
-        lines.append("</rag_collections>")
+        lines.append("</search_collections>")
         return "\n".join(lines)

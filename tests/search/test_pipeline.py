@@ -867,10 +867,10 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
 
 @pytest.mark.asyncio
 async def test_create_pipeline_wires_all_components():
-    from archon.config.loader import RagConfig
+    from archon.config.loader import SearchConfig
     from archon.search.pipeline import create_pipeline
 
-    cfg = RagConfig(db_path="/tmp/test_rag_db")
+    cfg = SearchConfig(db_path="/tmp/test_rag_db")
 
     with (
         patch("archon.search.pipeline.ModelEmbedder") as MockME,
@@ -896,10 +896,10 @@ async def test_create_pipeline_wires_all_components():
 
 @pytest.mark.asyncio
 async def test_create_pipeline_does_not_auto_connect():
-    from archon.config.loader import RagConfig
+    from archon.config.loader import SearchConfig
     from archon.search.pipeline import create_pipeline
 
-    cfg = RagConfig(db_path="/tmp/test_no_connect_rag")
+    cfg = SearchConfig(db_path="/tmp/test_no_connect_rag")
 
     with (
         patch("archon.search.pipeline.ModelEmbedder") as MockME,

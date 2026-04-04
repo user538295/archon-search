@@ -18,7 +18,7 @@ from archon.search.reranker import ModelReranker, Reranker, RerankerBackend
 from archon.search.store import RagStore
 
 if TYPE_CHECKING:
-    from archon.config.loader import RagConfig
+    from archon.config.loader import SearchConfig
 
 logger = logging.getLogger("archon")
 
@@ -313,11 +313,11 @@ class RagPipeline:
 
 
 def create_pipeline(
-    cfg: RagConfig,
+    cfg: SearchConfig,
     embedder_backend: EmbedderBackend | None = None,
     reranker_backend: RerankerBackend | None = None,
 ) -> RagPipeline:
-    """Build a RagPipeline from a RagConfig.
+    """Build a RagPipeline from a SearchConfig.
 
     Does NOT call store.connect() — caller is responsible for connecting.
     """

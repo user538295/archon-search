@@ -54,11 +54,11 @@ def _make_full_config(tmp_path: Path) -> object:
     @dataclass
     class FakeFullConfig:
         history: FakeHistoryConfig = None  # type: ignore[assignment]
-        rag: FakeRagConfigInner = None  # type: ignore[assignment]
+        search: FakeRagConfigInner = None  # type: ignore[assignment]
 
         def __post_init__(self) -> None:
             self.history = FakeHistoryConfig()
-            self.rag = FakeRagConfigInner()
+            self.search = FakeRagConfigInner()
 
     return FakeFullConfig()
 
@@ -89,7 +89,7 @@ class TestRagInstallerInit:
         from unittest.mock import MagicMock
 
         fake_cfg = MagicMock()
-        fake_cfg.rag = MagicMock()
+        fake_cfg.search = MagicMock()
         with patch("archon.config.loader.load_config", return_value=fake_cfg) as mock_load:
             installer = RagInstaller()
         assert installer.config_file == str(Path.home() / ".archon" / "config.toml")
@@ -371,7 +371,7 @@ class TestConfigureProviders:
     def test_configure_providers_replaces_cuda_with_coreml(self, tmp_path: Path) -> None:
         """Switching from cuda to apple_silicon must fully replace providers list."""
         config_file = tmp_path / "config.toml"
-        config_file.write_text('[rag]\nenabled = true\nproviders = ["CUDAExecutionProvider"]\n')
+        config_file.write_text('[search]\nenabled = true\nproviders = ["CUDAExecutionProvider"]\n')
 
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
@@ -502,9 +502,9 @@ class TestBootstrapCollections:
 
         MockSync.assert_called_once()
         _, kwargs = MockSync.call_args
-        assert kwargs["embedding_model"] == installer._full_cfg.rag.embedding_model
-        assert kwargs["chunk_size"] == installer._full_cfg.rag.chunk_size
-        assert kwargs["auto_reindex_on_chunk_size_change"] == installer._full_cfg.rag.auto_reindex_on_chunk_size_change
+        assert kwargs["embedding_model"] == installer._full_cfg.search.embedding_model
+        assert kwargs["chunk_size"] == installer._full_cfg.search.chunk_size
+        assert kwargs["auto_reindex_on_chunk_size_change"] == installer._full_cfg.search.auto_reindex_on_chunk_size_change
 
 
 # ---------------------------------------------------------------------------
@@ -1390,8 +1390,8 @@ class TestRunFlow:
         assert result == 0
         import tomlkit
         doc = tomlkit.parse(config_file.read_text())
-        rag_section = doc.get("rag", {})
-        assert "providers" not in rag_section
+        search_section = doc.get("search", {})
+        assert "providers" not in search_section
 
     def test_run_flow_dry_run_skips_validation(self, tmp_path: Path) -> None:
         """dry_run=True: validate_providers skipped, configure_providers called directly."""

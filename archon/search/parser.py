@@ -83,7 +83,7 @@ class DocumentParser:
 
     def _parse_html(self, path: Path) -> str:
         try:
-            import trafilatura  # lazy: optional rag extra
+            import trafilatura  # lazy: optional search extra
             raw = path.read_text(encoding="utf-8", errors="replace")
             extracted = trafilatura.extract(raw, include_tables=True, include_links=False)
             if extracted is None:

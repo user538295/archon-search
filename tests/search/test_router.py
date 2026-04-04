@@ -26,7 +26,7 @@ def _router(
     embedder: MagicMock | None = None,
 ) -> MultiCollectionRouter:
     return MultiCollectionRouter(
-        rag_url="http://localhost:9999",
+        search_url="http://localhost:9999",
         embedder=embedder or _make_embedder(),
         shortlist_size=shortlist_size,
         confidence_threshold=confidence_threshold,
@@ -165,7 +165,7 @@ async def test_tier2_skips_centroid_preranking() -> None:
             result = await router.get_pre_context("test query", pinned_names=[], available_slots=3)
 
     assert result is not None
-    assert "<rag_collections>" in result
+    assert "<search_collections>" in result
     for m in routable:
         assert m.name in result
     assert router._decomposer_was_invoked is True
@@ -205,7 +205,7 @@ async def test_tier3_centroid_preranking_called() -> None:
         result = await router.get_pre_context("test query", pinned_names=[], available_slots=2)
 
     assert result is not None
-    assert "<rag_collections>" in result
+    assert "<search_collections>" in result
     assert router._decomposer_was_invoked is True
     # shortlist_size=3, so only top 3 by similarity should be in _last_routable_names
     assert len(router._last_routable_names) <= 3
