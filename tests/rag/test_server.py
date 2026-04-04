@@ -1019,6 +1019,208 @@ class TestServerInstallTrigger:
         MockSync.return_value.sync.assert_awaited_once()
 
 
+# ---------------------------------------------------------------------------
+# Task 8.5 — WatcherManager integration tests
+# ---------------------------------------------------------------------------
+
+
+def _make_server_mocks_with_collections(
+    watch: bool = False,
+    collections: list[str] | None = None,
+    sync_timeout: int = 5,
+) -> tuple:
+    """Return common mocks for watcher integration tests."""
+    from archon.config.loader import RagConfig
+    from archon.rag.sync import SyncResult
+
+    mock_store = MagicMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.store = mock_store
+
+    mock_app = MagicMock()
+    mock_app.run_http_async = AsyncMock()
+
+    mock_cfg = MagicMock()
+    mock_cfg.rag = RagConfig(
+        host="127.0.0.1",
+        port=9999,
+        sync_timeout_seconds=sync_timeout,
+        collections=collections or ["~/docs"],
+        watch=watch,
+    )
+    mock_cfg.history.directory = "/tmp/history"
+
+    mock_sync_result = SyncResult(added=[], removed=[], unchanged=[], errors=[], skipped=[])
+    return mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result
+
+
+@pytest.mark.asyncio
+async def test_server_starts_watcher_manager_when_watch_true() -> None:
+    """main() creates WatcherManager, calls add() for each collection, stop_all() in finally."""
+    from archon.rag.server import main
+
+    mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = (
+        _make_server_mocks_with_collections(watch=True, collections=["~/docs", "~/notes"])
+    )
+    sentinel_state_store = MagicMock()
+    mock_watcher_manager = MagicMock()
+    mock_watcher_manager.stop_all = AsyncMock()
+
+    desired = {"docs": "/home/user/docs", "notes": "/home/user/notes"}
+
+    with (
+        patch("archon.config.loader.load_config", return_value=mock_cfg),
+        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.rag.server.create_app", return_value=mock_app),
+        patch("archon.rag.server.RagCollectionSync") as MockSync,
+        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+        patch("archon.rag.watcher.WatcherManager", return_value=mock_watcher_manager) as MockWatcherManager,
+    ):
+        MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+        MockSync.return_value.build_desired = MagicMock(return_value=desired)
+        await main()
+
+    MockWatcherManager.assert_called_once()
+    assert mock_watcher_manager.add.call_count == 2
+    mock_watcher_manager.add.assert_any_call("docs", Path("/home/user/docs"))
+    mock_watcher_manager.add.assert_any_call("notes", Path("/home/user/notes"))
+    mock_watcher_manager.stop_all.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_server_skips_watcher_manager_when_watch_false() -> None:
+    """main() does NOT create WatcherManager when cfg.rag.watch=False."""
+    from archon.rag.server import main
+
+    mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = (
+        _make_server_mocks_with_collections(watch=False, collections=["~/docs"])
+    )
+    sentinel_state_store = MagicMock()
+
+    with (
+        patch("archon.config.loader.load_config", return_value=mock_cfg),
+        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.rag.server.create_app", return_value=mock_app),
+        patch("archon.rag.server.RagCollectionSync") as MockSync,
+        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+        patch("archon.rag.watcher.WatcherManager") as MockWatcherManager,
+    ):
+        MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+        MockSync.return_value.build_desired = MagicMock(return_value={"docs": "/home/user/docs"})
+        await main()
+
+    MockWatcherManager.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_server_stops_watcher_on_shutdown() -> None:
+    """main() calls watcher_manager.stop_all() in finally even when run_http_async raises."""
+    from archon.rag.server import main
+
+    mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = (
+        _make_server_mocks_with_collections(watch=True, collections=["~/docs"])
+    )
+    sentinel_state_store = MagicMock()
+    mock_watcher_manager = MagicMock()
+    call_order: list[str] = []
+    mock_watcher_manager.stop_all = AsyncMock(side_effect=lambda: call_order.append("stop_all"))
+    mock_store.disconnect = AsyncMock(side_effect=lambda: call_order.append("disconnect"))
+    mock_app.run_http_async = AsyncMock(side_effect=RuntimeError("server error"))
+
+    desired = {"docs": "/home/user/docs"}
+
+    with (
+        patch("archon.config.loader.load_config", return_value=mock_cfg),
+        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.rag.server.create_app", return_value=mock_app),
+        patch("archon.rag.server.RagCollectionSync") as MockSync,
+        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+        patch("archon.rag.watcher.WatcherManager", return_value=mock_watcher_manager),
+    ):
+        MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+        MockSync.return_value.build_desired = MagicMock(return_value=desired)
+        with pytest.raises(RuntimeError, match="server error"):
+            await main()
+
+    mock_watcher_manager.stop_all.assert_awaited_once()
+    assert call_order == ["stop_all", "disconnect"]
+
+
+@pytest.mark.asyncio
+async def test_server_on_change_handles_sync_exception(caplog: pytest.LogCaptureFixture) -> None:
+    """_on_change callback logs error and watcher continues when sync_collection raises."""
+    import logging
+    from archon.rag.server import main
+
+    mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = (
+        _make_server_mocks_with_collections(watch=True, collections=["~/docs"])
+    )
+    sentinel_state_store = MagicMock()
+
+    captured_on_change: list = []
+    desired = {"docs": "/home/user/docs"}
+
+    class _CapturingWatcherManager:
+        def __init__(self, on_change, loop, **kwargs):
+            captured_on_change.append(on_change)
+            self.stop_all = AsyncMock()
+            self.add = MagicMock()
+
+    with (
+        patch("archon.config.loader.load_config", return_value=mock_cfg),
+        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.rag.server.create_app", return_value=mock_app),
+        patch("archon.rag.server.RagCollectionSync") as MockSync,
+        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+        patch("archon.rag.watcher.WatcherManager", _CapturingWatcherManager),
+        caplog.at_level(logging.ERROR),
+    ):
+        MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+        MockSync.return_value.sync_collection = AsyncMock(side_effect=RuntimeError("sync boom"))
+        MockSync.return_value.build_desired = MagicMock(return_value=desired)
+        await main()
+
+        # Call _on_change from inside the context so MockSync.return_value is still valid
+        assert len(captured_on_change) == 1
+        on_change = captured_on_change[0]
+        # The callback should not propagate the exception — sync_collection raises RuntimeError
+        await on_change("docs")
+        MockSync.return_value.sync_collection.assert_awaited_once()
+        assert any("sync boom" in r.message for r in caplog.records)
+
+
+
+@pytest.mark.asyncio
+async def test_server_stop_all_exception_still_disconnects() -> None:
+    """disconnect() is called even when stop_all() raises."""
+    from archon.rag.server import main
+
+    mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = (
+        _make_server_mocks_with_collections(watch=True, collections=["~/docs"])
+    )
+    sentinel_state_store = MagicMock()
+    mock_watcher_manager = MagicMock()
+    mock_watcher_manager.stop_all = AsyncMock(side_effect=RuntimeError("stop failed"))
+
+    desired = {"docs": "/home/user/docs"}
+
+    with (
+        patch("archon.config.loader.load_config", return_value=mock_cfg),
+        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.rag.server.create_app", return_value=mock_app),
+        patch("archon.rag.server.RagCollectionSync") as MockSync,
+        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+        patch("archon.rag.watcher.WatcherManager", return_value=mock_watcher_manager),
+    ):
+        MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+        MockSync.return_value.build_desired = MagicMock(return_value=desired)
+        await main()
+
+    mock_store.disconnect.assert_awaited_once()
+
 @pytest.mark.asyncio
 async def test_health_endpoint_returns_200() -> None:
     """GET /health returns 200 with JSON body {"status": "ok"}."""

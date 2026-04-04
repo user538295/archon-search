@@ -223,11 +223,38 @@ async def main() -> None:
             )
             asyncio.create_task(sync.sync(cfg.rag.collections))
 
+    watcher_manager = None
+    if cfg.rag.watch:
+        from archon.rag.watcher import WatcherManager  # lazy import — watchdog may not be installed
+        desired = sync.build_desired(cfg.rag.collections)
+        loop = asyncio.get_running_loop()
+
+        async def _on_change(col_name: str) -> None:
+            path_str = desired.get(col_name)
+            if path_str:
+                try:
+                    await sync.sync_collection(col_name, Path(path_str))
+                except Exception as exc:
+                    logger.error("Watch-triggered sync for %r raised: %r", col_name, exc)
+
+        watcher_manager = WatcherManager(on_change=_on_change, loop=loop)
+        for col_name, path_str in desired.items():
+            watcher_manager.add(col_name, Path(path_str))
+        logger.info(
+            "Watch mode active: monitoring %d collection(s) for file changes",
+            len(desired),
+        )
+
     app = create_app(pipeline, history_col)
 
     try:
         await app.run_http_async(host=cfg.rag.host, port=cfg.rag.port)
     finally:
+        if watcher_manager is not None:
+            try:
+                await watcher_manager.stop_all()
+            except Exception:
+                logger.exception("Error stopping watcher manager")
         await pipeline.store.disconnect()
 
 
