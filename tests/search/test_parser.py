@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon.rag.parser import DocumentParser, ParseError
+from archon.search.parser import DocumentParser, ParseError
 
 
 @pytest.mark.asyncio

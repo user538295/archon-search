@@ -73,7 +73,7 @@ def connected_store(tmp_path_factory: pytest.TempPathFactory):  # type: ignore[n
     """
     import asyncio
 
-    from archon.rag.store import RagStore
+    from archon.search.store import RagStore
 
     tmp_path = tmp_path_factory.mktemp("rag_db")
     store = RagStore(tmp_path)

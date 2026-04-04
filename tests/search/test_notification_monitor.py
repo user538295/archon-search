@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 
 from archon.config.loader import NotificationsConfig
-from archon.rag.notification_monitor import IndexingNotificationMonitor
-from archon.rag.progress import (
+from archon.search.notification_monitor import IndexingNotificationMonitor
+from archon.search.progress import (
     CollectionProgress,
     IndexingState,
     IndexingStateStore,

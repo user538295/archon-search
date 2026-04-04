@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from archon.rag._types import CollectionInfo, DocumentInfo, IngestResult, SearchResult
-from archon.rag.collection_meta import CollectionMeta
-from archon.rag.pipeline import RagPipeline
+from archon.search._types import CollectionInfo, DocumentInfo, IngestResult, SearchResult
+from archon.search.collection_meta import CollectionMeta
+from archon.search.pipeline import RagPipeline
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ def _make_pipeline(
 
 
 def _make_app(pipeline: MagicMock, default_collection: str = "docs") -> Any:
-    from archon.rag.server import create_app
+    from archon.search.server import create_app
     return create_app(pipeline, default_collection)
 
 
@@ -301,10 +301,10 @@ async def test_server_search_tool_with_real_pipeline(
     """search tool works end-to-end with real store through MCP protocol."""
     from fastmcp import Client
 
-    from archon.rag.chunker import DocumentChunker
-    from archon.rag.embedder import Embedder
-    from archon.rag.parser import DocumentParser
-    from archon.rag.reranker import Reranker
+    from archon.search.chunker import DocumentChunker
+    from archon.search.embedder import Embedder
+    from archon.search.parser import DocumentParser
+    from archon.search.reranker import Reranker
 
     doc = tmp_path / "hello.md"
     doc.write_text("The quick brown fox jumps over the lazy dog.")
@@ -345,10 +345,10 @@ async def test_server_error_serialization_through_mcp_transport(
     """search before store has data returns result (may be empty or error) — not transport crash."""
     from fastmcp import Client
 
-    from archon.rag.chunker import DocumentChunker
-    from archon.rag.embedder import Embedder
-    from archon.rag.parser import DocumentParser
-    from archon.rag.reranker import Reranker
+    from archon.search.chunker import DocumentChunker
+    from archon.search.embedder import Embedder
+    from archon.search.parser import DocumentParser
+    from archon.search.reranker import Reranker
 
     class _FailEmbed:
         def encode(self, texts: list[str]) -> list[list[float]]:
@@ -382,8 +382,8 @@ async def test_server_error_serialization_through_mcp_transport(
 async def test_server_main_wires_all_components() -> None:
     """main() calls store.connect() and app.run_http_async with correct host/port."""
     from archon.config.loader import RagConfig
-    from archon.rag.server import main
-    from archon.rag.sync import SyncResult
+    from archon.search.server import main
+    from archon.search.sync import SyncResult
 
     mock_store = MagicMock()
     mock_store.connect = AsyncMock()
@@ -403,9 +403,9 @@ async def test_server_main_wires_all_components() -> None:
 
     with (
         patch("archon.config.loader.load_config", return_value=mock_cfg),
-        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-        patch("archon.rag.server.create_app", return_value=mock_app),
-        patch("archon.rag.server.RagCollectionSync") as MockSync,
+        patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.search.server.create_app", return_value=mock_app),
+        patch("archon.search.server.RagCollectionSync") as MockSync,
     ):
         MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
         await main()
@@ -428,8 +428,8 @@ async def test_server_runs_sync_on_startup() -> None:
     """main() calls RagCollectionSync.sync() before app.run_http_async."""
     import asyncio
     from archon.config.loader import RagConfig
-    from archon.rag.server import main
-    from archon.rag.sync import SyncResult
+    from archon.search.server import main
+    from archon.search.sync import SyncResult
 
     call_order: list[str] = []
 
@@ -452,9 +452,9 @@ async def test_server_runs_sync_on_startup() -> None:
 
     with (
         patch("archon.config.loader.load_config", return_value=mock_cfg),
-        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-        patch("archon.rag.server.create_app", return_value=mock_app),
-        patch("archon.rag.server.RagCollectionSync") as MockSync,
+        patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.search.server.create_app", return_value=mock_app),
+        patch("archon.search.server.RagCollectionSync") as MockSync,
     ):
         MockSync.return_value.sync = mock_sync
         await main()
@@ -470,8 +470,8 @@ async def test_server_logs_warning_on_sync_errors(caplog: pytest.LogCaptureFixtu
     """main() logs WARNING when sync_result.errors is non-empty."""
     import logging
     from archon.config.loader import RagConfig
-    from archon.rag.server import main
-    from archon.rag.sync import SyncResult
+    from archon.search.server import main
+    from archon.search.sync import SyncResult
 
     mock_store = MagicMock()
     mock_store.connect = AsyncMock()
@@ -494,9 +494,9 @@ async def test_server_logs_warning_on_sync_errors(caplog: pytest.LogCaptureFixtu
 
     with (
         patch("archon.config.loader.load_config", return_value=mock_cfg),
-        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-        patch("archon.rag.server.create_app", return_value=mock_app),
-        patch("archon.rag.server.RagCollectionSync") as MockSync,
+        patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.search.server.create_app", return_value=mock_app),
+        patch("archon.search.server.RagCollectionSync") as MockSync,
         caplog.at_level(logging.WARNING),
     ):
         MockSync.return_value.sync = mock_sync
@@ -511,7 +511,7 @@ async def test_server_starts_even_if_sync_times_out() -> None:
     """main() starts the HTTP server even when startup sync times out."""
     import asyncio
     from archon.config.loader import RagConfig
-    from archon.rag.server import main
+    from archon.search.server import main
 
     mock_store = MagicMock()
     mock_store.connect = AsyncMock()
@@ -533,9 +533,9 @@ async def test_server_starts_even_if_sync_times_out() -> None:
 
     with (
         patch("archon.config.loader.load_config", return_value=mock_cfg),
-        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-        patch("archon.rag.server.create_app", return_value=mock_app),
-        patch("archon.rag.server.RagCollectionSync") as MockSync,
+        patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.search.server.create_app", return_value=mock_app),
+        patch("archon.search.server.RagCollectionSync") as MockSync,
     ):
         MockSync.return_value.sync = _slow_sync
         await main()
@@ -718,8 +718,8 @@ class TestServerStateStore:
     async def test_main_creates_state_store(self) -> None:
         """main() instantiates IndexingStateStore with cfg.rag.db_path."""
         from archon.config.loader import RagConfig
-        from archon.rag.server import main
-        from archon.rag.sync import SyncResult
+        from archon.search.server import main
+        from archon.search.sync import SyncResult
 
         mock_store = MagicMock()
         mock_store.connect = AsyncMock()
@@ -740,10 +740,10 @@ class TestServerStateStore:
 
         with (
             patch("archon.config.loader.load_config", return_value=mock_cfg),
-            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-            patch("archon.rag.server.create_app", return_value=mock_app),
-            patch("archon.rag.server.RagCollectionSync") as MockSync,
-            patch("archon.rag.server.IndexingStateStore") as MockStateStore,
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.RagCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore") as MockStateStore,
         ):
             MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
             await main()
@@ -754,8 +754,8 @@ class TestServerStateStore:
     async def test_main_passes_state_store_to_sync(self) -> None:
         """main() passes the created state_store to RagCollectionSync."""
         from archon.config.loader import RagConfig
-        from archon.rag.server import main
-        from archon.rag.sync import SyncResult
+        from archon.search.server import main
+        from archon.search.sync import SyncResult
 
         mock_store = MagicMock()
         mock_store.connect = AsyncMock()
@@ -777,10 +777,10 @@ class TestServerStateStore:
 
         with (
             patch("archon.config.loader.load_config", return_value=mock_cfg),
-            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-            patch("archon.rag.server.create_app", return_value=mock_app),
-            patch("archon.rag.server.RagCollectionSync") as MockSync,
-            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.RagCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
         ):
             MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
             await main()
@@ -794,8 +794,8 @@ class TestServerStateStore:
     async def test_main_passes_pinned_collections_to_sync(self) -> None:
         """main() passes cfg.rag.pinned_collections to RagCollectionSync."""
         from archon.config.loader import RagConfig
-        from archon.rag.server import main
-        from archon.rag.sync import SyncResult
+        from archon.search.server import main
+        from archon.search.sync import SyncResult
 
         mock_store = MagicMock()
         mock_store.connect = AsyncMock()
@@ -821,10 +821,10 @@ class TestServerStateStore:
 
         with (
             patch("archon.config.loader.load_config", return_value=mock_cfg),
-            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-            patch("archon.rag.server.create_app", return_value=mock_app),
-            patch("archon.rag.server.RagCollectionSync") as MockSync,
-            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.RagCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
         ):
             MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
             await main()
@@ -843,8 +843,8 @@ class TestServerStateStore:
 async def test_server_sync_passes_config_params() -> None:
     """main() passes embedding_model, chunk_size, auto_reindex_on_chunk_size_change to RagCollectionSync."""
     from archon.config.loader import RagConfig
-    from archon.rag.server import main
-    from archon.rag.sync import SyncResult
+    from archon.search.server import main
+    from archon.search.sync import SyncResult
 
     mock_store = MagicMock()
     mock_store.connect = AsyncMock()
@@ -873,10 +873,10 @@ async def test_server_sync_passes_config_params() -> None:
 
     with (
         patch("archon.config.loader.load_config", return_value=mock_cfg),
-        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-        patch("archon.rag.server.create_app", return_value=mock_app),
-        patch("archon.rag.server.RagCollectionSync") as MockSync,
-        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+        patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.search.server.create_app", return_value=mock_app),
+        patch("archon.search.server.RagCollectionSync") as MockSync,
+        patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
     ):
         MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
         await main()
@@ -899,7 +899,7 @@ async def test_server_sync_passes_config_params() -> None:
 def _make_server_mocks(sync_timeout: int = 5, db_path: str = "/tmp/test-rag-db"):
     """Return common mocks needed for main() trigger tests."""
     from archon.config.loader import RagConfig
-    from archon.rag.sync import SyncResult
+    from archon.search.sync import SyncResult
 
     mock_store = MagicMock()
     mock_store.connect = AsyncMock()
@@ -925,7 +925,7 @@ class TestServerInstallTrigger:
     @pytest.mark.asyncio
     async def test_server_startup_sync_sets_install_trigger(self) -> None:
         """main() calls state_store.set_trigger('install') before sync.sync() (normal path)."""
-        from archon.rag.server import main
+        from archon.search.server import main
 
         mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
         sentinel_state_store = MagicMock()
@@ -934,10 +934,10 @@ class TestServerInstallTrigger:
 
         with (
             patch("archon.config.loader.load_config", return_value=mock_cfg),
-            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-            patch("archon.rag.server.create_app", return_value=mock_app),
-            patch("archon.rag.server.RagCollectionSync") as MockSync,
-            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.RagCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
         ):
             MockSync.return_value.sync = AsyncMock(
                 side_effect=lambda cols: (call_order.append("sync"), mock_sync_result)[1]
@@ -950,7 +950,7 @@ class TestServerInstallTrigger:
     @pytest.mark.asyncio
     async def test_server_background_path_sets_install_trigger(self) -> None:
         """main() calls set_trigger('install') even when sync_timeout_seconds=0 (background path)."""
-        from archon.rag.server import main
+        from archon.search.server import main
 
         mock_store, mock_pipeline, mock_app, mock_cfg, _ = _make_server_mocks(sync_timeout=0)
         sentinel_state_store = MagicMock()
@@ -959,10 +959,10 @@ class TestServerInstallTrigger:
 
         with (
             patch("archon.config.loader.load_config", return_value=mock_cfg),
-            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-            patch("archon.rag.server.create_app", return_value=mock_app),
-            patch("archon.rag.server.RagCollectionSync") as MockSync,
-            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.RagCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
             patch("asyncio.create_task", side_effect=lambda coro, **kw: (call_order.append("create_task"), coro.close(), None)[2]),
         ):
             MockSync.return_value.sync = AsyncMock()
@@ -975,7 +975,7 @@ class TestServerInstallTrigger:
     async def test_server_timeout_fallback_path_sets_install_trigger(self) -> None:
         """main() calls set_trigger('install') before any branch — also covers timeout-fallback path."""
         import asyncio as _asyncio
-        from archon.rag.server import main
+        from archon.search.server import main
 
         mock_store, mock_pipeline, mock_app, mock_cfg, _ = _make_server_mocks(sync_timeout=1)
         sentinel_state_store = MagicMock()
@@ -985,10 +985,10 @@ class TestServerInstallTrigger:
 
         with (
             patch("archon.config.loader.load_config", return_value=mock_cfg),
-            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-            patch("archon.rag.server.create_app", return_value=mock_app),
-            patch("archon.rag.server.RagCollectionSync") as MockSync,
-            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.RagCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
             patch("asyncio.create_task", side_effect=lambda coro, **kw: coro.close()),
         ):
             MockSync.return_value.sync = _slow_sync
@@ -999,7 +999,7 @@ class TestServerInstallTrigger:
     @pytest.mark.asyncio
     async def test_server_startup_set_trigger_failure_does_not_crash(self) -> None:
         """If set_trigger('install') raises, main() logs a warning and continues — server still starts."""
-        from archon.rag.server import main
+        from archon.search.server import main
 
         mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
         sentinel_state_store = MagicMock()
@@ -1007,10 +1007,10 @@ class TestServerInstallTrigger:
 
         with (
             patch("archon.config.loader.load_config", return_value=mock_cfg),
-            patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-            patch("archon.rag.server.create_app", return_value=mock_app),
-            patch("archon.rag.server.RagCollectionSync") as MockSync,
-            patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.RagCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
         ):
             MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
             await main()  # must not raise
@@ -1031,7 +1031,7 @@ def _make_server_mocks_with_collections(
 ) -> tuple:
     """Return common mocks for watcher integration tests."""
     from archon.config.loader import RagConfig
-    from archon.rag.sync import SyncResult
+    from archon.search.sync import SyncResult
 
     mock_store = MagicMock()
     mock_store.connect = AsyncMock()
@@ -1060,7 +1060,7 @@ def _make_server_mocks_with_collections(
 @pytest.mark.asyncio
 async def test_server_starts_watcher_manager_when_watch_true() -> None:
     """main() creates WatcherManager, calls add() for each collection, stop_all() in finally."""
-    from archon.rag.server import main
+    from archon.search.server import main
 
     mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = (
         _make_server_mocks_with_collections(watch=True, collections=["~/docs", "~/notes"])
@@ -1073,11 +1073,11 @@ async def test_server_starts_watcher_manager_when_watch_true() -> None:
 
     with (
         patch("archon.config.loader.load_config", return_value=mock_cfg),
-        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-        patch("archon.rag.server.create_app", return_value=mock_app),
-        patch("archon.rag.server.RagCollectionSync") as MockSync,
-        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
-        patch("archon.rag.watcher.WatcherManager", return_value=mock_watcher_manager) as MockWatcherManager,
+        patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.search.server.create_app", return_value=mock_app),
+        patch("archon.search.server.RagCollectionSync") as MockSync,
+        patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        patch("archon.search.watcher.WatcherManager", return_value=mock_watcher_manager) as MockWatcherManager,
     ):
         MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
         MockSync.return_value.build_desired = MagicMock(return_value=desired)
@@ -1093,7 +1093,7 @@ async def test_server_starts_watcher_manager_when_watch_true() -> None:
 @pytest.mark.asyncio
 async def test_server_skips_watcher_manager_when_watch_false() -> None:
     """main() does NOT create WatcherManager when cfg.rag.watch=False."""
-    from archon.rag.server import main
+    from archon.search.server import main
 
     mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = (
         _make_server_mocks_with_collections(watch=False, collections=["~/docs"])
@@ -1102,11 +1102,11 @@ async def test_server_skips_watcher_manager_when_watch_false() -> None:
 
     with (
         patch("archon.config.loader.load_config", return_value=mock_cfg),
-        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-        patch("archon.rag.server.create_app", return_value=mock_app),
-        patch("archon.rag.server.RagCollectionSync") as MockSync,
-        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
-        patch("archon.rag.watcher.WatcherManager") as MockWatcherManager,
+        patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.search.server.create_app", return_value=mock_app),
+        patch("archon.search.server.RagCollectionSync") as MockSync,
+        patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        patch("archon.search.watcher.WatcherManager") as MockWatcherManager,
     ):
         MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
         MockSync.return_value.build_desired = MagicMock(return_value={"docs": "/home/user/docs"})
@@ -1118,7 +1118,7 @@ async def test_server_skips_watcher_manager_when_watch_false() -> None:
 @pytest.mark.asyncio
 async def test_server_stops_watcher_on_shutdown() -> None:
     """main() calls watcher_manager.stop_all() in finally even when run_http_async raises."""
-    from archon.rag.server import main
+    from archon.search.server import main
 
     mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = (
         _make_server_mocks_with_collections(watch=True, collections=["~/docs"])
@@ -1134,11 +1134,11 @@ async def test_server_stops_watcher_on_shutdown() -> None:
 
     with (
         patch("archon.config.loader.load_config", return_value=mock_cfg),
-        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-        patch("archon.rag.server.create_app", return_value=mock_app),
-        patch("archon.rag.server.RagCollectionSync") as MockSync,
-        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
-        patch("archon.rag.watcher.WatcherManager", return_value=mock_watcher_manager),
+        patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.search.server.create_app", return_value=mock_app),
+        patch("archon.search.server.RagCollectionSync") as MockSync,
+        patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        patch("archon.search.watcher.WatcherManager", return_value=mock_watcher_manager),
     ):
         MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
         MockSync.return_value.build_desired = MagicMock(return_value=desired)
@@ -1153,7 +1153,7 @@ async def test_server_stops_watcher_on_shutdown() -> None:
 async def test_server_on_change_handles_sync_exception(caplog: pytest.LogCaptureFixture) -> None:
     """_on_change callback logs error and watcher continues when sync_collection raises."""
     import logging
-    from archon.rag.server import main
+    from archon.search.server import main
 
     mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = (
         _make_server_mocks_with_collections(watch=True, collections=["~/docs"])
@@ -1171,11 +1171,11 @@ async def test_server_on_change_handles_sync_exception(caplog: pytest.LogCapture
 
     with (
         patch("archon.config.loader.load_config", return_value=mock_cfg),
-        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-        patch("archon.rag.server.create_app", return_value=mock_app),
-        patch("archon.rag.server.RagCollectionSync") as MockSync,
-        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
-        patch("archon.rag.watcher.WatcherManager", _CapturingWatcherManager),
+        patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.search.server.create_app", return_value=mock_app),
+        patch("archon.search.server.RagCollectionSync") as MockSync,
+        patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        patch("archon.search.watcher.WatcherManager", _CapturingWatcherManager),
         caplog.at_level(logging.ERROR),
     ):
         MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
@@ -1196,7 +1196,7 @@ async def test_server_on_change_handles_sync_exception(caplog: pytest.LogCapture
 @pytest.mark.asyncio
 async def test_server_stop_all_exception_still_disconnects() -> None:
     """disconnect() is called even when stop_all() raises."""
-    from archon.rag.server import main
+    from archon.search.server import main
 
     mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = (
         _make_server_mocks_with_collections(watch=True, collections=["~/docs"])
@@ -1209,11 +1209,11 @@ async def test_server_stop_all_exception_still_disconnects() -> None:
 
     with (
         patch("archon.config.loader.load_config", return_value=mock_cfg),
-        patch("archon.rag.server.create_pipeline", return_value=mock_pipeline),
-        patch("archon.rag.server.create_app", return_value=mock_app),
-        patch("archon.rag.server.RagCollectionSync") as MockSync,
-        patch("archon.rag.server.IndexingStateStore", return_value=sentinel_state_store),
-        patch("archon.rag.watcher.WatcherManager", return_value=mock_watcher_manager),
+        patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+        patch("archon.search.server.create_app", return_value=mock_app),
+        patch("archon.search.server.RagCollectionSync") as MockSync,
+        patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        patch("archon.search.watcher.WatcherManager", return_value=mock_watcher_manager),
     ):
         MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
         MockSync.return_value.build_desired = MagicMock(return_value=desired)

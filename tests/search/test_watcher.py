@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon.rag.watcher import CollectionWatcher, _DebounceHandler, _log_future_exception
+from archon.search.watcher import CollectionWatcher, _DebounceHandler, _log_future_exception
 
 
 # ---------------------------------------------------------------------------
@@ -208,8 +208,8 @@ class TestCollectionWatcher:
         mock_observer = MagicMock()
         mock_observer.is_alive.return_value = False
 
-        with patch("archon.rag.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon.rag.watcher.Observer", return_value=mock_observer), \
+        with patch("archon.search.watcher._WATCHDOG_AVAILABLE", True), \
+             patch("archon.search.watcher.Observer", return_value=mock_observer), \
              patch.object(_DebounceHandler, "cancel_all") as mock_cancel_all:
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
@@ -233,8 +233,8 @@ class TestCollectionWatcher:
         mock_observer = MagicMock()
         mock_observer.is_alive.return_value = True
 
-        with patch("archon.rag.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon.rag.watcher.Observer", return_value=mock_observer):
+        with patch("archon.search.watcher._WATCHDOG_AVAILABLE", True), \
+             patch("archon.search.watcher.Observer", return_value=mock_observer):
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
 
             # Before start: False (no observer set)
@@ -254,7 +254,7 @@ class TestCollectionWatcher:
         cb, _ = _make_async_callback()
         loop = asyncio.new_event_loop()
 
-        with patch("archon.rag.watcher._WATCHDOG_AVAILABLE", False):
+        with patch("archon.search.watcher._WATCHDOG_AVAILABLE", False):
             with caplog.at_level(logging.WARNING, logger="archon"):
                 watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
                 watcher.start()
@@ -272,8 +272,8 @@ class TestCollectionWatcher:
         mock_observer.start.side_effect = OSError("no such file")
         mock_observer.is_alive.return_value = False
 
-        with patch("archon.rag.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon.rag.watcher.Observer", return_value=mock_observer):
+        with patch("archon.search.watcher._WATCHDOG_AVAILABLE", True), \
+             patch("archon.search.watcher.Observer", return_value=mock_observer):
             with caplog.at_level(logging.WARNING, logger="archon"):
                 watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
                 watcher.start()  # must not raise
@@ -291,8 +291,8 @@ class TestCollectionWatcher:
         # is_alive: True — simulates observer still running after join
         mock_observer.is_alive.return_value = True
 
-        with patch("archon.rag.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon.rag.watcher.Observer", return_value=mock_observer):
+        with patch("archon.search.watcher._WATCHDOG_AVAILABLE", True), \
+             patch("archon.search.watcher.Observer", return_value=mock_observer):
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
 
@@ -311,8 +311,8 @@ class TestCollectionWatcher:
         mock_observer.is_alive.return_value = False
         mock_observer.stop.side_effect = OSError("path vanished")
 
-        with patch("archon.rag.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon.rag.watcher.Observer", return_value=mock_observer):
+        with patch("archon.search.watcher._WATCHDOG_AVAILABLE", True), \
+             patch("archon.search.watcher.Observer", return_value=mock_observer):
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
 
@@ -330,8 +330,8 @@ class TestCollectionWatcher:
         mock_observer = MagicMock()
         mock_observer.is_alive.return_value = False
 
-        with patch("archon.rag.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon.rag.watcher.Observer", return_value=mock_observer) as mock_observer_cls:
+        with patch("archon.search.watcher._WATCHDOG_AVAILABLE", True), \
+             patch("archon.search.watcher.Observer", return_value=mock_observer) as mock_observer_cls:
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
             watcher.start()  # second call must be a no-op
@@ -359,8 +359,8 @@ class TestCollectionWatcher:
         mock_observer.is_alive.return_value = False
         mock_observer.join.side_effect = OSError("fs gone during join")
 
-        with patch("archon.rag.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon.rag.watcher.Observer", return_value=mock_observer):
+        with patch("archon.search.watcher._WATCHDOG_AVAILABLE", True), \
+             patch("archon.search.watcher.Observer", return_value=mock_observer):
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
             watcher.stop()  # must not raise
@@ -389,8 +389,8 @@ class TestWatcherManager:
         mock_watcher = MagicMock()
         mock_watcher.is_alive.return_value = True
 
-        with patch("archon.rag.watcher.CollectionWatcher", return_value=mock_watcher) as mock_cls:
-            from archon.rag.watcher import WatcherManager
+        with patch("archon.search.watcher.CollectionWatcher", return_value=mock_watcher) as mock_cls:
+            from archon.search.watcher import WatcherManager
 
             mgr = WatcherManager(on_change=_on_change, loop=loop, debounce_seconds=5.0)
             mgr.add("col1", tmp_path)
@@ -411,8 +411,8 @@ class TestWatcherManager:
         mock_watcher = MagicMock()
         mock_watcher.is_alive.return_value = True
 
-        with patch("archon.rag.watcher.CollectionWatcher", return_value=mock_watcher) as mock_cls:
-            from archon.rag.watcher import WatcherManager
+        with patch("archon.search.watcher.CollectionWatcher", return_value=mock_watcher) as mock_cls:
+            from archon.search.watcher import WatcherManager
 
             mgr = WatcherManager(on_change=_on_change, loop=loop, debounce_seconds=5.0)
             mgr.add("col1", tmp_path)
@@ -438,8 +438,8 @@ class TestWatcherManager:
 
         watchers = [mock_watcher1, mock_watcher2]
 
-        with patch("archon.rag.watcher.CollectionWatcher", side_effect=watchers):
-            from archon.rag.watcher import WatcherManager
+        with patch("archon.search.watcher.CollectionWatcher", side_effect=watchers):
+            from archon.search.watcher import WatcherManager
 
             mgr = WatcherManager(on_change=_on_change, loop=loop, debounce_seconds=5.0)
             mgr.add("col1", tmp_path)
@@ -463,8 +463,8 @@ class TestWatcherManager:
         mock_dead = MagicMock()
         mock_dead.is_alive.return_value = False
 
-        with patch("archon.rag.watcher.CollectionWatcher", side_effect=[mock_alive, mock_dead]):
-            from archon.rag.watcher import WatcherManager
+        with patch("archon.search.watcher.CollectionWatcher", side_effect=[mock_alive, mock_dead]):
+            from archon.search.watcher import WatcherManager
 
             mgr = WatcherManager(on_change=_on_change, loop=loop, debounce_seconds=5.0)
             mgr.add("live_col", tmp_path)
@@ -481,7 +481,7 @@ class TestWatcherManager:
         calls = []
         async def _on_change(col): calls.append(col)
         loop = asyncio.get_event_loop()
-        from archon.rag.watcher import WatcherManager
+        from archon.search.watcher import WatcherManager
         mgr = WatcherManager(on_change=_on_change, loop=loop)
         mgr._shutting_down = True
         await mgr._wrapped_callback("col1")
@@ -492,7 +492,7 @@ class TestWatcherManager:
         """_wrapped_callback logs errors from on_change and does not propagate them; _active_syncs is empty after."""
         async def _failing_on_change(col): raise RuntimeError("sync failed")
         loop = asyncio.get_event_loop()
-        from archon.rag.watcher import WatcherManager
+        from archon.search.watcher import WatcherManager
         mgr = WatcherManager(on_change=_failing_on_change, loop=loop)
         with caplog.at_level(logging.ERROR, logger="archon"):
             await mgr._wrapped_callback("col1")  # must not raise
@@ -511,7 +511,7 @@ class TestWatcherManager:
             await proceed.wait()
 
         loop = asyncio.get_event_loop()
-        from archon.rag.watcher import WatcherManager
+        from archon.search.watcher import WatcherManager
         mgr = WatcherManager(on_change=_slow_on_change, loop=loop)
 
         # Start callback but don't let it finish yet
@@ -527,10 +527,10 @@ class TestWatcherManager:
         """add() is a no-op when _shutting_down=True."""
         async def _on_change(col): pass
         loop = asyncio.new_event_loop()
-        from archon.rag.watcher import WatcherManager
+        from archon.search.watcher import WatcherManager
         mgr = WatcherManager(on_change=_on_change, loop=loop)
         mgr._shutting_down = True
-        with patch("archon.rag.watcher.CollectionWatcher") as mock_cls:
+        with patch("archon.search.watcher.CollectionWatcher") as mock_cls:
             mgr.add("col1", tmp_path)
             mock_cls.assert_not_called()
         assert "col1" not in mgr._watchers
@@ -541,7 +541,7 @@ class TestWatcherManager:
         """stop_all() on a manager with no watchers does not raise."""
         async def _on_change(col): pass
         loop = asyncio.get_event_loop()
-        from archon.rag.watcher import WatcherManager
+        from archon.search.watcher import WatcherManager
         mgr = WatcherManager(on_change=_on_change, loop=loop)
         await mgr.stop_all()  # must not raise
         assert mgr.watching_names() == set()
@@ -550,7 +550,7 @@ class TestWatcherManager:
         """is_watching() returns False for a name not in _watchers."""
         async def _on_change(col): pass
         loop = asyncio.new_event_loop()
-        from archon.rag.watcher import WatcherManager
+        from archon.search.watcher import WatcherManager
         mgr = WatcherManager(on_change=_on_change, loop=loop)
         assert mgr.is_watching("nonexistent") is False
         loop.close()
@@ -563,8 +563,8 @@ class TestWatcherManager:
         mock_dead1.is_alive.return_value = False
         mock_dead2 = MagicMock()
         mock_dead2.is_alive.return_value = False
-        with patch("archon.rag.watcher.CollectionWatcher", side_effect=[mock_dead1, mock_dead2]):
-            from archon.rag.watcher import WatcherManager
+        with patch("archon.search.watcher.CollectionWatcher", side_effect=[mock_dead1, mock_dead2]):
+            from archon.search.watcher import WatcherManager
             mgr = WatcherManager(on_change=_on_change, loop=loop)
             mgr.add("col1", tmp_path)
             mgr.add("col2", tmp_path)
@@ -581,7 +581,7 @@ class TestWatcherManager:
             await asyncio.sleep(60)  # simulate long-running sync
 
         loop = asyncio.get_event_loop()
-        from archon.rag.watcher import WatcherManager
+        from archon.search.watcher import WatcherManager
 
         mgr = WatcherManager(on_change=_slow_on_change, loop=loop)
         # Directly invoke _wrapped_callback to populate _active_syncs
@@ -598,7 +598,7 @@ class TestWatcherManager:
             async def fast_wait(fs, *, timeout=None):
                 return await original_wait(fs, timeout=0.01)
 
-            with unittest.mock.patch("archon.rag.watcher.asyncio.wait", fast_wait):
+            with unittest.mock.patch("archon.search.watcher.asyncio.wait", fast_wait):
                 await mgr.stop_all()
 
         # All active syncs must be cleared after stop_all

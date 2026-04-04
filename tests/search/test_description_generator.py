@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from claude_agent_sdk import ResultMessage
 
-from archon.rag.description_generator import _should_regenerate, generate_description
+from archon.search.description_generator import _should_regenerate, generate_description
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ async def test_generate_description_calls_haiku() -> None:
 
     mock_client = _mock_sdk_client("Test description.")
 
-    with patch("archon.rag.description_generator.ClaudeSDKClient", return_value=mock_client) as MockSDK:
+    with patch("archon.search.description_generator.ClaudeSDKClient", return_value=mock_client) as MockSDK:
         result = await generate_description(["chunk one", "chunk two"], "my-collection")
 
     assert result == "Test description."
@@ -75,7 +75,7 @@ async def test_generate_description_on_failure_returns_none() -> None:
     mock_client.connect = AsyncMock(side_effect=RuntimeError("SDK connection failed"))
     mock_client.disconnect = AsyncMock()
 
-    with patch("archon.rag.description_generator.ClaudeSDKClient", return_value=mock_client):
+    with patch("archon.search.description_generator.ClaudeSDKClient", return_value=mock_client):
         result = await generate_description(["chunk text"], "test-collection")
 
     assert result is None
@@ -92,8 +92,8 @@ async def test_generate_description_timeout_returns_none() -> None:
     mock_client.connect = AsyncMock(side_effect=_slow_connect)
     mock_client.disconnect = AsyncMock()
 
-    with patch("archon.rag.description_generator.ClaudeSDKClient", return_value=mock_client):
-        with patch("archon.rag.description_generator._TIMEOUT_SECONDS", 0.01):
+    with patch("archon.search.description_generator.ClaudeSDKClient", return_value=mock_client):
+        with patch("archon.search.description_generator._TIMEOUT_SECONDS", 0.01):
             result = await generate_description(["chunk"], "test-collection")
 
     assert result is None
@@ -102,7 +102,7 @@ async def test_generate_description_timeout_returns_none() -> None:
 @pytest.mark.asyncio
 async def test_generate_description_returns_none_on_empty_chunks() -> None:
     """generate_description() returns None immediately for an empty chunk list — no SDK call."""
-    with patch("archon.rag.description_generator.ClaudeSDKClient") as MockSDK:
+    with patch("archon.search.description_generator.ClaudeSDKClient") as MockSDK:
         result = await generate_description([], "test-collection")
 
     assert result is None

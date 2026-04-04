@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from archon.rag._types import SearchResult
-from archon.rag.reranker import Reranker, RerankerBackend, make_reranker
+from archon.search._types import SearchResult
+from archon.search.reranker import Reranker, RerankerBackend, make_reranker
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +125,7 @@ def test_model_reranker_init_called_once_under_concurrent_predict() -> None:
 
     import numpy as np
 
-    from archon.rag.reranker import ModelReranker
+    from archon.search.reranker import ModelReranker
 
     init_count = 0
     barrier = threading.Barrier(2)

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from archon.rag.progress import (
+from archon.search.progress import (
     CollectionProgress,
     IndexingState,
     IndexingStateStore,
@@ -643,7 +643,7 @@ class TestComputeEtaSeconds:
     """Tests for compute_eta_seconds() pure function."""
 
     def _make_cp(self, **kwargs) -> "CollectionProgress":
-        from archon.rag.progress import CollectionProgress, IndexingStatus
+        from archon.search.progress import CollectionProgress, IndexingStatus
         defaults = dict(
             status=IndexingStatus.IN_PROGRESS,
             total_files=100,
@@ -657,7 +657,7 @@ class TestComputeEtaSeconds:
         "done", "pending", "failed",
     ])
     def test_compute_eta_returns_none_when_not_in_progress(self, status: str) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone, timedelta
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         started = (now - timedelta(seconds=50)).isoformat()
@@ -669,7 +669,7 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_none_when_too_few_files(self) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone, timedelta
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         started = (now - timedelta(seconds=50)).isoformat()
@@ -682,7 +682,7 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_none_when_started_at_missing(self) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         cp = self._make_cp(
@@ -694,7 +694,7 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_none_when_elapsed_zero(self) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         cp = self._make_cp(
@@ -706,7 +706,7 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_none_when_nothing_remaining(self) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone, timedelta
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         started = (now - timedelta(seconds=50)).isoformat()
@@ -719,7 +719,7 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_basic_calculation(self) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone, timedelta
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         started = (now - timedelta(seconds=50)).isoformat()
@@ -735,7 +735,7 @@ class TestComputeEtaSeconds:
         assert isinstance(result, int)  # must be int, not float
 
     def test_compute_eta_accepts_custom_now(self) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone, timedelta
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         started = (now - timedelta(seconds=100)).isoformat()
@@ -749,7 +749,7 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) == 400
 
     def test_compute_eta_returns_none_for_invalid_started_at(self) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         cp = self._make_cp(
@@ -761,7 +761,7 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_value_at_exact_threshold(self) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone, timedelta
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         started = (now - timedelta(seconds=10)).isoformat()
@@ -775,7 +775,7 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) == 90
 
     def test_compute_eta_naive_started_at_treated_as_utc(self) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone, timedelta
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         # Naive ISO string — no timezone suffix
@@ -790,7 +790,7 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) == 400
 
     def test_compute_eta_returns_none_when_elapsed_negative(self) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone, timedelta
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         # now is 5 seconds BEFORE started_at (clock skew)
@@ -804,7 +804,7 @@ class TestComputeEtaSeconds:
         assert compute_eta_seconds(cp, now=now) is None
 
     def test_compute_eta_returns_none_when_total_files_zero(self) -> None:
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timezone, timedelta
         now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
         started = (now - timedelta(seconds=50)).isoformat()
@@ -819,7 +819,7 @@ class TestComputeEtaSeconds:
 
     def test_compute_eta_naive_now_treated_as_utc(self) -> None:
         """Naive `now` kwarg should be treated as UTC (spec-mandated behavior)."""
-        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from archon.search.progress import IndexingStatus, compute_eta_seconds
         from datetime import datetime, timedelta, timezone
         # started_at is UTC-aware
         started_utc = datetime(2026, 4, 4, 9, 58, 20, tzinfo=timezone.utc)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from archon.rag._types import (
+from archon.search._types import (
     ChunkRecord,
     CollectionInfo,
     DocumentInfo,

@@ -66,7 +66,7 @@ def _make_full_config(tmp_path: Path) -> object:
 class TestRagInstallerInit:
     def test_init_succeeds_without_telegram_token(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """RagInstaller.__init__ must not require TELEGRAM_BOT_TOKEN — exercises real load_config path."""
-        from archon.rag.install import RagInstaller
+        from archon.search.install import RagInstaller
         from archon.config.loader import load_config
 
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
@@ -85,7 +85,7 @@ class TestRagInstallerInit:
 
     def test_default_config_file_path(self) -> None:
         """RagInstaller default config_file must point to ~/.archon/config.toml."""
-        from archon.rag.install import RagInstaller
+        from archon.search.install import RagInstaller
         from unittest.mock import MagicMock
 
         fake_cfg = MagicMock()
@@ -98,7 +98,7 @@ class TestRagInstallerInit:
 
 def _make_installer(tmp_path: Path, dry_run: bool = False) -> object:
     """Create a RagInstaller with a fake config injected."""
-    from archon.rag.install import RagInstaller
+    from archon.search.install import RagInstaller
 
     installer = RagInstaller.__new__(RagInstaller)
     installer.dry_run = dry_run
@@ -118,7 +118,7 @@ class TestCheckDeps:
         """When all packages importable → empty list returned."""
         installer = _make_installer(tmp_path)
 
-        with patch("archon.rag.install.importlib.import_module", return_value=MagicMock()):
+        with patch("archon.search.install.importlib.import_module", return_value=MagicMock()):
             missing = installer.check_deps()
 
         assert missing == []
@@ -132,7 +132,7 @@ class TestCheckDeps:
                 raise ImportError("No module named 'lancedb'")
             return MagicMock()
 
-        with patch("archon.rag.install.importlib.import_module", side_effect=fake_import):
+        with patch("archon.search.install.importlib.import_module", side_effect=fake_import):
             missing = installer.check_deps()
 
         assert "lancedb" in missing
@@ -148,7 +148,7 @@ class TestDetectGpu:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = "cuda"
-        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+        with patch("archon.search.install.get_runtime", return_value=mock_runtime):
             result = installer.detect_gpu()
         assert result == "cuda"
         mock_runtime.detect_gpu_type.assert_called_once()
@@ -157,28 +157,28 @@ class TestDetectGpu:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = "cuda"
-        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+        with patch("archon.search.install.get_runtime", return_value=mock_runtime):
             assert installer.detect_gpu() == "cuda"
 
     def test_detect_gpu_returns_apple_silicon(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = "apple_silicon"
-        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+        with patch("archon.search.install.get_runtime", return_value=mock_runtime):
             assert installer.detect_gpu() == "apple_silicon"
 
     def test_detect_gpu_returns_none_on_intel_mac(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = "none"
-        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+        with patch("archon.search.install.get_runtime", return_value=mock_runtime):
             assert installer.detect_gpu() == "none"
 
     def test_detect_gpu_returns_none_on_linux_no_cuda(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = "none"
-        with patch("archon.rag.install.get_runtime", return_value=mock_runtime):
+        with patch("archon.search.install.get_runtime", return_value=mock_runtime):
             assert installer.detect_gpu() == "none"
 
 
@@ -426,7 +426,7 @@ class TestServiceDelegation:
         installer = _make_installer(tmp_path)
         svc = self._mock_rag_service()
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_rag_service", return_value=svc):
             installer.write_service_file()
 
         svc.register.assert_called_once_with(dry_run=False)
@@ -435,7 +435,7 @@ class TestServiceDelegation:
         installer = _make_installer(tmp_path, dry_run=True)
         svc = self._mock_rag_service()
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_rag_service", return_value=svc):
             installer.write_service_file()
 
         svc.register.assert_called_once_with(dry_run=True)
@@ -461,8 +461,8 @@ class TestBootstrapCollections:
         mock_sync_result = MagicMock()
         mock_sync = AsyncMock(side_effect=lambda *a, **kw: (call_order.append("sync"), mock_sync_result)[1])
 
-        with patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync:
+        with patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync:
             MockSync.return_value.sync = mock_sync
             asyncio.run(installer._bootstrap_collections())
 
@@ -479,8 +479,8 @@ class TestBootstrapCollections:
         mock_pipeline = MagicMock()
         mock_pipeline.store = mock_store
 
-        with patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync:
+        with patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync:
             MockSync.return_value.sync = AsyncMock(side_effect=RuntimeError("boom"))
             with pytest.raises(RuntimeError, match="boom"):
                 asyncio.run(installer._bootstrap_collections())
@@ -495,8 +495,8 @@ class TestBootstrapCollections:
         mock_pipeline = MagicMock()
         mock_pipeline.store = mock_store
 
-        with patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync:
+        with patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync:
             MockSync.return_value.sync = AsyncMock()
             asyncio.run(installer._bootstrap_collections())
 
@@ -518,8 +518,8 @@ class TestRun:
         svc.register.return_value = 0
         svc.start.return_value = 0
         return {
-            "archon.rag.install.get_rag_service": MagicMock(return_value=svc),
-            "archon.rag.install.create_pipeline": MagicMock(
+            "archon.search.install.get_rag_service": MagicMock(return_value=svc),
+            "archon.search.install.create_pipeline": MagicMock(
                 return_value=MagicMock(
                     store=AsyncMock(),
                     ingest_directory=AsyncMock(return_value=[]),
@@ -552,9 +552,9 @@ class TestRun:
 
         mock_sync = AsyncMock(return_value=MagicMock())
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc), \
-             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+        with patch("archon.search.install.get_rag_service", return_value=svc), \
+             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -577,9 +577,9 @@ class TestRun:
         mock_store = AsyncMock()
         mock_pipeline.store = mock_store
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc), \
-             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+        with patch("archon.search.install.get_rag_service", return_value=svc), \
+             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -602,9 +602,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc), \
-             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+        with patch("archon.search.install.get_rag_service", return_value=svc), \
+             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -636,9 +636,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc), \
-             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+        with patch("archon.search.install.get_rag_service", return_value=svc), \
+             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -666,9 +666,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc), \
-             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+        with patch("archon.search.install.get_rag_service", return_value=svc), \
+             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -696,9 +696,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc), \
-             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+        with patch("archon.search.install.get_rag_service", return_value=svc), \
+             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -726,9 +726,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc), \
-             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+        with patch("archon.search.install.get_rag_service", return_value=svc), \
+             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -756,9 +756,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc), \
-             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+        with patch("archon.search.install.get_rag_service", return_value=svc), \
+             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=["lancedb"]), \
              patch.object(installer, "install_deps"), \
@@ -786,9 +786,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc), \
-             patch("archon.rag.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.rag.sync.RagCollectionSync") as MockSync, \
+        with patch("archon.search.install.get_rag_service", return_value=svc), \
+             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.RagCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=["lancedb"]), \
              patch.object(installer, "install_deps"), \
@@ -820,7 +820,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_rag_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -837,7 +837,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_rag_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
@@ -853,7 +853,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_rag_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -870,7 +870,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_rag_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
@@ -1059,7 +1059,7 @@ class TestValidateProviders:
 class TestWaitForService:
     def test_wait_for_service_default_timeout_is_60(self) -> None:
         """_WAIT_FOR_SERVICE_TIMEOUT module constant must equal 60."""
-        from archon.rag.install import _WAIT_FOR_SERVICE_TIMEOUT
+        from archon.search.install import _WAIT_FOR_SERVICE_TIMEOUT
 
         assert _WAIT_FOR_SERVICE_TIMEOUT == 60
 
@@ -1425,7 +1425,7 @@ class TestLoadUnloadService:
         svc = MagicMock()
         svc.start.return_value = 0
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_rag_service", return_value=svc):
             rc = installer.load_service()
 
         assert rc == 0
@@ -1437,7 +1437,7 @@ class TestLoadUnloadService:
         svc = MagicMock()
         svc.stop.return_value = 0
 
-        with patch("archon.rag.install.get_rag_service", return_value=svc):
+        with patch("archon.search.install.get_rag_service", return_value=svc):
             rc = installer.unload_service()
 
         assert rc == 0
