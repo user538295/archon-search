@@ -143,6 +143,45 @@ class IndexingStateStore:
         self.write(state)
 
 
+def compute_eta_seconds(
+    cp: CollectionProgress,
+    now: datetime | None = None,
+) -> int | None:
+    """Compute estimated seconds remaining for an in-progress collection.
+
+    Returns None when ETA cannot be computed reliably:
+      - status is not IN_PROGRESS
+      - fewer than 10 files processed (too early to be reliable)
+      - started_at is missing or unparseable
+      - elapsed seconds is zero or negative
+      - no files remaining (processed_files >= total_files)
+    """
+    if cp.status != IndexingStatus.IN_PROGRESS:
+        return None
+    if cp.processed_files < 10:
+        return None
+    if cp.started_at is None:
+        return None
+    if cp.processed_files >= cp.total_files:
+        return None
+    try:
+        started = datetime.fromisoformat(cp.started_at)
+    except (ValueError, TypeError):
+        return None
+    if now is None:
+        now = datetime.now(UTC)
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    elapsed = (now - started).total_seconds()
+    if elapsed <= 0:
+        return None
+    fps = cp.processed_files / elapsed
+    remaining = cp.total_files - cp.processed_files
+    return max(0, int(remaining / fps))
+
+
 def from_dict(data: dict) -> IndexingState:
     """Deserialize IndexingState from a dict. Never raises — returns empty state on any error."""
     try:

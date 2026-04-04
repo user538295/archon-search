@@ -16,6 +16,7 @@ from archon.rag.progress import (
     from_dict,
     to_dict,
 )
+# compute_eta_seconds imported locally in TestComputeEtaSeconds to test it in isolation
 
 
 class TestDataclasses:
@@ -636,6 +637,200 @@ class TestTriggerField:
         d = {"trigger": "", "collections": {}}
         state = from_dict(d)
         assert state.trigger == ""
+
+
+class TestComputeEtaSeconds:
+    """Tests for compute_eta_seconds() pure function."""
+
+    def _make_cp(self, **kwargs) -> "CollectionProgress":
+        from archon.rag.progress import CollectionProgress, IndexingStatus
+        defaults = dict(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=100,
+            processed_files=50,
+            started_at=None,
+        )
+        defaults.update(kwargs)
+        return CollectionProgress(**defaults)
+
+    @pytest.mark.parametrize("status", [
+        "done", "pending", "failed",
+    ])
+    def test_compute_eta_returns_none_when_not_in_progress(self, status: str) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        started = (now - timedelta(seconds=50)).isoformat()
+        cp = self._make_cp(
+            status=IndexingStatus(status),
+            processed_files=50,
+            started_at=started,
+        )
+        assert compute_eta_seconds(cp, now=now) is None
+
+    def test_compute_eta_returns_none_when_too_few_files(self) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        started = (now - timedelta(seconds=50)).isoformat()
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=9,
+            total_files=100,
+            started_at=started,
+        )
+        assert compute_eta_seconds(cp, now=now) is None
+
+    def test_compute_eta_returns_none_when_started_at_missing(self) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=50,
+            total_files=100,
+            started_at=None,
+        )
+        assert compute_eta_seconds(cp, now=now) is None
+
+    def test_compute_eta_returns_none_when_elapsed_zero(self) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=50,
+            total_files=100,
+            started_at=now.isoformat(),
+        )
+        assert compute_eta_seconds(cp, now=now) is None
+
+    def test_compute_eta_returns_none_when_nothing_remaining(self) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        started = (now - timedelta(seconds=50)).isoformat()
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=100,
+            total_files=100,
+            started_at=started,
+        )
+        assert compute_eta_seconds(cp, now=now) is None
+
+    def test_compute_eta_basic_calculation(self) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        started = (now - timedelta(seconds=50)).isoformat()
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=50,
+            total_files=100,
+            started_at=started,
+        )
+        # fps = 50/50 = 1.0, remaining = 50, eta = int(50/1.0) = 50
+        assert compute_eta_seconds(cp, now=now) == 50
+
+    def test_compute_eta_accepts_custom_now(self) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        started = (now - timedelta(seconds=100)).isoformat()
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=20,
+            total_files=100,
+            started_at=started,
+        )
+        # fps = 20/100 = 0.2, remaining = 80, eta = int(80/0.2) = 400
+        assert compute_eta_seconds(cp, now=now) == 400
+
+    def test_compute_eta_returns_none_for_invalid_started_at(self) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=50,
+            total_files=100,
+            started_at="not-a-date",
+        )
+        assert compute_eta_seconds(cp, now=now) is None
+
+    def test_compute_eta_returns_value_at_exact_threshold(self) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        started = (now - timedelta(seconds=10)).isoformat()
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=10,
+            total_files=100,
+            started_at=started,
+        )
+        # fps = 10/10 = 1.0, remaining = 90, eta = int(90/1.0) = 90; threshold is < 10, not <= 10
+        assert compute_eta_seconds(cp, now=now) == 90
+
+    def test_compute_eta_naive_started_at_treated_as_utc(self) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        # Naive ISO string — no timezone suffix
+        started_naive = "2026-04-04T09:58:20"  # 100 seconds before now
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=20,
+            total_files=100,
+            started_at=started_naive,
+        )
+        # fps = 20/100 = 0.2, remaining = 80, eta = int(80/0.2) = 400
+        assert compute_eta_seconds(cp, now=now) == 400
+
+    def test_compute_eta_returns_none_when_elapsed_negative(self) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        # now is 5 seconds BEFORE started_at (clock skew)
+        started = (now + timedelta(seconds=5)).isoformat()
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=50,
+            total_files=100,
+            started_at=started,
+        )
+        assert compute_eta_seconds(cp, now=now) is None
+
+    def test_compute_eta_returns_none_when_total_files_zero(self) -> None:
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc)
+        started = (now - timedelta(seconds=50)).isoformat()
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=10,
+            total_files=0,
+            started_at=started,
+        )
+        # processed (10) >= total (0) → nothing remaining
+        assert compute_eta_seconds(cp, now=now) is None
+
+    def test_compute_eta_naive_now_treated_as_utc(self) -> None:
+        """Naive `now` kwarg should be treated as UTC (spec-mandated behavior)."""
+        from archon.rag.progress import IndexingStatus, compute_eta_seconds
+        from datetime import datetime, timedelta, timezone
+        # started_at is UTC-aware
+        started_utc = datetime(2026, 4, 4, 9, 58, 20, tzinfo=timezone.utc)
+        # now is naive (no tzinfo) — 100 seconds after started
+        now_naive = datetime(2026, 4, 4, 10, 0, 0)  # no tzinfo
+        cp = self._make_cp(
+            status=IndexingStatus.IN_PROGRESS,
+            processed_files=20,
+            total_files=100,
+            started_at=started_utc.isoformat(),
+        )
+        # fps = 20/100 = 0.2, remaining = 80, eta = int(80/0.2) = 400
+        assert compute_eta_seconds(cp, now=now_naive) == 400
 
 
 class TestSetTrigger:
