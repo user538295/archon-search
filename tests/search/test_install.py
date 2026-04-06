@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1455,7 +1456,14 @@ class TestIsServiceRunning:
 
 
 class TestRunNonBlocking:
-    """Tests verifying that run() is non-blocking: service starts first, no asyncio.run bootstrap."""
+    """Tests verifying that run() is non-blocking: service starts first, no asyncio.run bootstrap.
+
+    State file gap note: TestServerInstallTrigger in test_server.py verifies that
+    set_trigger('install') is called (the trigger field), NOT that individual collection
+    status is written as IN_PROGRESS. Per-collection IN_PROGRESS status writing is not
+    currently covered by unit tests — it is verified by the sync/indexing integration tests.
+    Tests here focus solely on install.py not blocking in run().
+    """
 
     def test_run_does_not_call_bootstrap_collections(self, tmp_path: Path) -> None:
         """run() must NOT call _bootstrap_collections — server handles sync on startup via asyncio.create_task."""
@@ -1532,17 +1540,63 @@ class TestRunNonBlocking:
         # _wait_for_service must still be called (service readiness check)
         mock_wait.assert_called_once()
 
-    def test_load_service_called_before_bootstrap_would_run(self, tmp_path: Path) -> None:
-        """load_service must be invoked before any bootstrap/indexing could happen."""
+    def test_exact_call_order_service_before_wait_no_bootstrap(self, tmp_path: Path) -> None:
+        """run() must call load_service before _wait_for_service, and _bootstrap_collections must never appear.
+
+        install_deps is excluded from recording because check_deps returns [] (no missing deps),
+        so install_deps is never invoked on the happy path.
+        The relative ordering of configure_providers/create_data_dir/write_service_file is an
+        implementation detail — only the load_service→_wait_for_service pair is a strict contract.
+        """
         installer = _make_installer(tmp_path)
         call_order: list[str] = []
 
-        def record_load_service() -> int:
-            call_order.append("load_service")
-            return 0
+        def record(name: str):  # noqa: ANN001, ANN202
+            def _side_effect(*args: object, **kwargs: object) -> object:  # noqa: ANN401
+                call_order.append(name)
+                if name == "load_service":
+                    return 0
+                if name == "_wait_for_service":
+                    return True
+                return None
+            return _side_effect
 
-        def record_bootstrap() -> None:
-            call_order.append("_bootstrap_collections")
+        with patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers", side_effect=record("configure_providers")), \
+             patch.object(installer, "create_data_dir", side_effect=record("create_data_dir")), \
+             patch.object(installer, "write_service_file", side_effect=record("write_service_file")), \
+             patch.object(installer, "load_service", side_effect=record("load_service")), \
+             patch.object(installer, "_bootstrap_collections", side_effect=record("_bootstrap_collections")), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", side_effect=record("_wait_for_service")):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+
+        # _bootstrap_collections must NEVER be called
+        assert "_bootstrap_collections" not in call_order, (
+            f"_bootstrap_collections was called — run() must not block on indexing. order={call_order}"
+        )
+
+        # Critical contract: load_service must come before _wait_for_service
+        assert "load_service" in call_order, "load_service was never called"
+        assert "_wait_for_service" in call_order, "_wait_for_service was never called"
+        assert call_order.index("load_service") < call_order.index("_wait_for_service"), (
+            f"load_service must precede _wait_for_service. order={call_order}"
+        )
+
+    def test_run_completes_quickly_without_blocking(self, tmp_path: Path) -> None:
+        """run() completes in under 2 seconds when all subprocesses are mocked.
+
+        Since all methods are mocked, run() should complete in microseconds. This catches
+        any inline blocking code added directly to run() between the patched method calls —
+        e.g., a sleep() or synchronous HTTP call inserted directly in the method body.
+        It does NOT catch regressions to existing patched methods (those are covered by
+        the ordering tests above).
+        """
+        installer = _make_installer(tmp_path)
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
@@ -1550,16 +1604,15 @@ class TestRunNonBlocking:
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
-             patch.object(installer, "load_service", side_effect=record_load_service), \
-             patch.object(installer, "_bootstrap_collections", side_effect=record_bootstrap), \
+             patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_is_service_running", return_value=False), \
-             patch.object(installer, "_wait_for_service", return_value=True):
+             patch.object(installer, "_wait_for_service", return_value=True), \
+             patch.object(installer, "_bootstrap_collections"):
+            start = time.monotonic()
             result = installer.run(non_interactive=True)
+            elapsed = time.monotonic() - start
 
         assert result == 0
-        # load_service must appear in call_order before any bootstrap call
-        assert "load_service" in call_order, "load_service was never called"
-        if "_bootstrap_collections" in call_order:
-            assert call_order.index("load_service") < call_order.index("_bootstrap_collections"), (
-                "load_service must be called before _bootstrap_collections"
-            )
+        assert elapsed < 2.0, (
+            f"run() took {elapsed:.2f}s — a blocking call may have been reintroduced"
+        )
