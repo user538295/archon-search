@@ -93,6 +93,31 @@ class TestDebounceHandler:
         handler.cancel_all()
         loop.close()
 
+    def test_debounce_rapid_events_callback_fires_once(self):
+        """Two rapid events result in exactly one callback invocation (not two)."""
+        cb, calls = _make_async_callback()
+
+        loop = asyncio.new_event_loop()
+        # 10ms debounce with 300ms sleep = 30x margin; robust on loaded CI runners
+        handler = _DebounceHandler(cb, loop, "mycol", debounce_seconds=0.01)
+
+        event1 = _make_file_event("/some/file1.txt")
+        event2 = _make_file_event("/some/file2.txt")
+
+        try:
+            handler.on_any_event(event1)
+            handler.on_any_event(event2)
+
+            # Run the event loop long enough for the debounced timer to fire and
+            # the coroutine to complete (30x margin over debounce)
+            loop.run_until_complete(asyncio.sleep(0.3))
+
+            assert calls == ["mycol"], f"Expected callback once, got {calls}"
+            assert handler._timer is None  # verify full debounce lifecycle completed
+        finally:
+            handler.cancel_all()
+            loop.close()
+
     def test_debounce_handler_skips_directory_events(self):
         """Directory events are ignored — no timer created."""
         loop = asyncio.new_event_loop()
