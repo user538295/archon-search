@@ -47,7 +47,7 @@ def _make_full_config(tmp_path: Path) -> object:
     @dataclass
     class FakeSearchConfigInner:
         collections: list[str] = field(default_factory=list)
-        pinned_collections: list[str] = field(default_factory=list)
+        pinned_collections: list[str] = field(default_factory=lambda: ["/pinned/docs"])
         embedding_model: str = "BAAI/bge-small-en-v1.5"
         chunk_size: int = 512
         auto_reindex_on_chunk_size_change: bool = True
@@ -506,6 +506,7 @@ class TestBootstrapCollections:
         assert kwargs["embedding_model"] == installer._full_cfg.search.embedding_model
         assert kwargs["chunk_size"] == installer._full_cfg.search.chunk_size
         assert kwargs["auto_reindex_on_chunk_size_change"] == installer._full_cfg.search.auto_reindex_on_chunk_size_change
+        assert kwargs["pinned_collections"] == installer._full_cfg.search.pinned_collections
 
 
 # ---------------------------------------------------------------------------
