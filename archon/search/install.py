@@ -207,7 +207,7 @@ class SearchInstaller:
         pipeline = create_pipeline(self.cfg)
         try:
             await pipeline.store.connect()
-            state_store = IndexingStateStore(Path(self.cfg.db_path))
+            state_store = IndexingStateStore(Path(self.cfg.db_path).expanduser())
             sync = SearchCollectionSync(
                 pipeline,
                 state_store=state_store,

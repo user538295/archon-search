@@ -191,7 +191,7 @@ async def main() -> None:
     await pipeline.store.connect()
 
     # Startup sync
-    state_store = IndexingStateStore(Path(cfg.search.db_path))
+    state_store = IndexingStateStore(Path(cfg.search.db_path).expanduser())
     sync = SearchCollectionSync(
         pipeline,
         state_store=state_store,

@@ -406,6 +406,7 @@ async def test_server_main_wires_all_components() -> None:
         patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
         patch("archon.search.server.create_app", return_value=mock_app),
         patch("archon.search.server.SearchCollectionSync") as MockSync,
+        patch("archon.search.server.IndexingStateStore"),
     ):
         MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
         await main()
@@ -455,6 +456,7 @@ async def test_server_runs_sync_on_startup() -> None:
         patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
         patch("archon.search.server.create_app", return_value=mock_app),
         patch("archon.search.server.SearchCollectionSync") as MockSync,
+        patch("archon.search.server.IndexingStateStore"),
     ):
         MockSync.return_value.sync = mock_sync
         await main()
@@ -497,6 +499,7 @@ async def test_server_logs_warning_on_sync_errors(caplog: pytest.LogCaptureFixtu
         patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
         patch("archon.search.server.create_app", return_value=mock_app),
         patch("archon.search.server.SearchCollectionSync") as MockSync,
+        patch("archon.search.server.IndexingStateStore"),
         caplog.at_level(logging.WARNING),
     ):
         MockSync.return_value.sync = mock_sync
