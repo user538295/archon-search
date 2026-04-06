@@ -616,7 +616,6 @@ class TestSyncLocking:
         lock_was_locked_during_ingest = False
 
         async def fake_ingest(path, name, **kwargs):
-            progress_cb = kwargs.get("progress_cb")
             nonlocal lock_was_locked_during_ingest
             lock = syncer._get_lock(name)
             lock_was_locked_during_ingest = lock.locked()
@@ -644,7 +643,6 @@ class TestSyncLocking:
         call_count = 0
 
         async def fake_ingest(path, name, **kwargs):
-            progress_cb = kwargs.get("progress_cb")
             nonlocal call_count
             call_count += 1
             current_call = call_count
@@ -697,7 +695,6 @@ class TestSyncLocking:
         both_started = asyncio.Event()
 
         async def fake_ingest(path, name, **kwargs):
-            progress_cb = kwargs.get("progress_cb")
             started.append(name)
             if len(started) == 2:
                 both_started.set()
@@ -838,7 +835,6 @@ class TestSyncProgress:
         captured_status = None
 
         async def fake_ingest(path, name, **kwargs):
-            progress_cb = kwargs.get("progress_cb")
             nonlocal captured_status
             state = state_store.read()
             if state and name in state.collections:
@@ -989,11 +985,12 @@ class TestSyncProgress:
         pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
         state_store = IndexingStateStore(tmp_path / "state")
 
-        write_calls: list[tuple[str, int]] = []
+        progress_write_counts: list[int] = []
         original_write = state_store.update_collection
 
         def tracking_update(name, progress):
-            write_calls.append((str(progress.status), progress.processed_files))
+            if progress.status == IndexingStatus.IN_PROGRESS and progress.processed_files > 0:
+                progress_write_counts.append(progress.processed_files)
             return original_write(name, progress)
 
         state_store.update_collection = tracking_update
@@ -1001,14 +998,11 @@ class TestSyncProgress:
         N = 150
 
         async def fake_ingest(path, name, **kwargs):
-            progress_cb = kwargs.get("progress_cb")
             on_file_complete = kwargs.get("on_file_complete")
             results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
             for i in range(N):
                 if on_file_complete:
                     on_file_complete(Path(f"/fake/file{i}.md"))
-                if progress_cb:
-                    progress_cb(i + 1, N)
             return results
 
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
@@ -1017,14 +1011,11 @@ class TestSyncProgress:
         await syncer.sync([str(new_dir)])
 
         # Batched writes from on_file_complete at every 50 files
-        in_progress_status = str(IndexingStatus.IN_PROGRESS)
-        batched = [pf for st, pf in write_calls if st == in_progress_status and pf > 0]
-        assert batched == [50, 100, 150], f"Expected exactly [50, 100, 150], got {batched}"
+        assert progress_write_counts == [50, 100, 150], f"Expected exactly [50, 100, 150], got {progress_write_counts}"
 
     @pytest.mark.asyncio
     async def test_sync_batched_writes_boundary_49_files(self, tmp_path):
         """With 49 files, no batched progress writes should happen (only PENDING/IN_PROGRESS/DONE)."""
-        import asyncio
         from archon.search._types import IngestResult
         from archon.search.progress import IndexingStateStore, IndexingStatus
         from archon.search.sync import SearchCollectionSync
@@ -1039,7 +1030,7 @@ class TestSyncProgress:
         original_update = state_store.update_collection
 
         def tracking_update(name, progress):
-            if progress.status == IndexingStatus.IN_PROGRESS:
+            if progress.status == IndexingStatus.IN_PROGRESS and progress.processed_files > 0:
                 progress_write_counts.append(progress.processed_files)
             return original_update(name, progress)
 
@@ -1049,12 +1040,10 @@ class TestSyncProgress:
         results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
 
         async def fake_ingest(path, name, **kwargs):
-            progress_cb = kwargs.get("progress_cb")
-            if progress_cb:
-                for i in range(1, N + 1):
-                    cb_result = progress_cb(i, N)
-                    if asyncio.iscoroutine(cb_result):
-                        await cb_result
+            on_file_complete = kwargs.get("on_file_complete")
+            if on_file_complete:
+                for i in range(N):
+                    on_file_complete(Path(f"/fake/file{i}.md"))
             return results
 
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
@@ -1063,8 +1052,7 @@ class TestSyncProgress:
         await syncer.sync([str(new_dir)])
 
         # Only the initial IN_PROGRESS write (processed_files=0), no batched progress writes
-        batched = [c for c in progress_write_counts if c > 0]
-        assert len(batched) == 0
+        assert len(progress_write_counts) == 0
 
     @pytest.mark.asyncio
     async def test_sync_batched_writes_boundary_50_files(self, tmp_path):
@@ -1092,7 +1080,6 @@ class TestSyncProgress:
         N = 50
 
         async def fake_ingest(path, name, **kwargs):
-            progress_cb = kwargs.get("progress_cb")
             on_file_complete = kwargs.get("on_file_complete")
             results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
             for i in range(N):
@@ -1134,7 +1121,6 @@ class TestSyncProgress:
         N = 51
 
         async def fake_ingest(path, name, **kwargs):
-            progress_cb = kwargs.get("progress_cb")
             on_file_complete = kwargs.get("on_file_complete")
             results = [IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(N)]
             for i in range(N):
@@ -1152,7 +1138,6 @@ class TestSyncProgress:
     @pytest.mark.asyncio
     async def test_sync_batched_writes_boundary_1_file(self, tmp_path):
         """With 1 file, no batched progress writes."""
-        import asyncio
         from archon.search._types import IngestResult
         from archon.search.progress import IndexingStateStore, IndexingStatus
         from archon.search.sync import SearchCollectionSync
@@ -1176,11 +1161,9 @@ class TestSyncProgress:
         results = [IngestResult(doc_id="d0", chunks_created=1, status="ok")]
 
         async def fake_ingest(path, name, **kwargs):
-            progress_cb = kwargs.get("progress_cb")
-            if progress_cb:
-                cb_result = progress_cb(1, 1)
-                if asyncio.iscoroutine(cb_result):
-                    await cb_result
+            on_file_complete = kwargs.get("on_file_complete")
+            if on_file_complete:
+                on_file_complete(Path("/fake/file0.md"))
             return results
 
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
