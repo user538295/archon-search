@@ -2348,6 +2348,61 @@ class TestSyncResumable:
         assert "project_b" not in result.unchanged
 
     @pytest.mark.asyncio
+    async def test_sync_deleted_file_remains_in_processed_paths(self, tmp_path):
+        """Deleting a file from disk does NOT remove it from processed_paths.
+
+        The file has no entry in file_mtimes, so it is invisible to the deletion
+        detector; sync leaves the collection unchanged (status stays DONE, no phantom
+        mtime entries are added).
+        """
+        from archon.search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+
+        # Create a real file and capture its resolved path
+        tracked_file = col_dir / "tracked.md"
+        tracked_file.write_text("already indexed content")
+        tracked_file_resolved = str(tracked_file.resolve())
+
+        resolved_dir = str(col_dir.resolve())
+        manifest = {"myproject": resolved_dir}
+        pipeline = make_mock_pipeline(
+            tmp_path,
+            existing_collections=["myproject"],
+            manifest=manifest,
+        )
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        # Seed collection as DONE with the file in processed_paths but empty file_mtimes.
+        # Without a file_mtimes entry, _check_collection_changes cannot detect this file
+        # as deleted — it is invisible to the Phase 4 deletion detector.
+        state_store.update_collection("myproject", CollectionProgress(
+            status=IndexingStatus.DONE,
+            processed_paths=[tracked_file_resolved],
+            file_mtimes={},
+        ))
+
+        # Delete the file from disk
+        tracked_file.unlink()
+        assert not tracked_file.exists()
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+        result = await syncer.sync([str(col_dir)])
+
+        # No error should occur — the missing file is simply invisible to the detector
+        assert result.errors == []
+
+        # The path must remain in processed_paths; collection is left unchanged
+        state = state_store.read()
+        assert state is not None
+        cp = state.collections["myproject"]
+        assert tracked_file_resolved in cp.processed_paths
+        assert cp.status == IndexingStatus.DONE
+        assert cp.file_mtimes == {}
+
+    @pytest.mark.asyncio
     async def test_sync_resumes_existing_collection_with_failed_status(self, tmp_path):
         """FAILED collection in existing & desired → Step 6.5 resumes it."""
         from archon.search._types import IngestResult
