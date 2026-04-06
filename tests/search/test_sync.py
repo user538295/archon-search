@@ -143,6 +143,37 @@ class TestSearchCollectionSync:
         assert result.errors == []
 
     @pytest.mark.asyncio
+    async def test_sync_no_state_store_existing_collection_goes_to_unchanged(self, tmp_path):
+        """state_store=None + existing collection → result.unchanged contains it; no crash; _check_collection_changes not called."""
+        from unittest.mock import patch
+
+        from archon.search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        resolved = str(col_dir.resolve())
+
+        manifest = {"myproject": resolved}
+        pipeline = make_mock_pipeline(
+            tmp_path,
+            existing_collections=["myproject"],
+            manifest=manifest,
+        )
+
+        syncer = SearchCollectionSync(pipeline, state_store=None)
+
+        with patch.object(syncer, "_check_collection_changes") as mock_check:
+            result = await syncer.sync([str(col_dir)])
+
+        assert "myproject" in result.unchanged
+        mock_check.assert_not_called()
+        assert result.errors == []
+        assert result.added == []
+        assert result.removed == []
+        assert result.updated == []
+        assert result.skipped == []
+
+    @pytest.mark.asyncio
     async def test_sync_resolves_collision(self, tmp_path):
         """Two paths with same basename → parent prefix used."""
         from archon.search.sync import SearchCollectionSync
