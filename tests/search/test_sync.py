@@ -4039,6 +4039,71 @@ class TestTask46:
         assert result.errors == []
 
     # ------------------------------------------------------------------
+    # Test 23b: stat() OSError on CHANGED file → old mtime preserved (not cleared)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_stat_oserror_on_changed_file_preserves_old_mtime(self, tmp_path):
+        """ingest_file succeeds for a CHANGED file but file.stat() raises OSError during mtime write.
+
+        Acceptance criterion: the OLD mtime is preserved in file_mtimes (not removed, not updated).
+        The file will be detected as changed again on the next sync, ensuring retry behaviour.
+
+        The OSError is triggered by deleting the file after ingest_file returns (same technique
+        as test_sync_file_vanishes_between_check_and_apply), but here the file starts with a
+        stale mtime so it enters the *changed* branch (not the *new* branch).
+        """
+        from archon.search.progress import IndexingStatus
+        from archon.search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "readme.md"
+        doc.write_text("content")
+        real_key = str(doc.resolve())
+        old_mtime = 1234567890.123  # stale mtime → file detected as changed on sync
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # After ingest_file succeeds, delete the file so file.stat() raises FileNotFoundError
+        # (FileNotFoundError is a subclass of OSError — same code path as any other OSError)
+        async def ingest_then_delete(file, name, **kwargs):
+            if file.name == "readme.md":
+                file.unlink()  # causes subsequent file.stat() to raise FileNotFoundError
+            return MagicMock(status="ok", chunks_created=1)
+
+        pipeline.ingest_file.side_effect = ingest_then_delete
+
+        # File starts with a stale mtime so it is classified as CHANGED, not new
+        state_store = _make_done_state(tmp_path, "myproject", {real_key: old_mtime})
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        # ingest_file must have been called with the changed file, collection name, and rebuild_fts=False
+        from unittest.mock import ANY
+        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False)
+        assert "myproject" in result.updated
+        assert result.errors == []
+
+        # State must be DONE (OSError during stat is not a hard failure)
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+
+        # OLD mtime must be preserved — not removed, not updated to a new value
+        assert real_key in cp.file_mtimes, "key must still be in file_mtimes (old mtime preserved)"
+        assert cp.file_mtimes[real_key] == old_mtime, (
+            f"old mtime {old_mtime} must be preserved, got {cp.file_mtimes.get(real_key)}"
+        )
+
+        # File must still be in processed_paths (it was there before the OSError, must remain)
+        assert real_key in cp.processed_paths, "file must remain in processed_paths after OSError on stat"
+
+    # ------------------------------------------------------------------
     # Test 24a: soft-ingest failure on CHANGED file → not in processed_paths
     # ------------------------------------------------------------------
 
