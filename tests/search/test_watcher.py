@@ -169,6 +169,28 @@ class TestDebounceHandler:
         assert handler._timer is None
         loop.close()
 
+    def test_fire_does_not_clobber_timer_set_by_concurrent_event(self):
+        """If on_any_event sets a NEW timer during _fire(), the finally block must not clear it."""
+        loop = asyncio.new_event_loop()
+        cb, _ = _make_async_callback()
+        handler = _DebounceHandler(cb, loop, "mycol", debounce_seconds=0.0)
+
+        original_timer = MagicMock()
+        new_timer = MagicMock()
+        handler._timer = original_timer
+
+        # Simulate on_any_event replacing _timer with a new one during submission
+        def _replace_timer_side_effect(coro, loop):
+            with handler._lock:
+                handler._timer = new_timer  # simulates concurrent on_any_event
+            raise RuntimeError("loop closed")
+
+        with patch("asyncio.run_coroutine_threadsafe", side_effect=_replace_timer_side_effect):
+            handler._fire()
+
+        # The new timer must survive — finally must NOT clobber it
+        assert handler._timer is new_timer
+
 
 # ---------------------------------------------------------------------------
 # _log_future_exception tests
