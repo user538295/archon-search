@@ -2089,9 +2089,13 @@ class TestSyncResumable:
         syncer = SearchCollectionSync(pipeline, state_store=state_store)
         await syncer.sync([str(new_dir)])
 
-        # Should have a write with 50 paths (batch) and final with 100 paths (DONE)
-        assert 50 in write_path_counts
-        assert 100 in write_path_counts
+        # Exact sequence of processed_paths counts per write call:
+        # [0]: PENDING write (no paths yet)
+        # [0]: IN_PROGRESS write (resume_paths is empty at start)
+        # [50]: batch flush at callback 50 (50 % 50 == 0)
+        # [100]: batch flush at callback 100 (100 % 50 == 0)
+        # [100]: final DONE write
+        assert write_path_counts == [0, 0, 50, 100, 100]
 
     @pytest.mark.asyncio
     async def test_sync_final_state_contains_all_paths(self, tmp_path):
