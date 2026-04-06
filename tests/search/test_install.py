@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon.cli.console import Console
+
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -102,6 +104,7 @@ def _make_installer(tmp_path: Path, dry_run: bool = False) -> object:
     from archon.search.install import SearchInstaller
 
     installer = SearchInstaller.__new__(SearchInstaller)
+    installer._console = Console()
     installer.dry_run = dry_run
     installer.cfg = _make_search_config(tmp_path)
     installer._full_cfg = _make_full_config(tmp_path)
@@ -1616,4 +1619,127 @@ class TestRunNonBlocking:
         assert result == 0
         assert elapsed < 2.0, (
             f"run() took {elapsed:.2f}s — a blocking call may have been reintroduced"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Console integration — Task 3.1
+# ---------------------------------------------------------------------------
+
+
+class TestConsoleIntegration:
+    @staticmethod
+    def _run_patches() -> dict:
+        return {
+            "detect_gpu": MagicMock(return_value="none"),
+            "check_deps": MagicMock(return_value=[]),
+            "install_deps": MagicMock(),
+            "configure_providers": MagicMock(),
+            "validate_providers": MagicMock(return_value=True),
+            "create_data_dir": MagicMock(),
+            "_bootstrap_collections": AsyncMock(),
+            "write_service_file": MagicMock(),
+            "load_service": MagicMock(return_value=0),
+            "_wait_for_service": MagicMock(return_value=True),
+            "_is_service_running": MagicMock(return_value=False),
+        }
+
+    @staticmethod
+    def _make_console_installer(tmp_path: Path) -> tuple:
+        """Return (installer, mock_console) with __new__ bypass."""
+        from archon.search.install import SearchInstaller
+
+        installer = SearchInstaller.__new__(SearchInstaller)
+        mock_console = MagicMock()
+        installer._console = mock_console
+        installer.dry_run = False
+        installer.cfg = _make_search_config(tmp_path)
+        installer._full_cfg = _make_full_config(tmp_path)
+        installer.config_file = str(tmp_path / "config.toml")
+        return installer, mock_console
+
+    def test_search_run_final_message_uses_console(self, tmp_path: Path) -> None:
+        """run() final success message is the last console.success() call."""
+        installer, mock_console = self._make_console_installer(tmp_path)
+
+        patches = self._run_patches()
+        with patch.object(installer, "detect_gpu", patches["detect_gpu"]), \
+             patch.object(installer, "check_deps", patches["check_deps"]), \
+             patch.object(installer, "install_deps", patches["install_deps"]), \
+             patch.object(installer, "configure_providers", patches["configure_providers"]), \
+             patch.object(installer, "validate_providers", patches["validate_providers"]), \
+             patch.object(installer, "create_data_dir", patches["create_data_dir"]), \
+             patch.object(installer, "_bootstrap_collections", patches["_bootstrap_collections"]), \
+             patch.object(installer, "write_service_file", patches["write_service_file"]), \
+             patch.object(installer, "load_service", patches["load_service"]), \
+             patch.object(installer, "_wait_for_service", patches["_wait_for_service"]), \
+             patch.object(installer, "_is_service_running", patches["_is_service_running"]):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        last_call = str(mock_console.success.call_args_list[-1])
+        assert "Search service installed and running" in last_call, (
+            f"Expected 'Search service installed and running' in last success call: {last_call}"
+        )
+
+    def test_search_uninstall_uses_console(self, tmp_path: Path) -> None:
+        """run_uninstall() final message contains 'uninstalled' via console.info()."""
+        installer, mock_console = self._make_console_installer(tmp_path)
+
+        svc = MagicMock()
+        svc.stop.return_value = 0
+        svc.unregister.return_value = 0
+
+        with patch("archon.search.install.get_search_service", return_value=svc):
+            result = installer.run_uninstall(delete_db=False)
+
+        assert result == 0
+        info_calls = [str(c) for c in mock_console.info.call_args_list]
+        assert any("uninstalled" in c for c in info_calls), (
+            f"Expected 'uninstalled' in info calls: {info_calls}"
+        )
+
+    def test_search_run_error_path_uses_console_error(self, tmp_path: Path) -> None:
+        """Service start failure is reported via console.error() (stderr)."""
+        installer, mock_console = self._make_console_installer(tmp_path)
+
+        patches = self._run_patches()
+        patches["load_service"] = MagicMock(return_value=42)
+        with patch.object(installer, "detect_gpu", patches["detect_gpu"]), \
+             patch.object(installer, "check_deps", patches["check_deps"]), \
+             patch.object(installer, "configure_providers", patches["configure_providers"]), \
+             patch.object(installer, "create_data_dir", patches["create_data_dir"]), \
+             patch.object(installer, "_bootstrap_collections", patches["_bootstrap_collections"]), \
+             patch.object(installer, "write_service_file", patches["write_service_file"]), \
+             patch.object(installer, "load_service", patches["load_service"]), \
+             patch.object(installer, "_is_service_running", patches["_is_service_running"]):
+            result = installer.run(non_interactive=True)
+
+        assert result == 42
+        error_calls = [str(c) for c in mock_console.error.call_args_list]
+        assert any("exit code" in c for c in error_calls), (
+            f"Expected 'exit code' in error calls: {error_calls}"
+        )
+
+    def test_search_run_timeout_uses_console_warn(self, tmp_path: Path) -> None:
+        """Service readiness timeout is reported via console.warn() (stdout)."""
+        installer, mock_console = self._make_console_installer(tmp_path)
+
+        patches = self._run_patches()
+        patches["_wait_for_service"] = MagicMock(return_value=False)
+        with patch.object(installer, "detect_gpu", patches["detect_gpu"]), \
+             patch.object(installer, "check_deps", patches["check_deps"]), \
+             patch.object(installer, "configure_providers", patches["configure_providers"]), \
+             patch.object(installer, "create_data_dir", patches["create_data_dir"]), \
+             patch.object(installer, "_bootstrap_collections", patches["_bootstrap_collections"]), \
+             patch.object(installer, "write_service_file", patches["write_service_file"]), \
+             patch.object(installer, "load_service", patches["load_service"]), \
+             patch.object(installer, "_wait_for_service", patches["_wait_for_service"]), \
+             patch.object(installer, "_is_service_running", patches["_is_service_running"]):
+            result = installer.run(non_interactive=True)
+
+        assert result == 1
+        warn_calls = [str(c) for c in mock_console.warn.call_args_list]
+        assert any("did not become ready" in c for c in warn_calls), (
+            f"Expected 'did not become ready' in warn calls: {warn_calls}"
         )

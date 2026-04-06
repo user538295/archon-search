@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import tomlkit
 
+from archon.cli.console import Console
 from archon.platform import get_search_service, get_runtime
 from archon.platform.types import GpuType
 from archon.search.pipeline import create_pipeline
@@ -28,7 +29,8 @@ _WAIT_FOR_SERVICE_TIMEOUT = 60
 class SearchInstaller:
     """Installs and manages the search service end-to-end."""
 
-    def __init__(self, config_file: str | None = None, dry_run: bool = False) -> None:
+    def __init__(self, config_file: str | None = None, dry_run: bool = False, console: Console | None = None) -> None:
+        self._console = console or Console()
         self.config_file = config_file or str(Path.home() / ".archon" / "config.toml")
         self.dry_run = dry_run
 
@@ -259,62 +261,62 @@ class SearchInstaller:
         """Execute the full install flow. Returns 0 on success."""
         gpu = self.detect_gpu()
 
-        print(f"Search installer — GPU detected: {gpu}")
-        print("Note: first run will download ~150MB of model data.")
+        self._console.info(f"Search installer — GPU detected: {gpu}")
+        self._console.info("Note: first run will download ~150MB of model data.")
 
         if not non_interactive:
             answer = input("Proceed with installation? [y/N] ").strip().lower()
             if answer != "y":
-                print("Installation aborted.")
+                self._console.info("Installation aborted.")
                 return 1
 
         # Warn if service already running
         if self._is_service_running():
-            print("Warning: Search service is already running. Proceeding anyway.")
+            self._console.warn("Warning: Search service is already running. Proceeding anyway.")
 
         # Dependencies
         missing = self.check_deps()
         if missing:
-            print(f"[1/5] Installing packages: {', '.join(missing)} ...")
+            self._console.info(f"[1/5] Installing packages: {', '.join(missing)} ...")
             self.install_deps(gpu=gpu)
-            print("[1/5] Packages installed.")
+            self._console.success("[1/5] Packages installed.")
         else:
-            print("[1/5] All packages already installed.")
+            self._console.success("[1/5] All packages already installed.")
 
         # Configure execution providers based on GPU type
         if not self.dry_run and gpu == "apple_silicon":
-            print("[2/5] Validating GPU acceleration (first run downloads ~150 MB model data) ...")
+            self._console.info("[2/5] Validating GPU acceleration (first run downloads ~150 MB model data) ...")
             if self.validate_providers(["CoreMLExecutionProvider"]):
                 self.configure_providers(gpu=gpu)
-                print("[2/5] CoreML acceleration validated — GPU/Neural Engine active.")
+                self._console.success("[2/5] CoreML acceleration validated — GPU/Neural Engine active.")
             else:
-                print("[2/5] Warning: CoreML validation failed — falling back to CPU. macOS 12+ required.")
+                self._console.warn("[2/5] Warning: CoreML validation failed — falling back to CPU. macOS 12+ required.")
         else:
-            print(f"[2/5] Configuring providers for {gpu} ...")
+            self._console.info(f"[2/5] Configuring providers for {gpu} ...")
             self.configure_providers(gpu=gpu)
-            print(f"[2/5] Providers configured for {gpu}.")
+            self._console.success(f"[2/5] Providers configured for {gpu}.")
 
         # Create data directory
-        print("[3/5] Creating data directory ...")
+        self._console.info("[3/5] Creating data directory ...")
         self.create_data_dir()
 
         # Register and start service (bootstrap happens in the background via the server's startup sync)
-        print("[4/5] Starting search service ...")
+        self._console.info("[4/5] Starting search service ...")
         self.write_service_file()
         rc = self.load_service()
         if rc != 0:
-            print(f"Service start returned exit code {rc}.")
+            self._console.error(f"Service start returned exit code {rc}.")
             return rc
 
         # Wait for service readiness — indexing runs in background via server's asyncio.create_task
-        print("[5/5] Waiting for service readiness ...")
+        self._console.info("[5/5] Waiting for service readiness ...")
         if not self.dry_run:
             ready = self._wait_for_service()
             if not ready:
-                print(f"Search service did not become ready within {_WAIT_FOR_SERVICE_TIMEOUT} seconds.")
+                self._console.warn(f"Search service did not become ready within {_WAIT_FOR_SERVICE_TIMEOUT} seconds.")
                 return 1
 
-        print("Search service installed and running successfully.")
+        self._console.success("Search service installed and running.")
         return 0
 
     # ------------------------------------------------------------------
@@ -332,7 +334,7 @@ class SearchInstaller:
             if db_path.exists():
                 if not self.dry_run:
                     rmtree(db_path)
-                    print(f"Deleted search database at {db_path}.")
+                    self._console.info(f"Deleted search database at {db_path}.")
 
-        print("Search service uninstalled. Remove [search] section from config.toml to disable.")
+        self._console.info("Search service uninstalled. Remove [search] section from config.toml to disable.")
         return 0
