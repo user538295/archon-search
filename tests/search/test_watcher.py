@@ -151,6 +151,24 @@ class TestDebounceHandler:
         assert "Event loop closed" in caplog.text or "loop" in caplog.text.lower()
         loop.close()
 
+    def test_fire_clears_timer_in_finally_on_unexpected_exception(self):
+        """_fire() must set _timer=None in a finally block even when an unexpected exception propagates."""
+        loop = asyncio.new_event_loop()
+        cb, _ = _make_async_callback()
+        handler = _DebounceHandler(cb, loop, "mycol", debounce_seconds=0.0)
+
+        # Simulate a pending timer so _timer is not None before the call
+        mock_timer = MagicMock()
+        handler._timer = mock_timer
+
+        with patch("asyncio.run_coroutine_threadsafe", side_effect=ValueError("unexpected")):
+            with pytest.raises(ValueError, match="unexpected"):
+                handler._fire()
+
+        # _timer must be None regardless of whether the exception was RuntimeError or not
+        assert handler._timer is None
+        loop.close()
+
 
 # ---------------------------------------------------------------------------
 # _log_future_exception tests

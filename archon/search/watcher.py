@@ -98,8 +98,6 @@ class _DebounceHandler(FileSystemEventHandler):  # type: ignore[misc]
 
     def _fire(self) -> None:
         """Called from the timer thread — submit coroutine to the event loop."""
-        with self._lock:
-            self._timer = None  # clear before work so on_any_event sees a clean state
         coro = self._async_callback(self._collection_name)
         try:
             future = asyncio.run_coroutine_threadsafe(coro, self._loop)
@@ -110,6 +108,9 @@ class _DebounceHandler(FileSystemEventHandler):  # type: ignore[misc]
                 "Event loop closed, skipping watch-triggered sync for %r",
                 self._collection_name,
             )
+        finally:
+            with self._lock:
+                self._timer = None
 
     def cancel_all(self) -> None:
         """Cancel any pending debounce timer."""
