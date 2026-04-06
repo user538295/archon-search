@@ -213,6 +213,7 @@ class SearchCollectionSync:
         # (only when state_store is available; without it we can't track mtimes)
         to_check = existing_and_desired - to_resume
         to_update: set[str] = set()
+        successfully_updated: set[str] = set()
         if self._state_store is not None:
             sorted_to_check = self._sort_ingestion_order(to_check, desired)
             # Read state once for all Step 7 collections (avoids O(n) JSON reads)
@@ -239,6 +240,7 @@ class SearchCollectionSync:
                     )
                     if error is None:
                         result.updated.append(name)
+                        successfully_updated.add(name)
                     else:
                         result.errors.append(error)
 
@@ -249,7 +251,7 @@ class SearchCollectionSync:
         # Step 9: update manifest atomically
         new_manifest: dict[str, str] = {}
         for name, path_str in desired.items():
-            if name in successfully_added or name in unchanged or name in to_update:
+            if name in successfully_added or name in unchanged or name in successfully_updated:
                 new_manifest[name] = path_str
         self._write_manifest(manifest_path, new_manifest)
 

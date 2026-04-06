@@ -422,6 +422,91 @@ class TestSearchCollectionSync:
         pipeline.store.rename_collection.assert_not_called()
         assert any("archon-history" in msg for msg in caplog.messages)
 
+    @pytest.mark.asyncio
+    async def test_failed_apply_collection_excluded_from_manifest(self, tmp_path):
+        """Collection where _apply_collection_changes returns an error must NOT appear in manifest."""
+        import json
+        from archon.search.sync import SearchCollectionSync
+        from unittest.mock import MagicMock
+
+        existing_dir = tmp_path / "myproject"
+        existing_dir.mkdir()
+        resolved = str(existing_dir.resolve())
+
+        # Collection already exists in LanceDB and in manifest
+        manifest = {"myproject": resolved}
+        pipeline = make_mock_pipeline(
+            tmp_path,
+            existing_collections=["myproject"],
+            manifest=manifest,
+        )
+
+        # Set up a state_store mock so Step 7 (change detection) runs
+        state_store = MagicMock()
+        state_store.read.return_value = None  # no prior state → treated as DONE
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+
+        # Force _check_collection_changes to report a changed file so to_update is populated
+        syncer._check_collection_changes = MagicMock(
+            return_value=([existing_dir / "file.txt"], [], [])
+        )
+        # Force _apply_collection_changes to return an error (simulate failure)
+        syncer._apply_collection_changes = AsyncMock(return_value="ingest failed: disk full")
+
+        result = await syncer.sync([resolved])
+
+        db_path = tmp_path / "db"
+        manifest_path = db_path / "sync_manifest.json"
+        assert manifest_path.exists(), "Manifest file was not written"
+        written = json.loads(manifest_path.read_text())
+        assert "myproject" not in written, (
+            "Failed collection should NOT be in manifest, but was found"
+        )
+        assert "ingest failed: disk full" in result.errors
+        assert "myproject" not in result.updated
+
+    @pytest.mark.asyncio
+    async def test_successful_apply_collection_included_in_manifest(self, tmp_path):
+        """Collection where _apply_collection_changes returns None (success) MUST appear in manifest."""
+        import json
+        from archon.search.sync import SearchCollectionSync
+        from unittest.mock import MagicMock
+
+        existing_dir = tmp_path / "goodproject"
+        existing_dir.mkdir()
+        resolved = str(existing_dir.resolve())
+
+        manifest = {"goodproject": resolved}
+        pipeline = make_mock_pipeline(
+            tmp_path,
+            existing_collections=["goodproject"],
+            manifest=manifest,
+        )
+
+        state_store = MagicMock()
+        state_store.read.return_value = None
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+
+        syncer._check_collection_changes = MagicMock(
+            return_value=([existing_dir / "file.txt"], [], [])
+        )
+        # Successful apply returns None
+        syncer._apply_collection_changes = AsyncMock(return_value=None)
+
+        result = await syncer.sync([resolved])
+
+        db_path = tmp_path / "db"
+        manifest_path = db_path / "sync_manifest.json"
+        assert manifest_path.exists(), "Manifest file was not written"
+        written = json.loads(manifest_path.read_text())
+        assert "goodproject" in written, (
+            "Successfully updated collection MUST be in manifest"
+        )
+        assert "goodproject" in result.updated
+        assert not result.errors
+
 
 # ---------------------------------------------------------------------------
 # manifest_lookup_by_path tests
