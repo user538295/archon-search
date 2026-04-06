@@ -1180,6 +1180,9 @@ class TestSyncProgress:
 
         new_dir = tmp_path / "myproject"
         new_dir.mkdir()
+        # Create 5 real files so enumeration yields total_new == 5
+        for i in range(5):
+            (new_dir / f"file{i}.md").write_text(f"content {i}")
 
         syncer, state_store, _ = self._make_syncer_with_state(tmp_path, file_count=5)
         await syncer.sync([str(new_dir)])
@@ -1355,6 +1358,9 @@ class TestSyncProgress:
 
         new_dir = tmp_path / "myproject"
         new_dir.mkdir()
+        # Create 5 real files so enumeration yields total_new == 5
+        for i in range(5):
+            (new_dir / f"file{i}.md").write_text(f"content {i}")
 
         results = [
             IngestResult(doc_id="d0", chunks_created=1, status="ok"),
@@ -1407,6 +1413,107 @@ class TestSyncProgress:
         assert cp.total_files == 100  # from enumeration
         assert "crash mid-ingest" in cp.error
         assert len(cp.processed_paths) == 2  # partial progress retained
+
+    @pytest.mark.asyncio
+    async def test_sync_done_total_files_uses_total_new_not_len_results(self, tmp_path):
+        """DONE state total_files should use total_new (file enumeration count),
+        not len(results) (ingest return count), so partial ingest results don't
+        undercount the total."""
+        from archon.search._types import IngestResult
+        from archon.search.progress import IndexingStateStore, IndexingStatus
+        from archon.search.sync import SearchCollectionSync
+
+        new_dir = tmp_path / "myproject"
+        new_dir.mkdir()
+        # Create 5 real files so enumeration yields total_new == 5
+        for i in range(5):
+            (new_dir / f"file{i}.md").write_text(f"content {i}")
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        # ingest returns only 3 results — fewer than the 5 enumerated files
+        partial_results = [
+            IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(3)
+        ]
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            if on_file_complete:
+                for r in partial_results:
+                    on_file_complete(Path(f"/fake/{r.doc_id}.md"))
+            return partial_results
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(new_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        # total_files must reflect file enumeration (5), not ingest result count (3)
+        assert cp.total_files == 5
+
+    @pytest.mark.asyncio
+    async def test_sync_done_total_files_resume_plus_new(self, tmp_path):
+        """DONE total_files = resume_offset + total_new, not resume_offset + len(results).
+
+        Compound case: resume_offset > 0 AND total_new > 0 AND len(results) < total_new.
+        The old buggy formula (resume_offset + len(results)) would give 1 + 2 = 3.
+        The correct formula (resume_offset + total_new) must give 1 + 3 = 4.
+        """
+        from archon.search._types import IngestResult
+        from archon.search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
+        from archon.search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+
+        # Pre-seeded file (resume_offset = 1)
+        old_file = col_dir / "old.md"
+        old_file.write_text("already indexed")
+        old_file_resolved = str(old_file.resolve())
+
+        # 3 new real files on disk → total_new = 3
+        for i in range(3):
+            (col_dir / f"new{i}.md").write_text(f"new content {i}")
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        # Pre-seed old_file as already processed
+        state_store.update_collection("myproject", CollectionProgress(
+            status=IndexingStatus.PENDING,
+            processed_paths=[old_file_resolved],
+        ))
+
+        # ingest returns only 2 results — fewer than total_new (3)
+        partial_results = [
+            IngestResult(doc_id=f"d{i}", chunks_created=1, status="ok") for i in range(2)
+        ]
+
+        async def fake_ingest(path, name, **kwargs):
+            on_file_complete = kwargs.get("on_file_complete")
+            if on_file_complete:
+                for r in partial_results:
+                    on_file_complete(Path(f"/fake/{r.doc_id}.md"))
+            return partial_results
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(col_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        # resume_offset(1) + total_new(3) = 4, not resume_offset(1) + len(results)(2) = 3
+        assert cp.total_files == 4
 
     @pytest.mark.asyncio
     async def test_sync_multiple_collections_mixed_results(self, tmp_path):

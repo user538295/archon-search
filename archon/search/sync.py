@@ -558,7 +558,7 @@ class SearchCollectionSync:
                     error_count = sum(1 for r in results if r.status != "ok")
                     self._safe_state_update(name, CollectionProgress(
                         status=IndexingStatus.DONE,
-                        total_files=resume_offset + len(results),
+                        total_files=resume_offset + total_new,
                         processed_files=resume_offset + ok_count,
                         error_count=error_count,
                         started_at=started_at,
