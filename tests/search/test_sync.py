@@ -2453,6 +2453,67 @@ class TestSyncResumable:
         assert cp.status == IndexingStatus.DONE
         assert "/old/file.md" in cp.processed_paths
 
+    @pytest.mark.asyncio
+    async def test_sync_initial_in_progress_write_contains_resume_paths(self, tmp_path):
+        """First IN_PROGRESS write must preserve resume_paths — not reset to [].
+
+        Covers the crash-before-first-batch scenario: a previous partial run left
+        processed_paths in PENDING state; the initial IN_PROGRESS transition must
+        carry those paths so a crash between the state write and the first batch
+        does not lose resume progress.
+        """
+        from archon.search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        resume_paths = ["path/a", "path/b"]
+
+        # Pre-seed state with two previously processed paths (PENDING = stale resumed state)
+        state_store.update_collection("myproject", CollectionProgress(
+            status=IndexingStatus.PENDING,
+            processed_paths=resume_paths,
+        ))
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+
+        # Intercept _safe_state_update on the syncer itself (bypasses the internal
+        # try/except inside _safe_state_update that wraps state_store calls).
+        first_in_progress: list[CollectionProgress] = []
+        original_safe_update = syncer._safe_state_update
+
+        def capturing_safe_update(name, cp):
+            original_safe_update(name, cp)
+            if cp.status == IndexingStatus.IN_PROGRESS and not first_in_progress:
+                first_in_progress.append(cp)
+                raise RuntimeError("stop after first IN_PROGRESS write")
+
+        with patch.object(syncer, "_safe_state_update", side_effect=capturing_safe_update):
+            with pytest.raises(RuntimeError, match="stop after first IN_PROGRESS write"):
+                await syncer.sync([str(col_dir)])
+
+        assert len(first_in_progress) == 1, "Expected exactly one captured IN_PROGRESS write"
+        assert first_in_progress[0].processed_paths == resume_paths, (
+            "Initial IN_PROGRESS write must carry resume_paths, not reset to []"
+        )
+        assert first_in_progress[0].total_files == len(resume_paths), (
+            "total_files must equal len(resume_paths)"
+        )
+        assert first_in_progress[0].processed_files == len(resume_paths), (
+            "processed_files must equal len(resume_paths)"
+        )
+
+        # Verify the IN_PROGRESS write was actually persisted to the state store
+        state = state_store.read()
+        assert state is not None
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.IN_PROGRESS
+        assert cp.processed_paths == resume_paths
+
 
 # ---------------------------------------------------------------------------
 # Task 4.4 — _iter_eligible_files and _reset_stale Phase 4 field preservation
