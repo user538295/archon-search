@@ -376,6 +376,6 @@ class TestRunLoop:
         task = asyncio.create_task(monitor.run())
         await asyncio.sleep(0)
         task.cancel()
-        # Should not raise CancelledError or any other exception
+        # CancelledError propagates normally (standard asyncio cancellation semantics)
         with pytest.raises(asyncio.CancelledError):
             await task
