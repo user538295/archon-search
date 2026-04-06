@@ -994,3 +994,31 @@ async def test_delete_by_source_path_collection_not_found(tmp_path: Path) -> Non
     result = await store.delete_by_source_path("nonexistent-col", "/any/path.txt")
 
     assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_by_source_path_delegates_to_delete_document(tmp_path: Path) -> None:
+    """delete_by_source_path delegates to delete_document with the sha256 doc_id."""
+    from unittest.mock import AsyncMock, patch
+
+    source_path = "/some/project/README.md"
+    expected_doc_id = hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
+
+    store = SearchStore(tmp_path / "db")
+    with patch.object(store, "delete_document", new_callable=AsyncMock, return_value=1) as mock_del:
+        await store.delete_by_source_path("my-col", source_path)
+
+        mock_del.assert_called_once_with("my-col", expected_doc_id)
+
+
+@pytest.mark.asyncio
+async def test_delete_by_source_path_returns_count(tmp_path: Path) -> None:
+    """delete_by_source_path returns the count from delete_document."""
+    from unittest.mock import AsyncMock, patch
+
+    store = SearchStore(tmp_path / "db")
+    with patch.object(store, "delete_document", new_callable=AsyncMock, return_value=5) as mock_del:
+        result = await store.delete_by_source_path("my-col", "/some/file.py")
+
+        assert result == 5
+        mock_del.assert_called_once()
