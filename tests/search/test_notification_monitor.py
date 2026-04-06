@@ -226,6 +226,25 @@ class TestCheckAndNotify:
         await monitor._check_and_notify()
 
     @pytest.mark.asyncio
+    async def test_bot_not_connected_notification_silently_skipped(self, caplog: pytest.LogCaptureFixture) -> None:
+        """bot.send_message raises RuntimeError('Bot is not running') — exception caught, logged at WARNING, not propagated.
+
+        Covers the scenario where the daemon starts before Telegram polling is established.
+        Unlike test_send_failure_is_caught (which only checks no-raise), this test verifies
+        the WARNING log is emitted with the exception message.
+        """
+        state = _terminal_state(done=1, trigger="install")
+        monitor, store, bot = _make_monitor(state=state, user_ids=[111])
+        bot.send_message.side_effect = RuntimeError("Bot is not running")
+        with caplog.at_level(logging.WARNING, logger="archon"):
+            await monitor._check_and_notify()
+        assert any(
+            r.levelno == logging.WARNING and "Bot is not running" in r.getMessage()
+            for r in caplog.records
+        )
+        store.set_trigger.assert_called_once_with(None)
+
+    @pytest.mark.asyncio
     async def test_monitor_set_trigger_failure_caught(self, caplog: pytest.LogCaptureFixture) -> None:
         """If set_trigger raises OSError, exception is caught, _send_to_all not called."""
         state = _terminal_state(done=1, trigger="install")
