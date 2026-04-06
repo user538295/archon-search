@@ -3631,6 +3631,148 @@ class TestTask46:
         assert result.errors == []
 
     # ------------------------------------------------------------------
+    # Test 24a: soft-ingest failure on CHANGED file → not in processed_paths
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_changed_file_error_not_in_processed_paths(self, tmp_path):
+        """ingest_file returns error status for a CHANGED file → that file NOT in processed_paths."""
+        from archon.search.progress import IndexingStatus
+        from archon.search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        ok_doc = col_dir / "ok.md"
+        ok_doc.write_text("ok content")
+        err_doc = col_dir / "err.md"
+        err_doc.write_text("error content")
+        ok_key = str(ok_doc.resolve())
+        err_key = str(err_doc.resolve())
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # Both files are in state with stale mtimes → both appear as CHANGED
+        state_store = _make_done_state(tmp_path, "myproject", {ok_key: 0.0, err_key: 0.0})
+
+        async def ingest_side_effect(file, name, **kwargs):
+            if file.name == "err.md":
+                return MagicMock(status="error", chunks_created=0)
+            return MagicMock(status="ok", chunks_created=1)
+
+        pipeline.ingest_file.side_effect = ingest_side_effect
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        await syncer.sync([str(col_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        # ok file must be in processed_paths; err file must NOT be
+        assert ok_key in cp.processed_paths
+        assert err_key not in cp.processed_paths
+        # stale mtime preserved → mtime mismatch on next scan → file detected as changed again
+        assert err_key in cp.file_mtimes, "stale mtime must be preserved to enable retry via change detection"
+
+    # ------------------------------------------------------------------
+    # Test 24b: soft-ingest failure on NEW file → not in processed_paths
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_new_file_error_not_in_processed_paths(self, tmp_path):
+        """ingest_file returns error status for a NEW file → that file NOT in processed_paths."""
+        from archon.search.progress import IndexingStatus
+        from archon.search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        ok_doc = col_dir / "ok.md"
+        ok_doc.write_text("ok content")
+        err_doc = col_dir / "err.md"
+        err_doc.write_text("error content")
+        ok_key = str(ok_doc.resolve())
+        err_key = str(err_doc.resolve())
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # Empty file_mtimes → both files are NEW
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        async def ingest_side_effect(file, name, **kwargs):
+            if file.name == "err.md":
+                return MagicMock(status="error", chunks_created=0)
+            return MagicMock(status="ok", chunks_created=1)
+
+        pipeline.ingest_file.side_effect = ingest_side_effect
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        await syncer.sync([str(col_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.DONE
+        # ok file must be in processed_paths; err file must NOT be
+        assert ok_key in cp.processed_paths
+        assert err_key not in cp.processed_paths
+        # error file must not be in file_mtimes so it is re-discovered as new on next sync
+        assert err_key not in cp.file_mtimes, "error file must not be in file_mtimes so it is re-discovered as new on next sync"
+
+    # ------------------------------------------------------------------
+    # Test 24c: error file is retried on next sync
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_error_file_retried_on_next_sync(self, tmp_path):
+        """Error file on first sync is retried (and succeeds) on second sync."""
+        from archon.search.progress import IndexingStatus
+        from archon.search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        err_doc = col_dir / "err.md"
+        err_doc.write_text("error content")
+        err_key = str(err_doc.resolve())
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+
+        # Empty file_mtimes → file is NEW on first sync
+        state_store = _make_done_state(tmp_path, "myproject", {})
+
+        # First sync: ingest fails
+        async def ingest_fail(file, name, **kwargs):
+            return MagicMock(status="error", chunks_created=0)
+
+        pipeline.ingest_file.side_effect = ingest_fail
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        await syncer.sync([str(col_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert err_key not in cp.processed_paths
+        assert err_key not in cp.file_mtimes
+
+        # Second sync: ingest succeeds
+        async def ingest_ok(file, name, **kwargs):
+            return MagicMock(status="ok", chunks_created=1)
+
+        pipeline.ingest_file.side_effect = ingest_ok
+
+        await syncer.sync([str(col_dir)])
+
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert err_key in cp.processed_paths, "file must be in processed_paths after successful retry"
+
+    # ------------------------------------------------------------------
     # Test 24: resume then change detection works correctly
     # ------------------------------------------------------------------
 

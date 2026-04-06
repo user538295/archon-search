@@ -650,14 +650,18 @@ class SearchCollectionSync:
                 # Changed files
                 for file in changed_files:
                     ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False)
+                    resolved_str = str(file.resolve())
                     if ingest_result.status == "ok":
                         try:
-                            file_mtimes[str(file.resolve())] = file.stat().st_mtime
+                            file_mtimes[resolved_str] = file.stat().st_mtime
                         except OSError:
                             pass  # keep old mtime
-                    resolved_str = str(file.resolve())
-                    if resolved_str not in processed_paths:
-                        processed_paths.append(resolved_str)
+                        if resolved_str not in processed_paths:
+                            processed_paths.append(resolved_str)
+                    else:
+                        # Soft-ingest failure: remove from processed_paths so the file is retried
+                        if resolved_str in processed_paths:
+                            processed_paths.remove(resolved_str)
                     file_count += 1
                     if file_count % 50 == 0:
                         self._safe_state_update(name, CollectionProgress(
@@ -679,7 +683,7 @@ class SearchCollectionSync:
                         except OSError:
                             pass  # file won't be in mtimes → treated as new on next sync
                     resolved_str = str(file.resolve())
-                    if resolved_str not in processed_paths:
+                    if ingest_result.status == "ok" and resolved_str not in processed_paths:
                         processed_paths.append(resolved_str)
                     file_count += 1
                     if file_count % 50 == 0:
