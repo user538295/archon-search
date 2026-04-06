@@ -1766,6 +1766,73 @@ class TestSyncResumable:
         assert "/a/file.md" in captured_kwargs["exclude_paths"]
 
     @pytest.mark.asyncio
+    async def test_sync_new_collection_preseeded_paths_excluded_new_ingested(self, tmp_path):
+        """Pre-seeded path is excluded; new path is ingested; final state has both."""
+        from archon.search._types import IngestResult
+        from archon.search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon.search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+
+        # Two real files in the directory
+        old_file = col_dir / "old.md"
+        new_file = col_dir / "new.md"
+        old_file.write_text("already indexed")
+        new_file.write_text("brand new content")
+
+        old_file_resolved = str(old_file.resolve())
+        new_file_resolved = str(new_file.resolve())
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        # Pre-seed old_file as already processed
+        state_store.update_collection("myproject", CollectionProgress(
+            status=IndexingStatus.PENDING,
+            processed_paths=[old_file_resolved],
+        ))
+
+        captured_exclude: set = set()
+        captured_new_paths: list[str] = []
+
+        async def fake_ingest(path, name, **kwargs):
+            exclude = kwargs.get("exclude_paths", frozenset())
+            captured_exclude.update(exclude)
+            on_file_complete = kwargs.get("on_file_complete")
+            # Simulate ingesting only non-excluded files
+            results = []
+            for f in sorted(path.glob("**/*.md")):
+                if str(f.resolve()) in exclude:
+                    continue
+                r = IngestResult(doc_id=f.stem, chunks_created=1, status="ok")
+                results.append(r)
+                captured_new_paths.append(str(f.resolve()))
+                if on_file_complete:
+                    on_file_complete(f)
+            return results
+
+        pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+        await syncer.sync([str(col_dir)])
+
+        # Pre-seeded file must appear in exclude_paths passed to ingest_directory
+        assert old_file_resolved in captured_exclude, "pre-seeded file should be excluded"
+
+        # New file must have been ingested
+        assert new_file_resolved in captured_new_paths, "new file should be ingested"
+
+        # Old file must NOT have been re-ingested
+        assert old_file_resolved not in captured_new_paths, "pre-seeded file must not be re-ingested"
+
+        # Final state must include both paths in processed_paths and reach DONE
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert set(cp.processed_paths) == {old_file_resolved, new_file_resolved}
+        assert cp.status == IndexingStatus.DONE
+
+    @pytest.mark.asyncio
     async def test_sync_accumulates_new_paths_in_state(self, tmp_path):
         """After sync, state processed_paths contains newly processed file paths."""
         from archon.search._types import IngestResult
