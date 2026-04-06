@@ -794,10 +794,14 @@ class TestSyncProgress:
         state_store = IndexingStateStore(tmp_path / "state")
 
         statuses_seen: list[IndexingStatus] = []
+        pending_progress = None
         original_update = state_store.update_collection
 
         def tracking_update(name, progress):
+            nonlocal pending_progress
             statuses_seen.append(progress.status)
+            if progress.status == IndexingStatus.PENDING and pending_progress is None:
+                pending_progress = progress
             return original_update(name, progress)
 
         state_store.update_collection = tracking_update
@@ -813,6 +817,9 @@ class TestSyncProgress:
         assert len(statuses_seen) >= 2
         assert statuses_seen[0] == IndexingStatus.PENDING
         assert statuses_seen[1] == IndexingStatus.IN_PROGRESS
+        # PENDING must be written with total_files=0 (files not yet counted)
+        assert pending_progress is not None
+        assert pending_progress.total_files == 0
 
     @pytest.mark.asyncio
     async def test_sync_writes_in_progress_during_ingest(self, tmp_path):
