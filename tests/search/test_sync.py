@@ -3518,6 +3518,52 @@ class TestTask46:
         assert cp.file_mtimes[real_key] == old_mtime
 
     # ------------------------------------------------------------------
+    # Test 21b: ingest_file hard-raise on changed file preserves old mtime
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_sync_apply_changes_ingest_hard_raise_preserves_old_mtime(self, tmp_path):
+        """ingest_file raises (not returns error status) on changed file → FAILED state, old mtime preserved."""
+        from archon.search.progress import IndexingStatus
+        from archon.search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "readme.md"
+        doc.write_text("content")
+        real_key = str(doc.resolve())
+        old_mtime = 0.0  # stale mtime → treated as changed
+
+        manifest = {"myproject": str(col_dir.resolve())}
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path, existing_collections=["myproject"], manifest=manifest
+        )
+        # Hard raise (not soft error return)
+        pipeline.ingest_file.side_effect = RuntimeError("hard ingest failure")
+
+        state_store = _make_done_state(tmp_path, "myproject", {real_key: old_mtime})
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        result = await syncer.sync([str(col_dir)])
+
+        # ingest_file must have been called with the changed file, collection name, and rebuild_fts=False
+        from unittest.mock import ANY
+        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False)
+
+        # The collection should be in errors (FAILED), not updated
+        assert len(result.errors) == 1
+        assert "myproject" not in result.updated
+
+        # State must be FAILED with old mtime preserved (not cleared)
+        state = state_store.read()
+        cp = state.collections["myproject"]
+        assert cp.status == IndexingStatus.FAILED
+        assert cp.error == "hard ingest failure"
+        assert real_key in cp.file_mtimes
+        assert cp.file_mtimes[real_key] == old_mtime
+        assert real_key in cp.processed_paths
+
+    # ------------------------------------------------------------------
     # Test 22: _ingest_collection FAILED state has partial file_mtimes
     # ------------------------------------------------------------------
 
