@@ -3124,7 +3124,14 @@ class TestTask46:
 
     @pytest.mark.asyncio
     async def test_sync_apply_changes_failed_midway(self, tmp_path):
-        """Exception during ingest_file → FAILED state with partial file_mtimes."""
+        """Exception during ingest_file → FAILED state with partial file_mtimes.
+
+        Scenario: 1 deleted file (in initial state but not on disk) + 2 new files;
+        second new file's ingest_file raises. FAILED state must have:
+        - deleted path removed from file_mtimes
+        - first new file's mtime present in file_mtimes
+        - second new file absent from file_mtimes
+        """
         from archon.search.progress import IndexingStatus
         from archon.search.sync import SearchCollectionSync
 
@@ -3135,18 +3142,22 @@ class TestTask46:
         doc1.write_text("content a")
         doc2.write_text("content b")
 
+        # Pre-existing file that is no longer on disk → will be detected as a deletion
+        deleted_key = str((col_dir / "old.md").resolve())
+
         manifest = {"myproject": str(col_dir.resolve())}
         pipeline = _make_mock_pipeline_with_ingest_file(
             tmp_path, existing_collections=["myproject"], manifest=manifest
         )
 
-        # First ingest_file succeeds, second raises
+        # First ingest_file (doc1 / a.md) succeeds, second (doc2 / b.md) raises
         pipeline.ingest_file.side_effect = [
             MagicMock(status="ok", chunks_created=1),
             RuntimeError("disk full"),
         ]
 
-        state_store = _make_done_state(tmp_path, "myproject", {})
+        # Initial state includes the to-be-deleted file so sync detects it as removed
+        state_store = _make_done_state(tmp_path, "myproject", {deleted_key: 1234567890.0})
 
         syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
@@ -3158,10 +3169,15 @@ class TestTask46:
         cp = state.collections["myproject"]
         assert cp.status == IndexingStatus.FAILED
         assert "disk full" in cp.error
-        # First file was successfully processed — its mtime should be in file_mtimes
+
         doc1_key = str(doc1.resolve())
         doc2_key = str(doc2.resolve())
+
+        # Deleted file must be absent — deletion was processed before the failure
+        assert deleted_key not in cp.file_mtimes, "deleted path should be removed from file_mtimes"
+        # First new file succeeded — its mtime should be present
         assert doc1_key in cp.file_mtimes, "successfully processed file should have mtime saved"
+        # Second new file failed — must not appear in file_mtimes
         assert doc2_key not in cp.file_mtimes, "failed file should not have mtime saved"
 
     # ------------------------------------------------------------------
