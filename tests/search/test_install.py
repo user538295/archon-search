@@ -539,32 +539,6 @@ class TestRun:
         assert result != 0
         mock_install.assert_not_called()
 
-    def test_installer_run_calls__bootstrap_collections(self, tmp_path: Path) -> None:
-        installer = _make_installer(tmp_path)
-
-        svc = MagicMock()
-        svc.register.return_value = 0
-        svc.start.return_value = 0
-
-        mock_pipeline = MagicMock()
-        mock_store = AsyncMock()
-        mock_pipeline.store = mock_store
-
-        mock_sync = AsyncMock(return_value=MagicMock())
-
-        with patch("archon.search.install.get_search_service", return_value=svc), \
-             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
-             patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            MockSync.return_value.sync = mock_sync
-            result = installer.run(non_interactive=True)
-
-        assert result == 0
-        mock_sync.assert_called_once()
-
     def test_installer_run_warns_when_service_running(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """If service is already running, installer warns but continues."""
         installer = _make_installer(tmp_path)
@@ -1473,3 +1447,119 @@ class TestIsServiceRunning:
         installer = _make_installer(tmp_path)
         with patch("urllib.request.urlopen", side_effect=ConnectionRefusedError()):
             assert installer._is_service_running() is False
+
+
+# ---------------------------------------------------------------------------
+# Non-blocking install flow (P1-001 bug fix)
+# ---------------------------------------------------------------------------
+
+
+class TestRunNonBlocking:
+    """Tests verifying that run() is non-blocking: service starts first, no asyncio.run bootstrap."""
+
+    def test_run_does_not_call_bootstrap_collections(self, tmp_path: Path) -> None:
+        """run() must NOT call _bootstrap_collections — server handles sync on startup via asyncio.create_task."""
+        installer = _make_installer(tmp_path)
+        bootstrap_mock = AsyncMock()
+
+        with patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_bootstrap_collections", new=bootstrap_mock), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        bootstrap_mock.assert_not_called()
+
+    def test_run_does_not_import_asyncio_for_blocking_call(self, tmp_path: Path) -> None:
+        """asyncio must not be imported in install.py for blocking bootstrap — module is sync-only."""
+        import importlib
+        import importlib.util
+        spec = importlib.util.find_spec("archon.search.install")
+        assert spec is not None
+        # Reload the module and inspect its globals — asyncio must not be present
+        # (it was removed when we dropped the asyncio.run(_bootstrap_collections()) call)
+        import archon.search.install as install_mod
+        assert "asyncio" not in vars(install_mod), (
+            "asyncio is still imported in archon/search/install.py — the blocking asyncio.run call may still exist"
+        )
+
+    def test_run_step_4_is_service_start_not_bootstrap(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """After the fix, [4/5] must describe starting the service, not bootstrapping collections."""
+        installer = _make_installer(tmp_path)
+
+        with patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        captured = capsys.readouterr()
+        # [4/5] must now be about starting the service
+        assert "[4/5]" in captured.out
+        # The old "[4/5] Bootstrapping collections" text must be gone
+        assert "Bootstrapping collections" not in captured.out
+
+    def test_service_starts_without_waiting_for_indexing(self, tmp_path: Path) -> None:
+        """run() exits with 0 as soon as service is ready — it does NOT block on indexing completion."""
+        installer = _make_installer(tmp_path)
+        # Simulate that _wait_for_service returns True immediately
+        # If bootstrap was still blocking, this would hang; since it's removed the call succeeds fast.
+        with patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True) as mock_wait:
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        # _wait_for_service must still be called (service readiness check)
+        mock_wait.assert_called_once()
+
+    def test_load_service_called_before_bootstrap_would_run(self, tmp_path: Path) -> None:
+        """load_service must be invoked before any bootstrap/indexing could happen."""
+        installer = _make_installer(tmp_path)
+        call_order: list[str] = []
+
+        def record_load_service() -> int:
+            call_order.append("load_service")
+            return 0
+
+        def record_bootstrap() -> None:
+            call_order.append("_bootstrap_collections")
+
+        with patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", side_effect=record_load_service), \
+             patch.object(installer, "_bootstrap_collections", side_effect=record_bootstrap), \
+             patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(installer, "_wait_for_service", return_value=True):
+            result = installer.run(non_interactive=True)
+
+        assert result == 0
+        # load_service must appear in call_order before any bootstrap call
+        assert "load_service" in call_order, "load_service was never called"
+        if "_bootstrap_collections" in call_order:
+            assert call_order.index("load_service") < call_order.index("_bootstrap_collections"), (
+                "load_service must be called before _bootstrap_collections"
+            )

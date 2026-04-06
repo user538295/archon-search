@@ -1,7 +1,6 @@
 """SearchInstaller — install, configure, and manage the search service (Task 7.1)."""
 from __future__ import annotations
 
-import asyncio
 import importlib
 import logging
 import subprocess
@@ -299,21 +298,16 @@ class SearchInstaller:
         print("[3/5] Creating data directory ...")
         self.create_data_dir()
 
-        # Bootstrap collections
-        print("[4/5] Bootstrapping collections ...")
-        if not self.dry_run:
-            asyncio.run(self._bootstrap_collections())
-            print("[4/5] Collections ready.")
-
-        # Register and start service
-        print("[5/5] Starting search service ...")
+        # Register and start service (bootstrap happens in the background via the server's startup sync)
+        print("[4/5] Starting search service ...")
         self.write_service_file()
         rc = self.load_service()
         if rc != 0:
             print(f"Service start returned exit code {rc}.")
             return rc
 
-        # Wait for readiness
+        # Wait for service readiness — indexing runs in background via server's asyncio.create_task
+        print("[5/5] Waiting for service readiness ...")
         if not self.dry_run:
             ready = self._wait_for_service()
             if not ready:
