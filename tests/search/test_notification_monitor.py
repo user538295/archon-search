@@ -164,8 +164,7 @@ class TestCheckAndNotify:
         bot.send_message.side_effect = lambda *a, **kw: call_order.append("send_message")
 
         await monitor._check_and_notify()
-        assert call_order[0] == "set_trigger"
-        assert "send_message" in call_order
+        assert call_order.index("set_trigger") < call_order.index("send_message")
         store.set_trigger.assert_called_once_with(None)
 
     @pytest.mark.asyncio
