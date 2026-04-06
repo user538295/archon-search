@@ -444,6 +444,22 @@ class TestServiceDelegation:
 
         svc.register.assert_called_once_with(dry_run=True)
 
+    def test_write_service_file_calls_pre_activate_cleanup_before_register(self, tmp_path: Path) -> None:
+        """write_service_file() must call pre_activate_cleanup before register to stop legacy service."""
+        installer = _make_installer(tmp_path)
+        svc = self._mock_rag_service()
+        svc.pre_activate_cleanup.return_value = 0
+        call_order: list[str] = []
+        svc.pre_activate_cleanup.side_effect = lambda **_: call_order.append("pre_activate_cleanup") or 0
+        svc.register.side_effect = lambda **_: call_order.append("register") or 0
+
+        with patch("archon.search.install.get_search_service", return_value=svc):
+            installer.write_service_file()
+
+        assert "pre_activate_cleanup" in call_order
+        assert "register" in call_order
+        assert call_order.index("pre_activate_cleanup") < call_order.index("register")
+
 
 # ---------------------------------------------------------------------------
 # _bootstrap_collections (replaces _bootstrap_collections)

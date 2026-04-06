@@ -186,8 +186,10 @@ class SearchInstaller:
     # ------------------------------------------------------------------
 
     def write_service_file(self) -> None:
-        """Delegate to get_search_service().register()."""
-        get_search_service().register(dry_run=self.dry_run)
+        """Stop legacy service then register the new search service."""
+        svc = get_search_service()
+        svc.pre_activate_cleanup(dry_run=self.dry_run)
+        svc.register(dry_run=self.dry_run)
 
     def load_service(self) -> int:
         """Delegate to get_search_service().start()."""
