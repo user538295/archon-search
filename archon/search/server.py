@@ -200,10 +200,12 @@ async def main() -> None:
         chunk_size=cfg.search.chunk_size,
         auto_reindex_on_chunk_size_change=cfg.search.auto_reindex_on_chunk_size_change,
     )
-    try:
-        state_store.set_trigger("install")
-    except Exception as exc:
-        logger.warning("Startup sync: failed to write install trigger (notification may not fire): %s", exc)
+    existing_state = state_store.read()
+    if existing_state is None or not existing_state.collections:
+        try:
+            state_store.set_trigger("install")
+        except Exception as exc:
+            logger.warning("Startup sync: failed to write install trigger (notification may not fire): %s", exc)
     sync_timeout = cfg.search.sync_timeout_seconds
     if sync_timeout == 0:
         asyncio.create_task(sync.sync(cfg.search.collections))
