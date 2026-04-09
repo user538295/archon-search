@@ -206,9 +206,15 @@ async def main() -> None:
             state_store.set_trigger("install")
         except Exception as exc:
             logger.warning("Startup sync: failed to write install trigger (notification may not fire): %s", exc)
+    def _log_sync_error(task: asyncio.Task) -> None:
+        exc = task.exception() if not task.cancelled() else None
+        if exc is not None:
+            logger.error("Background startup sync failed: %s", exc, exc_info=exc)
+
     sync_timeout = cfg.search.sync_timeout_seconds
     if sync_timeout == 0:
-        asyncio.create_task(sync.sync(cfg.search.collections))
+        task = asyncio.create_task(sync.sync(cfg.search.collections))
+        task.add_done_callback(_log_sync_error)
         logger.info("Startup sync deferred to background task (sync_timeout_seconds=0).")
     else:
         try:
@@ -223,7 +229,8 @@ async def main() -> None:
             logger.warning(
                 "Startup sync timed out after %ds — continuing in background.", sync_timeout
             )
-            asyncio.create_task(sync.sync(cfg.search.collections))
+            task = asyncio.create_task(sync.sync(cfg.search.collections))
+            task.add_done_callback(_log_sync_error)
 
     watcher_manager = None
     if cfg.search.watch:
