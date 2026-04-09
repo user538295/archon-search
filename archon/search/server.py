@@ -213,12 +213,12 @@ async def main() -> None:
 
     sync_timeout = cfg.search.sync_timeout_seconds
     if sync_timeout == 0:
-        task = asyncio.create_task(sync.sync(cfg.search.collections))
+        task = asyncio.create_task(sync.sync(cfg.search.all_indexed_collections))
         task.add_done_callback(_log_sync_error)
         logger.info("Startup sync deferred to background task (sync_timeout_seconds=0).")
     else:
         try:
-            result = await asyncio.wait_for(sync.sync(cfg.search.collections), timeout=sync_timeout)
+            result = await asyncio.wait_for(sync.sync(cfg.search.all_indexed_collections), timeout=sync_timeout)
             logger.info(
                 "Startup sync complete: %d added, %d removed, %d unchanged, %d errors.",
                 len(result.added), len(result.removed), len(result.unchanged), len(result.errors),
@@ -229,13 +229,13 @@ async def main() -> None:
             logger.warning(
                 "Startup sync timed out after %ds — continuing in background.", sync_timeout
             )
-            task = asyncio.create_task(sync.sync(cfg.search.collections))
+            task = asyncio.create_task(sync.sync(cfg.search.all_indexed_collections))
             task.add_done_callback(_log_sync_error)
 
     watcher_manager = None
     if cfg.search.watch:
         from archon.search.watcher import WatcherManager  # lazy import — watchdog may not be installed
-        desired = sync.build_desired(cfg.search.collections)
+        desired = sync.build_desired(cfg.search.all_indexed_collections)
         loop = asyncio.get_running_loop()
 
         async def _on_change(col_name: str) -> None:

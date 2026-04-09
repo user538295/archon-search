@@ -54,6 +54,10 @@ def _make_full_config(tmp_path: Path) -> object:
         chunk_size: int = 512
         auto_reindex_on_chunk_size_change: bool = True
 
+        @property
+        def all_indexed_collections(self) -> list[str]:
+            return list(dict.fromkeys(self.pinned_collections + self.collections))
+
     @dataclass
     class FakeFullConfig:
         history: FakeHistoryConfig = None  # type: ignore[assignment]
@@ -526,6 +530,32 @@ class TestBootstrapCollections:
         assert kwargs["chunk_size"] == installer._full_cfg.search.chunk_size
         assert kwargs["auto_reindex_on_chunk_size_change"] == installer._full_cfg.search.auto_reindex_on_chunk_size_change
         assert kwargs["pinned_collections"] == installer._full_cfg.search.pinned_collections
+
+    def test_bootstrap_collections_syncs_all_indexed_collections(self, tmp_path: Path) -> None:
+        """sync.sync() receives the union of pinned_collections + collections, not just collections."""
+        from archon.config.loader import SearchConfig
+
+        installer = _make_installer(tmp_path)
+        installer._full_cfg.search = SearchConfig(
+            collections=["/user/notes"],
+            pinned_collections=["/pinned/sys"],
+        )
+
+        mock_store = AsyncMock()
+        mock_pipeline = MagicMock()
+        mock_pipeline.store = mock_store
+        mock_sync = AsyncMock()
+
+        with patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon.search.sync.SearchCollectionSync") as MockSync:
+            MockSync.return_value.sync = mock_sync
+            asyncio.run(installer._bootstrap_collections())
+
+        mock_sync.assert_called_once()
+        synced_paths = mock_sync.call_args[0][0]
+        assert "/pinned/sys" in synced_paths
+        assert "/user/notes" in synced_paths
+        assert synced_paths.index("/pinned/sys") < synced_paths.index("/user/notes")
 
 
 # ---------------------------------------------------------------------------

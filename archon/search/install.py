@@ -220,7 +220,7 @@ class SearchInstaller:
                 chunk_size=self._full_cfg.search.chunk_size,
                 auto_reindex_on_chunk_size_change=self._full_cfg.search.auto_reindex_on_chunk_size_change,
             )
-            await sync.sync(self._full_cfg.search.collections)
+            await sync.sync(self._full_cfg.search.all_indexed_collections)
         finally:
             await pipeline.store.disconnect()
 
