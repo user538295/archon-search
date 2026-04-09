@@ -56,7 +56,15 @@ def _make_full_config(tmp_path: Path) -> object:
 
         @property
         def all_indexed_collections(self) -> list[str]:
-            return list(dict.fromkeys(self.pinned_collections + self.collections))
+            from pathlib import Path as _Path
+            seen: set[str] = set()
+            result: list[str] = []
+            for raw in self.pinned_collections + self.collections:
+                resolved = str(_Path(raw).expanduser().resolve())
+                if resolved not in seen:
+                    seen.add(resolved)
+                    result.append(raw)
+            return result
 
     @dataclass
     class FakeFullConfig:
