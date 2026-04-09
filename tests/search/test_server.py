@@ -932,6 +932,7 @@ class TestServerInstallTrigger:
 
         mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
         sentinel_state_store = MagicMock()
+        sentinel_state_store.read.return_value = None  # no previous state → trigger must be set
         call_order: list[str] = []
         sentinel_state_store.set_trigger.side_effect = lambda t: call_order.append(f"set_trigger:{t}")
 
@@ -953,12 +954,19 @@ class TestServerInstallTrigger:
     @pytest.mark.asyncio
     async def test_server_background_path_sets_install_trigger(self) -> None:
         """main() calls set_trigger('install') even when sync_timeout_seconds=0 (background path)."""
+        import asyncio
         from archon.search.server import main
 
         mock_store, mock_pipeline, mock_app, mock_cfg, _ = _make_server_mocks(sync_timeout=0)
         sentinel_state_store = MagicMock()
+        sentinel_state_store.read.return_value = None  # no previous state → trigger must be set
         call_order: list[str] = []
         sentinel_state_store.set_trigger.side_effect = lambda t: call_order.append(f"set_trigger:{t}")
+
+        def _fake_create_task(coro, **kw):
+            call_order.append("create_task")
+            task = asyncio.ensure_future(coro)
+            return task
 
         with (
             patch("archon.config.loader.load_config", return_value=mock_cfg),
@@ -966,7 +974,7 @@ class TestServerInstallTrigger:
             patch("archon.search.server.create_app", return_value=mock_app),
             patch("archon.search.server.SearchCollectionSync") as MockSync,
             patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
-            patch("asyncio.create_task", side_effect=lambda coro, **kw: (call_order.append("create_task"), coro.close(), None)[2]),
+            patch("asyncio.create_task", side_effect=_fake_create_task),
         ):
             MockSync.return_value.sync = AsyncMock()
             await main()
@@ -982,9 +990,14 @@ class TestServerInstallTrigger:
 
         mock_store, mock_pipeline, mock_app, mock_cfg, _ = _make_server_mocks(sync_timeout=1)
         sentinel_state_store = MagicMock()
+        sentinel_state_store.read.return_value = None  # no previous state → trigger must be set
 
         async def _slow_sync(cols):
             await _asyncio.sleep(10)
+
+        def _fake_create_task(coro, **kw):
+            task = _asyncio.ensure_future(coro)
+            return task
 
         with (
             patch("archon.config.loader.load_config", return_value=mock_cfg),
@@ -992,7 +1005,7 @@ class TestServerInstallTrigger:
             patch("archon.search.server.create_app", return_value=mock_app),
             patch("archon.search.server.SearchCollectionSync") as MockSync,
             patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
-            patch("asyncio.create_task", side_effect=lambda coro, **kw: coro.close()),
+            patch("asyncio.create_task", side_effect=_fake_create_task),
         ):
             MockSync.return_value.sync = _slow_sync
             await main()
@@ -1223,6 +1236,171 @@ async def test_server_stop_all_exception_still_disconnects() -> None:
         await main()
 
     mock_store.disconnect.assert_awaited_once()
+
+# ---------------------------------------------------------------------------
+# Bug 1 — set_trigger skipped when indexed collections already exist
+# ---------------------------------------------------------------------------
+
+
+class TestServerInstallTriggerSkippedWhenCollectionsExist:
+    @pytest.mark.asyncio
+    async def test_set_trigger_skipped_when_state_has_indexed_collections(self) -> None:
+        """main() skips set_trigger('install') when existing state has indexed collections."""
+        from archon.search.progress import CollectionProgress, IndexingState, IndexingStatus
+        from archon.search.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
+        sentinel_state_store = MagicMock()
+        # Simulate existing state with an indexed collection
+        existing_state = IndexingState(
+            collections={"docs": CollectionProgress(status=IndexingStatus.DONE)}
+        )
+        sentinel_state_store.read.return_value = existing_state
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.SearchCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        ):
+            MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+            await main()
+
+        sentinel_state_store.set_trigger.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_trigger_called_when_state_is_none(self) -> None:
+        """main() calls set_trigger('install') when state file is absent (None)."""
+        from archon.search.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
+        sentinel_state_store = MagicMock()
+        sentinel_state_store.read.return_value = None
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.SearchCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        ):
+            MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+            await main()
+
+        sentinel_state_store.set_trigger.assert_called_once_with("install")
+
+    @pytest.mark.asyncio
+    async def test_set_trigger_called_when_state_has_empty_collections(self) -> None:
+        """main() calls set_trigger('install') when existing state has no collections."""
+        from archon.search.progress import IndexingState
+        from archon.search.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
+        sentinel_state_store = MagicMock()
+        sentinel_state_store.read.return_value = IndexingState(collections={})
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.SearchCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        ):
+            MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+            await main()
+
+        sentinel_state_store.set_trigger.assert_called_once_with("install")
+
+
+# ---------------------------------------------------------------------------
+# Bug 2 — Background sync task done callback logs exceptions
+# ---------------------------------------------------------------------------
+
+
+class TestServerBackgroundSyncErrorLogging:
+    @pytest.mark.asyncio
+    async def test_background_sync_task_exception_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When background sync task raises, the exception is logged at ERROR level."""
+        import asyncio
+        import logging
+        from archon.search.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, _ = _make_server_mocks(sync_timeout=0)
+        sentinel_state_store = MagicMock()
+        sentinel_state_store.read.return_value = None
+
+        done_callbacks: list = []
+
+        def _capture_task(coro, **kw):
+            task = asyncio.ensure_future(coro)
+            task.add_done_callback = MagicMock(side_effect=lambda cb: done_callbacks.append(cb))
+            return task
+
+        async def _failing_sync(cols):
+            raise RuntimeError("sync exploded")
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.SearchCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+            patch("asyncio.create_task", side_effect=_capture_task),
+            caplog.at_level(logging.ERROR),
+        ):
+            MockSync.return_value.sync = _failing_sync
+            await main()
+
+        # A done callback must have been registered on the task
+        assert len(done_callbacks) >= 1
+
+    @pytest.mark.asyncio
+    async def test_background_sync_done_callback_logs_on_exception(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The done callback logs at ERROR when the task raises an exception."""
+        import asyncio
+        import logging
+        from archon.search.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, _ = _make_server_mocks(sync_timeout=0)
+        sentinel_state_store = MagicMock()
+        sentinel_state_store.read.return_value = None
+
+        real_tasks: list = []
+
+        def _capture_task(coro, **kw):
+            task = asyncio.ensure_future(coro)
+            real_tasks.append(task)
+            return task
+
+        async def _failing_sync(cols):
+            raise RuntimeError("sync exploded")
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.SearchCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+            patch("asyncio.create_task", side_effect=_capture_task),
+            caplog.at_level(logging.ERROR),
+        ):
+            MockSync.return_value.sync = _failing_sync
+            await main()
+
+        # Wait for the background task to finish so the callback fires
+        for task in real_tasks:
+            try:
+                await task
+            except Exception:
+                pass
+
+        assert any("sync" in r.message.lower() for r in caplog.records if r.levelno >= logging.ERROR)
+
 
 @pytest.mark.asyncio
 async def test_health_endpoint_returns_200() -> None:
