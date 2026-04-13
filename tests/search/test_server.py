@@ -895,6 +895,73 @@ async def test_server_sync_passes_config_params() -> None:
 
 
 # ---------------------------------------------------------------------------
+# F5 — _needs_install_trigger unit tests (all branches)
+# ---------------------------------------------------------------------------
+
+
+class TestNeedsInstallTrigger:
+    """Direct unit tests for _needs_install_trigger covering all branches."""
+
+    def _state(self, **collections):  # type: ignore[return]
+        from archon.search.progress import CollectionProgress, IndexingState, IndexingStatus
+        parsed = {
+            name: CollectionProgress(status=IndexingStatus(status))
+            for name, status in collections.items()
+        }
+        return IndexingState(collections=parsed)
+
+    def test_no_state_with_collections_returns_true(self) -> None:
+        from archon.search.server import _needs_install_trigger
+        assert _needs_install_trigger(None, {"a": "/a"}) is True
+
+    def test_no_state_empty_desired_returns_false(self) -> None:
+        """Empty desired → nothing to index → no trigger, even with no state file."""
+        from archon.search.server import _needs_install_trigger
+        assert _needs_install_trigger(None, {}) is False
+
+    def test_empty_desired_returns_false_regardless_of_state(self) -> None:
+        from archon.search.progress import IndexingState
+        from archon.search.server import _needs_install_trigger
+        assert _needs_install_trigger(IndexingState({}), {}) is False
+
+    def test_empty_desired_with_done_collections_returns_false(self) -> None:
+        from archon.search.server import _needs_install_trigger
+        state = self._state(a="done")
+        assert _needs_install_trigger(state, {}) is False
+
+    def test_all_done_returns_false(self) -> None:
+        from archon.search.server import _needs_install_trigger
+        state = self._state(a="done")
+        assert _needs_install_trigger(state, {"a": "/a"}) is False
+
+    def test_in_progress_returns_true(self) -> None:
+        """IN_PROGRESS on startup means crash → needs re-trigger."""
+        from archon.search.server import _needs_install_trigger
+        state = self._state(a="in_progress")
+        assert _needs_install_trigger(state, {"a": "/a"}) is True
+
+    def test_failed_returns_true(self) -> None:
+        from archon.search.server import _needs_install_trigger
+        state = self._state(a="failed")
+        assert _needs_install_trigger(state, {"a": "/a"}) is True
+
+    def test_pending_returns_true(self) -> None:
+        from archon.search.server import _needs_install_trigger
+        state = self._state(a="pending")
+        assert _needs_install_trigger(state, {"a": "/a"}) is True
+
+    def test_collection_absent_from_state_returns_true(self) -> None:
+        from archon.search.progress import IndexingState
+        from archon.search.server import _needs_install_trigger
+        assert _needs_install_trigger(IndexingState({}), {"a": "/a"}) is True
+
+    def test_mixed_done_and_failed_returns_true(self) -> None:
+        from archon.search.server import _needs_install_trigger
+        state = self._state(a="done", b="failed")
+        assert _needs_install_trigger(state, {"a": "/a", "b": "/b"}) is True
+
+
+# ---------------------------------------------------------------------------
 # Task 5.3 — server.py sets install trigger before sync
 # ---------------------------------------------------------------------------
 
@@ -943,6 +1010,7 @@ class TestServerInstallTrigger:
             patch("archon.search.server.SearchCollectionSync") as MockSync,
             patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
         ):
+            MockSync.return_value.build_desired.return_value = {"some_col": "/some/path"}
             MockSync.return_value.sync = AsyncMock(
                 side_effect=lambda cols: (call_order.append("sync"), mock_sync_result)[1]
             )
@@ -976,6 +1044,7 @@ class TestServerInstallTrigger:
             patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
             patch("asyncio.create_task", side_effect=_fake_create_task),
         ):
+            MockSync.return_value.build_desired.return_value = {"some_col": "/some/path"}
             MockSync.return_value.sync = AsyncMock()
             await main()
 
@@ -1007,6 +1076,7 @@ class TestServerInstallTrigger:
             patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
             patch("asyncio.create_task", side_effect=_fake_create_task),
         ):
+            MockSync.return_value.build_desired.return_value = {"some_col": "/some/path"}
             MockSync.return_value.sync = _slow_sync
             await main()
 
@@ -1019,6 +1089,7 @@ class TestServerInstallTrigger:
 
         mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
         sentinel_state_store = MagicMock()
+        sentinel_state_store.read.return_value = None  # no previous state → trigger must fire
         sentinel_state_store.set_trigger.side_effect = OSError("disk full")
 
         with (
@@ -1028,6 +1099,7 @@ class TestServerInstallTrigger:
             patch("archon.search.server.SearchCollectionSync") as MockSync,
             patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
         ):
+            MockSync.return_value.build_desired.return_value = {"some_col": "/some/path"}
             MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
             await main()  # must not raise
 
@@ -1264,6 +1336,8 @@ class TestServerInstallTriggerSkippedWhenCollectionsExist:
             patch("archon.search.server.SearchCollectionSync") as MockSync,
             patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
         ):
+            # build_desired returns {"docs": "/tmp/docs"} → "docs" IS in state as DONE → no trigger
+            MockSync.return_value.build_desired.return_value = {"docs": "/tmp/docs"}
             MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
             await main()
 
@@ -1285,6 +1359,7 @@ class TestServerInstallTriggerSkippedWhenCollectionsExist:
             patch("archon.search.server.SearchCollectionSync") as MockSync,
             patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
         ):
+            MockSync.return_value.build_desired.return_value = {"docs": "/tmp/docs"}
             MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
             await main()
 
@@ -1307,6 +1382,123 @@ class TestServerInstallTriggerSkippedWhenCollectionsExist:
             patch("archon.search.server.SearchCollectionSync") as MockSync,
             patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
         ):
+            # build_desired returns a configured collection → not in state → trigger must fire
+            MockSync.return_value.build_desired.return_value = {"docs": "/tmp/docs"}
+            MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+            await main()
+
+        sentinel_state_store.set_trigger.assert_called_once_with("install")
+
+    @pytest.mark.asyncio
+    async def test_set_trigger_called_when_pinned_collection_missing_from_state(self) -> None:
+        """main() calls set_trigger('install') when a configured collection is absent from state."""
+        from archon.search.progress import CollectionProgress, IndexingState, IndexingStatus
+        from archon.search.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
+        # Add a pinned collection to the config
+        mock_cfg.search.pinned_collections = ["/tmp/my-docs"]
+        sentinel_state_store = MagicMock()
+        # State exists but the pinned collection is NOT indexed yet
+        existing_state = IndexingState(
+            collections={"other": CollectionProgress(status=IndexingStatus.DONE)}
+        )
+        sentinel_state_store.read.return_value = existing_state
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.SearchCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        ):
+            MockSync.return_value.build_desired.return_value = {"my_docs": "/tmp/my-docs"}
+            MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+            await main()
+
+        sentinel_state_store.set_trigger.assert_called_once_with("install")
+
+    @pytest.mark.asyncio
+    async def test_set_trigger_called_when_collection_has_failed_status(self) -> None:
+        """main() calls set_trigger('install') when a configured collection has FAILED status."""
+        from archon.search.progress import CollectionProgress, IndexingState, IndexingStatus
+        from archon.search.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
+        mock_cfg.search.pinned_collections = ["/tmp/my-docs"]
+        sentinel_state_store = MagicMock()
+        # State exists, collection is present but FAILED
+        existing_state = IndexingState(
+            collections={"my_docs": CollectionProgress(status=IndexingStatus.FAILED)}
+        )
+        sentinel_state_store.read.return_value = existing_state
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.SearchCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        ):
+            MockSync.return_value.build_desired.return_value = {"my_docs": "/tmp/my-docs"}
+            MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+            await main()
+
+        sentinel_state_store.set_trigger.assert_called_once_with("install")
+
+    @pytest.mark.asyncio
+    async def test_set_trigger_skipped_when_all_collections_done(self) -> None:
+        """main() skips set_trigger when all configured collections are DONE in state."""
+        from archon.search.progress import CollectionProgress, IndexingState, IndexingStatus
+        from archon.search.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
+        mock_cfg.search.pinned_collections = ["/tmp/my-docs"]
+        sentinel_state_store = MagicMock()
+        existing_state = IndexingState(
+            collections={"my_docs": CollectionProgress(status=IndexingStatus.DONE)}
+        )
+        sentinel_state_store.read.return_value = existing_state
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.SearchCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        ):
+            MockSync.return_value.build_desired.return_value = {"my_docs": "/tmp/my-docs"}
+            MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
+            await main()
+
+        sentinel_state_store.set_trigger.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_trigger_called_when_all_collections_in_progress(self) -> None:
+        """main() calls set_trigger when all configured collections are IN_PROGRESS.
+
+        On restart, IN_PROGRESS always means the previous process crashed mid-index.
+        We must re-trigger so the notification monitor fires when indexing completes.
+        """
+        from archon.search.progress import CollectionProgress, IndexingState, IndexingStatus
+        from archon.search.server import main
+
+        mock_store, mock_pipeline, mock_app, mock_cfg, mock_sync_result = _make_server_mocks(sync_timeout=5)
+        mock_cfg.search.pinned_collections = ["/tmp/my-docs"]
+        sentinel_state_store = MagicMock()
+        existing_state = IndexingState(
+            collections={"my_docs": CollectionProgress(status=IndexingStatus.IN_PROGRESS)}
+        )
+        sentinel_state_store.read.return_value = existing_state
+
+        with (
+            patch("archon.config.loader.load_config", return_value=mock_cfg),
+            patch("archon.search.server.create_pipeline", return_value=mock_pipeline),
+            patch("archon.search.server.create_app", return_value=mock_app),
+            patch("archon.search.server.SearchCollectionSync") as MockSync,
+            patch("archon.search.server.IndexingStateStore", return_value=sentinel_state_store),
+        ):
+            MockSync.return_value.build_desired.return_value = {"my_docs": "/tmp/my-docs"}
             MockSync.return_value.sync = AsyncMock(return_value=mock_sync_result)
             await main()
 

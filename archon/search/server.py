@@ -15,7 +15,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from archon.search.pipeline import SearchPipeline, create_pipeline
-from archon.search.progress import IndexingStateStore
+from archon.search.progress import IndexingState, IndexingStateStore, IndexingStatus
 from archon.search.sync import SearchCollectionSync, path_to_collection_name
 
 if TYPE_CHECKING:
@@ -177,6 +177,31 @@ def create_app(pipeline: SearchPipeline, default_collection: str) -> FastMCP:
     return app
 
 
+def _needs_install_trigger(
+    existing_state: IndexingState | None,
+    desired: dict[str, str],
+) -> bool:
+    """Return True if any desired collection needs (re-)indexing.
+
+    Returns False immediately when desired is empty (nothing to index).
+
+    Triggers when:
+    - No state file exists (first run)
+    - A desired collection is absent from state
+    - A desired collection has any status other than DONE (PENDING/IN_PROGRESS/FAILED)
+      — on restart, IN_PROGRESS always means the process crashed mid-index
+    """
+    if not desired:
+        return False
+    if existing_state is None:
+        return True
+    for name in desired:
+        cp = existing_state.collections.get(name)
+        if cp is None or cp.status != IndexingStatus.DONE:
+            return True
+    return False
+
+
 async def main() -> None:
     """Start the RAG MCP server from config."""
     import asyncio  # noqa: PLC0415
@@ -200,8 +225,9 @@ async def main() -> None:
         chunk_size=cfg.search.chunk_size,
         auto_reindex_on_chunk_size_change=cfg.search.auto_reindex_on_chunk_size_change,
     )
+    desired = sync.build_desired(cfg.search.all_indexed_collections)
     existing_state = state_store.read()
-    if existing_state is None or not existing_state.collections:
+    if _needs_install_trigger(existing_state, desired):
         try:
             state_store.set_trigger("install")
         except Exception as exc:
@@ -235,7 +261,6 @@ async def main() -> None:
     watcher_manager = None
     if cfg.search.watch:
         from archon.search.watcher import WatcherManager  # lazy import — watchdog may not be installed
-        desired = sync.build_desired(cfg.search.all_indexed_collections)
         loop = asyncio.get_running_loop()
 
         async def _on_change(col_name: str) -> None:

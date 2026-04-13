@@ -331,12 +331,21 @@ class SearchInstaller:
         rag_svc.stop(dry_run=self.dry_run)
         rag_svc.unregister(dry_run=self.dry_run)
 
+        db_deleted = False
         if delete_db:
             db_path = Path(self.cfg.db_path).expanduser()
             if db_path.exists():
                 if not self.dry_run:
                     rmtree(db_path)
                     self._console.info(f"Deleted search database at {db_path}.")
+                    db_deleted = True
 
-        self._console.info("Search service uninstalled. Remove [search] section from config.toml to disable.")
+        if db_deleted:
+            self._console.info(
+                "Search service uninstalled. Search database deleted. Your config.toml settings are preserved."
+            )
+        else:
+            self._console.info(
+                "Search service uninstalled. Your search settings are preserved in config.toml."
+            )
         return 0

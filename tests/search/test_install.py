@@ -876,6 +876,52 @@ class TestRunUninstall:
         assert result == 0
         assert not db_path.exists()
 
+    def test_run_uninstall_delete_db_true_shows_deleted_message(self, tmp_path: Path) -> None:
+        """When delete_db=True and DB exists, final message must mention 'deleted'."""
+        installer = _make_installer(tmp_path)
+        db_path = tmp_path / "rag_db"
+        db_path.mkdir()
+        installer.cfg.db_path = str(db_path)
+
+        mock_console = MagicMock()
+        installer._console = mock_console
+
+        svc = MagicMock()
+        svc.stop.return_value = 0
+        svc.unregister.return_value = 0
+
+        with patch("archon.search.install.get_search_service", return_value=svc):
+            result = installer.run_uninstall(delete_db=True)
+
+        assert result == 0
+        info_messages = " ".join(
+            str(call.args[0]) for call in mock_console.info.call_args_list
+        )
+        assert "deleted" in info_messages.lower(), (
+            f"Expected 'deleted' in uninstall message when delete_db=True, got: {info_messages}"
+        )
+
+    def test_run_uninstall_delete_db_false_shows_preserved_message(self, tmp_path: Path) -> None:
+        """When delete_db=False, final message must mention 'preserved' (settings preserved)."""
+        installer = _make_installer(tmp_path)
+        mock_console = MagicMock()
+        installer._console = mock_console
+
+        svc = MagicMock()
+        svc.stop.return_value = 0
+        svc.unregister.return_value = 0
+
+        with patch("archon.search.install.get_search_service", return_value=svc):
+            result = installer.run_uninstall(delete_db=False)
+
+        assert result == 0
+        info_messages = " ".join(
+            str(call.args[0]) for call in mock_console.info.call_args_list
+        )
+        assert "preserved" in info_messages.lower(), (
+            f"Expected 'preserved' in uninstall message when delete_db=False, got: {info_messages}"
+        )
+
     def test_run_uninstall_delete_db_false_preserves_directory(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         db_path = tmp_path / "rag_db"
@@ -908,6 +954,53 @@ class TestRunUninstall:
 
         assert result == 0
         assert db_path.exists()
+
+    def test_run_uninstall_delete_db_true_db_nonexistent_still_succeeds(self, tmp_path: Path) -> None:
+        """delete_db=True but DB path does not exist → still returns 0 with 'preserved' message."""
+        installer = _make_installer(tmp_path)
+        # db_path is set to tmp_path / "rag_db" by _make_search_config, but we do NOT mkdir it
+        db_path = Path(installer.cfg.db_path)
+        assert not db_path.exists(), "pre-condition: DB must not exist for this test"
+
+        mock_console = MagicMock()
+        installer._console = mock_console
+
+        svc = MagicMock()
+        svc.stop.return_value = 0
+        svc.unregister.return_value = 0
+
+        with patch("archon.search.install.get_search_service", return_value=svc):
+            result = installer.run_uninstall(delete_db=True)
+
+        assert result == 0
+        # DB was absent → nothing to delete → config preserved message
+        info_messages = " ".join(
+            str(call.args[0]) for call in mock_console.info.call_args_list
+        )
+        assert "preserved" in info_messages.lower(), (
+            f"Expected 'preserved' in uninstall message when DB is absent, got: {info_messages}"
+        )
+
+    def test_run_uninstall_does_not_modify_config_toml(self, tmp_path: Path) -> None:
+        """Uninstall must NEVER write to config.toml — verified by snapshot comparison."""
+        installer = _make_installer(tmp_path)
+
+        # Create a config file to snapshot
+        config_file = Path(installer.config_file)
+        original_content = "[search]\nenabled = true\ndb_path = '/tmp/search'\n"
+        config_file.write_text(original_content)
+
+        svc = MagicMock()
+        svc.stop.return_value = 0
+        svc.unregister.return_value = 0
+
+        with patch("archon.search.install.get_search_service", return_value=svc):
+            result = installer.run_uninstall(delete_db=False)
+
+        assert result == 0
+        assert config_file.read_text() == original_content, (
+            "run_uninstall must not modify config.toml"
+        )
 
 
 # ---------------------------------------------------------------------------
