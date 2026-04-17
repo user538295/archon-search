@@ -14,11 +14,19 @@ def test_fastembed_is_patched() -> None:
 
 def test_textcrossencoder_is_patched() -> None:
     """fastembed.TextCrossEncoder().rerank() must return plain floats."""
+    import sys  # noqa: PLC0415
+
     import fastembed  # noqa: PLC0415
 
     enc = fastembed.TextCrossEncoder("any-model")
     scores = enc.rerank("query", ["doc1", "doc2"])
     assert scores == [0.5, 0.5]
+
+    # Also verify the submodule path required by the new import is patched
+    submod = sys.modules["fastembed.rerank.cross_encoder"]
+    assert hasattr(submod, "TextCrossEncoder")
+    enc2 = submod.TextCrossEncoder("any-model")
+    assert enc2.rerank("query", ["doc1", "doc2"]) == [0.5, 0.5]
 
 
 def test_sentence_transformers_is_blocked() -> None:

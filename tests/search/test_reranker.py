@@ -105,9 +105,18 @@ async def test_reranker_score_mutation() -> None:
     assert scores["doc1"] == pytest.approx(0.33)
 
 
-def test_make_reranker_returns_reranker() -> None:
+@pytest.mark.asyncio
+async def test_make_reranker_returns_reranker() -> None:
+    """Factory creates a working Reranker that exercises the lazy import path."""
     r = make_reranker("BAAI/bge-reranker-v2-m3", providers=[])
     assert isinstance(r, Reranker)
+    # Also verify the lazy import fires correctly by calling rerank()
+    candidates = [
+        SearchResult(doc_id="d0", chunk_id="d0-000000", text="text", score=0.0, source_path="/tmp/f.md")
+    ]
+    result = await r.rerank("query", candidates, top_k=1)
+    assert len(result) == 1
+    assert result[0].score == pytest.approx(0.5)
 
 
 def test_reranker_backend_protocol() -> None:
@@ -123,8 +132,6 @@ def test_model_reranker_init_called_once_under_concurrent_predict() -> None:
     import time
     from typing import Any
 
-    import numpy as np
-
     from archon.search.reranker import ModelReranker
 
     init_count = 0
@@ -139,8 +146,8 @@ def test_model_reranker_init_called_once_under_concurrent_predict() -> None:
         def rerank(self, query: str, documents: object) -> list[float]:
             return [0.5] * len(list(documents))  # type: ignore[arg-type]
 
-    original = sys.modules["fastembed"].TextCrossEncoder
-    sys.modules["fastembed"].TextCrossEncoder = _SlowTextCrossEncoder
+    original = sys.modules["fastembed.rerank.cross_encoder"].TextCrossEncoder
+    sys.modules["fastembed.rerank.cross_encoder"].TextCrossEncoder = _SlowTextCrossEncoder
     try:
         reranker = ModelReranker("BAAI/bge-reranker-v2-m3")
         results: list[list[float]] = []
@@ -163,4 +170,28 @@ def test_model_reranker_init_called_once_under_concurrent_predict() -> None:
         assert len(results) == 2
         assert init_count == 1, f"Model __init__ called {init_count} times — lock missing"
     finally:
-        sys.modules["fastembed"].TextCrossEncoder = original
+        sys.modules["fastembed.rerank.cross_encoder"].TextCrossEncoder = original
+
+
+def test_model_reranker_uses_submodule_import_path() -> None:
+    """Regression: predict() must resolve TextCrossEncoder from fastembed.rerank.cross_encoder.
+
+    If the import in reranker.py is reverted to `from fastembed import TextCrossEncoder`,
+    this test fails because TextCrossEncoder is temporarily hidden from the top-level module.
+    """
+    import sys
+
+    from archon.search.reranker import ModelReranker
+
+    top_level = sys.modules["fastembed"]
+    original = getattr(top_level, "TextCrossEncoder", None)
+    # Hide TextCrossEncoder from the top-level fastembed module
+    if hasattr(top_level, "TextCrossEncoder"):
+        delattr(top_level, "TextCrossEncoder")
+    try:
+        reranker = ModelReranker("test-model")
+        result = reranker.predict([("query", "doc")])
+        assert result == [0.5], f"Expected [0.5], got {result}"
+    finally:
+        if original is not None:
+            top_level.TextCrossEncoder = original

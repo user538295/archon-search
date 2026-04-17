@@ -28,7 +28,7 @@ class ModelReranker:
         if self._model is None:
             with self._lock:
                 if self._model is None:
-                    from fastembed import TextCrossEncoder  # noqa: PLC0415
+                    from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
 
                     self._model = TextCrossEncoder(self._model_name, providers=self._providers)
         # TextCrossEncoder.rerank(query, documents) → Iterable[float]

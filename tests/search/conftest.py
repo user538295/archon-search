@@ -50,6 +50,27 @@ if "fastembed" not in sys.modules:
     _fe.TextCrossEncoder = _FakeTextCrossEncoder  # type: ignore[attr-defined]
     sys.modules["fastembed"] = _fe
 
+# Always ensure submodule paths are registered (independent of top-level guard).
+# Production code uses `from fastembed.rerank.cross_encoder import TextCrossEncoder`
+# which resolves via sys.modules["fastembed.rerank.cross_encoder"] directly.
+if "fastembed.rerank.cross_encoder" not in sys.modules:
+    _fe_mod = sys.modules["fastembed"]
+
+    # Look up the fake class from the registered fastembed module
+    _FakeEncoderClass = getattr(_fe_mod, "TextCrossEncoder")
+
+    _fe_rerank = types.ModuleType("fastembed.rerank")
+    _fe_cross_encoder = types.ModuleType("fastembed.rerank.cross_encoder")
+    _fe_cross_encoder.TextCrossEncoder = _FakeEncoderClass  # type: ignore[attr-defined]
+
+    # Register in sys.modules
+    sys.modules["fastembed.rerank"] = _fe_rerank
+    sys.modules["fastembed.rerank.cross_encoder"] = _fe_cross_encoder
+
+    # Link as attributes on parent modules for dotted-access compatibility
+    _fe_mod.rerank = _fe_rerank  # type: ignore[attr-defined]
+    _fe_rerank.cross_encoder = _fe_cross_encoder  # type: ignore[attr-defined]
+
 # Belt-and-braces: also block sentence_transformers
 if "sentence_transformers" not in sys.modules:
     sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
