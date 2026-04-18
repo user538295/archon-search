@@ -145,3 +145,28 @@ def test_no_regeneration_when_chunk_count_is_zero() -> None:
     assert not _should_regenerate(doc_count=5, chunk_count=0, described_at_doc_count=None)
     assert not _should_regenerate(doc_count=5, chunk_count=0, described_at_doc_count=0)
     assert not _should_regenerate(doc_count=5, chunk_count=0, described_at_doc_count=10)
+
+
+# ---------------------------------------------------------------------------
+# max_buffer_size — FIX-031 Task 2.1
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_max_buffer_size_set_on_description_generator() -> None:
+    """_call_haiku must pass max_buffer_size=10*1024*1024 to ClaudeAgentOptions."""
+    captured: list = []
+
+    mock_client = _mock_sdk_client("A description.")
+
+    with (
+        patch("archon.search.description_generator.ClaudeSDKClient", return_value=mock_client),
+        patch(
+            "archon.search.description_generator.ClaudeAgentOptions",
+            side_effect=lambda **kw: captured.append(kw) or MagicMock(),
+        ),
+    ):
+        await generate_description(["chunk one", "chunk two"], "my-collection")
+
+    assert len(captured) == 1
+    assert captured[0].get("max_buffer_size") == 10 * 1024 * 1024

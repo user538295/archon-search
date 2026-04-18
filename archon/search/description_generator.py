@@ -86,6 +86,7 @@ async def _call_haiku(prompt: str) -> str | None:
             permission_mode="bypassPermissions",
             model=DEFAULT_FAST_MODEL,
             max_turns=1,
+            max_buffer_size=10 * 1024 * 1024,
         )
     )
     # Serialise CLAUDECODE env mutation with the same lock used by ClaudeSession.start()
