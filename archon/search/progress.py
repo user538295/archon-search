@@ -82,8 +82,8 @@ class IndexingStateStore:
     """
 
     def __init__(self, state_dir: Path) -> None:
-        self._state_dir = state_dir
-        self._state_file = state_dir / ".indexing_state.json"
+        self._state_dir = Path(state_dir).expanduser()
+        self._state_file = self._state_dir / ".indexing_state.json"
 
     def read(self) -> IndexingState | None:
         """Read and deserialize state file. Returns None if missing, unreadable, or corrupt."""
