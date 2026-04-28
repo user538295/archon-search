@@ -236,6 +236,16 @@ class TestDataclasses:
         assert not hasattr(state.collections["col"], "unknown_new_field")
 
 
+class TestIndexingStateStoreInit:
+    def test_indexing_state_store_init_expands_tilde(self) -> None:
+        store = IndexingStateStore(Path("~/.archon/search"))
+        assert store._state_dir == Path.home() / ".archon/search"
+
+    def test_indexing_state_store_init_absolute_path_unchanged(self) -> None:
+        store = IndexingStateStore(Path("/tmp/state"))
+        assert store._state_dir == Path("/tmp/state")
+
+
 class TestIndexingStateStore:
     def test_read_missing_file(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)
