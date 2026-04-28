@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1022,3 +1023,49 @@ async def test_delete_by_source_path_returns_count(tmp_path: Path) -> None:
 
         assert result == 5
         mock_del.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tilde expansion tests (FIX-033 Task 1.2)
+# ---------------------------------------------------------------------------
+
+
+def test_search_store_init_expands_tilde() -> None:
+    """SearchStore('~/.archon/search') must expand tilde at __init__ time."""
+    store = SearchStore("~/.archon/search")
+    assert store._db_path == Path.home() / ".archon/search"
+
+
+def test_search_store_init_absolute_path_unchanged() -> None:
+    """SearchStore('/tmp/test_db') must leave an absolute path unchanged."""
+    store = SearchStore("/tmp/test_db")
+    assert store._db_path == Path("/tmp/test_db")
+
+
+def test_search_store_init_expands_tilde_path_object() -> None:
+    """SearchStore(Path('~/.archon/search')) must expand tilde for Path inputs too."""
+    store = SearchStore(Path("~/.archon/search"))
+    assert store._db_path == Path.home() / ".archon/search"
+
+
+@pytest.mark.asyncio
+async def test_search_store_connect_does_not_create_tilde_dir_in_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """connect() must create the expanded path, NOT a literal '~' dir in CWD."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    store = SearchStore("~/.archon/search")
+
+    # Inject mock into sys.modules so connect()'s runtime `import lancedb` picks it up
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_lancedb = MagicMock()
+    mock_lancedb.connect_async = AsyncMock()
+    monkeypatch.setitem(sys.modules, "lancedb", mock_lancedb)
+
+    await store.connect()
+
+    assert (tmp_path / "~").exists() is False
+    assert (tmp_path / ".archon" / "search").exists() is True
