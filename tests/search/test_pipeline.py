@@ -1021,6 +1021,22 @@ def test_ragpipeline_has_no_history_collection_attr() -> None:
     )
 
 
+def test_create_pipeline_uses_expanded_db_path() -> None:
+    """create_pipeline() with a tilde db_path must produce a fully-expanded store._db_path."""
+    from pathlib import Path
+    from unittest.mock import MagicMock, patch
+    from archon.config.loader import SearchConfig
+    from archon.search.pipeline import create_pipeline
+
+    cfg = SearchConfig(db_path="~/.archon/search")
+    with (
+        patch("archon.search.pipeline.DocumentChunker"),
+        patch("archon.search.pipeline.DocumentParser"),
+    ):
+        pipeline = create_pipeline(cfg, embedder_backend=MagicMock(), reranker_backend=MagicMock())
+    assert pipeline.store._db_path == Path.home() / ".archon/search"
+
+
 # ===========================================================================
 # Task 3.2 — exclude_paths and on_file_complete tests
 # ===========================================================================
