@@ -35,7 +35,7 @@ class SearchStore:
     """Async LanceDB store for chunked document embeddings."""
 
     def __init__(self, db_path: str | Path) -> None:
-        self._db_path = Path(db_path)
+        self._db_path = Path(db_path).expanduser()
         self._db: Optional[lancedb.db.AsyncConnection] = None
 
     # ------------------------------------------------------------------
