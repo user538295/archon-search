@@ -1,0 +1,37 @@
+[project]
+name = "archon-search"
+version = "26.4.0"
+description = "Standalone Search server for Archon"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "lancedb>=0.30.0",
+    "fastembed>=0.8.0",
+    "tomlkit>=0.12",
+    "click>=8.1",
+    "claude-agent-sdk>=0.1.46",
+    "httpx>=0.25",
+]
+
+[project.scripts]
+archon-search = "archon_search.cli.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.uv]
+package = true
