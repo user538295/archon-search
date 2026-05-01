@@ -54,8 +54,8 @@ def test_importable_modules(module_path: str, class_name: str) -> None:
 
 _CROSS_PACKAGE_IMPORTS = [
     # (filename, expected import string that must still exist)
+    # description_generator.py intentionally removed: _get_env_lock was inlined in Task 2.2
     ("notification_monitor.py", "from archon.config.loader import NotificationsConfig"),
-    ("description_generator.py", "from archon.ai.claude_session import _get_env_lock"),
     ("install.py", "from archon.cli.console import Console"),
 ]
 

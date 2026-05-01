@@ -8,10 +8,20 @@ import random
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 
-from archon.ai.claude_session import _get_env_lock
-from archon.ai.constants import DEFAULT_FAST_MODEL
+from archon_search.constants import DEFAULT_FAST_MODEL
 
 logger = logging.getLogger("archon")
+
+# Serializes concurrent SDK connect() calls during the os.environ mutation window.
+# Lazy-initialized per event loop (avoids "bound to a different event loop" errors).
+_ENV_LOCK: asyncio.Lock | None = None
+
+
+def _get_env_lock() -> asyncio.Lock:
+    global _ENV_LOCK  # noqa: PLW0603
+    if _ENV_LOCK is None:
+        _ENV_LOCK = asyncio.Lock()
+    return _ENV_LOCK
 
 _TIMEOUT_SECONDS = 30
 _MAX_SAMPLE_CHUNKS = 20
@@ -48,16 +58,24 @@ def _should_regenerate(
     return abs(doc_count - described_at_doc_count) / described_at_doc_count >= 0.20
 
 
-async def generate_description(chunks: list[str], collection_name: str) -> str | None:
+async def generate_description(chunks: list[str], collection_name: str) -> str:
     """Sample up to 20 chunks, call Haiku via ClaudeSDKClient, return 2-3 sentence description.
 
     Session lifecycle: creates a new ClaudeSDKClient with DEFAULT_FAST_MODEL (Haiku),
     permission_mode="bypassPermissions".  Sends a single query, reads response, disconnects.
-    A 30-second timeout wraps the entire connect/query/receive/disconnect lifecycle;
-    if exceeded, returns None.  On any error, returns None without raising.
+    A 30-second timeout wraps the entire connect/query/receive/disconnect lifecycle.
+
+    Falls back to returning collection_name (the collection path) on any failure:
+    - ANTHROPIC_API_KEY not set
+    - SDK exception or timeout
+    - No chunks provided
     """
     if not chunks:
-        return None
+        return collection_name
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        logger.debug("ANTHROPIC_API_KEY not set; skipping description generation for %r", collection_name)
+        return collection_name
 
     sample = random.sample(chunks, min(_MAX_SAMPLE_CHUNKS, len(chunks)))
     prompt = _DESCRIPTION_PROMPT.format(
@@ -66,17 +84,18 @@ async def generate_description(chunks: list[str], collection_name: str) -> str |
     )
 
     try:
-        return await asyncio.wait_for(_call_haiku(prompt), timeout=_TIMEOUT_SECONDS)
+        result = await asyncio.wait_for(_call_haiku(prompt), timeout=_TIMEOUT_SECONDS)
+        return result if result else collection_name
     except asyncio.TimeoutError:
         logger.debug("Description generation timed out for collection %r", collection_name)
-        return None
+        return collection_name
     except Exception:
         logger.debug(
             "Description generation failed for collection %r",
             collection_name,
             exc_info=True,
         )
-        return None
+        return collection_name
 
 
 async def _call_haiku(prompt: str) -> str | None:
