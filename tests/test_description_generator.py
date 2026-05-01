@@ -18,18 +18,18 @@ class TestConstants:
 
 class TestDescriptionGeneratorFallback:
     @pytest.mark.asyncio
-    async def test_no_api_key_falls_back_to_path(self, tmp_path, monkeypatch) -> None:
-        """When ANTHROPIC_API_KEY is not set, generate_description returns the collection path."""
+    async def test_no_api_key_returns_none(self, tmp_path, monkeypatch) -> None:
+        """When ANTHROPIC_API_KEY is not set, generate_description returns None."""
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
         from archon_search.description_generator import generate_description
 
         result = await generate_description(["chunk1", "chunk2"], str(tmp_path))
-        assert result == str(tmp_path)
+        assert result is None
 
     @pytest.mark.asyncio
-    async def test_api_failure_falls_back_to_path(self, tmp_path, monkeypatch) -> None:
-        """When the SDK raises an exception, generate_description returns the collection path."""
+    async def test_api_failure_returns_none(self, tmp_path, monkeypatch) -> None:
+        """When the SDK raises an exception, generate_description returns None."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
         with patch("archon_search.description_generator.ClaudeSDKClient") as mock_cls:
@@ -40,7 +40,42 @@ class TestDescriptionGeneratorFallback:
             from archon_search.description_generator import generate_description
 
             result = await generate_description(["chunk1", "chunk2"], str(tmp_path))
-            assert result == str(tmp_path)
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_empty_chunks_returns_none(self) -> None:
+        """Empty chunks list skips generation and returns None."""
+        from archon_search.description_generator import generate_description
+
+        result = await generate_description([], "test-collection")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_successful_generation_returns_description(self, monkeypatch) -> None:
+        """Happy path: SDK returns a description string."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+        from claude_agent_sdk import ResultMessage
+
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.query = AsyncMock()
+        mock_client.disconnect = AsyncMock()
+
+        result_msg = AsyncMock(spec=ResultMessage)
+        result_msg.result = "A test description of this collection"
+
+        async def mock_receive():
+            yield result_msg
+
+        mock_client.receive_response = mock_receive
+
+        with patch("archon_search.description_generator.ClaudeSDKClient", return_value=mock_client):
+            from archon_search.description_generator import generate_description
+
+            result = await generate_description(["chunk text"], "test-collection")
+
+        assert result == "A test description of this collection"
 
     @pytest.mark.asyncio
     async def test_no_archon_imports(self) -> None:
@@ -57,3 +92,5 @@ class TestDescriptionGeneratorFallback:
             source = f.read()
         assert "from archon." not in source
         assert "import archon." not in source
+        assert "import archon\n" not in source
+        assert "from archon import" not in source

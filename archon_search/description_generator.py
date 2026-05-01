@@ -58,24 +58,24 @@ def _should_regenerate(
     return abs(doc_count - described_at_doc_count) / described_at_doc_count >= 0.20
 
 
-async def generate_description(chunks: list[str], collection_name: str) -> str:
+async def generate_description(chunks: list[str], collection_name: str) -> str | None:
     """Sample up to 20 chunks, call Haiku via ClaudeSDKClient, return 2-3 sentence description.
 
     Session lifecycle: creates a new ClaudeSDKClient with DEFAULT_FAST_MODEL (Haiku),
     permission_mode="bypassPermissions".  Sends a single query, reads response, disconnects.
     A 30-second timeout wraps the entire connect/query/receive/disconnect lifecycle.
 
-    Falls back to returning collection_name (the collection path) on any failure:
+    Returns None on any failure (caller decides fallback):
+    - No chunks provided
     - ANTHROPIC_API_KEY not set
     - SDK exception or timeout
-    - No chunks provided
     """
     if not chunks:
-        return collection_name
+        return None
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         logger.debug("ANTHROPIC_API_KEY not set; skipping description generation for %r", collection_name)
-        return collection_name
+        return None
 
     sample = random.sample(chunks, min(_MAX_SAMPLE_CHUNKS, len(chunks)))
     prompt = _DESCRIPTION_PROMPT.format(
@@ -84,18 +84,17 @@ async def generate_description(chunks: list[str], collection_name: str) -> str:
     )
 
     try:
-        result = await asyncio.wait_for(_call_haiku(prompt), timeout=_TIMEOUT_SECONDS)
-        return result if result else collection_name
+        return await asyncio.wait_for(_call_haiku(prompt), timeout=_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         logger.debug("Description generation timed out for collection %r", collection_name)
-        return collection_name
+        return None
     except Exception:
         logger.debug(
             "Description generation failed for collection %r",
             collection_name,
             exc_info=True,
         )
-        return collection_name
+        return None
 
 
 async def _call_haiku(prompt: str) -> str | None:
@@ -108,8 +107,7 @@ async def _call_haiku(prompt: str) -> str | None:
             max_buffer_size=10 * 1024 * 1024,
         )
     )
-    # Serialise CLAUDECODE env mutation with the same lock used by ClaudeSession.start()
-    # to prevent races between concurrent SDK connect() calls.
+    # Serialise CLAUDECODE env mutation to prevent races between concurrent SDK connect() calls.
     async with _get_env_lock():
         claudecode = os.environ.pop("CLAUDECODE", None)
         try:
