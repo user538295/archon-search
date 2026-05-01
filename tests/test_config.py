@@ -120,3 +120,18 @@ def test_load_config_invalid_port_raises_config_error(tmp_path: Path) -> None:
     toml_file.write_text("[server]\nport = -1\n", encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(path=toml_file)
+
+
+def test_load_config_providers_from_database_section(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        '[database]\nproviders = ["CUDAExecutionProvider"]\n',
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.providers == ["CUDAExecutionProvider"]
+
+
+def test_load_config_providers_default_is_empty_list() -> None:
+    config = SearchConfig()
+    assert config.providers == []

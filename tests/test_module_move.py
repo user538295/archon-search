@@ -55,8 +55,8 @@ def test_importable_modules(module_path: str, class_name: str) -> None:
 _CROSS_PACKAGE_IMPORTS = [
     # (filename, expected import string that must still exist)
     # description_generator.py intentionally removed: _get_env_lock was inlined in Task 2.2
+    # install.py intentionally removed: archon.* imports removed in Task 2.3
     ("notification_monitor.py", "from archon.config.loader import NotificationsConfig"),
-    ("install.py", "from archon.cli.console import Console"),
 ]
 
 _ARCHON_SEARCH_SRC = Path(__file__).parent.parent / "archon_search"
@@ -69,3 +69,10 @@ def test_cross_package_imports_preserved(filename: str, expected_import: str) ->
     assert expected_import in source, (
         f"{filename}: expected cross-package import not found: {expected_import!r}"
     )
+
+
+def test_install_py_has_no_archon_imports() -> None:
+    """Task 2.3: install.py must have zero archon.* imports after platform extraction."""
+    source = (_ARCHON_SEARCH_SRC / "install.py").read_text(encoding="utf-8")
+    lines = [ln for ln in source.splitlines() if "from archon." in ln or "import archon." in ln]
+    assert not lines, f"install.py still has archon.* imports: {lines}"

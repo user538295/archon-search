@@ -23,6 +23,7 @@ class SearchConfig:
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     chunk_size: int = 512
     auto_reindex_on_chunk_size_change: bool = True
+    providers: list[str] = field(default_factory=list)
     # [routing]
     routing_shortlist_size: int = 8
     routing_confidence_threshold: float = 0.30
@@ -101,6 +102,8 @@ def load_config(path: Path | None = None) -> SearchConfig:
         config.auto_reindex_on_chunk_size_change = _coerce_bool(
             database["auto_reindex_on_chunk_size_change"], "auto_reindex_on_chunk_size_change"
         )
+    if "providers" in database:
+        config.providers = list(database["providers"])
 
     routing = doc.get("routing", {})
     if "routing_shortlist_size" in routing:
