@@ -41,12 +41,12 @@ def sync() -> None:
     """Sync collections."""
 
 
-@main.command()
+@main.group()
 def collection() -> None:
     """Manage collections."""
 
 
-@main.command()
+@main.group()
 def config() -> None:
     """Show or edit configuration."""
 
