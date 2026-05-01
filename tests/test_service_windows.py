@@ -20,6 +20,11 @@ def test_stop_raises_not_implemented(service: WindowsSearchService) -> None:
         service.stop()
 
 
+def test_restart_raises_not_implemented(service: WindowsSearchService) -> None:
+    with pytest.raises(NotImplementedError):
+        service.restart()
+
+
 def test_register_raises_not_implemented(service: WindowsSearchService) -> None:
     with pytest.raises(NotImplementedError):
         service.register()

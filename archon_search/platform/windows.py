@@ -13,6 +13,9 @@ class WindowsSearchService(SearchServiceLifecycle):
     def stop(self) -> None:
         raise NotImplementedError(_MSG)
 
+    def restart(self) -> None:
+        raise NotImplementedError(_MSG)
+
     def register(self) -> None:
         raise NotImplementedError(_MSG)
 
