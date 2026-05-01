@@ -1,5 +1,8 @@
 import click
 
+from archon_search.cli.start import start
+from archon_search.cli.stop import stop
+
 
 @click.group()
 def main() -> None:
@@ -16,14 +19,8 @@ def uninstall() -> None:
     """Uninstall archon-search service."""
 
 
-@main.command()
-def start() -> None:
-    """Start the archon-search service."""
-
-
-@main.command()
-def stop() -> None:
-    """Stop the archon-search service."""
+main.add_command(start)
+main.add_command(stop)
 
 
 @main.command()
