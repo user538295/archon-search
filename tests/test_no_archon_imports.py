@@ -13,7 +13,7 @@ FORBIDDEN_PATTERNS = [
 ]
 
 # Files that are known to still need migration in later tasks
-_PENDING_MIGRATION = {"pipeline.py", "server.py"}
+_PENDING_MIGRATION = {"pipeline.py", "mcp.py"}
 
 
 def _collect_py_files() -> list[Path]:
