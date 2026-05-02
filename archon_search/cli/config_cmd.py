@@ -10,7 +10,7 @@ from archon_search.config import SearchConfig, get_default_config_path
 
 
 def _default_toml() -> str:
-    """Return a minimal default TOML string with SearchConfig defaults."""
+    """Return a complete default TOML string with all SearchConfig defaults."""
     cfg = SearchConfig()
     doc = tomlkit.document()
 
@@ -24,7 +24,25 @@ def _default_toml() -> str:
     database.add("embedding_model", cfg.embedding_model)
     database.add("reranker_model", cfg.reranker_model)
     database.add("chunk_size", cfg.chunk_size)
+    database.add("auto_reindex_on_chunk_size_change", cfg.auto_reindex_on_chunk_size_change)
     doc.add("database", database)
+
+    routing = tomlkit.table()
+    routing.add("routing_shortlist_size", cfg.routing_shortlist_size)
+    routing.add("routing_confidence_threshold", cfg.routing_confidence_threshold)
+    routing.add("max_parallel_collections", cfg.max_parallel_collections)
+    doc.add("routing", routing)
+
+    collections = tomlkit.table()
+    collections.add("pinned_collections", cfg.pinned_collections)
+    collections.add("collections", cfg.collections)
+    collections.add("watch", cfg.watch)
+    doc.add("collections", collections)
+
+    logging_table = tomlkit.table()
+    logging_table.add("level", cfg.level)
+    logging_table.add("log_file", cfg.log_file)
+    doc.add("logging", logging_table)
 
     return tomlkit.dumps(doc)
 
@@ -93,15 +111,20 @@ def set_cmd(key: str, value: str, config_path: Path | None) -> None:
     if section not in doc:
         doc.add(section, tomlkit.table())
 
-    # Try to coerce to int or float if possible
-    coerced: str | int | float = value
-    try:
-        coerced = int(value)
-    except ValueError:
+    # Try to coerce to bool, int, or float if possible
+    coerced: bool | str | int | float = value
+    if value.lower() == "true":
+        coerced = True
+    elif value.lower() == "false":
+        coerced = False
+    else:
         try:
-            coerced = float(value)
+            coerced = int(value)
         except ValueError:
-            pass
+            try:
+                coerced = float(value)
+            except ValueError:
+                pass
 
     doc[section][field] = coerced  # type: ignore[index]
 

@@ -21,6 +21,25 @@ def _legacy_service_path() -> Path:
     return Path.home() / ".config" / "systemd" / "user" / "archon-search.service"
 
 
+def _remove_legacy_service(legacy_path: Path) -> None:
+    """Unload and remove a legacy Archon-managed service definition."""
+    import subprocess
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["launchctl", "unload", str(legacy_path)], check=False, capture_output=True)
+        elif sys.platform.startswith("linux"):
+            service_name = legacy_path.stem
+            subprocess.run(["systemctl", "--user", "stop", service_name], check=False, capture_output=True)
+            subprocess.run(["systemctl", "--user", "disable", service_name], check=False, capture_output=True)
+    except Exception:
+        pass  # best-effort
+    try:
+        legacy_path.unlink(missing_ok=True)
+        click.echo(f"Removed legacy service file: {legacy_path}")
+    except Exception as exc:
+        click.echo(f"Warning: could not remove legacy service file: {exc}", err=True)
+
+
 def _get_db_path(config_path: Path | None = None) -> Path:
     """Return the expanded database path from config."""
     cfg = load_config(config_path)
@@ -82,7 +101,8 @@ def install(dry_run: bool, non_interactive: bool, config_path: Path | None) -> N
     # Detect and handle legacy service
     legacy = _legacy_service_path()
     if legacy.exists():
-        click.echo(f"Legacy service definition found at {legacy} — will be overwritten")
+        click.echo(f"Legacy service definition found at {legacy} — migrating ...")
+        _remove_legacy_service(legacy)
 
     service = _get_service()
     click.echo("Registering service ...")

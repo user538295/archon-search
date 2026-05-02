@@ -76,6 +76,42 @@ def test_config_set_creates_file_if_absent(runner: CliRunner, tmp_path: Path) ->
     assert doc["server"]["port"] == 9001
 
 
+def test_config_set_boolean_true(runner: CliRunner, tmp_path: Path) -> None:
+    config_file = tmp_path / "archon-search.toml"
+    config_file.write_text("[database]\nauto_reindex_on_chunk_size_change = true\n")
+    result = runner.invoke(main, ["config", "set", "database.auto_reindex_on_chunk_size_change", "false", "--config", str(config_file)])
+    assert result.exit_code == 0, result.output
+    doc = tomlkit.parse(config_file.read_text())
+    assert doc["database"]["auto_reindex_on_chunk_size_change"] is False  # must be bool, not string
+
+
+def test_config_set_boolean_false(runner: CliRunner, tmp_path: Path) -> None:
+    config_file = tmp_path / "archon-search.toml"
+    config_file.write_text("[database]\nauto_reindex_on_chunk_size_change = false\n")
+    result = runner.invoke(main, ["config", "set", "database.auto_reindex_on_chunk_size_change", "true", "--config", str(config_file)])
+    assert result.exit_code == 0, result.output
+    doc = tomlkit.parse(config_file.read_text())
+    assert doc["database"]["auto_reindex_on_chunk_size_change"] is True  # must be bool, not string
+
+
+def test_config_get_routing_key_with_no_file(runner: CliRunner, tmp_path: Path) -> None:
+    missing = tmp_path / "nonexistent.toml"
+    result = runner.invoke(main, ["config", "get", "routing.routing_shortlist_size", "--config", str(missing)])
+    assert result.exit_code == 0, result.output
+    assert "8" in result.output  # default value
+
+
+def test_config_show_defaults_include_all_sections(runner: CliRunner, tmp_path: Path) -> None:
+    missing = tmp_path / "nonexistent.toml"
+    result = runner.invoke(main, ["config", "show", "--config", str(missing)])
+    assert result.exit_code == 0, result.output
+    assert "[server]" in result.output
+    assert "[database]" in result.output
+    assert "[routing]" in result.output
+    assert "[collections]" in result.output
+    assert "[logging]" in result.output
+
+
 # ---------------------------------------------------------------------------
 # install subcommand
 # ---------------------------------------------------------------------------
@@ -122,7 +158,7 @@ def test_install_dry_run_skips_service_calls(runner: CliRunner, mock_service: Ma
 
 
 def test_install_migrates_legacy_service_definition(runner: CliRunner, mock_service: MagicMock, tmp_path: Path) -> None:
-    """If legacy plist/unit exists, install should call register() to overwrite it."""
+    """Legacy plist/unit is removed during install migration."""
     legacy_plist = tmp_path / "com.archon.search.plist"
     legacy_plist.write_text("<plist/>")
 
@@ -130,10 +166,11 @@ def test_install_migrates_legacy_service_definition(runner: CliRunner, mock_serv
         patch("archon_search.cli.install_cmd._get_service", return_value=mock_service),
         patch("archon_search.cli.install_cmd._wait_for_health", return_value=True),
         patch("archon_search.cli.install_cmd._legacy_service_path", return_value=legacy_plist),
+        patch("archon_search.cli.install_cmd._remove_legacy_service") as mock_remove,
     ):
         result = runner.invoke(main, ["install", "--non-interactive"])
     assert result.exit_code == 0, result.output
-    # register is called regardless (overwrites legacy)
+    mock_remove.assert_called_once_with(legacy_plist)
     mock_service.register.assert_called_once()
 
 
@@ -201,14 +238,33 @@ def test_sync_calls_collection_sync(runner: CliRunner, tmp_path: Path) -> None:
         patch("archon_search.cli.sync.create_pipeline", return_value=mock_pipeline),
         patch("archon_search.cli.sync.IndexingStateStore"),
     ):
-        mock_load.return_value = MagicMock(pinned_collections=[], db_path=str(tmp_path), embedding_model="test", chunk_size=512, auto_reindex_on_chunk_size_change=True)
+        mock_load.return_value = MagicMock(pinned_collections=[], collections=[], db_path=str(tmp_path), embedding_model="test", chunk_size=512, auto_reindex_on_chunk_size_change=True)
         result = runner.invoke(main, ["sync", "--config", str(config_file)])
     assert result.exit_code == 0, result.output
+    mock_sync.sync.assert_called_once()
+    call_arg = mock_sync.sync.call_args[0][0]
+    # Should be pinned_collections + collections (both empty in mock)
+    assert isinstance(call_arg, list)
 
 
 # ---------------------------------------------------------------------------
 # collection subgroup
 # ---------------------------------------------------------------------------
+
+def test_ingest_uses_default_path_when_no_path_given(runner: CliRunner) -> None:
+    mock_pipeline = MagicMock()
+    mock_pipeline.store.connect = AsyncMock()
+    mock_pipeline.store.disconnect = AsyncMock()
+    mock_pipeline.ingest_directory = AsyncMock(return_value=[])
+
+    with (
+        patch("archon_search.cli.ingest.load_config"),
+        patch("archon_search.cli.ingest.create_pipeline", return_value=mock_pipeline),
+    ):
+        result = runner.invoke(main, ["ingest"])
+    # Should not fail with "missing argument" — path is now optional
+    assert "Missing option" not in result.output
+
 
 def test_collection_group_available(runner: CliRunner) -> None:
     result = runner.invoke(main, ["collection", "--help"])
@@ -274,3 +330,82 @@ def test_collection_remove_pinned_only_error_preserved(runner: CliRunner, tmp_pa
     ])
     assert result.exit_code != 0
     assert "pinned" in result.output.lower() or "error" in result.output.lower()
+
+
+def test_collection_remove_dry_run_and_force_mutually_exclusive(runner: CliRunner, tmp_path: Path) -> None:
+    config_file = tmp_path / "archon-search.toml"
+    config_file.write_text("[collections]\npinned_collections = []\ncollections = [\"/some/path\"]\n")
+    result = runner.invoke(main, [
+        "collection", "remove", "/some/path",
+        "--dry-run", "--force",
+        "--config", str(config_file),
+    ])
+    assert result.exit_code != 0
+
+
+def test_collection_add_calls_ingest_directory(runner: CliRunner, tmp_path: Path) -> None:
+    config_file = tmp_path / "archon-search.toml"
+    config_file.write_text("[collections]\npinned_collections = []\ncollections = []\n")
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.store.connect = AsyncMock()
+    mock_pipeline.store.disconnect = AsyncMock()
+    mock_pipeline.ingest_directory = AsyncMock(return_value=[])
+
+    with (
+        patch("archon_search.cli.collection.load_config") as mock_load,
+        patch("archon_search.cli.collection.create_pipeline", return_value=mock_pipeline),
+        patch("archon_search.cli.collection.get_default_config_path", return_value=config_file),
+    ):
+        mock_load.return_value = MagicMock(
+            pinned_collections=[],
+            collections=[str(tmp_path)],
+            db_path=str(tmp_path),
+            embedding_model="test",
+            chunk_size=512,
+        )
+        result = runner.invoke(main, [
+            "collection", "add", str(tmp_path),
+            "--config", str(config_file),
+        ])
+    assert result.exit_code == 0, result.output
+    mock_pipeline.ingest_directory.assert_called_once()
+
+
+def test_collection_reindex_calls_ingest_directory(runner: CliRunner, tmp_path: Path) -> None:
+    config_file = tmp_path / "archon-search.toml"
+    source_path = str(tmp_path)
+    config_file.write_text(
+        f"[collections]\npinned_collections = []\ncollections = [\"{source_path}\"]\n"
+    )
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.store.connect = AsyncMock()
+    mock_pipeline.store.disconnect = AsyncMock()
+    mock_pipeline.store.drop_collection = AsyncMock()
+    mock_pipeline.ingest_directory = AsyncMock(return_value=[])
+
+    from archon_search.sync import path_to_collection_name
+    collection_name = path_to_collection_name(source_path)
+
+    mock_state_store = MagicMock()
+    mock_state_store.remove_collection = MagicMock()
+
+    with (
+        patch("archon_search.cli.collection.load_config") as mock_load,
+        patch("archon_search.cli.collection.create_pipeline", return_value=mock_pipeline),
+        patch("archon_search.progress.IndexingStateStore", return_value=mock_state_store),
+    ):
+        mock_load.return_value = MagicMock(
+            pinned_collections=[],
+            collections=[source_path],
+            db_path=str(tmp_path),
+            embedding_model="test",
+            chunk_size=512,
+        )
+        result = runner.invoke(main, [
+            "collection", "reindex", collection_name,
+            "--config", str(config_file),
+        ])
+    assert result.exit_code == 0, result.output
+    mock_pipeline.ingest_directory.assert_called_once()

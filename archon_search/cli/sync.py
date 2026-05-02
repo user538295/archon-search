@@ -35,7 +35,8 @@ def sync(config_path: Path | None) -> None:
                 chunk_size=cfg.chunk_size,
                 auto_reindex_on_chunk_size_change=cfg.auto_reindex_on_chunk_size_change,
             )
-            result = await sync_runner.sync(cfg.pinned_collections)
+            all_collections = cfg.pinned_collections + cfg.collections
+            result = await sync_runner.sync(all_collections)
             click.echo(f"Sync complete: {result}")
         finally:
             await pipeline.store.disconnect()

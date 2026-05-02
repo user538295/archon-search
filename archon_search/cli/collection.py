@@ -35,7 +35,7 @@ def list_cmd(config_path: Path | None) -> None:
                 click.echo("No collections found.")
             else:
                 for c in collections:
-                    click.echo(c)
+                    click.echo(f"{c.name}  docs={c.doc_count}  chunks={c.chunk_count}")
         finally:
             await pipeline.store.disconnect()
 
@@ -86,8 +86,8 @@ def add(path: str, config_path: Path | None) -> None:
         pipeline = create_pipeline(cfg)
         try:
             await pipeline.store.connect()
-            result = await pipeline.ingest(path, collection_name=collection_name)
-            click.echo(f"Added collection '{collection_name}': {result}")
+            result = await pipeline.ingest_directory(Path(path).expanduser(), collection_name)
+            click.echo(f"Added collection '{collection_name}': {len(result)} files ingested")
         finally:
             await pipeline.store.disconnect()
 
@@ -117,8 +117,9 @@ def remove(path: str, dry_run: bool, force: bool, config_path: Path | None) -> N
         click.echo(f"Error loading config: {exc}", err=True)
         raise SystemExit(1)
 
-    in_pinned = path in cfg.pinned_collections
-    in_collections = path in cfg.collections
+    resolved = Path(path).expanduser().resolve()
+    in_pinned = any(Path(p).expanduser().resolve() == resolved for p in cfg.pinned_collections)
+    in_collections = any(Path(p).expanduser().resolve() == resolved for p in cfg.collections)
 
     # Pinned-only check: in pinned but NOT in collections
     if in_pinned and not in_collections:
@@ -177,8 +178,11 @@ def info(collection_name: str, config_path: Path | None) -> None:
         pipeline = create_pipeline(cfg)
         try:
             await pipeline.store.connect()
-            col_info = await pipeline.store.collection_info(collection_name)
-            click.echo(str(col_info))
+            meta = await pipeline.store.get_collection_meta(collection_name)
+            if meta is None:
+                click.echo(f"Error: collection '{collection_name}' not found.", err=True)
+                raise SystemExit(1)
+            click.echo(str(meta))
         finally:
             await pipeline.store.disconnect()
 
@@ -201,11 +205,37 @@ def reindex(collection_name: str, config_path: Path | None) -> None:
         raise SystemExit(1)
 
     async def _run() -> None:
+        from archon_search.progress import IndexingStateStore  # noqa: PLC0415
+        from archon_search.sync import path_to_collection_name as p2cn  # noqa: PLC0415
+
+        # Find source path for this collection
+        source_path: str | None = None
+        for p in cfg.pinned_collections + cfg.collections:
+            if p2cn(p) == collection_name:
+                source_path = p
+                break
+        if source_path is None:
+            click.echo(f"Error: collection '{collection_name}' not found in config.", err=True)
+            raise SystemExit(1)
+
         pipeline = create_pipeline(cfg)
         try:
             await pipeline.store.connect()
-            await pipeline.store.drop_collection(collection_name)
-            click.echo(f"Collection '{collection_name}' cleared — reindex via 'sync' or 'collection add'.")
+            # Clear state to force full reindex
+            state_store = IndexingStateStore(Path(cfg.db_path).expanduser())
+            state_store.remove_collection(collection_name)
+            # Drop old data
+            try:
+                await pipeline.store.drop_collection(collection_name)
+            except Exception:
+                pass
+            # Reindex
+            results = await pipeline.ingest_directory(
+                Path(source_path).expanduser(), collection_name, force_regenerate_description=True
+            )
+            ok = sum(1 for r in results if r.status == "ok")
+            errors = sum(1 for r in results if r.status == "error")
+            click.echo(f"Reindex complete for '{collection_name}': {ok} ingested, {errors} errors.")
         finally:
             await pipeline.store.disconnect()
 
