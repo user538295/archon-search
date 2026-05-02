@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.config import ConfigError, SearchConfig, get_default_config_path, load_config
+from archon_search.config import ConfigError, SearchConfig, get_default_config_path, load_config, save_config
 
 
 def test_load_config_defaults_when_no_file(tmp_path: Path) -> None:
@@ -135,3 +135,46 @@ def test_load_config_providers_from_database_section(tmp_path: Path) -> None:
 def test_load_config_providers_default_is_empty_list() -> None:
     config = SearchConfig()
     assert config.providers == []
+
+
+# ---------------------------------------------------------------------------
+# save_config tests
+# ---------------------------------------------------------------------------
+
+
+def test_save_config_round_trip(tmp_path: Path) -> None:
+    """Load config, mutate collections, save, reload — collections match."""
+    toml_file = tmp_path / "archon-search.toml"
+    config = SearchConfig()
+    config.collections = ["/path/a", "/path/b"]
+    config.pinned_collections = ["/pinned/x"]
+
+    save_config(config, toml_file)
+
+    reloaded = load_config(path=toml_file)
+    assert reloaded.collections == ["/path/a", "/path/b"]
+    assert reloaded.pinned_collections == ["/pinned/x"]
+
+
+def test_save_config_preserves_other_sections(tmp_path: Path) -> None:
+    """save_config only touches [collections] keys; other TOML sections are preserved."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        "[server]\nhost = \"0.0.0.0\"\nport = 9000\n\n[database]\ndb_path = \"/custom/db\"\n",
+        encoding="utf-8",
+    )
+
+    config = SearchConfig()
+    config.collections = ["/new/path"]
+    config.pinned_collections = []
+
+    save_config(config, toml_file)
+
+    reloaded = load_config(path=toml_file)
+    # Other sections must be intact
+    assert reloaded.host == "0.0.0.0"
+    assert reloaded.port == 9000
+    assert reloaded.db_path == "/custom/db"
+    # Collections updated
+    assert reloaded.collections == ["/new/path"]
+    assert reloaded.pinned_collections == []

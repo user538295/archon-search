@@ -37,6 +37,30 @@ class SearchConfig:
     log_file: str = "~/.archon/logs/archon-search.log"
 
 
+def save_config(config: SearchConfig, path: Path | str) -> None:
+    """Write collections and pinned_collections back to the TOML file.
+
+    Uses tomlkit for round-trip editing (preserves comments/formatting).
+    If the file does not exist yet, creates it with the two arrays.
+    """
+    path = Path(path)
+    if path.exists():
+        text = path.read_text(encoding="utf-8")
+        doc = tomlkit.parse(text)
+    else:
+        doc = tomlkit.document()
+
+    if "collections" not in doc:
+        doc.add("collections", tomlkit.table())  # type: ignore[arg-type]
+    col_section = doc["collections"]
+    col_section["collections"] = tomlkit.array()
+    col_section["collections"].extend(config.collections)
+    col_section["pinned_collections"] = tomlkit.array()
+    col_section["pinned_collections"].extend(config.pinned_collections)
+
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+
+
 def get_default_config_path() -> Path:
     return Path.home() / ".archon" / "archon-search.toml"
 

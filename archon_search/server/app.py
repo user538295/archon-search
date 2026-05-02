@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 import uvicorn
@@ -13,6 +14,7 @@ from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.jobs.store import JobStore
 from archon_search.progress import IndexingStateStore
+from archon_search.server.routes_collections import router as collections_router
 from archon_search.server.routes_health import router as health_router
 from archon_search.server.routes_jobs import router as jobs_router
 from archon_search.server.routes_route import router as route_router
@@ -22,7 +24,11 @@ from archon_search.server.routes_status import router as status_router
 logger = logging.getLogger("archon-search")
 
 
-def create_app(config: SearchConfig, job_store: JobStore) -> FastAPI:
+def create_app(
+    config: SearchConfig,
+    job_store: JobStore,
+    config_path: Path | str | None = None,
+) -> FastAPI:
     """Create and configure the FastAPI application instance."""
 
     @asynccontextmanager
@@ -37,9 +43,12 @@ def create_app(config: SearchConfig, job_store: JobStore) -> FastAPI:
     app = FastAPI(title="archon-search", lifespan=lifespan)
     app.state.config = config
     app.state.job_store = job_store
+    app.state.config_path = Path(config_path) if config_path is not None else None
     app.state._background_tasks: set = set()
     app.state.state_store = IndexingStateStore(config.db_path)
+    app.state.search_store = None
     app.state.embedder = Embedder(ModelEmbedder(config.embedding_model, providers=config.providers or None))
+    app.include_router(collections_router)
     app.include_router(health_router)
     app.include_router(jobs_router)
     app.include_router(status_router)

@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from archon_search.jobs.model import IngestJob, JobStatus
+from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
 
 logger = logging.getLogger("archon-search")
@@ -34,16 +34,6 @@ class IngestRequest(BaseModel):
             raise ValueError("collection must be non-empty")
         return v
 
-
-def _job_to_dict(job: IngestJob) -> dict:
-    return {
-        "job_id": job.job_id,
-        "status": job.status.value,
-        "created_at": job.created_at,
-        "updated_at": job.updated_at,
-        "result": job.result,
-        "error": job.error,
-    }
 
 
 async def _run_pipeline(
@@ -100,7 +90,7 @@ async def ingest(body: IngestRequest, request: Request) -> JSONResponse:
     task = asyncio.create_task(_default_ingest_task(job.job_id, store, body, pipeline_fn))
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
-    return JSONResponse(content=_job_to_dict(job), status_code=202)
+    return JSONResponse(content=job_to_dict(job), status_code=202)
 
 
 @router.get("/jobs/{job_id}")
@@ -109,7 +99,7 @@ async def get_job(job_id: str, request: Request) -> JSONResponse:
     job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return JSONResponse(content=_job_to_dict(job))
+    return JSONResponse(content=job_to_dict(job))
 
 
 @router.delete("/jobs/{job_id}")
@@ -119,17 +109,17 @@ async def delete_job(job_id: str, request: Request) -> JSONResponse:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status in _TERMINAL_STATUSES:
-        return JSONResponse(content=_job_to_dict(job), status_code=200)
+        return JSONResponse(content=job_to_dict(job), status_code=200)
     if job.status in _ACTIVE_STATUSES:
         # Use transition() to avoid TOCTOU race: only updates if still active
         updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)
         if updated is None:
             # Race: job became terminal between get() and transition() — idempotent 200
             job = store.get(job_id)
-            return JSONResponse(content=_job_to_dict(job), status_code=200)  # type: ignore[arg-type]
-        return JSONResponse(content=_job_to_dict(updated), status_code=202)
+            return JSONResponse(content=job_to_dict(job), status_code=200)  # type: ignore[arg-type]
+        return JSONResponse(content=job_to_dict(updated), status_code=202)
     elif job.status == JobStatus.CANCELLING:
-        return JSONResponse(content=_job_to_dict(job), status_code=202)
+        return JSONResponse(content=job_to_dict(job), status_code=202)
     else:
         logger.error("DELETE /jobs/%s: unknown status %s", job_id, job.status)
         return JSONResponse(
