@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
+from archon_search.server.routes_health import router as health_router
 
 logger = logging.getLogger("archon-search")
 
@@ -17,6 +18,7 @@ def create_app(config: SearchConfig, job_store: JobStore) -> FastAPI:
     app = FastAPI(title="archon-search")
     app.state.config = config
     app.state.job_store = job_store
+    app.include_router(health_router)
     return app
 
 
