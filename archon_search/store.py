@@ -26,9 +26,48 @@ _META_TABLE = "_archon_collection_meta"
 
 _RRF_K = 60  # RRF constant
 
+_META_MAX_FIELDS = 50
+_META_MAX_KEY_LEN = 256
+_META_MAX_VAL_LEN = 4096
+
 
 def _rrf_score(rank: int) -> float:
     return 1.0 / (_RRF_K + rank + 1)
+
+
+def validate_metadata(metadata: dict[str, str]) -> None:
+    """Validate metadata dict against size constraints.
+
+    Raises ValueError if any constraint is violated.
+    """
+    if len(metadata) > _META_MAX_FIELDS:
+        raise ValueError(f"metadata exceeds max {_META_MAX_FIELDS} fields (got {len(metadata)})")
+    for key, value in metadata.items():
+        if not isinstance(key, str):
+            raise ValueError(f"metadata key must be a string (got {type(key).__name__})")
+        if not isinstance(value, str):
+            raise ValueError(f"metadata value must be a string (got {type(value).__name__})")
+        if len(key) > _META_MAX_KEY_LEN:
+            raise ValueError(f"metadata key too long: max {_META_MAX_KEY_LEN} chars (got {len(key)})")
+        if len(value) > _META_MAX_VAL_LEN:
+            raise ValueError(f"metadata value too long: max {_META_MAX_VAL_LEN} chars (got {len(value)})")
+
+
+def parse_metadata(raw: str) -> dict[str, str]:
+    """Parse a JSON string into a metadata dict. Returns empty dict on error.
+
+    Coerces non-string values to strings and skips non-string keys to guard
+    against corrupted stored data.
+    """
+    if not raw:
+        return {}
+    try:
+        result = json.loads(raw)
+        if not isinstance(result, dict):
+            return {}
+        return {str(k): str(v) for k, v in result.items() if isinstance(k, str)}
+    except json.JSONDecodeError:
+        return {}
 
 
 class SearchStore:
@@ -87,6 +126,13 @@ class SearchStore:
                 pa.field("vector", pa.list_(pa.float32(), embedding_dim)),
                 pa.field("source_path", pa.utf8()),
                 pa.field("indexed_at", pa.utf8()),
+                # Extended metadata fields (FEAT-038 Task 6.1)
+                pa.field("file_type", pa.utf8()),
+                pa.field("language", pa.utf8()),  # nullable via None → ""
+                pa.field("metadata", pa.utf8()),   # JSON string
+                pa.field("custom_score", pa.float32()),  # nullable
+                pa.field("ingested_by", pa.utf8()),
+                pa.field("updated_at", pa.utf8()),
             ]
         )
 
@@ -276,6 +322,7 @@ class SearchStore:
         for chunk in chunks:
             if not _CHUNK_ID_RE.match(chunk.chunk_id):
                 raise ValueError(f"malformed chunk_id: {chunk.chunk_id!r}")
+            validate_metadata(chunk.metadata)
 
         if not chunks:
             return 0
@@ -289,6 +336,12 @@ class SearchStore:
                 "vector": [float(v) for v in c.vector],
                 "source_path": c.source_path,
                 "indexed_at": c.indexed_at,
+                "file_type": c.file_type or "",
+                "language": c.language or "",
+                "metadata": json.dumps(c.metadata) if c.metadata else "{}",
+                "custom_score": float(c.custom_score) if c.custom_score is not None else None,
+                "ingested_by": c.ingested_by or "archon-search-cli",
+                "updated_at": c.updated_at or c.indexed_at,
             }
             for c in chunks
         ]
@@ -493,6 +546,12 @@ class SearchStore:
                 vector=list(r["vector"]),
                 source_path=r["source_path"],
                 indexed_at=r["indexed_at"],
+                file_type=r.get("file_type") or "",
+                language=r.get("language") or None,
+                metadata=parse_metadata(r.get("metadata") or "{}"),
+                custom_score=r.get("custom_score"),
+                ingested_by=r.get("ingested_by") or "archon-search-cli",
+                updated_at=r.get("updated_at") or r["indexed_at"],
             )
             for r in rows
         ]

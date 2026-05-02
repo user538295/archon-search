@@ -110,8 +110,11 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JSONRe
     config.collections.append(resolved)
     _maybe_save_config(config, request)
 
+    ingested_by = request.headers.get("X-Ingested-By", "archon-search-cli")
     job = store.create()
-    ingest_body = IngestRequest(collection=path_to_collection_name(resolved), path=resolved)
+    ingest_body = IngestRequest(
+        collection=path_to_collection_name(resolved), path=resolved, ingested_by=ingested_by
+    )
     task = asyncio.create_task(_default_ingest_task(job.job_id, store, ingest_body))
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
@@ -225,8 +228,9 @@ async def reindex_collection(name: str, request: Request) -> JSONResponse:
 
     resolved = path_to_name[name]
 
+    ingested_by = request.headers.get("X-Ingested-By", "archon-search-cli")
     job = store.create()
-    ingest_body = IngestRequest(collection=name, path=resolved)
+    ingest_body = IngestRequest(collection=name, path=resolved, ingested_by=ingested_by)
     task = asyncio.create_task(_default_ingest_task(job.job_id, store, ingest_body))
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)

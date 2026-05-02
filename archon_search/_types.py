@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -9,6 +9,13 @@ class ChunkRecord:
     vector: list[float]
     source_path: str
     indexed_at: str
+    # Extended metadata fields (FEAT-038 Task 6.1)
+    file_type: str = ""
+    language: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
+    custom_score: float | None = None
+    ingested_by: str = "archon-search-cli"
+    updated_at: str = ""
 
 
 @dataclass

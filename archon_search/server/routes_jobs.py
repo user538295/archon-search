@@ -26,6 +26,7 @@ class IngestRequest(BaseModel):
     collection: str
     path: str | None = None
     documents: list[dict[str, Any]] | None = None
+    ingested_by: str = "archon-search-cli"
 
     @field_validator("collection")
     @classmethod
@@ -86,6 +87,9 @@ async def ingest(body: IngestRequest, request: Request) -> JSONResponse:
     pipeline_fn: Callable[..., Awaitable[None]] | None = getattr(
         request.app.state, "ingest_pipeline", None
     )
+    # Populate ingested_by from HTTP header if present
+    ingested_by = request.headers.get("X-Ingested-By", "archon-search-cli")
+    body.ingested_by = ingested_by
     job = store.create()
     task = asyncio.create_task(_default_ingest_task(job.job_id, store, body, pipeline_fn))
     request.app.state._background_tasks.add(task)

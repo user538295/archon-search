@@ -45,6 +45,22 @@ def test_ingest_empty_collection_returns_422(client: TestClient) -> None:
     assert response.status_code == 422
 
 
+def test_ingest_x_ingested_by_header_accepted(client: TestClient) -> None:
+    """POST /ingest with X-Ingested-By header must succeed with 202."""
+    response = client.post(
+        "/ingest",
+        json={"collection": "docs"},
+        headers={"X-Ingested-By": "external-tool"},
+    )
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+    # Verify the job was created and is retrievable
+    job_id = data["job_id"]
+    get_response = client.get(f"/jobs/{job_id}")
+    assert get_response.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # GET /jobs/{job_id}
 # ---------------------------------------------------------------------------
