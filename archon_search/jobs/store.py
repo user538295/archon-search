@@ -26,23 +26,21 @@ class JobStore:
     def __init__(self, path: Path = JOBS_FILE) -> None:
         self._path = path
         self._jobs: dict[str, IngestJob] = {}
-        self._load()
-        self._evict_old()
+        changed = self._load()
+        if changed:
+            self._write_atomic()
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def create(self, **kwargs: object) -> IngestJob:
+    def create(self) -> IngestJob:
         now = _now_iso()
-        job = dataclasses.replace(
-            IngestJob(
-                job_id=str(uuid.uuid4()),
-                status=JobStatus.PENDING,
-                created_at=now,
-                updated_at=now,
-            ),
-            **kwargs,  # type: ignore[arg-type]
+        job = IngestJob(
+            job_id=str(uuid.uuid4()),
+            status=JobStatus.PENDING,
+            created_at=now,
+            updated_at=now,
         )
         self._jobs[job.job_id] = job
         self._write_atomic()
@@ -67,11 +65,13 @@ class JobStore:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _load(self) -> None:
+    def _load(self) -> bool:
+        """Load jobs from disk. Returns True if store was modified (crash recovery or eviction)."""
         if not self._path.exists():
-            return
+            return False
         try:
             raw = json.loads(self._path.read_text())
+            modified = False
             for item in raw:
                 item["status"] = JobStatus(item["status"])
                 job = IngestJob(**item)
@@ -79,12 +79,20 @@ class JobStore:
                     job = dataclasses.replace(
                         job, status=JobStatus.FAILED, error="process_restart"
                     )
+                    modified = True
                 self._jobs[job.job_id] = job
+            count_before = len(self._jobs)
+            self._evict_old()
+            if len(self._jobs) < count_before:
+                modified = True
+            return modified
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             logger.error("JobStore: corrupt jobs file %s — resetting (%s)", self._path, exc)
             self._jobs = {}
+            return False
 
     def _write_atomic(self) -> None:
+        self._evict_old()  # evict BEFORE serializing so stale jobs are never written
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(".tmp")
         data = [dataclasses.asdict(job) for job in self._jobs.values()]
@@ -93,7 +101,6 @@ class JobStore:
             item["status"] = item["status"].value if hasattr(item["status"], "value") else item["status"]
         tmp.write_text(json.dumps(data, indent=2))
         tmp.rename(self._path)
-        self._evict_old()
 
     def _evict_old(self) -> None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=_EVICTION_DAYS)
