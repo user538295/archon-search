@@ -30,6 +30,7 @@ class SearchConfig:
     max_parallel_collections: int = 3
     # [collections]
     pinned_collections: list[str] = field(default_factory=list)
+    collections: list[str] = field(default_factory=list)
     watch: bool = False
     # [logging]
     level: str = "INFO"
@@ -125,6 +126,8 @@ def load_config(path: Path | None = None) -> SearchConfig:
     collections = doc.get("collections", {})
     if "pinned_collections" in collections:
         config.pinned_collections = list(collections["pinned_collections"])
+    if "collections" in collections:
+        config.collections = list(collections["collections"])
     if "watch" in collections:
         config.watch = _coerce_bool(collections["watch"], "watch")
 
