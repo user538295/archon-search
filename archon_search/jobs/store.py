@@ -58,6 +58,22 @@ class JobStore:
     def get(self, job_id: str) -> IngestJob | None:
         return self._jobs.get(job_id)
 
+    def transition(
+        self,
+        job_id: str,
+        from_statuses: set[JobStatus],
+        to_status: JobStatus,
+    ) -> IngestJob | None:
+        """Atomically update status only if current status is in from_statuses.
+
+        Returns the updated job, or None if the transition was rejected
+        (job not found or status not in from_statuses).
+        """
+        job = self._jobs.get(job_id)
+        if job is None or job.status not in from_statuses:
+            return None
+        return self.update(job_id, status=to_status)
+
     def list(self) -> list[IngestJob]:
         return list(self._jobs.values())
 
