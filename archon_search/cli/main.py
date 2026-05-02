@@ -1,6 +1,7 @@
 import click
 
 from archon_search.cli.start import start
+from archon_search.cli.status import status
 from archon_search.cli.stop import stop
 
 
@@ -21,11 +22,7 @@ def uninstall() -> None:
 
 main.add_command(start)
 main.add_command(stop)
-
-
-@main.command()
-def status() -> None:
-    """Show archon-search service status."""
+main.add_command(status)
 
 
 @main.command()
