@@ -7,9 +7,11 @@ import uvicorn
 from fastapi import FastAPI
 
 from archon_search.config import SearchConfig
+from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.jobs.store import JobStore
 from archon_search.progress import IndexingStateStore
 from archon_search.server.routes_health import router as health_router
+from archon_search.server.routes_route import router as route_router
 from archon_search.server.routes_state import router as state_router
 from archon_search.server.routes_status import router as status_router
 
@@ -22,9 +24,11 @@ def create_app(config: SearchConfig, job_store: JobStore) -> FastAPI:
     app.state.config = config
     app.state.job_store = job_store
     app.state.state_store = IndexingStateStore(config.db_path)
+    app.state.embedder = Embedder(ModelEmbedder(config.embedding_model, providers=config.providers or None))
     app.include_router(health_router)
     app.include_router(status_router)
     app.include_router(state_router)
+    app.include_router(route_router)
     return app
 
 
