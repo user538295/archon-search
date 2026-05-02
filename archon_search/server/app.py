@@ -10,6 +10,7 @@ from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.progress import IndexingStateStore
 from archon_search.server.routes_health import router as health_router
+from archon_search.server.routes_state import router as state_router
 from archon_search.server.routes_status import router as status_router
 
 logger = logging.getLogger("archon-search")
@@ -23,6 +24,7 @@ def create_app(config: SearchConfig, job_store: JobStore) -> FastAPI:
     app.state.state_store = IndexingStateStore(config.db_path)
     app.include_router(health_router)
     app.include_router(status_router)
+    app.include_router(state_router)
     return app
 
 
