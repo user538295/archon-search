@@ -1,4 +1,4 @@
-"""tests/rag/test_chunker.py — unit tests for DocumentChunker."""
+"""packages/archon-search/tests/test_chunker.py — unit tests for DocumentChunker."""
 from __future__ import annotations
 
 import pytest

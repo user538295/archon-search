@@ -1,4 +1,4 @@
-"""Tests for archon.rag.progress — CollectionProgress and IndexingState dataclasses."""
+"""packages/archon-search/tests/test_progress.py — CollectionProgress and IndexingState dataclasses."""
 from __future__ import annotations
 
 import json

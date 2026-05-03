@@ -1,4 +1,4 @@
-"""tests/search/test_pipeline.py — TDD tests for SearchPipeline (FEAT-019 Task 4.1)."""
+"""packages/archon-search/tests/test_pipeline.py — TDD tests for SearchPipeline (FEAT-019 Task 4.1)."""
 from __future__ import annotations
 
 import re

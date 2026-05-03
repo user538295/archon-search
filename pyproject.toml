@@ -12,6 +12,8 @@ dependencies = [
     "click>=8.1",
     "claude-agent-sdk>=0.1.46",
     "httpx>=0.25",
+    "chonkie>=0.5.0",
+    "docling>=2.80.0",
 ]
 
 [project.scripts]
@@ -34,6 +36,7 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = [
     "benchmark: latency benchmark — requires a running archon-search server; skipped automatically when server is unreachable",
+    "integration: integration tests requiring live infrastructure",
 ]
 
 [tool.uv]

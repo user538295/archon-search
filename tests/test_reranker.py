@@ -1,4 +1,4 @@
-"""tests/rag/test_reranker.py — unit tests for Reranker (fastembed backend)."""
+"""packages/archon-search/tests/test_reranker.py — unit tests for Reranker (fastembed backend)."""
 from __future__ import annotations
 
 import pytest

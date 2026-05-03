@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from archon.cli.console import Console
 from archon_search.platform.types import GpuType
 
 

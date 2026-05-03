@@ -1,5 +1,5 @@
 """
-tests/search/conftest.py — ML-model isolation and shared store fixture.
+packages/archon-search/tests/conftest.py — ML-model isolation and shared store fixture.
 
 ALL sys.modules injections run at module level (import time), before pytest
 discovers any test file.  This prevents ONNX model downloads and the

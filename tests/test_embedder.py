@@ -1,4 +1,4 @@
-"""tests/rag/test_embedder.py — unit tests for Embedder (fastembed backend)."""
+"""packages/archon-search/tests/test_embedder.py — unit tests for Embedder (fastembed backend)."""
 from __future__ import annotations
 
 import threading

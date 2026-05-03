@@ -1,4 +1,4 @@
-"""tests/search/test_store.py — unit + integration tests for SearchStore."""
+"""packages/archon-search/tests/test_store.py — unit + integration tests for SearchStore."""
 from __future__ import annotations
 
 import hashlib

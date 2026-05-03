@@ -1,4 +1,4 @@
-"""tests/rag/test_parser.py — unit tests for DocumentParser."""
+"""packages/archon-search/tests/test_parser.py — unit tests for DocumentParser."""
 from __future__ import annotations
 
 from pathlib import Path

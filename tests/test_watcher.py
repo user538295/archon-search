@@ -1,4 +1,4 @@
-"""Tests for archon.rag.watcher — _DebounceHandler and CollectionWatcher."""
+"""packages/archon-search/tests/test_watcher.py — _DebounceHandler and CollectionWatcher."""
 from __future__ import annotations
 
 import asyncio

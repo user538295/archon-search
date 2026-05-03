@@ -1,4 +1,4 @@
-"""tests/rag/test_conftest.py — verify that fastembed is safely patched."""
+"""packages/archon-search/tests/test_conftest.py — verify that ML model stubs in conftest.py work correctly."""
 from __future__ import annotations
 
 
