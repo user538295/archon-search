@@ -32,6 +32,9 @@ build-backend = "hatchling.build"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = [
+    "benchmark: latency benchmark — requires a running archon-search server; skipped automatically when server is unreachable",
+]
 
 [tool.uv]
 package = true
