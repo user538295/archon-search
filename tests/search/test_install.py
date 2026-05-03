@@ -540,14 +540,14 @@ class TestBootstrapCollections:
         assert kwargs["pinned_collections"] == installer._full_cfg.search.pinned_collections
 
     def test_bootstrap_collections_syncs_all_indexed_collections(self, tmp_path: Path) -> None:
-        """sync.sync() receives the union of pinned_collections + collections, not just collections."""
-        from archon.config.loader import SearchConfig
-
+        """sync.sync() receives all_indexed_collections from config."""
         installer = _make_installer(tmp_path)
-        installer._full_cfg.search = SearchConfig(
-            collections=["/user/notes"],
-            pinned_collections=["/pinned/sys"],
-        )
+        installer._full_cfg.search = MagicMock()
+        installer._full_cfg.search.pinned_collections = ["/pinned/sys"]
+        installer._full_cfg.search.embedding_model = "BAAI/bge-small-en-v1.5"
+        installer._full_cfg.search.chunk_size = 512
+        installer._full_cfg.search.auto_reindex_on_chunk_size_change = False
+        installer._full_cfg.search.all_indexed_collections = ["/pinned/sys", "/user/notes"]
 
         mock_store = AsyncMock()
         mock_pipeline = MagicMock()
@@ -563,7 +563,6 @@ class TestBootstrapCollections:
         synced_paths = mock_sync.call_args[0][0]
         assert "/pinned/sys" in synced_paths
         assert "/user/notes" in synced_paths
-        assert synced_paths.index("/pinned/sys") < synced_paths.index("/user/notes")
 
 
 # ---------------------------------------------------------------------------

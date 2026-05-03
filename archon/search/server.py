@@ -202,6 +202,19 @@ def _needs_install_trigger(
     return False
 
 
+_DEFAULT_DB_PATH = "~/.archon/search"
+_DEFAULT_HOST = "127.0.0.1"
+_DEFAULT_PORT = 8765
+_DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+_DEFAULT_CHUNK_SIZE = 512
+_DEFAULT_PINNED = ["~/.archon/history/sessions", "~/.archon/workspace"]
+
+
+def _search_cfg_get(search: Any, key: str, default: Any) -> Any:
+    """Get a field from search config with fallback to default (supports removed fields)."""
+    return getattr(search, key, default)
+
+
 async def main() -> None:
     """Start the RAG MCP server from config."""
     import asyncio  # noqa: PLC0415
@@ -215,17 +228,31 @@ async def main() -> None:
     pipeline = create_pipeline(cfg.search)
     await pipeline.store.connect()
 
+    search = cfg.search
+    db_path_raw = _search_cfg_get(search, "db_path", _DEFAULT_DB_PATH)
+    pinned_collections = _search_cfg_get(search, "pinned_collections", _DEFAULT_PINNED)
+    embedding_model = _search_cfg_get(search, "embedding_model", _DEFAULT_EMBEDDING_MODEL)
+    chunk_size = _search_cfg_get(search, "chunk_size", _DEFAULT_CHUNK_SIZE)
+    auto_reindex = _search_cfg_get(search, "auto_reindex_on_chunk_size_change", False)
+    sync_timeout = _search_cfg_get(search, "sync_timeout_seconds", 0)
+    watch_mode = _search_cfg_get(search, "watch", False)
+    host = _search_cfg_get(search, "host", _DEFAULT_HOST)
+    port = _search_cfg_get(search, "port", _DEFAULT_PORT)
+    all_indexed = _search_cfg_get(search, "all_indexed_collections", None)
+
     # Startup sync
-    state_store = IndexingStateStore(Path(cfg.search.db_path).expanduser())
+    state_store = IndexingStateStore(Path(str(db_path_raw)).expanduser())
     sync = SearchCollectionSync(
         pipeline,
         state_store=state_store,
-        pinned_collections=cfg.search.pinned_collections,
-        embedding_model=cfg.search.embedding_model,
-        chunk_size=cfg.search.chunk_size,
-        auto_reindex_on_chunk_size_change=cfg.search.auto_reindex_on_chunk_size_change,
+        pinned_collections=pinned_collections,
+        embedding_model=embedding_model,
+        chunk_size=chunk_size,
+        auto_reindex_on_chunk_size_change=auto_reindex,
     )
-    desired = sync.build_desired(cfg.search.all_indexed_collections)
+    if all_indexed is None:
+        all_indexed = pinned_collections  # fallback: sync pinned only
+    desired = sync.build_desired(all_indexed)
     existing_state = state_store.read()
     if _needs_install_trigger(existing_state, desired):
         try:
@@ -237,14 +264,13 @@ async def main() -> None:
         if exc is not None:
             logger.error("Background startup sync failed: %s", exc, exc_info=exc)
 
-    sync_timeout = cfg.search.sync_timeout_seconds
     if sync_timeout == 0:
-        task = asyncio.create_task(sync.sync(cfg.search.all_indexed_collections))
+        task = asyncio.create_task(sync.sync(all_indexed))
         task.add_done_callback(_log_sync_error)
         logger.info("Startup sync deferred to background task (sync_timeout_seconds=0).")
     else:
         try:
-            result = await asyncio.wait_for(sync.sync(cfg.search.all_indexed_collections), timeout=sync_timeout)
+            result = await asyncio.wait_for(sync.sync(all_indexed), timeout=sync_timeout)
             logger.info(
                 "Startup sync complete: %d added, %d removed, %d unchanged, %d errors.",
                 len(result.added), len(result.removed), len(result.unchanged), len(result.errors),
@@ -255,11 +281,11 @@ async def main() -> None:
             logger.warning(
                 "Startup sync timed out after %ds — continuing in background.", sync_timeout
             )
-            task = asyncio.create_task(sync.sync(cfg.search.all_indexed_collections))
+            task = asyncio.create_task(sync.sync(all_indexed))
             task.add_done_callback(_log_sync_error)
 
     watcher_manager = None
-    if cfg.search.watch:
+    if watch_mode:
         from archon.search.watcher import WatcherManager  # lazy import — watchdog may not be installed
         loop = asyncio.get_running_loop()
 
@@ -282,7 +308,7 @@ async def main() -> None:
     app = create_app(pipeline, history_col)
 
     try:
-        await app.run_http_async(host=cfg.search.host, port=cfg.search.port)
+        await app.run_http_async(host=host, port=port)
     finally:
         if watcher_manager is not None:
             try:

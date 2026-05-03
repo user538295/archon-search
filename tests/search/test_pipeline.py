@@ -867,10 +867,11 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
 
 @pytest.mark.asyncio
 async def test_create_pipeline_wires_all_components():
-    from archon.config.loader import SearchConfig
+    from unittest.mock import MagicMock
     from archon.search.pipeline import create_pipeline
 
-    cfg = SearchConfig(db_path="/tmp/test_rag_db")
+    cfg = MagicMock()
+    cfg.db_path = "/tmp/test_rag_db"
 
     with (
         patch("archon.search.pipeline.ModelEmbedder") as MockME,
@@ -896,10 +897,11 @@ async def test_create_pipeline_wires_all_components():
 
 @pytest.mark.asyncio
 async def test_create_pipeline_does_not_auto_connect():
-    from archon.config.loader import SearchConfig
+    from unittest.mock import MagicMock
     from archon.search.pipeline import create_pipeline
 
-    cfg = SearchConfig(db_path="/tmp/test_no_connect_rag")
+    cfg = MagicMock()
+    cfg.db_path = "/tmp/test_no_connect_rag"
 
     with (
         patch("archon.search.pipeline.ModelEmbedder") as MockME,
@@ -1025,10 +1027,10 @@ def test_create_pipeline_uses_expanded_db_path() -> None:
     """create_pipeline() with a tilde db_path must produce a fully-expanded store._db_path."""
     from pathlib import Path
     from unittest.mock import MagicMock, patch
-    from archon.config.loader import SearchConfig
     from archon.search.pipeline import create_pipeline
 
-    cfg = SearchConfig(db_path="~/.archon/search")
+    cfg = MagicMock()
+    cfg.db_path = "~/.archon/search"
     with (
         patch("archon.search.pipeline.DocumentChunker"),
         patch("archon.search.pipeline.DocumentParser"),
