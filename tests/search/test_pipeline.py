@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from archon.search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestResult, SearchResult
-from archon.search.embedder import Embedder, EmbedderBackend
-from archon.search.reranker import Reranker, RerankerBackend
+from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestResult, SearchResult
+from archon_search.embedder import Embedder, EmbedderBackend
+from archon_search.reranker import Reranker, RerankerBackend
 
 
 # ---------------------------------------------------------------------------
@@ -47,9 +47,9 @@ def make_reranker() -> Reranker:
 # ---------------------------------------------------------------------------
 
 def make_pipeline(store):  # type: ignore[no-untyped-def]
-    from archon.search.chunker import DocumentChunker
-    from archon.search.parser import DocumentParser
-    from archon.search.pipeline import SearchPipeline
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
 
     return SearchPipeline(
         store=store,
@@ -83,7 +83,7 @@ async def test_pipeline_ingest_file_ok(connected_store, col_name, tmp_path):
 
 @pytest.mark.asyncio
 async def test_pipeline_ingest_file_parse_error(connected_store, col_name, tmp_path):
-    from archon.search.parser import ParseError
+    from archon_search.parser import ParseError
 
     pipeline = make_pipeline(connected_store)
     md_file = tmp_path / "bad.md"
@@ -117,9 +117,9 @@ async def test_pipeline_ingest_is_idempotent(connected_store, col_name, tmp_path
 
 @pytest.mark.asyncio
 async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_name, tmp_path):
-    from archon.search.chunker import DocumentChunker
-    from archon.search.parser import DocumentParser
-    from archon.search.pipeline import SearchPipeline
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
 
     captured_records: list[ChunkRecord] = []
 
@@ -161,9 +161,9 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
 
 @pytest.mark.asyncio
 async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_name, tmp_path):
-    from archon.search.chunker import DocumentChunker
-    from archon.search.parser import DocumentParser
-    from archon.search.pipeline import SearchPipeline
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
 
     captured_records: list[ChunkRecord] = []
 
@@ -247,9 +247,9 @@ async def test_pipeline_search_returns_ranked_results(connected_store, col_name,
 async def test_pipeline_search_with_context_returns_neighbors(connected_store, col_name, tmp_path):
     pipeline = make_pipeline(connected_store)
     # Use small chunk_size to force multiple chunks
-    from archon.search.chunker import DocumentChunker
-    from archon.search.parser import DocumentParser
-    from archon.search.pipeline import SearchPipeline
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
 
     pipeline2 = SearchPipeline(
         store=connected_store,
@@ -332,7 +332,7 @@ async def test_pipeline_ingest_directory_empty_dir(connected_store, col_name, tm
 
 @pytest.mark.asyncio
 async def test_pipeline_ingest_directory_partial_failure(connected_store, col_name, tmp_path):
-    from archon.search.parser import ParseError
+    from archon_search.parser import ParseError
 
     pipeline = make_pipeline(connected_store)
     for i in range(3):
@@ -360,10 +360,10 @@ async def test_pipeline_ingest_directory_partial_failure(connected_store, col_na
 
 @pytest.mark.asyncio
 async def test_pipeline_ingest_directory_rebuilds_fts_once(connected_store, col_name, tmp_path):
-    from archon.search.chunker import DocumentChunker
-    from archon.search.parser import DocumentParser
-    from archon.search.pipeline import SearchPipeline
-    from archon.search.store import SearchStore
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.store import SearchStore
 
     rebuild_calls = 0
     original_rebuild = connected_store.rebuild_fts_index
@@ -454,7 +454,7 @@ async def test_pipeline_ingest_directory_skips_symlinks(connected_store, col_nam
 
 @pytest.mark.asyncio
 async def test_pipeline_ingest_file_parse_error_preserves_existing_chunks(connected_store, col_name, tmp_path):
-    from archon.search.parser import ParseError
+    from archon_search.parser import ParseError
 
     pipeline = make_pipeline(connected_store)
     md_file = tmp_path / "existing.md"
@@ -503,9 +503,9 @@ async def test_pipeline_ingest_file_empty_content_preserves_existing_chunks(conn
 
 @pytest.mark.asyncio
 async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connected_store, col_name, tmp_path):
-    from archon.search.chunker import DocumentChunker
-    from archon.search.parser import DocumentParser, ParseError
-    from archon.search.pipeline import SearchPipeline
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser, ParseError
+    from archon_search.pipeline import SearchPipeline
 
     rebuild_called = False
 
@@ -561,7 +561,7 @@ async def test_pipeline_ingest_directory_skips_binary_extensions(connected_store
 
 
 def test_pipeline_image_extensions_not_in_binary() -> None:
-    from archon.search.pipeline import _BINARY_EXTENSIONS
+    from archon_search.pipeline import _BINARY_EXTENSIONS
 
     image_exts = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
     for ext in image_exts:
@@ -569,7 +569,7 @@ def test_pipeline_image_extensions_not_in_binary() -> None:
 
 
 def test_pipeline_gif_svg_ico_remain_binary() -> None:
-    from archon.search.pipeline import _BINARY_EXTENSIONS
+    from archon_search.pipeline import _BINARY_EXTENSIONS
 
     for ext in {".gif", ".svg", ".ico"}:
         assert ext in _BINARY_EXTENSIONS, f"{ext} must remain in _BINARY_EXTENSIONS"
@@ -683,9 +683,9 @@ async def test_ingest_centroid_replaced_on_reingest(connected_store, col_name, t
 @pytest.mark.asyncio
 async def test_ingest_centroid_averages_heterogeneous_embeddings(connected_store, col_name, tmp_path):
     """Centroid is the element-wise mean, verified with non-uniform vectors."""
-    from archon.search.chunker import DocumentChunker
-    from archon.search.parser import DocumentParser
-    from archon.search.pipeline import SearchPipeline
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
 
     call_count = 0
 
@@ -741,7 +741,7 @@ async def test_ingest_directory_calls_generate_description(connected_store, col_
     (tmp_path / "doc.md").write_text("# Doc\n\nContent.\n" * 5)
 
     with _patch(
-        "archon.search.pipeline.generate_description", return_value="A fine collection."
+        "archon_search.pipeline.generate_description", return_value="A fine collection."
     ) as mock_gen:
         await pipeline.ingest_directory(tmp_path, col_name)
 
@@ -763,7 +763,7 @@ async def test_ingest_directory_preserves_old_description_on_generation_failure(
     (tmp_path / "doc.md").write_text("# Doc\n\nContent.\n" * 5)
 
     # First ingest — description successfully generated
-    with _patch("archon.search.pipeline.generate_description", return_value="Original description."):
+    with _patch("archon_search.pipeline.generate_description", return_value="Original description."):
         await pipeline.ingest_directory(tmp_path, col_name)
 
     meta1 = await connected_store.get_collection_meta(col_name)
@@ -783,7 +783,7 @@ async def test_ingest_directory_preserves_old_description_on_generation_failure(
     new_col = col_name + "-b"
     (tmp_path / "doc2.md").write_text("# Doc2\n\nNew content.\n" * 5)
 
-    with _patch("archon.search.pipeline.generate_description", return_value=None) as mock_gen:
+    with _patch("archon_search.pipeline.generate_description", return_value=None) as mock_gen:
         pipeline._embedder = make_embedder()  # reset to standard embedder
         await pipeline.ingest_directory(tmp_path, new_col)
 
@@ -808,7 +808,7 @@ async def test_ingest_directory_sets_described_at_doc_count_on_success(
     for i in range(3):
         (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent.\n" * 5)
 
-    with _patch("archon.search.pipeline.generate_description", return_value="Three docs here."):
+    with _patch("archon_search.pipeline.generate_description", return_value="Three docs here."):
         await pipeline.ingest_directory(tmp_path, col_name)
 
     meta = await connected_store.get_collection_meta(col_name)
@@ -824,9 +824,9 @@ async def test_ingest_directory_sets_described_at_doc_count_on_success(
 
 @pytest.mark.asyncio
 async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
-    from archon.search.chunker import DocumentChunker
-    from archon.search.parser import DocumentParser
-    from archon.search.pipeline import SearchPipeline
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
 
     malformed_result = SearchResult(
         doc_id="a" * 64,
@@ -868,17 +868,17 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
 @pytest.mark.asyncio
 async def test_create_pipeline_wires_all_components():
     from unittest.mock import MagicMock
-    from archon.search.pipeline import create_pipeline
+    from archon_search.pipeline import create_pipeline
 
     cfg = MagicMock()
     cfg.db_path = "/tmp/test_rag_db"
 
     with (
-        patch("archon.search.pipeline.ModelEmbedder") as MockME,
-        patch("archon.search.pipeline.ModelReranker") as MockMR,
-        patch("archon.search.pipeline.DocumentChunker") as MockChunker,
-        patch("archon.search.pipeline.DocumentParser") as MockParser,
-        patch("archon.search.pipeline.SearchStore") as MockStore,
+        patch("archon_search.pipeline.ModelEmbedder") as MockME,
+        patch("archon_search.pipeline.ModelReranker") as MockMR,
+        patch("archon_search.pipeline.DocumentChunker") as MockChunker,
+        patch("archon_search.pipeline.DocumentParser") as MockParser,
+        patch("archon_search.pipeline.SearchStore") as MockStore,
     ):
         MockME.return_value = MockEmbedderBackend()
         MockMR.return_value = MockRerankerBackend()
@@ -898,22 +898,22 @@ async def test_create_pipeline_wires_all_components():
 @pytest.mark.asyncio
 async def test_create_pipeline_does_not_auto_connect():
     from unittest.mock import MagicMock
-    from archon.search.pipeline import create_pipeline
+    from archon_search.pipeline import create_pipeline
 
     cfg = MagicMock()
     cfg.db_path = "/tmp/test_no_connect_rag"
 
     with (
-        patch("archon.search.pipeline.ModelEmbedder") as MockME,
-        patch("archon.search.pipeline.ModelReranker") as MockMR,
-        patch("archon.search.pipeline.DocumentChunker"),
-        patch("archon.search.pipeline.DocumentParser"),
-        patch("archon.search.pipeline.SearchStore") as MockStore,
+        patch("archon_search.pipeline.ModelEmbedder") as MockME,
+        patch("archon_search.pipeline.ModelReranker") as MockMR,
+        patch("archon_search.pipeline.DocumentChunker"),
+        patch("archon_search.pipeline.DocumentParser"),
+        patch("archon_search.pipeline.SearchStore") as MockStore,
     ):
         MockME.return_value = MockEmbedderBackend()
         MockMR.return_value = MockRerankerBackend()
         # Real SearchStore that is NOT connected
-        from archon.search.store import SearchStore
+        from archon_search.store import SearchStore
         real_store = SearchStore("/tmp/test_no_connect_rag")
         MockStore.return_value = real_store
 
@@ -983,7 +983,7 @@ async def test_ingest_async_progress_callback(connected_store, col_name, tmp_pat
 def test_create_pipeline_no_history_collection_param() -> None:
     """SearchPipeline.__init__ must NOT accept history_collection parameter."""
     import inspect
-    from archon.search.pipeline import SearchPipeline
+    from archon_search.pipeline import SearchPipeline
 
     sig = inspect.signature(SearchPipeline.__init__)
     assert "history_collection" not in sig.parameters, (
@@ -994,7 +994,7 @@ def test_create_pipeline_no_history_collection_param() -> None:
 def test_create_pipeline_factory_no_history_collection_param() -> None:
     """create_pipeline() must NOT pass history_collection to SearchPipeline."""
     import inspect
-    from archon.search.pipeline import create_pipeline
+    from archon_search.pipeline import create_pipeline
 
     sig = inspect.signature(create_pipeline)
     assert "history_collection" not in sig.parameters, (
@@ -1005,9 +1005,9 @@ def test_create_pipeline_factory_no_history_collection_param() -> None:
 def test_ragpipeline_has_no_history_collection_attr() -> None:
     """SearchPipeline instance must NOT have _history_collection attribute."""
     from unittest.mock import MagicMock
-    from archon.search.embedder import Embedder
-    from archon.search.pipeline import SearchPipeline
-    from archon.search.reranker import Reranker
+    from archon_search.embedder import Embedder
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.reranker import Reranker
 
     pipeline = SearchPipeline(
         store=MagicMock(),
@@ -1027,13 +1027,13 @@ def test_create_pipeline_uses_expanded_db_path() -> None:
     """create_pipeline() with a tilde db_path must produce a fully-expanded store._db_path."""
     from pathlib import Path
     from unittest.mock import MagicMock, patch
-    from archon.search.pipeline import create_pipeline
+    from archon_search.pipeline import create_pipeline
 
     cfg = MagicMock()
     cfg.db_path = "~/.archon/search"
     with (
-        patch("archon.search.pipeline.DocumentChunker"),
-        patch("archon.search.pipeline.DocumentParser"),
+        patch("archon_search.pipeline.DocumentChunker"),
+        patch("archon_search.pipeline.DocumentParser"),
     ):
         pipeline = create_pipeline(cfg, embedder_backend=MagicMock(), reranker_backend=MagicMock())
     assert pipeline.store._db_path == Path.home() / ".archon/search"
@@ -1100,7 +1100,7 @@ async def test_ingest_directory_on_file_complete_called_per_file(connected_store
 @pytest.mark.asyncio
 async def test_ingest_directory_on_file_complete_only_for_ok_results(connected_store, col_name, tmp_path):
     """Callback NOT called for files where ingest_file returns status='error'."""
-    from archon.search.parser import ParseError
+    from archon_search.parser import ParseError
 
     pipeline = make_pipeline(connected_store)
     for i in range(3):
@@ -1161,7 +1161,7 @@ async def test_ingest_directory_no_exclude_paths_unchanged(connected_store, col_
 @pytest.mark.asyncio
 async def test_ingest_directory_exclude_and_on_file_complete_combined(connected_store, col_name, tmp_path):
     """exclude_paths + on_file_complete + parse error: callback fires only for non-excluded ok files."""
-    from archon.search.parser import ParseError
+    from archon_search.parser import ParseError
 
     pipeline = make_pipeline(connected_store)
     for i in range(3):

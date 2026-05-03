@@ -1,5 +1,5 @@
 """
-tests/rag/conftest.py — ML-model isolation and shared store fixture.
+tests/search/conftest.py — ML-model isolation and shared store fixture.
 
 ALL sys.modules injections run at module level (import time), before pytest
 discovers any test file.  This prevents ONNX model downloads and the
@@ -94,7 +94,7 @@ def connected_store(tmp_path_factory: pytest.TempPathFactory):  # type: ignore[n
     """
     import asyncio
 
-    from archon.search.store import SearchStore
+    from archon_search.store import SearchStore
 
     tmp_path = tmp_path_factory.mktemp("rag_db")
     store = SearchStore(tmp_path)

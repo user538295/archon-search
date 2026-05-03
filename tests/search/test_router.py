@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from archon.search.collection_meta import CollectionMeta
-from archon.search.router import MultiCollectionRouter
+from archon_search.collection_meta import CollectionMeta
+from archon_search.router import MultiCollectionRouter
 
 
 # ---------------------------------------------------------------------------

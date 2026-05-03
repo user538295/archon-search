@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from archon.search._types import ChunkRecord
-from archon.search.chunker import DocumentChunker
+from archon_search._types import ChunkRecord
+from archon_search.chunker import DocumentChunker
 
 
 _LONG_TEXT = " ".join([f"This is sentence number {i} in a long document." for i in range(200)])

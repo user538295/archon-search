@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from archon.search._types import SearchResult
-from archon.search.reranker import Reranker, RerankerBackend, make_reranker
+from archon_search._types import SearchResult
+from archon_search.reranker import Reranker, RerankerBackend, make_reranker
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ def test_model_reranker_init_called_once_under_concurrent_predict() -> None:
     import time
     from typing import Any
 
-    from archon.search.reranker import ModelReranker
+    from archon_search.reranker import ModelReranker
 
     init_count = 0
     barrier = threading.Barrier(2)
@@ -181,7 +181,7 @@ def test_model_reranker_uses_submodule_import_path() -> None:
     """
     import sys
 
-    from archon.search.reranker import ModelReranker
+    from archon_search.reranker import ModelReranker
 
     top_level = sys.modules["fastembed"]
     original = getattr(top_level, "TextCrossEncoder", None)

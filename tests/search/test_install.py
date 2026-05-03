@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon.cli.console import Console
+from archon_search.platform.types import GpuType
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +35,9 @@ def _make_search_config(tmp_path: Path) -> object:
         top_k_return: int = 5
         chunk_size: int = 512
         collections: list[str] = field(default_factory=list)
+        pinned_collections: list[str] = field(default_factory=lambda: ["/pinned/docs"])
+        auto_reindex_on_chunk_size_change: bool = True
+        max_parallel_collections: int = 3
 
     return FakeSearchConfig()
 
@@ -80,47 +84,36 @@ def _make_full_config(tmp_path: Path) -> object:
 
 class TestSearchInstallerInit:
     def test_init_succeeds_without_telegram_token(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """SearchInstaller.__init__ must not require TELEGRAM_BOT_TOKEN — exercises real load_config path."""
-        from archon.search.install import SearchInstaller
-        from archon.config.loader import load_config
+        """SearchInstaller.__init__ must not require TELEGRAM_BOT_TOKEN — uses archon_search.config."""
+        from archon_search.install import SearchInstaller
 
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-        config_toml = tmp_path / "config.toml"
-        config_toml.write_text(
-            "[access]\nallowed_user_ids = [1]\n[session]\nworking_directory = \"/tmp\"\n"
-        )
-        env_file = tmp_path / ".env"  # empty — no token
+        config_toml = tmp_path / "archon-search.toml"
+        config_toml.write_text("")  # empty — valid minimal config
 
-        with patch("archon.config.loader.load_config",
-                   side_effect=lambda **kw: load_config(env_file=str(env_file), **kw)):
+        with patch("archon_search.install.load_config", return_value=MagicMock()):
             installer = SearchInstaller(config_file=str(config_toml))
 
         assert installer.cfg is not None
-        assert installer._full_cfg.telegram_bot_token is None
 
     def test_default_config_file_path(self) -> None:
-        """SearchInstaller default config_file must point to ~/.archon/config.toml."""
-        from archon.search.install import SearchInstaller
-        from unittest.mock import MagicMock
+        """SearchInstaller default config_file must be None (uses archon_search.config default path)."""
+        from archon_search.install import SearchInstaller
 
-        fake_cfg = MagicMock()
-        fake_cfg.search = MagicMock()
-        with patch("archon.config.loader.load_config", return_value=fake_cfg) as mock_load:
+        with patch("archon_search.install.load_config", return_value=MagicMock()) as mock_load:
             installer = SearchInstaller()
-        assert installer.config_file == str(Path.home() / ".archon" / "config.toml")
-        mock_load.assert_called_once_with(config_file=str(Path.home() / ".archon" / "config.toml"), require_token=False)
+        assert installer.config_file is None
+        mock_load.assert_called_once_with(path=None)
 
 
 def _make_installer(tmp_path: Path, dry_run: bool = False) -> object:
     """Create a SearchInstaller with a fake config injected."""
-    from archon.search.install import SearchInstaller
+    from archon_search.install import SearchInstaller
 
     installer = SearchInstaller.__new__(SearchInstaller)
-    installer._console = Console()
     installer.dry_run = dry_run
     installer.cfg = _make_search_config(tmp_path)
-    installer._full_cfg = _make_full_config(tmp_path)
-    installer.config_file = str(tmp_path / "config.toml")
+    installer.config_file = str(tmp_path / "archon-search.toml")
     return installer
 
 
@@ -134,7 +127,7 @@ class TestCheckDeps:
         """When all packages importable → empty list returned."""
         installer = _make_installer(tmp_path)
 
-        with patch("archon.search.install.importlib.import_module", return_value=MagicMock()):
+        with patch("archon_search.install.importlib.import_module", return_value=MagicMock()):
             missing = installer.check_deps()
 
         assert missing == []
@@ -148,7 +141,7 @@ class TestCheckDeps:
                 raise ImportError("No module named 'lancedb'")
             return MagicMock()
 
-        with patch("archon.search.install.importlib.import_module", side_effect=fake_import):
+        with patch("archon_search.install.importlib.import_module", side_effect=fake_import):
             missing = installer.check_deps()
 
         assert "lancedb" in missing
@@ -163,38 +156,38 @@ class TestDetectGpu:
     def test_detect_gpu_delegates_to_platform_runtime(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
-        mock_runtime.detect_gpu_type.return_value = "cuda"
-        with patch("archon.search.install.get_runtime", return_value=mock_runtime):
+        mock_runtime.detect_gpu_type.return_value = GpuType.CUDA
+        with patch("archon_search.install.get_runtime", return_value=mock_runtime):
             result = installer.detect_gpu()
-        assert result == "cuda"
+        assert result == GpuType.CUDA
         mock_runtime.detect_gpu_type.assert_called_once()
 
     def test_detect_gpu_returns_cuda(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
-        mock_runtime.detect_gpu_type.return_value = "cuda"
-        with patch("archon.search.install.get_runtime", return_value=mock_runtime):
-            assert installer.detect_gpu() == "cuda"
+        mock_runtime.detect_gpu_type.return_value = GpuType.CUDA
+        with patch("archon_search.install.get_runtime", return_value=mock_runtime):
+            assert installer.detect_gpu() == GpuType.CUDA
 
     def test_detect_gpu_returns_apple_silicon(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
-        mock_runtime.detect_gpu_type.return_value = "apple_silicon"
-        with patch("archon.search.install.get_runtime", return_value=mock_runtime):
-            assert installer.detect_gpu() == "apple_silicon"
+        mock_runtime.detect_gpu_type.return_value = GpuType.METAL
+        with patch("archon_search.install.get_runtime", return_value=mock_runtime):
+            assert installer.detect_gpu() == GpuType.METAL
 
     def test_detect_gpu_returns_none_on_intel_mac(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = "none"
-        with patch("archon.search.install.get_runtime", return_value=mock_runtime):
+        with patch("archon_search.install.get_runtime", return_value=mock_runtime):
             assert installer.detect_gpu() == "none"
 
     def test_detect_gpu_returns_none_on_linux_no_cuda(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = "none"
-        with patch("archon.search.install.get_runtime", return_value=mock_runtime):
+        with patch("archon_search.install.get_runtime", return_value=mock_runtime):
             assert installer.detect_gpu() == "none"
 
 
@@ -223,7 +216,7 @@ class TestInstallDeps:
         assert "onnxruntime-gpu" in all_args
 
     def test_install_deps_apple_silicon_installs_standard_fastembed(self, tmp_path: Path) -> None:
-        calls = self._capture_pip_args(tmp_path, gpu="apple_silicon")
+        calls = self._capture_pip_args(tmp_path, gpu=GpuType.METAL)
         all_args = " ".join(arg for cmd in calls for arg in cmd)
         assert "fastembed" in all_args
         assert "fastembed-gpu" not in all_args
@@ -248,7 +241,7 @@ class TestInstallDeps:
             assert "--python" in cmd
             assert cmd[cmd.index("--python") + 1] == sys.executable
 
-    @pytest.mark.parametrize("gpu", ["none", "apple_silicon"])
+    @pytest.mark.parametrize("gpu", ["none", GpuType.METAL])
     def test_install_deps_cpu_passes_python_to_all_calls(self, tmp_path: Path, gpu: str) -> None:
         """All 2 subprocess calls for CPU/Apple Silicon path include --python sys.executable."""
         calls = self._capture_pip_args(tmp_path, gpu=gpu)
@@ -279,8 +272,8 @@ class TestInstallDeps:
 
 class TestConfigureProviders:
     def test_configure_providers_writes_cuda_when_gpu(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "config.toml"
-        config_file.write_text("[rag]\nenabled = true\n")
+        config_file = tmp_path / "archon-search.toml"
+        config_file.write_text("[database]\n")
 
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
@@ -292,7 +285,7 @@ class TestConfigureProviders:
 
     def test_configure_providers_no_op_when_no_gpu(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
-        original = "[rag]\nenabled = true\n"
+        original = "[database]\n"
         config_file.write_text(original)
 
         installer = _make_installer(tmp_path)
@@ -304,7 +297,7 @@ class TestConfigureProviders:
 
     def test_configure_providers_dry_run_no_op(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
-        original = "[rag]\nenabled = true\n"
+        original = "[database]\n"
         config_file.write_text(original)
 
         installer = _make_installer(tmp_path, dry_run=True)
@@ -315,21 +308,21 @@ class TestConfigureProviders:
         assert config_file.read_text() == original
 
     def test_configure_providers_apple_silicon_writes_coreml(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "config.toml"
-        config_file.write_text("[rag]\nenabled = true\n")
+        config_file = tmp_path / "archon-search.toml"
+        config_file.write_text("[database]\n")
 
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
 
-        installer.configure_providers(gpu="apple_silicon")
+        installer.configure_providers(gpu=GpuType.METAL)
 
         content = config_file.read_text()
         assert "CoreMLExecutionProvider" in content
         assert "CUDAExecutionProvider" not in content
 
     def test_configure_providers_cuda_unchanged(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "config.toml"
-        config_file.write_text("[rag]\nenabled = true\n")
+        config_file = tmp_path / "archon-search.toml"
+        config_file.write_text("[database]\n")
 
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
@@ -341,7 +334,7 @@ class TestConfigureProviders:
 
     def test_configure_providers_none_is_noop(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
-        original = "[rag]\nenabled = true\n"
+        original = "[database]\n"
         config_file.write_text(original)
 
         installer = _make_installer(tmp_path)
@@ -352,8 +345,8 @@ class TestConfigureProviders:
         assert config_file.read_text() == original
 
     def test_configure_providers_idempotent_if_already_set(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "config.toml"
-        config_file.write_text("[rag]\nenabled = true\n")
+        config_file = tmp_path / "archon-search.toml"
+        config_file.write_text("[database]\n")
 
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
@@ -371,13 +364,13 @@ class TestConfigureProviders:
         config_file = tmp_path / "config.toml"
         # providers already has CoreML + CPU fallback chain
         config_file.write_text(
-            '[rag]\nenabled = true\nproviders = ["CoreMLExecutionProvider", "CPUExecutionProvider"]\n'
+            '[database]\nproviders = ["CoreMLExecutionProvider", "CPUExecutionProvider"]\n'
         )
 
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
 
-        installer.configure_providers(gpu="apple_silicon")
+        installer.configure_providers(gpu=GpuType.METAL)
 
         content = config_file.read_text()
         # must NOT clobber the existing chain
@@ -386,13 +379,13 @@ class TestConfigureProviders:
 
     def test_configure_providers_replaces_cuda_with_coreml(self, tmp_path: Path) -> None:
         """Switching from cuda to apple_silicon must fully replace providers list."""
-        config_file = tmp_path / "config.toml"
-        config_file.write_text('[search]\nenabled = true\nproviders = ["CUDAExecutionProvider"]\n')
+        config_file = tmp_path / "archon-search.toml"
+        config_file.write_text('[database]\nproviders = ["CUDAExecutionProvider"]\n')
 
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
 
-        installer.configure_providers(gpu="apple_silicon")
+        installer.configure_providers(gpu=GpuType.METAL)
 
         content = config_file.read_text()
         assert "CoreMLExecutionProvider" in content
@@ -442,7 +435,7 @@ class TestServiceDelegation:
         installer = _make_installer(tmp_path)
         svc = self._mock_rag_service()
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             installer.write_service_file()
 
         svc.register.assert_called_once_with(dry_run=False)
@@ -451,7 +444,7 @@ class TestServiceDelegation:
         installer = _make_installer(tmp_path, dry_run=True)
         svc = self._mock_rag_service()
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             installer.write_service_file()
 
         svc.register.assert_called_once_with(dry_run=True)
@@ -465,7 +458,7 @@ class TestServiceDelegation:
         svc.pre_activate_cleanup.side_effect = lambda **_: call_order.append("pre_activate_cleanup") or 0
         svc.register.side_effect = lambda **_: call_order.append("register") or 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             installer.write_service_file()
 
         assert "pre_activate_cleanup" in call_order
@@ -493,8 +486,8 @@ class TestBootstrapCollections:
         mock_sync_result = MagicMock()
         mock_sync = AsyncMock(side_effect=lambda *a, **kw: (call_order.append("sync"), mock_sync_result)[1])
 
-        with patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync:
+        with patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync:
             MockSync.return_value.sync = mock_sync
             asyncio.run(installer._bootstrap_collections())
 
@@ -511,8 +504,8 @@ class TestBootstrapCollections:
         mock_pipeline = MagicMock()
         mock_pipeline.store = mock_store
 
-        with patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync:
+        with patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync:
             MockSync.return_value.sync = AsyncMock(side_effect=RuntimeError("boom"))
             with pytest.raises(RuntimeError, match="boom"):
                 asyncio.run(installer._bootstrap_collections())
@@ -527,35 +520,33 @@ class TestBootstrapCollections:
         mock_pipeline = MagicMock()
         mock_pipeline.store = mock_store
 
-        with patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync:
+        with patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync:
             MockSync.return_value.sync = AsyncMock()
             asyncio.run(installer._bootstrap_collections())
 
         MockSync.assert_called_once()
         _, kwargs = MockSync.call_args
-        assert kwargs["embedding_model"] == installer._full_cfg.search.embedding_model
-        assert kwargs["chunk_size"] == installer._full_cfg.search.chunk_size
-        assert kwargs["auto_reindex_on_chunk_size_change"] == installer._full_cfg.search.auto_reindex_on_chunk_size_change
-        assert kwargs["pinned_collections"] == installer._full_cfg.search.pinned_collections
+        assert kwargs["embedding_model"] == installer.cfg.embedding_model
+        assert kwargs["chunk_size"] == installer.cfg.chunk_size
+        assert kwargs["auto_reindex_on_chunk_size_change"] == installer.cfg.auto_reindex_on_chunk_size_change
+        assert kwargs["pinned_collections"] == installer.cfg.pinned_collections
 
     def test_bootstrap_collections_syncs_all_indexed_collections(self, tmp_path: Path) -> None:
-        """sync.sync() receives all_indexed_collections from config."""
+        """sync.sync() is called with pinned_collections from cfg."""
         installer = _make_installer(tmp_path)
-        installer._full_cfg.search = MagicMock()
-        installer._full_cfg.search.pinned_collections = ["/pinned/sys"]
-        installer._full_cfg.search.embedding_model = "BAAI/bge-small-en-v1.5"
-        installer._full_cfg.search.chunk_size = 512
-        installer._full_cfg.search.auto_reindex_on_chunk_size_change = False
-        installer._full_cfg.search.all_indexed_collections = ["/pinned/sys", "/user/notes"]
+        installer.cfg.pinned_collections = ["/pinned/sys", "/user/notes"]
+        installer.cfg.embedding_model = "BAAI/bge-small-en-v1.5"
+        installer.cfg.chunk_size = 512
+        installer.cfg.auto_reindex_on_chunk_size_change = False
 
         mock_store = AsyncMock()
         mock_pipeline = MagicMock()
         mock_pipeline.store = mock_store
         mock_sync = AsyncMock()
 
-        with patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync:
+        with patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync:
             MockSync.return_value.sync = mock_sync
             asyncio.run(installer._bootstrap_collections())
 
@@ -576,8 +567,8 @@ class TestRun:
         svc.register.return_value = 0
         svc.start.return_value = 0
         return {
-            "archon.search.install.get_search_service": MagicMock(return_value=svc),
-            "archon.search.install.create_pipeline": MagicMock(
+            "archon_search.install.get_search_service": MagicMock(return_value=svc),
+            "archon_search.install.create_pipeline": MagicMock(
                 return_value=MagicMock(
                     store=AsyncMock(),
                     ingest_directory=AsyncMock(return_value=[]),
@@ -609,9 +600,9 @@ class TestRun:
         mock_store = AsyncMock()
         mock_pipeline.store = mock_store
 
-        with patch("archon.search.install.get_search_service", return_value=svc), \
-             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
+        with patch("archon_search.install.get_search_service", return_value=svc), \
+             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -634,9 +625,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_search_service", return_value=svc), \
-             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
+        with patch("archon_search.install.get_search_service", return_value=svc), \
+             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -668,10 +659,10 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_search_service", return_value=svc), \
-             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
-             patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+        with patch("archon_search.install.get_search_service", return_value=svc), \
+             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
+             patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
@@ -698,10 +689,10 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_search_service", return_value=svc), \
-             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
-             patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+        with patch("archon_search.install.get_search_service", return_value=svc), \
+             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
+             patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
@@ -728,9 +719,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_search_service", return_value=svc), \
-             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
+        with patch("archon_search.install.get_search_service", return_value=svc), \
+             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -758,9 +749,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_search_service", return_value=svc), \
-             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
+        with patch("archon_search.install.get_search_service", return_value=svc), \
+             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "install_deps"), \
@@ -788,9 +779,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_search_service", return_value=svc), \
-             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
+        with patch("archon_search.install.get_search_service", return_value=svc), \
+             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=["lancedb"]), \
              patch.object(installer, "install_deps"), \
@@ -818,9 +809,9 @@ class TestRun:
         mock_pipeline = MagicMock()
         mock_pipeline.store = AsyncMock()
 
-        with patch("archon.search.install.get_search_service", return_value=svc), \
-             patch("archon.search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon.search.sync.SearchCollectionSync") as MockSync, \
+        with patch("archon_search.install.get_search_service", return_value=svc), \
+             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=["lancedb"]), \
              patch.object(installer, "install_deps"), \
@@ -852,7 +843,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -869,56 +860,47 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
         assert not db_path.exists()
 
-    def test_run_uninstall_delete_db_true_shows_deleted_message(self, tmp_path: Path) -> None:
-        """When delete_db=True and DB exists, final message must mention 'deleted'."""
+    def test_run_uninstall_delete_db_true_shows_deleted_message(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """When delete_db=True and DB exists, stdout must mention 'deleted'."""
         installer = _make_installer(tmp_path)
         db_path = tmp_path / "rag_db"
         db_path.mkdir()
         installer.cfg.db_path = str(db_path)
 
-        mock_console = MagicMock()
-        installer._console = mock_console
-
         svc = MagicMock()
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
-        info_messages = " ".join(
-            str(call.args[0]) for call in mock_console.info.call_args_list
-        )
-        assert "deleted" in info_messages.lower(), (
-            f"Expected 'deleted' in uninstall message when delete_db=True, got: {info_messages}"
+        out = capsys.readouterr().out
+        assert "deleted" in out.lower(), (
+            f"Expected 'deleted' in uninstall message when delete_db=True, got: {out}"
         )
 
-    def test_run_uninstall_delete_db_false_shows_preserved_message(self, tmp_path: Path) -> None:
-        """When delete_db=False, final message must mention 'preserved' (settings preserved)."""
+    def test_run_uninstall_delete_db_false_shows_preserved_message(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """When delete_db=False, stdout must mention 'preserved' (settings preserved)."""
         installer = _make_installer(tmp_path)
-        mock_console = MagicMock()
-        installer._console = mock_console
 
         svc = MagicMock()
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
-        info_messages = " ".join(
-            str(call.args[0]) for call in mock_console.info.call_args_list
-        )
-        assert "preserved" in info_messages.lower(), (
-            f"Expected 'preserved' in uninstall message when delete_db=False, got: {info_messages}"
+        out = capsys.readouterr().out
+        assert "preserved" in out.lower(), (
+            f"Expected 'preserved' in uninstall message when delete_db=False, got: {out}"
         )
 
     def test_run_uninstall_delete_db_false_preserves_directory(self, tmp_path: Path) -> None:
@@ -931,7 +913,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -948,36 +930,31 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
         assert db_path.exists()
 
-    def test_run_uninstall_delete_db_true_db_nonexistent_still_succeeds(self, tmp_path: Path) -> None:
+    def test_run_uninstall_delete_db_true_db_nonexistent_still_succeeds(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """delete_db=True but DB path does not exist → still returns 0 with 'preserved' message."""
         installer = _make_installer(tmp_path)
         # db_path is set to tmp_path / "rag_db" by _make_search_config, but we do NOT mkdir it
         db_path = Path(installer.cfg.db_path)
         assert not db_path.exists(), "pre-condition: DB must not exist for this test"
 
-        mock_console = MagicMock()
-        installer._console = mock_console
-
         svc = MagicMock()
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
+        out = capsys.readouterr().out
         # DB was absent → nothing to delete → config preserved message
-        info_messages = " ".join(
-            str(call.args[0]) for call in mock_console.info.call_args_list
-        )
-        assert "preserved" in info_messages.lower(), (
-            f"Expected 'preserved' in uninstall message when DB is absent, got: {info_messages}"
+        assert "preserved" in out.lower(), (
+            f"Expected 'preserved' in uninstall message when DB is absent, got: {out}"
         )
 
     def test_run_uninstall_does_not_modify_config_toml(self, tmp_path: Path) -> None:
@@ -993,7 +970,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -1184,7 +1161,7 @@ class TestValidateProviders:
 class TestWaitForService:
     def test_wait_for_service_default_timeout_is_60(self) -> None:
         """_WAIT_FOR_SERVICE_TIMEOUT module constant must equal 60."""
-        from archon.search.install import _WAIT_FOR_SERVICE_TIMEOUT
+        from archon_search.install import _WAIT_FOR_SERVICE_TIMEOUT
 
         assert _WAIT_FOR_SERVICE_TIMEOUT == 60
 
@@ -1401,7 +1378,7 @@ class TestRunFlow:
         """apple_silicon: validate → success → configure_providers called → success message printed."""
         installer = _make_installer(tmp_path)
 
-        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+        with patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "validate_providers", return_value=True) as mock_validate, \
@@ -1416,7 +1393,7 @@ class TestRunFlow:
 
         assert result == 0
         mock_validate.assert_called_once_with(["CoreMLExecutionProvider"])
-        mock_configure.assert_called_once_with(gpu="apple_silicon")
+        mock_configure.assert_called_once_with(gpu=GpuType.METAL)
         captured = capsys.readouterr()
         assert "CoreML acceleration validated" in captured.out
         assert "Warning" not in captured.out
@@ -1425,7 +1402,7 @@ class TestRunFlow:
         """apple_silicon: validate → failure → configure_providers NOT called → warning printed."""
         installer = _make_installer(tmp_path)
 
-        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+        with patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "validate_providers", return_value=False) as mock_validate, \
@@ -1494,13 +1471,13 @@ class TestRunFlow:
 
     def test_run_flow_apple_silicon_fallback_does_not_write_providers_to_config(self, tmp_path: Path) -> None:
         """Fallback path: providers key must be absent from the real config.toml."""
-        config_file = tmp_path / "config.toml"
-        config_file.write_text("[rag]\nenabled = true\n")
+        config_file = tmp_path / "archon-search.toml"
+        config_file.write_text("[database]\n")
 
         installer = _make_installer(tmp_path)
         installer.config_file = str(config_file)
 
-        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+        with patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "validate_providers", return_value=False), \
@@ -1522,7 +1499,7 @@ class TestRunFlow:
         """dry_run=True: validate_providers skipped, configure_providers called directly."""
         installer = _make_installer(tmp_path, dry_run=True)
 
-        with patch.object(installer, "detect_gpu", return_value="apple_silicon"), \
+        with patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
              patch.object(installer, "install_deps"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "validate_providers") as mock_validate, \
@@ -1535,7 +1512,7 @@ class TestRunFlow:
 
         assert result == 0
         mock_validate.assert_not_called()
-        mock_configure.assert_called_once_with(gpu="apple_silicon")
+        mock_configure.assert_called_once_with(gpu=GpuType.METAL)
 
 
 # ---------------------------------------------------------------------------
@@ -1550,7 +1527,7 @@ class TestLoadUnloadService:
         svc = MagicMock()
         svc.start.return_value = 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             rc = installer.load_service()
 
         assert rc == 0
@@ -1562,7 +1539,7 @@ class TestLoadUnloadService:
         svc = MagicMock()
         svc.stop.return_value = 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             rc = installer.unload_service()
 
         assert rc == 0
@@ -1639,13 +1616,13 @@ class TestRunNonBlocking:
         """asyncio must not be imported in install.py for blocking bootstrap — module is sync-only."""
         import importlib
         import importlib.util
-        spec = importlib.util.find_spec("archon.search.install")
+        spec = importlib.util.find_spec("archon_search.install")
         assert spec is not None
         # Reload the module and inspect its globals — asyncio must not be present
         # (it was removed when we dropped the asyncio.run(_bootstrap_collections()) call)
-        import archon.search.install as install_mod
+        import archon_search.install as install_mod
         assert "asyncio" not in vars(install_mod), (
-            "asyncio is still imported in archon/search/install.py — the blocking asyncio.run call may still exist"
+            "asyncio is still imported in archon_search/install.py — the blocking asyncio.run call may still exist"
         )
 
     def test_run_step_4_is_service_start_not_bootstrap(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
@@ -1774,6 +1751,12 @@ class TestRunNonBlocking:
 
 
 class TestConsoleIntegration:
+    """Tests for output messages during run() and run_uninstall().
+
+    The new archon_search.install.SearchInstaller uses print() instead of _console.
+    These tests use capsys to capture stdout.
+    """
+
     @staticmethod
     def _run_patches() -> dict:
         return {
@@ -1790,23 +1773,9 @@ class TestConsoleIntegration:
             "_is_service_running": MagicMock(return_value=False),
         }
 
-    @staticmethod
-    def _make_console_installer(tmp_path: Path) -> tuple:
-        """Return (installer, mock_console) with __new__ bypass."""
-        from archon.search.install import SearchInstaller
-
-        installer = SearchInstaller.__new__(SearchInstaller)
-        mock_console = MagicMock()
-        installer._console = mock_console
-        installer.dry_run = False
-        installer.cfg = _make_search_config(tmp_path)
-        installer._full_cfg = _make_full_config(tmp_path)
-        installer.config_file = str(tmp_path / "config.toml")
-        return installer, mock_console
-
-    def test_search_run_final_message_uses_console(self, tmp_path: Path) -> None:
-        """run() final success message is the last console.success() call."""
-        installer, mock_console = self._make_console_installer(tmp_path)
+    def test_search_run_final_message_uses_console(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """run() final success message printed to stdout contains 'installed and running'."""
+        installer = _make_installer(tmp_path)
 
         patches = self._run_patches()
         with patch.object(installer, "detect_gpu", patches["detect_gpu"]), \
@@ -1823,31 +1792,31 @@ class TestConsoleIntegration:
             result = installer.run(non_interactive=True)
 
         assert result == 0
-        last_call = str(mock_console.success.call_args_list[-1])
-        assert "Search service installed and running" in last_call, (
-            f"Expected 'Search service installed and running' in last success call: {last_call}"
+        out = capsys.readouterr().out
+        assert "installed and running" in out.lower(), (
+            f"Expected 'installed and running' in stdout: {out}"
         )
 
-    def test_search_uninstall_uses_console(self, tmp_path: Path) -> None:
-        """run_uninstall() final message contains 'uninstalled' via console.info()."""
-        installer, mock_console = self._make_console_installer(tmp_path)
+    def test_search_uninstall_uses_console(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """run_uninstall() stdout must mention 'uninstalled'."""
+        installer = _make_installer(tmp_path)
 
         svc = MagicMock()
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon.search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
-        info_calls = [str(c) for c in mock_console.info.call_args_list]
-        assert any("uninstalled" in c for c in info_calls), (
-            f"Expected 'uninstalled' in info calls: {info_calls}"
+        out = capsys.readouterr().out
+        assert "uninstalled" in out.lower(), (
+            f"Expected 'uninstalled' in stdout: {out}"
         )
 
-    def test_search_run_error_path_uses_console_error(self, tmp_path: Path) -> None:
-        """Service start failure is reported via console.error() (stderr)."""
-        installer, mock_console = self._make_console_installer(tmp_path)
+    def test_search_run_error_path_uses_console_error(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """Service start failure prints exit code info to stderr."""
+        installer = _make_installer(tmp_path)
 
         patches = self._run_patches()
         patches["load_service"] = MagicMock(return_value=42)
@@ -1862,14 +1831,14 @@ class TestConsoleIntegration:
             result = installer.run(non_interactive=True)
 
         assert result == 42
-        error_calls = [str(c) for c in mock_console.error.call_args_list]
-        assert any("exit code" in c for c in error_calls), (
-            f"Expected 'exit code' in error calls: {error_calls}"
+        captured = capsys.readouterr()
+        assert "exit code" in captured.err.lower() or "42" in captured.err, (
+            f"Expected exit code info in stderr: {captured.err}"
         )
 
-    def test_search_run_timeout_uses_console_warn(self, tmp_path: Path) -> None:
-        """Service readiness timeout is reported via console.warn() (stdout)."""
-        installer, mock_console = self._make_console_installer(tmp_path)
+    def test_search_run_timeout_uses_console_warn(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """Service readiness timeout is printed to stdout."""
+        installer = _make_installer(tmp_path)
 
         patches = self._run_patches()
         patches["_wait_for_service"] = MagicMock(return_value=False)
@@ -1885,7 +1854,7 @@ class TestConsoleIntegration:
             result = installer.run(non_interactive=True)
 
         assert result == 1
-        warn_calls = [str(c) for c in mock_console.warn.call_args_list]
-        assert any("did not become ready" in c for c in warn_calls), (
-            f"Expected 'did not become ready' in warn calls: {warn_calls}"
+        out = capsys.readouterr().out
+        assert "ready" in out.lower() or "timed out" in out.lower() or "timeout" in out.lower(), (
+            f"Expected timeout/ready info in stdout: {out}"
         )

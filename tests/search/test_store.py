@@ -11,8 +11,8 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from archon.search._types import ChunkRecord
-from archon.search.store import SearchStore
+from archon_search._types import ChunkRecord
+from archon_search.store import SearchStore
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -763,7 +763,7 @@ async def test_collection_meta_get_missing_returns_none(
 @pytest.mark.asyncio
 async def test_collection_meta_upsert(connected_store: SearchStore) -> None:
     """update_collection_meta stores metadata; get_collection_meta retrieves it."""
-    from archon.search.collection_meta import CollectionMeta
+    from archon_search.collection_meta import CollectionMeta
 
     meta = CollectionMeta(
         name="test-meta-col",
@@ -794,7 +794,7 @@ async def test_collection_meta_upsert_includes_described_at_doc_count(
     connected_store: SearchStore,
 ) -> None:
     """update_collection_meta persists described_at_doc_count; None round-trips."""
-    from archon.search.collection_meta import CollectionMeta
+    from archon_search.collection_meta import CollectionMeta
 
     meta = CollectionMeta(
         name="test-meta-described",
@@ -829,7 +829,7 @@ async def test_collection_meta_upsert_overwrites_on_same_name(
     connected_store: SearchStore,
 ) -> None:
     """Second update_collection_meta with same name replaces the first (upsert semantics)."""
-    from archon.search.collection_meta import CollectionMeta
+    from archon_search.collection_meta import CollectionMeta
 
     name = "test-meta-overwrite"
     meta1 = CollectionMeta(
@@ -867,7 +867,7 @@ async def test_collection_meta_centroid_none_round_trips(
     connected_store: SearchStore,
 ) -> None:
     """CollectionMeta with centroid=None round-trips as None (not a zero vector)."""
-    from archon.search.collection_meta import CollectionMeta
+    from archon_search.collection_meta import CollectionMeta
 
     meta = CollectionMeta(
         name="test-meta-no-centroid",
@@ -898,7 +898,7 @@ async def test_get_all_collections_meta_empty_before_any_update(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_get_all_collections_meta_returns_all_rows(tmp_path: Path) -> None:
     """get_all_collections_meta returns all stored CollectionMeta rows."""
-    from archon.search.collection_meta import CollectionMeta
+    from archon_search.collection_meta import CollectionMeta
 
     store = SearchStore(tmp_path / "db_meta_rows")
     await store.connect()
@@ -941,7 +941,7 @@ async def test_list_collections_excludes_archon_prefix(
     connected_store: SearchStore, col_name: str
 ) -> None:
     """list_collections() must not include internal _archon_ tables."""
-    from archon.search.collection_meta import CollectionMeta
+    from archon_search.collection_meta import CollectionMeta
 
     # Ensure a user-visible collection exists
     await connected_store.ensure_collection(col_name, _DIM)

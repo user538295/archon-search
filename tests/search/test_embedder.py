@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from archon.search.embedder import Embedder, EmbedderBackend, make_embedder
+from archon_search.embedder import Embedder, EmbedderBackend, make_embedder
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ def test_model_embedder_init_called_once_under_concurrent_encode() -> None:
 
     import numpy as np
 
-    from archon.search.embedder import ModelEmbedder
+    from archon_search.embedder import ModelEmbedder
 
     init_count = 0
     barrier = threading.Barrier(2)
