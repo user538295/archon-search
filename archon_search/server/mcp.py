@@ -1,25 +1,17 @@
-"""FastMCP HTTP server for Archon RAG (FEAT-019 Task 5.1).
-
-Usage:
-    python -m archon.search.server
-"""
+"""FastMCP HTTP server for Archon RAG (FEAT-019 Task 5.1)."""
 from __future__ import annotations
 
 import logging
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from fastmcp import Context, FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from archon_search.pipeline import SearchPipeline, create_pipeline
-from archon_search.progress import IndexingState, IndexingStateStore, IndexingStatus
-from archon_search.sync import SearchCollectionSync, path_to_collection_name
-
-if TYPE_CHECKING:
-    pass
+from archon_search.pipeline import SearchPipeline
+from archon_search.progress import IndexingState, IndexingStatus
 
 logger = logging.getLogger("archon.search")
 
@@ -200,99 +192,3 @@ def _needs_install_trigger(
         if cp is None or cp.status != IndexingStatus.DONE:
             return True
     return False
-
-
-async def main() -> None:
-    """Start the RAG MCP server from config."""
-    import asyncio  # noqa: PLC0415
-
-    from archon.config.loader import load_config  # noqa: PLC0415
-
-    cfg = load_config(require_token=False)
-    history_col = path_to_collection_name(
-        str(Path(cfg.history.directory).expanduser() / "sessions")
-    )
-    pipeline = create_pipeline(cfg.search)
-    await pipeline.store.connect()
-
-    # Startup sync
-    state_store = IndexingStateStore(Path(cfg.search.db_path).expanduser())
-    sync = SearchCollectionSync(
-        pipeline,
-        state_store=state_store,
-        pinned_collections=cfg.search.pinned_collections,
-        embedding_model=cfg.search.embedding_model,
-        chunk_size=cfg.search.chunk_size,
-        auto_reindex_on_chunk_size_change=cfg.search.auto_reindex_on_chunk_size_change,
-    )
-    desired = sync.build_desired(cfg.search.all_indexed_collections)
-    existing_state = state_store.read()
-    if _needs_install_trigger(existing_state, desired):
-        try:
-            state_store.set_trigger("install")
-        except Exception as exc:
-            logger.warning("Startup sync: failed to write install trigger (notification may not fire): %s", exc)
-    def _log_sync_error(task: asyncio.Task) -> None:
-        exc = task.exception() if not task.cancelled() else None
-        if exc is not None:
-            logger.error("Background startup sync failed: %s", exc, exc_info=exc)
-
-    sync_timeout = cfg.search.sync_timeout_seconds
-    if sync_timeout == 0:
-        task = asyncio.create_task(sync.sync(cfg.search.all_indexed_collections))
-        task.add_done_callback(_log_sync_error)
-        logger.info("Startup sync deferred to background task (sync_timeout_seconds=0).")
-    else:
-        try:
-            result = await asyncio.wait_for(sync.sync(cfg.search.all_indexed_collections), timeout=sync_timeout)
-            logger.info(
-                "Startup sync complete: %d added, %d removed, %d unchanged, %d errors.",
-                len(result.added), len(result.removed), len(result.unchanged), len(result.errors),
-            )
-            if result.errors:
-                logger.warning("Startup sync errors: %s", result.errors)
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Startup sync timed out after %ds — continuing in background.", sync_timeout
-            )
-            task = asyncio.create_task(sync.sync(cfg.search.all_indexed_collections))
-            task.add_done_callback(_log_sync_error)
-
-    watcher_manager = None
-    if cfg.search.watch:
-        from archon_search.watcher import WatcherManager  # lazy import — watchdog may not be installed
-        loop = asyncio.get_running_loop()
-
-        async def _on_change(col_name: str) -> None:
-            path_str = desired.get(col_name)
-            if path_str:
-                try:
-                    await sync.sync_collection(col_name, Path(path_str))
-                except Exception as exc:
-                    logger.error("Watch-triggered sync for %r raised: %r", col_name, exc)
-
-        watcher_manager = WatcherManager(on_change=_on_change, loop=loop)
-        for col_name, path_str in desired.items():
-            watcher_manager.add(col_name, Path(path_str))
-        logger.info(
-            "Watch mode active: monitoring %d collection(s) for file changes",
-            len(desired),
-        )
-
-    app = create_app(pipeline, history_col)
-
-    try:
-        await app.run_http_async(host=cfg.search.host, port=cfg.search.port)
-    finally:
-        if watcher_manager is not None:
-            try:
-                await watcher_manager.stop_all()
-            except Exception:
-                logger.exception("Error stopping watcher manager")
-        await pipeline.store.disconnect()
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(main())

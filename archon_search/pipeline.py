@@ -18,7 +18,7 @@ from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
 from archon_search.store import SearchStore
 
 if TYPE_CHECKING:
-    from archon.config.loader import SearchConfig
+    from archon_search.config import SearchConfig
 
 logger = logging.getLogger("archon")
 
