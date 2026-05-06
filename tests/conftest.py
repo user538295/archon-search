@@ -12,6 +12,10 @@ import sys
 import types
 import uuid
 
+from _search_stubs_shim import install_stubs  # noqa: E402
+
+install_stubs()
+
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
