@@ -12,6 +12,10 @@ import sys
 import types
 import uuid
 
+_tests_dir = os.path.dirname(os.path.abspath(__file__))
+if _tests_dir not in sys.path:
+    sys.path.insert(0, _tests_dir)
+
 from _search_stubs_shim import install_stubs  # noqa: E402
 
 install_stubs()
