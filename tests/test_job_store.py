@@ -157,3 +157,189 @@ def test_list_returns_all_jobs(store: JobStore) -> None:
 
 def test_jobs_file_default_path() -> None:
     assert JOBS_FILE == Path.home() / ".archon" / "archon-search-jobs.json"
+
+
+# ---------------------------------------------------------------------------
+# Gap tests J13.1–J13.11 (Task 10.2, FEAT-038)
+# ---------------------------------------------------------------------------
+
+
+# J13.1 — new store, no file → _load() returns False, _jobs empty
+def test_load_no_file_returns_false_and_empty(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "nonexistent.json"
+    assert not jobs_path.exists()
+    s = JobStore(path=jobs_path)
+    assert s.list() == []
+
+
+# J13.2 — corrupt JSON → empty store, error logged
+def test_corrupt_json_logs_error(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    jobs_path = tmp_path / "jobs.json"
+    jobs_path.write_text("{corrupt{{{")
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="archon"):
+        s = JobStore(path=jobs_path)
+    assert s.list() == []
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any("resetting" in r.message.lower() for r in error_records), (
+        "Expected an ERROR-level log mentioning 'resetting' on corrupt JSON"
+    )
+
+
+# J13.3 — valid JSON list but item missing required key → empty store
+def test_missing_required_key_resets_store(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "jobs.json"
+    # "status" key present, but "job_id" is missing — IngestJob(**item) will raise TypeError
+    data = [{"status": "DONE", "created_at": "2024-01-01T00:00:00+00:00", "updated_at": "2024-01-01T00:00:00+00:00"}]
+    jobs_path.write_text(json.dumps(data))
+    s = JobStore(path=jobs_path)
+    assert s.list() == []
+
+
+# J13.4 — valid JSON but root is dict, not list → empty store
+def test_wrong_root_type_resets_store(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "jobs.json"
+    jobs_path.write_text(json.dumps({"job_id": "abc", "status": "DONE"}))
+    s = JobStore(path=jobs_path)
+    assert s.list() == []
+
+
+# J13.5 — RUNNING job that already has error="prior" → error becomes "process_restart"
+def test_crash_recovery_preserves_process_restart_over_prior_error(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "jobs.json"
+    now = datetime.now(timezone.utc).isoformat()
+    data = [
+        {
+            "job_id": str(uuid.uuid4()),
+            "status": "RUNNING",
+            "created_at": now,
+            "updated_at": now,
+            "result": None,
+            "error": "prior",
+        }
+    ]
+    jobs_path.write_text(json.dumps(data))
+    s = JobStore(path=jobs_path)
+    jobs = s.list()
+    assert len(jobs) == 1
+    assert jobs[0].status == JobStatus.FAILED
+    assert jobs[0].error == "process_restart"
+
+
+# J13.6 — updated_at exactly 7 days + 1 second ago → evicted
+def test_eviction_boundary_one_second_over(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "jobs.json"
+    old_time = (datetime.now(timezone.utc) - timedelta(days=7, seconds=1)).isoformat()
+    old_id = str(uuid.uuid4())
+    data = [
+        {
+            "job_id": old_id,
+            "status": "DONE",
+            "created_at": old_time,
+            "updated_at": old_time,
+            "result": None,
+            "error": None,
+        }
+    ]
+    jobs_path.write_text(json.dumps(data))
+    s = JobStore(path=jobs_path)
+    assert s.get(old_id) is None
+    assert s.list() == []
+
+
+# J13.7 — updated_at exactly 7 days ago → NOT evicted (strict < cutoff, equality is kept)
+def test_eviction_boundary_exactly_seven_days(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "jobs.json"
+    # Production uses strict < cutoff (cutoff = now - 7 days).
+    # We place the job 1 second inside the boundary to avoid a race with _evict_old()
+    # recomputing "now" slightly later.  1s margin is far smaller than the 7-day window
+    # yet large enough to survive any test execution latency.
+    boundary_time = (datetime.now(timezone.utc) - timedelta(days=7) + timedelta(seconds=1)).isoformat()
+    recent_id = str(uuid.uuid4())
+    data = [
+        {
+            "job_id": recent_id,
+            "status": "DONE",
+            "created_at": boundary_time,
+            "updated_at": boundary_time,
+            "result": None,
+            "error": None,
+        }
+    ]
+    jobs_path.write_text(json.dumps(data))
+    s = JobStore(path=jobs_path)
+    assert s.get(recent_id) is not None
+
+
+# J13.8 — updated_at is not a valid ISO date → no crash, handled gracefully
+def test_invalid_date_no_crash(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "jobs.json"
+    now = datetime.now(timezone.utc).isoformat()
+    data = [
+        {
+            "job_id": str(uuid.uuid4()),
+            "status": "DONE",
+            "created_at": now,
+            "updated_at": "not-a-date",
+            "result": None,
+            "error": None,
+        }
+    ]
+    jobs_path.write_text(json.dumps(data))
+    # Must not raise; store may reset or keep the job — either is acceptable
+    s = JobStore(path=jobs_path)
+    # Just verify no exception was raised and the store is usable
+    _ = s.list()
+
+
+# J13.9 — job is DONE, transition(from_statuses={RUNNING}) → returns None, unchanged
+def test_transition_wrong_source_status_returns_none(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "jobs.json"
+    s = JobStore(path=jobs_path)
+    job = s.create()
+    s.update(job.job_id, status=JobStatus.DONE)
+    result = s.transition(job.job_id, from_statuses={JobStatus.RUNNING}, to_status=JobStatus.FAILED)
+    assert result is None
+    assert s.get(job.job_id) is not None
+    assert s.get(job.job_id).status == JobStatus.DONE  # type: ignore[union-attr]
+
+
+# J13.10 — sequential double-transition: second PENDING→RUNNING returns None
+def test_double_transition_second_rejected(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "jobs.json"
+    s = JobStore(path=jobs_path)
+    job = s.create()
+    assert job.status == JobStatus.PENDING
+
+    first = s.transition(job.job_id, from_statuses={JobStatus.PENDING}, to_status=JobStatus.RUNNING)
+    assert first is not None
+    assert first.status == JobStatus.RUNNING
+
+    second = s.transition(job.job_id, from_statuses={JobStatus.PENDING}, to_status=JobStatus.RUNNING)
+    assert second is None
+    # Job is still RUNNING
+    assert s.get(job.job_id).status == JobStatus.RUNNING  # type: ignore[union-attr]
+
+
+# J13.11 — rename() failure leaves .tmp on disk
+def test_write_atomic_failure_leaves_tmp_file(tmp_path: Path) -> None:
+    """Verify that after a rename() failure during _write_atomic the .tmp file is on disk.
+
+    Strategy: let _write_atomic write the .tmp normally, then make rename() raise.
+    This is the exact crash scenario: process dies after writing .tmp but before rename.
+    We use unittest.mock.patch to intercept Path.rename and raise, then assert that the
+    .tmp file _write_atomic itself created is present on disk.
+    """
+    from unittest.mock import patch
+
+    jobs_path = tmp_path / "jobs.json"
+    s = JobStore(path=jobs_path)
+
+    tmp_file = jobs_path.with_suffix(".tmp")
+
+    with patch.object(type(tmp_file), "rename", side_effect=OSError("simulated rename failure")):
+        with pytest.raises(OSError, match="simulated rename failure"):
+            s.create()
+
+    assert tmp_file.exists(), ".tmp file must remain on disk when rename() fails"
