@@ -882,3 +882,120 @@ class TestSetTrigger:
         # Verify JSON has null
         raw = json.loads(store._state_file.read_text())
         assert raw["trigger"] is None
+
+
+class TestIndexingStateStoreEdgeCases:
+    """Edge-case tests J13.12–J13.19 for IndexingStateStore and compute_eta_seconds."""
+
+    # J13.12: PermissionError reading state file → returns None, logs warning
+    def test_read_permission_error_returns_none_and_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+        store = IndexingStateStore(tmp_path)
+        # read() uses Path.read_text — patch it to raise PermissionError (subclass of OSError)
+        with patch.object(Path, "read_text", side_effect=PermissionError("denied")):
+            with caplog.at_level(logging.WARNING, logger="archon"):
+                result = store.read()
+        assert result is None
+        assert any(r.levelno == logging.WARNING and r.name == "archon" for r in caplog.records)
+
+    # J13.13: state path is a directory → returns None, no crash
+    def test_read_state_path_is_directory_returns_none(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        # Make the state file path be a directory instead of a file
+        store._state_file.mkdir(parents=True, exist_ok=True)
+        result = store.read()
+        assert result is None
+
+    # J13.14: os.replace() raises → .tmp unlinked; original exception re-raised
+    def test_write_os_replace_raises_unlinks_tmp_and_reraises(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        state = IndexingState()
+        tmp_file = store._state_file.with_suffix(".json.tmp")
+        error = OSError("disk full")
+        with patch("os.replace", side_effect=error):
+            with pytest.raises(OSError, match="disk full"):
+                store.write(state)
+        # .tmp file must have been cleaned up
+        assert not tmp_file.exists()
+
+    # J13.15: state absent → remove_collection() doesn't crash, doesn't write
+    def test_remove_collection_state_absent_does_not_write(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        # No state file exists
+        assert not store._state_file.exists()
+        store.remove_collection("nonexistent_col")
+        # Still no state file — nothing was written
+        assert not store._state_file.exists()
+
+    # J13.16: update collection A → collection B unchanged
+    def test_update_collection_a_leaves_collection_b_unchanged(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        cp_a = CollectionProgress(status=IndexingStatus.PENDING, total_files=3)
+        cp_b = CollectionProgress(status=IndexingStatus.DONE, total_files=7, processed_files=7)
+        initial = IndexingState(collections={"col_a": cp_a, "col_b": cp_b})
+        store.write(initial)
+
+        updated_a = CollectionProgress(status=IndexingStatus.IN_PROGRESS, total_files=3, processed_files=1)
+        store.update_collection("col_a", updated_a)
+
+        result = store.read()
+        assert result is not None
+        assert result.collections["col_a"].status == IndexingStatus.IN_PROGRESS
+        assert result.collections["col_b"].status == IndexingStatus.DONE
+        assert result.collections["col_b"].total_files == 7
+        assert result.collections["col_b"].processed_files == 7
+
+    # J13.17: processed_files > 0, elapsed=0 → returns None, no ZeroDivisionError
+    def test_compute_eta_elapsed_zero_returns_none(self) -> None:
+        from archon_search.progress import compute_eta_seconds
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 7, 12, 0, 0, tzinfo=timezone.utc)
+        # started_at == now → elapsed == 0
+        cp = CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=100,
+            processed_files=50,
+            started_at=now.isoformat(),
+        )
+        result = compute_eta_seconds(cp, now=now)
+        assert result is None
+
+    # J13.18: started_at with UTC+05:00 → ETA computed without crash
+    def test_compute_eta_utc_plus_offset_no_crash(self) -> None:
+        from archon_search.progress import compute_eta_seconds
+        from datetime import datetime, timezone, timedelta
+        tz_plus5 = timezone(timedelta(hours=5))
+        now = datetime(2026, 5, 7, 17, 1, 40, tzinfo=tz_plus5)  # 12:01:40 UTC
+        started = datetime(2026, 5, 7, 17, 0, 0, tzinfo=tz_plus5)  # 100s before now
+        cp = CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=100,
+            processed_files=20,
+            started_at=started.isoformat(),
+        )
+        # elapsed=100s, fps=20/100=0.2, remaining=80, eta=int(80/0.2)=400
+        result = compute_eta_seconds(cp, now=now)
+        assert result == 400
+
+    # J13.19: file_mtimes: {"file.md": true} → boolean fails isinstance check; file_mtimes == {}
+    def test_read_file_mtimes_boolean_value_falls_back_to_empty(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        raw_state = {
+            "last_updated": "2026-05-07T00:00:00+00:00",
+            "trigger": None,
+            "collections": {
+                "col": {
+                    "status": "done",
+                    "total_files": 1,
+                    "processed_files": 1,
+                    "file_mtimes": {"file.md": True},
+                }
+            },
+        }
+        store._state_dir.mkdir(parents=True, exist_ok=True)
+        store._state_file.write_text(json.dumps(raw_state))
+        result = store.read()
+        assert result is not None
+        assert result.collections["col"].file_mtimes == {}
