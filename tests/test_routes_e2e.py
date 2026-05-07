@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import tomlkit
 from fastapi.testclient import TestClient
 
 from archon_search.config import SearchConfig
@@ -426,24 +427,12 @@ def test_E3_7_cancel_cancelling_twice_both_return_202(tmp_path: Path) -> None:
 # Suite 3 — /collections lifecycle (Task 6.3: H3.12–H3.15, E3.8–E3.10)
 # ===========================================================================
 
-import tomlkit  # noqa: E402
-
-
-def _make_collections_client(tmp_path: Path, config: SearchConfig | None = None) -> TestClient:
-    """Create a TestClient for /collections tests with config_path set."""
-    if config is None:
-        config = SearchConfig()
-    config.db_path = str(tmp_path / "search")
-    job_store = JobStore(path=tmp_path / "jobs.json")
-    app = create_app(config, job_store, config_path=tmp_path / "config.toml")
-    return TestClient(app)
-
 
 # ---------------------------------------------------------------------------
 # H3.12 — POST /collections with config_path set → TOML file updated after add
 # ---------------------------------------------------------------------------
 def test_H3_12_add_collection_updates_toml(tmp_path: Path) -> None:
-    client = _make_collections_client(tmp_path)
+    client = _make_client(tmp_path)
     new_path = str(tmp_path / "my-docs")
 
     response = client.post("/collections/", json={"path": new_path})
@@ -463,7 +452,7 @@ def test_H3_13_remove_collection_updates_toml(tmp_path: Path) -> None:
     col_path = str(tmp_path / "my-docs")
     config = SearchConfig()
     config.collections = [col_path]
-    client = _make_collections_client(tmp_path, config=config)
+    client = _make_client(tmp_path, config=config)
 
     name = "my_docs"
     response = client.delete(f"/collections/{name}")
@@ -483,7 +472,7 @@ def test_H3_14_path_to_name_conversion(tmp_path: Path) -> None:
     col_path = "/home/user/my-docs"
     config = SearchConfig()
     config.collections = [col_path]
-    client = _make_collections_client(tmp_path, config=config)
+    client = _make_client(tmp_path, config=config)
 
     response = client.get("/collections/")
     assert response.status_code == 200
@@ -500,7 +489,7 @@ def test_H3_15_regular_and_pinned_both_in_list(tmp_path: Path) -> None:
     config = SearchConfig()
     config.collections = [regular_path]
     config.pinned_collections = [pinned_path]
-    client = _make_collections_client(tmp_path, config=config)
+    client = _make_client(tmp_path, config=config)
 
     response = client.get("/collections/")
     assert response.status_code == 200
@@ -513,7 +502,7 @@ def test_H3_15_regular_and_pinned_both_in_list(tmp_path: Path) -> None:
 # E3.8 — path="~/docs" → resolved to absolute (no tilde in stored path)
 # ---------------------------------------------------------------------------
 def test_E3_8_tilde_path_resolved_to_absolute(tmp_path: Path) -> None:
-    client = _make_collections_client(tmp_path)
+    client = _make_client(tmp_path)
 
     response = client.post("/collections/", json={"path": "~/docs"})
     assert response.status_code == 202
@@ -535,7 +524,7 @@ def test_E3_9_pinned_only_collection_delete_returns_409(tmp_path: Path) -> None:
     config = SearchConfig()
     config.pinned_collections = [pinned_path]
     # Not in config.collections
-    client = _make_collections_client(tmp_path, config=config)
+    client = _make_client(tmp_path, config=config)
 
     name = "pinned_only"
     response = client.delete(f"/collections/{name}")
@@ -549,7 +538,7 @@ def test_E3_10_double_delete_returns_404_on_second(tmp_path: Path) -> None:
     col_path = str(tmp_path / "my-docs")
     config = SearchConfig()
     config.collections = [col_path]
-    client = _make_collections_client(tmp_path, config=config)
+    client = _make_client(tmp_path, config=config)
 
     name = "my_docs"
     first = client.delete(f"/collections/{name}")
