@@ -1311,3 +1311,33 @@ async def test_pipeline_search_with_context_fetch_exception_propagates(tmp_path)
     # Current production behavior: exception propagates to caller
     with pytest.raises(RuntimeError, match="fetch_adjacent_chunks exploded"):
         await pipeline.search_with_context("query", "test-col", context_window=1)
+
+
+# ===========================================================================
+# FEAT-038 Task 10.4 — P14.23–P14.24: SQL injection regression guards
+# ===========================================================================
+
+
+def test_p14_23_add_collection_sql_injection_rejected_by_validate_collection() -> None:
+    """P14.23 — collection name containing apostrophe raises ValueError from _validate_collection.
+
+    Ensures no SQL injection is possible via collection names: any name that does not
+    match ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$ is rejected before reaching the database.
+    """
+    from archon_search.store import SearchStore
+
+    with pytest.raises(ValueError, match="Invalid collection name"):
+        SearchStore._validate_collection("col'name")
+
+
+@pytest.mark.asyncio
+async def test_p14_24_delete_document_sql_injection_rejected_by_doc_id_re(connected_store) -> None:
+    """P14.24 — doc_id containing SQL injection payload raises ValueError before SQL construction.
+
+    _DOC_ID_RE requires exactly 64 hex chars; any deviation (including injection strings)
+    is rejected with ValueError before any SQL is built or executed.
+    """
+    pipeline = make_pipeline(connected_store)
+
+    with pytest.raises(ValueError, match="Invalid doc_id"):
+        await pipeline.delete_document("' OR '1'='1", "valid-collection")
