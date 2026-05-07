@@ -557,3 +557,90 @@ def test_E3_10_double_delete_returns_404_on_second(tmp_path: Path) -> None:
 
     second = client.delete(f"/collections/{name}")
     assert second.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# H3.16 — /status returns collections in alphabetical order
+# ---------------------------------------------------------------------------
+def test_H3_16_status_collections_alphabetical(tmp_path: Path) -> None:
+    config = SearchConfig()
+    config.collections = ["/data/zebra", "/data/alpha", "/data/mango"]
+    client = _make_client(tmp_path, config=config)
+
+    response = client.get("/status")
+    assert response.status_code == 200
+    names = [c["name"] for c in response.json()["collections"]]
+    assert names == sorted(names)
+
+
+# ---------------------------------------------------------------------------
+# H3.17 — fresh collection with no prior ingest → status "not_yet_indexed"
+# ---------------------------------------------------------------------------
+def test_H3_17_fresh_collection_status_not_yet_indexed(tmp_path: Path) -> None:
+    config = SearchConfig()
+    config.collections = ["/data/fresh-docs"]
+    client = _make_client(tmp_path, config=config)
+
+    response = client.get("/status")
+    assert response.status_code == 200
+    collections = response.json()["collections"]
+    assert len(collections) == 1
+    assert collections[0]["name"] == "fresh_docs"
+    assert collections[0]["status"] == "not_yet_indexed"
+
+
+# ---------------------------------------------------------------------------
+# H3.18 — /indexing-state fields filtered to expected set
+# ---------------------------------------------------------------------------
+def test_H3_18_indexing_state_fields_filtered(tmp_path: Path) -> None:
+    from archon_search.progress import CollectionProgress, IndexingState, IndexingStatus
+    from archon_search.server.routes_state import _COLLECTION_API_FIELDS
+
+    state = IndexingState(
+        collections={
+            "docs": CollectionProgress(
+                status=IndexingStatus.DONE,
+                processed_files=5,
+                total_files=5,
+                error=None,
+                error_count=0,
+            )
+        }
+    )
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store, config_path=tmp_path / "config.toml")
+    app.state.state_store.write(state)
+    test_client = TestClient(app)
+
+    response = test_client.get("/indexing-state")
+    assert response.status_code == 200
+    data = response.json()
+    assert "collections" in data
+    for col_data in data["collections"].values():
+        assert set(col_data.keys()) <= _COLLECTION_API_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# H3.19 — no prior ingest → /indexing-state returns {}
+# ---------------------------------------------------------------------------
+def test_H3_19_no_prior_ingest_indexing_state_empty(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+
+    response = client.get("/indexing-state")
+    assert response.status_code == 200
+    assert response.json() == {}
+
+
+# ---------------------------------------------------------------------------
+# H3.20 — /status pid matches os.getpid()
+# ---------------------------------------------------------------------------
+def test_H3_20_status_pid_matches_current_process(tmp_path: Path) -> None:
+    import os
+
+    client = _make_client(tmp_path)
+
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert response.json()["pid"] == os.getpid()
