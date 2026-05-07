@@ -1188,3 +1188,126 @@ async def test_ingest_directory_exclude_and_on_file_complete_combined(connected_
     assert len(results) == 2  # doc1 + doc2 (doc0 excluded)
     assert len(completed) == 1
     assert completed[0] == tmp_path / "doc2.md"
+
+
+# ===========================================================================
+# FEAT-038 Task 4.1 — P14.17–P14.20: error-path and resilience tests
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_pipeline_ingest_file_embedder_exception_propagates(connected_store, col_name, tmp_path):
+    """P14.17 — embedder.embed() raises during ingest_file() → exception propagates to caller."""
+    pipeline = make_pipeline(connected_store)
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Hello\n\nContent to embed.\n" * 5)
+
+    class ExplodingBackend:
+        model_name: str = "exploding"
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("embedder exploded")
+
+    pipeline._embedder = Embedder(ExplodingBackend())
+
+    with pytest.raises(RuntimeError, match="embedder exploded"):
+        await pipeline.ingest_file(md_file, col_name)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_ingest_directory_partial_file_failure_continues(connected_store, col_name, tmp_path):
+    """P14.18 — one file parse-fails → others indexed, progress_cb called for every file including failed one."""
+    from archon_search.parser import ParseError
+
+    pipeline = make_pipeline(connected_store)
+    for i in range(3):
+        (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent for document {i}.\n" * 5)
+
+    original_parse = pipeline._parser.parse
+
+    async def _selective_fail(path: Path) -> str:
+        if path.name == "doc1.md":
+            raise ParseError(path, Exception("forced failure"))
+        return await original_parse(path)
+
+    pipeline._parser.parse = _selective_fail  # type: ignore[method-assign]
+
+    calls: list[tuple[int, int]] = []
+
+    def progress_cb(done: int, total: int) -> None:
+        calls.append((done, total))
+
+    results = await pipeline.ingest_directory(tmp_path, col_name, progress_cb=progress_cb)
+
+    # One file parse-fails, two succeed
+    ok_results = [r for r in results if r.status == "ok"]
+    error_results = [r for r in results if r.status == "error"]
+    assert len(ok_results) == 2
+    assert len(error_results) == 1
+
+    # progress_cb called for every file processed, including the failed one
+    assert len(calls) == 3
+    assert calls[-1] == (3, 3)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_search_embedder_exception_propagates(connected_store, col_name, tmp_path):
+    """P14.19 — embedder.embed_one() raises during search() → exception propagates to caller."""
+    pipeline = make_pipeline(connected_store)
+
+    class ExplodingBackend:
+        model_name: str = "exploding-search"
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("search embedder exploded")
+
+    pipeline._embedder = Embedder(ExplodingBackend())
+
+    with pytest.raises(RuntimeError, match="search embedder exploded"):
+        await pipeline.search("any query", col_name)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_search_with_context_fetch_exception_propagates(tmp_path):
+    """P14.20 — fetch_adjacent_chunks() raises → exception propagates to caller (current production behavior).
+
+    Spec intent was: fetch_adjacent_chunks failure → logs, continues, returns result with empty context.
+    Production code at pipeline.py:~235 has no try/except around fetch_adjacent_chunks(), so the
+    exception propagates instead. This test pins the actual behavior as a regression guard.
+    If graceful degradation is ever added, update this test to assert result-with-empty-context.
+    """
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    hit = SearchResult(
+        doc_id="a" * 64,
+        chunk_id=("a" * 64) + "-000001",
+        text="some result text",
+        score=0.9,
+        source_path="/some/path.md",
+    )
+
+    class FailingFetchStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+            return [hit]
+
+        async def fetch_adjacent_chunks(self, *a: Any, **kw: Any) -> list[Any]:
+            raise RuntimeError("fetch_adjacent_chunks exploded")
+
+    pipeline = SearchPipeline(
+        store=FailingFetchStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    # Pre-warm embedder so embedding_dim is set
+    await pipeline._embedder.embed(["warmup"])
+
+    # Current production behavior: exception propagates to caller
+    with pytest.raises(RuntimeError, match="fetch_adjacent_chunks exploded"):
+        await pipeline.search_with_context("query", "test-col", context_window=1)
