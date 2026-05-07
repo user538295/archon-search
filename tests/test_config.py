@@ -178,3 +178,174 @@ def test_save_config_preserves_other_sections(tmp_path: Path) -> None:
     # Collections updated
     assert reloaded.collections == ["/new/path"]
     assert reloaded.pinned_collections == []
+
+
+# ---------------------------------------------------------------------------
+# C11.13–C11.22: explicit coverage tests
+# ---------------------------------------------------------------------------
+
+
+def test_c11_13_search_config_no_args_all_defaults_valid() -> None:
+    """C11.13: SearchConfig() with no args → all defaults are valid values."""
+    config = SearchConfig()
+    assert config.host == "127.0.0.1"
+    assert config.port == 8765
+    assert config.db_path == "~/.archon/search"
+    assert config.embedding_model == "BAAI/bge-small-en-v1.5"
+    assert config.reranker_model == "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    assert config.chunk_size == 512
+    assert config.auto_reindex_on_chunk_size_change is True
+    assert config.providers == []
+    assert config.routing_shortlist_size == 8
+    assert config.routing_confidence_threshold == 0.30
+    assert config.max_parallel_collections == 3
+    assert config.pinned_collections == []
+    assert config.collections == []
+    assert config.watch is False
+    assert config.level == "INFO"
+    assert config.log_file == "~/.archon/logs/archon-search.log"
+
+
+def test_c11_14_nonexistent_path_returns_defaults(tmp_path: Path) -> None:
+    """C11.14: non-existent path → returns SearchConfig() defaults."""
+    config = load_config(path=tmp_path / "does_not_exist.toml")
+    defaults = SearchConfig()
+    assert config == defaults
+
+
+def test_c11_15_invalid_toml_raises_config_error_with_cause(tmp_path: Path) -> None:
+    """C11.15: invalid TOML → raises ConfigError with __cause__ set."""
+    bad_file = tmp_path / "bad.toml"
+    bad_file.write_text("[[[[not valid toml\n", encoding="utf-8")
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(path=bad_file)
+    assert exc_info.value.__cause__ is not None
+
+
+def test_c11_16_all_four_sections_populated(tmp_path: Path) -> None:
+    """C11.16: TOML with all 4 sections ([server], [database], [routing], [collections]) → all fields populated."""
+    toml_file = tmp_path / "full.toml"
+    toml_file.write_text(
+        "[server]\n"
+        'host = "0.0.0.0"\n'
+        "port = 9000\n\n"
+        "[database]\n"
+        'db_path = "/data/db"\n'
+        'embedding_model = "custom/model"\n'
+        'reranker_model = "custom/reranker"\n'
+        "chunk_size = 256\n"
+        "auto_reindex_on_chunk_size_change = false\n"
+        'providers = ["CPUExecutionProvider"]\n\n'
+        "[routing]\n"
+        "routing_shortlist_size = 5\n"
+        "routing_confidence_threshold = 0.75\n"
+        "max_parallel_collections = 2\n\n"
+        "[collections]\n"
+        'pinned_collections = ["/pinned/a"]\n'
+        'collections = ["/col/b"]\n'
+        "watch = true\n",
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.host == "0.0.0.0"
+    assert config.port == 9000
+    assert config.db_path == "/data/db"
+    assert config.embedding_model == "custom/model"
+    assert config.reranker_model == "custom/reranker"
+    assert config.chunk_size == 256
+    assert config.auto_reindex_on_chunk_size_change is False
+    assert config.providers == ["CPUExecutionProvider"]
+    assert config.routing_shortlist_size == 5
+    assert config.routing_confidence_threshold == 0.75
+    assert config.max_parallel_collections == 2
+    assert config.pinned_collections == ["/pinned/a"]
+    assert config.collections == ["/col/b"]
+    assert config.watch is True
+
+
+def test_c11_17_load_modify_save_reload_values_preserved(tmp_path: Path) -> None:
+    """C11.17: load → modify → save → reload → values preserved."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        "[server]\nport = 9000\n\n[collections]\ncollections = []\npinned_collections = []\n",
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    config.collections = ["/path/x", "/path/y"]
+    config.pinned_collections = ["/pinned/z"]
+    save_config(config, toml_file)
+
+    reloaded = load_config(path=toml_file)
+    assert reloaded.collections == ["/path/x", "/path/y"]
+    assert reloaded.pinned_collections == ["/pinned/z"]
+    # Other values from original file are preserved
+    assert reloaded.port == 9000
+
+
+def test_c11_18_save_to_nonexistent_path_creates_file(tmp_path: Path) -> None:
+    """C11.18: save to nonexistent path → file created."""
+    new_file = tmp_path / "subdir" / "new_config.toml"
+    new_file.parent.mkdir(parents=True)
+    config = SearchConfig()
+    config.collections = ["/some/path"]
+    save_config(config, new_file)
+    assert new_file.exists()
+    reloaded = load_config(path=new_file)
+    assert reloaded.collections == ["/some/path"]
+
+
+def test_c11_19_port_zero_raises_config_error(tmp_path: Path) -> None:
+    """C11.19: port=0 → ConfigError."""
+    toml_file = tmp_path / "bad.toml"
+    toml_file.write_text("[server]\nport = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_c11_19_port_65536_raises_config_error(tmp_path: Path) -> None:
+    """C11.19: port=65536 → ConfigError."""
+    toml_file = tmp_path / "bad.toml"
+    toml_file.write_text("[server]\nport = 65536\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_c11_20_chunk_size_zero_raises_config_error(tmp_path: Path) -> None:
+    """C11.20: chunk_size=0 → ConfigError."""
+    toml_file = tmp_path / "bad.toml"
+    toml_file.write_text("[database]\nchunk_size = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_c11_21_routing_shortlist_size_zero_raises_config_error(tmp_path: Path) -> None:
+    """C11.21: routing_shortlist_size=0 → ConfigError."""
+    toml_file = tmp_path / "bad.toml"
+    toml_file.write_text("[routing]\nrouting_shortlist_size = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_c11_22_routing_confidence_threshold_boundary_valid(tmp_path: Path) -> None:
+    """C11.22: routing_confidence_threshold=0.0 and 1.0 are valid."""
+    for value in (0.0, 1.0):
+        toml_file = tmp_path / f"conf_{value}.toml"
+        toml_file.write_text(f"[routing]\nrouting_confidence_threshold = {value}\n", encoding="utf-8")
+        config = load_config(path=toml_file)
+        assert config.routing_confidence_threshold == value
+
+
+def test_c11_22_routing_confidence_threshold_below_zero_raises(tmp_path: Path) -> None:
+    """C11.22: routing_confidence_threshold=-0.1 → ConfigError."""
+    toml_file = tmp_path / "bad.toml"
+    toml_file.write_text("[routing]\nrouting_confidence_threshold = -0.1\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_c11_22_routing_confidence_threshold_above_one_raises(tmp_path: Path) -> None:
+    """C11.22: routing_confidence_threshold=1.1 → ConfigError."""
+    toml_file = tmp_path / "bad.toml"
+    toml_file.write_text("[routing]\nrouting_confidence_threshold = 1.1\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
