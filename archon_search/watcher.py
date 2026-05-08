@@ -164,7 +164,15 @@ class CollectionWatcher:
             self._on_change, self._loop, self._collection_name, self._debounce_seconds
         )
         observer = Observer()
-        observer.schedule(handler, str(self._source_path), recursive=True)
+        try:
+            observer.schedule(handler, str(self._source_path), recursive=True)
+        except OSError as exc:
+            _log.warning(
+                "Failed to schedule filesystem observer for collection %r: %s",
+                self._collection_name,
+                exc,
+            )
+            return
 
         try:
             observer.start()
