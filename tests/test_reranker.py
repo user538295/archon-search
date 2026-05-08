@@ -125,6 +125,49 @@ def test_reranker_backend_protocol() -> None:
     assert isinstance(backend, RerankerBackend)
 
 
+# ===========================================================================
+# FEAT-038 Task 12.6 — P14.5–P14.7: Reranker edge cases
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_P14_5_reranker_top_k_greater_than_candidates_returns_all() -> None:
+    """P14.5 — top_k > len(candidates): returns all candidates (no IndexError)."""
+    backend = _MockRerankerBackend(scores=[0.9, 0.3])
+    reranker = Reranker(backend)
+    candidates = _make_candidates(2)
+    result = await reranker.rerank("query", candidates, top_k=10)
+    # All 2 candidates returned, no crash
+    assert len(result) == 2
+
+
+@pytest.mark.asyncio
+async def test_P14_6_reranker_stable_order_on_equal_scores() -> None:
+    """P14.6 — all candidates have equal scores: order is stable (sorted is stable in Python)."""
+    backend = _MockRerankerBackend(scores=[0.5])
+    reranker = Reranker(backend)
+    candidates = _make_candidates(4)
+    original_ids = [c.doc_id for c in candidates]
+    result = await reranker.rerank("query", candidates, top_k=4)
+    result_ids = [r.doc_id for r in result]
+    # All scores equal → Python's sort is stable, original order preserved
+    assert result_ids == original_ids
+
+
+@pytest.mark.asyncio
+async def test_P14_7_reranker_score_count_mismatch_raises_valueerror() -> None:
+    """P14.7 — backend returns different number of scores than candidates → ValueError."""
+    class _BadCountBackend:
+        def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+            # Returns one score regardless of how many pairs
+            return [0.99]
+
+    reranker = Reranker(_BadCountBackend())
+    candidates = _make_candidates(3)
+    with pytest.raises(ValueError, match="scores"):
+        await reranker.rerank("query", candidates, top_k=3)
+
+
 def test_model_reranker_init_called_once_under_concurrent_predict() -> None:
     """Double-checked locking: concurrent predict() calls init the model exactly once."""
     import sys

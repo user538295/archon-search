@@ -1318,6 +1318,51 @@ async def test_pipeline_search_with_context_fetch_exception_propagates(tmp_path)
 # ===========================================================================
 
 
+# ===========================================================================
+# FEAT-038 Task 12.6 — P14.21–P14.22: Pipeline zero-files ingest, chunk_size=1
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_P14_21_pipeline_ingest_directory_zero_markdown_files(connected_store, col_name, tmp_path):
+    """P14.21 — ingest_directory on a dir with zero accepted files returns [] and does not crash."""
+    pipeline = make_pipeline(connected_store)
+    # Only binary files present — all should be filtered out
+    (tmp_path / "image.gif").write_bytes(b"GIF89a" + b"\x00" * 50)
+    (tmp_path / "archive.zip").write_bytes(b"PK" + b"\x00" * 50)
+
+    results = await pipeline.ingest_directory(tmp_path, col_name)
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_P14_22_pipeline_ingest_file_chunk_size_1(connected_store, col_name, tmp_path):
+    """P14.22 — chunk_size=1 (minimal) produces one chunk per token without crashing."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    pipeline = SearchPipeline(
+        store=connected_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=1),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    md_file = tmp_path / "tiny.md"
+    md_file.write_text("alpha beta gamma delta")
+
+    result = await pipeline.ingest_file(md_file, col_name)
+
+    assert result.status == "ok"
+    # With chunk_size=1 every token is its own chunk — "alpha beta gamma delta" has 4 words
+    assert result.chunks_created >= 4
+
+
 def test_p14_23_add_collection_sql_injection_rejected_by_validate_collection() -> None:
     """P14.23 — collection name containing apostrophe raises ValueError from _validate_collection.
 

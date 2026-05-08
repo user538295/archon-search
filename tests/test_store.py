@@ -1048,6 +1048,169 @@ def test_search_store_init_expands_tilde_path_object() -> None:
     assert store._db_path == Path.home() / ".archon/search"
 
 
+# ===========================================================================
+# FEAT-038 Task 12.6 — P14.8–P14.16: Store error paths
+# ===========================================================================
+
+
+def test_P14_8_store_invalid_collection_name_space_raises(tmp_path: Path) -> None:
+    """P14.8 — Collection name with space raises ValueError."""
+    import asyncio
+
+    store = SearchStore(tmp_path / "db")
+    asyncio.run(store.connect())
+    try:
+        with pytest.raises(ValueError, match="Invalid collection name"):
+            asyncio.run(store.ensure_collection("has space", _DIM))
+    finally:
+        asyncio.run(store.disconnect())
+
+
+def test_P14_9_store_invalid_collection_name_slash_raises(tmp_path: Path) -> None:
+    """P14.9 — Collection name with slash raises ValueError (path traversal attempt)."""
+    import asyncio
+
+    store = SearchStore(tmp_path / "db")
+    asyncio.run(store.connect())
+    try:
+        with pytest.raises(ValueError, match="Invalid collection name"):
+            asyncio.run(store.ensure_collection("a/b", _DIM))
+    finally:
+        asyncio.run(store.disconnect())
+
+
+def test_P14_10_store_invalid_collection_name_empty_raises(tmp_path: Path) -> None:
+    """P14.10 — Empty collection name raises ValueError."""
+    import asyncio
+
+    store = SearchStore(tmp_path / "db")
+    asyncio.run(store.connect())
+    try:
+        with pytest.raises(ValueError, match="Invalid collection name"):
+            asyncio.run(store.ensure_collection("", _DIM))
+    finally:
+        asyncio.run(store.disconnect())
+
+
+@pytest.mark.asyncio
+async def test_P14_11_store_rebuild_fts_on_empty_collection_does_not_raise(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """P14.11 — rebuild_fts_index on a collection with no rows should not raise."""
+    await connected_store.ensure_collection(col_name, _DIM)
+    # No documents ingested — table exists but is empty
+    # Should not raise (may be a no-op or succeed silently)
+    try:
+        await connected_store.rebuild_fts_index(col_name)
+    except Exception as exc:
+        pytest.fail(f"rebuild_fts_index on empty collection raised: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_P14_12_store_hybrid_search_top_k_zero_returns_empty(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """P14.12 — hybrid_search with top_k=0 returns empty list (not an error)."""
+    await _ingest_doc(connected_store, col_name)
+    results = await connected_store.hybrid_search(col_name, [0.0] * _DIM, "any", top_k=0)
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_P14_13_store_list_documents_limit_zero_returns_empty(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """P14.13 — list_documents with limit=0 returns [] (no rows fetched)."""
+    doc_id = _doc_id()
+    chunks = [_chunk(doc_id, 0)]
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    docs = await connected_store.list_documents(col_name, limit=0)
+    # limit=0 → min(0, 1000) = 0 → limit * 50 = 0 rows fetched → []
+    assert docs == []
+
+
+@pytest.mark.asyncio
+async def test_P14_14_store_fetch_adjacent_nonexistent_doc_id_returns_empty(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """P14.14 — fetch_adjacent_chunks for a doc_id not in the collection returns []."""
+    await connected_store.ensure_collection(col_name, _DIM)
+    nonexistent_id = _doc_id()
+    result = await connected_store.fetch_adjacent_chunks(col_name, nonexistent_id, 0, 1)
+    assert result == []
+
+
+def test_P14_15_store_list_collections_exception_on_one_table_skips_it(tmp_path: Path) -> None:
+    """P14.15 — list_collections skips a table that raises an exception during inspection."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+
+    # Two tables: "good-col" succeeds, "bad-col" raises ValueError on open_table
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["good-col", "bad-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+
+    good_table = MagicMock()
+    good_table.count_rows = AsyncMock(return_value=5)
+    # For the good table, query().select().to_arrow() must return an Arrow table with doc_id column
+    import pyarrow as pa
+    arrow_table = pa.table({"doc_id": ["aaa", "bbb"]})
+    query_mock = MagicMock()
+    query_mock.select = MagicMock(return_value=query_mock)
+    query_mock.to_arrow = AsyncMock(return_value=arrow_table)
+    good_table.query = MagicMock(return_value=query_mock)
+
+    async def _open_table(name: str) -> MagicMock:
+        if name == "bad-col":
+            raise ValueError("corrupted table")
+        return good_table
+
+    mock_db.open_table = _open_table
+    store._db = mock_db
+
+    collections = asyncio.run(store.list_collections())
+    names = [c.name for c in collections]
+    assert "good-col" in names
+    assert "bad-col" not in names
+
+
+def test_P14_16_store_row_to_meta_malformed_centroid_json_returns_none(tmp_path: Path) -> None:
+    """P14.16 — _row_to_meta with malformed centroid_json sets centroid=None (no crash)."""
+    store = SearchStore(tmp_path / "db")
+    row = {
+        "name": "test-col",
+        "description": "some desc",
+        "centroid_json": "not-valid-json{",  # malformed JSON
+        "doc_count": 1,
+        "chunk_count": 3,
+        "embedding_model": "model-x",
+        "last_indexed": "",
+        "last_described": "",
+        "described_at_doc_count": -1,
+    }
+    meta = store._row_to_meta(row)
+    assert meta.centroid is None
+    assert meta.name == "test-col"
+    assert meta.doc_count == 1
+
+
+def test_P14_17_store_fetch_adjacent_invalid_hex_doc_id_raises(tmp_path: Path) -> None:
+    """P14.17 (store-specific) — fetch_adjacent_chunks with invalid hex doc_id raises ValueError."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = SearchStore(tmp_path / "db")
+    store._db = MagicMock()
+
+    with pytest.raises(ValueError, match="Invalid doc_id"):
+        asyncio.run(store.fetch_adjacent_chunks("valid-col", "not-a-hex-id", 0, 1))
+
+
 @pytest.mark.asyncio
 async def test_search_store_connect_does_not_create_tilde_dir_in_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

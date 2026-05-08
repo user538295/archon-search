@@ -125,6 +125,86 @@ async def test_embedder_embed_empty_list_leaves_dim_unset() -> None:
         _ = embedder.embedding_dim
 
 
+# ===========================================================================
+# FEAT-038 Task 12.6 — P14.1–P14.4: Embedder error paths
+# ===========================================================================
+
+
+class _WrongCountBackend:
+    """Returns one fewer vector than texts (simulates a broken backend)."""
+
+    model_name: str = "wrong-count"
+
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        # Return n-1 vectors to simulate a backend bug
+        return [[0.0] * 4 for _ in range(max(0, len(texts) - 1))]
+
+
+class _EmptyResultBackend:
+    """Returns empty list for every encode call."""
+
+    model_name: str = "empty-result"
+
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        return []
+
+
+@pytest.mark.asyncio
+async def test_P14_1_embedder_wrong_count_dim_set_from_truncated_result() -> None:
+    """P14.1 — backend returns fewer vectors than texts: embedding_dim is set from the first truncated result.
+
+    The Embedder sets _embedding_dim only when result is non-empty, so if the
+    backend silently returns fewer vectors than texts (but not empty), the
+    caller receives the truncated list and embedding_dim is set from result[0].
+    This test pins the current contract: wrong count → dim set from result[0],
+    no error raised by Embedder itself (the caller bears responsibility).
+    """
+    backend = _WrongCountBackend()
+    embedder = Embedder(backend)
+    result = await embedder.embed(["a", "b", "c"])
+    # Backend returns n-1 = 2 vectors; Embedder returns them as-is
+    assert len(result) == 2
+    # embedding_dim is set from result[0] (len=4)
+    assert embedder.embedding_dim == 4
+
+
+@pytest.mark.asyncio
+async def test_P14_2_embedder_empty_result_dim_not_initialized() -> None:
+    """P14.2 — backend returns [] for non-empty texts: embedding_dim stays unset."""
+    backend = _EmptyResultBackend()
+    embedder = Embedder(backend)
+    result = await embedder.embed(["hello", "world"])
+    assert result == []
+    with pytest.raises(RuntimeError, match="not yet initialized"):
+        _ = embedder.embedding_dim
+
+
+@pytest.mark.asyncio
+async def test_P14_3_embedder_whitespace_only_text_still_embeds() -> None:
+    """P14.3 — whitespace-only text is passed through to backend without error."""
+    backend = _MockBackend(dim=4)
+    embedder = Embedder(backend)
+    result = await embedder.embed(["   ", "\t\n", ""])
+    # Backend receives all three texts and returns 3 vectors
+    assert len(result) == 3
+    assert backend.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_P14_4_embedder_backend_exception_propagates() -> None:
+    """P14.4 — backend.encode() raises → exception propagates from embed()."""
+    class _ExplodingBackend:
+        model_name: str = "exploding"
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            raise ValueError("backend exploded")
+
+    backend = _ExplodingBackend()
+    embedder = Embedder(backend)
+    with pytest.raises(ValueError, match="backend exploded"):
+        await embedder.embed(["text"])
+
+
 def test_model_embedder_init_called_once_under_concurrent_encode() -> None:
     """Double-checked locking: concurrent encode() calls init the model exactly once."""
     import sys
