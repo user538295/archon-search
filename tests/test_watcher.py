@@ -273,8 +273,7 @@ class TestCollectionWatcher:
         mock_observer = MagicMock()
         mock_observer.is_alive.return_value = False
 
-        with patch("archon_search.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon_search.watcher.Observer", return_value=mock_observer), \
+        with patch("archon_search.watcher.Observer", return_value=mock_observer), \
              patch.object(_DebounceHandler, "cancel_all") as mock_cancel_all:
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
@@ -298,8 +297,7 @@ class TestCollectionWatcher:
         mock_observer = MagicMock()
         mock_observer.is_alive.return_value = True
 
-        with patch("archon_search.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon_search.watcher.Observer", return_value=mock_observer):
+        with patch("archon_search.watcher.Observer", return_value=mock_observer):
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
 
             # Before start: False (no observer set)
@@ -314,20 +312,6 @@ class TestCollectionWatcher:
 
         loop.close()
 
-    def test_collection_watcher_start_no_watchdog(self, tmp_path: Path, caplog):
-        """When _WATCHDOG_AVAILABLE is False, start() logs a warning and does nothing."""
-        cb, _ = _make_async_callback()
-        loop = asyncio.new_event_loop()
-
-        with patch("archon_search.watcher._WATCHDOG_AVAILABLE", False):
-            with caplog.at_level(logging.WARNING, logger="archon"):
-                watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
-                watcher.start()
-
-        assert watcher.is_alive() is False
-        assert len(caplog.records) > 0
-        loop.close()
-
     def test_collection_watcher_start_nonexistent_directory(self, tmp_path: Path, caplog):
         """If Observer.start() raises OSError, start() logs a warning and does not raise."""
         cb, _ = _make_async_callback()
@@ -337,8 +321,7 @@ class TestCollectionWatcher:
         mock_observer.start.side_effect = OSError("no such file")
         mock_observer.is_alive.return_value = False
 
-        with patch("archon_search.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon_search.watcher.Observer", return_value=mock_observer):
+        with patch("archon_search.watcher.Observer", return_value=mock_observer):
             with caplog.at_level(logging.WARNING, logger="archon"):
                 watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
                 watcher.start()  # must not raise
@@ -356,8 +339,7 @@ class TestCollectionWatcher:
         # is_alive: True — simulates observer still running after join
         mock_observer.is_alive.return_value = True
 
-        with patch("archon_search.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon_search.watcher.Observer", return_value=mock_observer):
+        with patch("archon_search.watcher.Observer", return_value=mock_observer):
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
 
@@ -376,8 +358,7 @@ class TestCollectionWatcher:
         mock_observer.is_alive.return_value = False
         mock_observer.stop.side_effect = OSError("path vanished")
 
-        with patch("archon_search.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon_search.watcher.Observer", return_value=mock_observer):
+        with patch("archon_search.watcher.Observer", return_value=mock_observer):
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
 
@@ -395,8 +376,7 @@ class TestCollectionWatcher:
         mock_observer = MagicMock()
         mock_observer.is_alive.return_value = False
 
-        with patch("archon_search.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon_search.watcher.Observer", return_value=mock_observer) as mock_observer_cls:
+        with patch("archon_search.watcher.Observer", return_value=mock_observer) as mock_observer_cls:
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
             watcher.start()  # second call must be a no-op
@@ -424,8 +404,7 @@ class TestCollectionWatcher:
         mock_observer.is_alive.return_value = False
         mock_observer.join.side_effect = OSError("fs gone during join")
 
-        with patch("archon_search.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon_search.watcher.Observer", return_value=mock_observer):
+        with patch("archon_search.watcher.Observer", return_value=mock_observer):
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
             watcher.stop()  # must not raise
@@ -710,8 +689,7 @@ class TestWatcherManager:
         mock_observer = MagicMock()
         mock_observer.is_alive.return_value = False
 
-        with patch("archon_search.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon_search.watcher.Observer", return_value=mock_observer):
+        with patch("archon_search.watcher.Observer", return_value=mock_observer):
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
 
@@ -729,8 +707,7 @@ class TestWatcherManager:
         mock_observer.schedule.side_effect = OSError("inotify limit reached")
         mock_observer.is_alive.return_value = False
 
-        with patch("archon_search.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon_search.watcher.Observer", return_value=mock_observer):
+        with patch("archon_search.watcher.Observer", return_value=mock_observer):
             with caplog.at_level(logging.WARNING, logger="archon"):
                 watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
                 watcher.start()  # must not raise
@@ -748,8 +725,7 @@ class TestWatcherManager:
         mock_observer.is_alive.return_value = False
         mock_observer.join.side_effect = OSError("fs gone during join")
 
-        with patch("archon_search.watcher._WATCHDOG_AVAILABLE", True), \
-             patch("archon_search.watcher.Observer", return_value=mock_observer):
+        with patch("archon_search.watcher.Observer", return_value=mock_observer):
             watcher = CollectionWatcher("col", tmp_path, cb, loop, debounce_seconds=5.0)
             watcher.start()
 
@@ -764,11 +740,6 @@ class TestWatcherManager:
 @pytest.mark.integration
 def test_collection_watcher_integration(tmp_path: Path):
     """Real watcher: write a file, verify on_change is called within 0.5s."""
-    try:
-        from watchdog.observers import Observer  # noqa: F401
-    except ImportError:
-        pytest.skip("watchdog not installed")
-
     calls: list[str] = []
 
     async def on_change(collection_name: str) -> None:

@@ -11,32 +11,8 @@ import threading
 from collections.abc import Callable, Coroutine
 from pathlib import Path
 
-try:
-    from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler, FileSystemEvent  # noqa: F401
-
-    _WATCHDOG_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    _WATCHDOG_AVAILABLE = False
-    FileSystemEventHandler = object  # type: ignore[assignment,misc]
-
-    class Observer:  # type: ignore[no-redef]
-        """Stub when watchdog is not installed."""
-
-        def schedule(self, *args: object, **kwargs: object) -> None:  # pragma: no cover
-            pass
-
-        def start(self) -> None:  # pragma: no cover
-            pass
-
-        def stop(self) -> None:  # pragma: no cover
-            pass
-
-        def join(self, timeout: float = 0.0) -> None:  # pragma: no cover
-            pass
-
-        def is_alive(self) -> bool:  # pragma: no cover
-            return False
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 _log = logging.getLogger("archon")
 
@@ -60,7 +36,7 @@ def _log_future_exception(future: object) -> None:
 # ---------------------------------------------------------------------------
 
 
-class _DebounceHandler(FileSystemEventHandler):  # type: ignore[misc]
+class _DebounceHandler(FileSystemEventHandler):
     """FileSystemEventHandler that debounces rapid events per collection."""
 
     def __init__(
@@ -78,15 +54,15 @@ class _DebounceHandler(FileSystemEventHandler):  # type: ignore[misc]
         self._timer: threading.Timer | None = None
         self._lock = threading.Lock()
 
-    def on_any_event(self, event: object) -> None:
+    def on_any_event(self, event: FileSystemEvent) -> None:
         """Called by watchdog on any filesystem event."""
-        if event.is_directory:  # type: ignore[union-attr]
+        if event.is_directory:
             return
 
         path = (
-            event.dest_path  # type: ignore[union-attr]
-            if event.event_type == "moved"  # type: ignore[union-attr]
-            else event.src_path  # type: ignore[union-attr]
+            event.dest_path
+            if event.event_type == "moved"
+            else event.src_path
         )
         _log.debug("Watcher event for collection %r: %s", self._collection_name, path)
 
@@ -146,19 +122,12 @@ class CollectionWatcher:
         self._loop = loop
         self._debounce_seconds = debounce_seconds
         self._handler: _DebounceHandler | None = None
-        self._observer: object | None = None  # watchdog Observer or None
+        self._observer: Observer | None = None
 
     def start(self) -> None:
         """Start watching the source directory."""
         if self._observer is not None:
             return  # already watching
-
-        if not _WATCHDOG_AVAILABLE:
-            _log.warning(
-                "watchdog is not installed; file watching disabled for collection %r",
-                self._collection_name,
-            )
-            return
 
         handler = _DebounceHandler(
             self._on_change, self._loop, self._collection_name, self._debounce_seconds
@@ -194,7 +163,7 @@ class CollectionWatcher:
 
         if self._observer is not None:
             try:
-                self._observer.stop()  # type: ignore[union-attr]
+                self._observer.stop()
             except OSError as exc:
                 _log.warning(
                     "OSError while stopping observer for collection %r: %s",
@@ -203,11 +172,11 @@ class CollectionWatcher:
                 )
             # still attempt join even after stop() failure — best-effort cleanup
             try:
-                self._observer.join(timeout=5.0)  # type: ignore[union-attr]
+                self._observer.join(timeout=5.0)
             except OSError:
                 pass
 
-            if self._observer.is_alive():  # type: ignore[union-attr]
+            if self._observer.is_alive():
                 _log.warning(
                     "Observer thread did not terminate within 5s for collection %r",
                     self._collection_name,
@@ -217,7 +186,7 @@ class CollectionWatcher:
 
     def is_alive(self) -> bool:
         """Return True if the observer thread is running."""
-        return self._observer is not None and self._observer.is_alive()  # type: ignore[union-attr]
+        return self._observer is not None and self._observer.is_alive()
 
 
 # ---------------------------------------------------------------------------
