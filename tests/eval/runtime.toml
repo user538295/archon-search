@@ -1,0 +1,17 @@
+# Eval runtime config for FEAT-039 Search Offline Evaluation Harness.
+# This file is committed alongside fixtures and thresholds.
+# Values here are eval-specific depth names; do not confuse with production top_k_return.
+
+[search]
+# candidate_depth: raw chunk candidates fetched before reranking (must be > return_depth)
+candidate_depth = 40
+# return_depth: chunk output after reranking (must be >= metric_depth)
+return_depth = 20
+# metric_depth: required post-dedupe unique-document depth for nDCG@10 (must be >= 10)
+metric_depth = 10
+
+[routing]
+# contract_enabled = true: routing is Search-owned via POST /route (confirmed by FEAT-038 Task 0.1).
+# Routing accuracy is computed as fraction of non-bypassed queries where the router's
+# candidate shortlist intersects the gold collection set derived from positive retrieval labels.
+contract_enabled = true
