@@ -17,9 +17,8 @@ skips prerequisite steps but cannot catch runtime bugs.
 """
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -67,7 +66,6 @@ def _task01_section(plan_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 def test_phase0_contract_links_existing_feat_038_artifact_or_inline_contract() -> None:
     """Task 0.1 section must reference the accepted FEAT-038 completion artifact."""
     text = _plan_text()
@@ -94,7 +92,6 @@ def test_phase0_contract_links_existing_feat_038_artifact_or_inline_contract() -
     )
 
 
-@pytest.mark.integration
 def test_phase0_contract_matches_package_paths() -> None:
     """Task 0.1 must confirm package root and import path matching the extracted package."""
     text = _plan_text()
@@ -124,7 +121,6 @@ def test_phase0_contract_matches_package_paths() -> None:
     )
 
 
-@pytest.mark.integration
 def test_phase0_contract_names_canonical_service_and_metadata_contracts() -> None:
     """Task 0.1 must name SearchResult and metadata schema as the frozen eval baseline."""
     text = _plan_text()
@@ -144,10 +140,15 @@ def test_phase0_contract_names_canonical_service_and_metadata_contracts() -> Non
         "SearchResult class not found in archon_search/_types.py"
     )
 
-    # Verify the five-field public shape documented in the plan
+    # Extract the SearchResult class body and verify the five-field public shape
+    sr_start = types_text.find("class SearchResult")
+    assert sr_start != -1, "class SearchResult not found in _types.py"
+    # Find the next class definition or end of file to scope the check
+    next_class = types_text.find("\nclass ", sr_start + 1)
+    sr_body = types_text[sr_start:next_class] if next_class != -1 else types_text[sr_start:]
     for field in ("doc_id", "chunk_id", "text", "score", "source_path"):
-        assert field in types_text, (
-            f"SearchResult field '{field}' not found in _types.py. "
+        assert field in sr_body, (
+            f"SearchResult field '{field}' not found in SearchResult class body in _types.py. "
             "The plan documents a five-field public shape."
         )
 
@@ -160,7 +161,6 @@ def test_phase0_contract_names_canonical_service_and_metadata_contracts() -> Non
     )
 
 
-@pytest.mark.integration
 def test_phase0_contract_records_routing_ownership() -> None:
     """Task 0.1 must record that routing is Search-owned via POST /route."""
     text = _plan_text()
@@ -184,7 +184,6 @@ def test_phase0_contract_records_routing_ownership() -> None:
     )
 
 
-@pytest.mark.integration
 def test_phase0_contract_requires_typed_route_api_when_routing_owned() -> None:
     """Task 0.1 must inline the typed route API contract when routing is Search-owned."""
     text = _plan_text()
@@ -219,61 +218,47 @@ def test_phase0_contract_requires_typed_route_api_when_routing_owned() -> None:
         "in the committed eval runtime config."
     )
     runtime_text = RUNTIME_TOML.read_text(encoding="utf-8")
-    assert "contract_enabled = true" in runtime_text, (
-        "runtime.toml does not contain 'contract_enabled = true'. "
-        "Task 0.1 requires [routing].contract_enabled = true in the eval runtime config."
+    runtime_data = tomllib.loads(runtime_text)
+    assert runtime_data.get("routing", {}).get("contract_enabled") is True, (
+        "runtime.toml [routing].contract_enabled is not True. "
+        "Task 0.1 requires setting [routing].contract_enabled = true in the committed eval runtime config."
     )
 
 
-@pytest.mark.integration
 def test_phase0_contract_links_archon_routing_eval_followup_when_needed() -> None:
     """Task 0.1 must link FEAT-039b as the deferred online data-collection follow-up."""
     text = _plan_text()
     task01 = _task01_section(text)
 
-    # FEAT-039b must be mentioned in the Task 0.1 section or immediately after it
-    # The plan background already mentions it; verify it appears in the task or verified section
-    # We look in a broader window (task01 + adjacent text near it)
-    idx = text.find("#### Task 0.1")
-    idx_next = text.find("#### Task 0.2", idx)
-    surrounding = text[idx:idx_next] if idx_next != -1 else text[idx:idx + 3000]
-
-    assert "FEAT-039b" in surrounding, (
+    assert "FEAT-039b" in task01, (
         "Task 0.1 section does not reference FEAT-039b as the deferred follow-up. "
         "Task 0.1 requires that non-Search-owned concerns cannot disappear from the roadmap. "
-        "FEAT-039b must be named in or adjacent to the Task 0.1 section."
+        "FEAT-039b must be named in the Task 0.1 section."
     )
 
 
-@pytest.mark.integration
 def test_phase0_contract_records_archon_doc_validation_owner_when_extracted() -> None:
-    """Plan codex must note that Archon doc validation is Archon-owned when package is extracted."""
+    """Task 0.1 must note that Archon doc validation is Archon-owned when package is extracted."""
     text = _plan_text()
+    task01 = _task01_section(text)
 
-    # The plan must reference Archon doc validation ownership
-    # The plan's Documentation section already has this:
-    # "Package release CI validates only package-local documentation; Archon roadmap and
-    #  architecture documentation updates are validated in the Archon repo workflow or
-    #  Phase 0 doc checklist, not by package-local tests"
     assert (
-        "Archon repo" in text
-        or "Archon roadmap" in text
-        or "Archon-doc" in text
-        or "Archon doc" in text
+        "Archon repo" in task01
+        or "Archon roadmap" in task01
+        or "Archon-doc" in task01
+        or "Archon doc" in task01
     ), (
-        "Plan codex does not name the Archon doc validation owner. "
+        "Task 0.1 section does not name the Archon doc validation owner. "
         "Task 0.1 requires that when archon-search is extracted, the doc validation "
-        "owner is explicitly documented."
+        "owner is explicitly documented in the Task 0.1 section."
     )
 
-    # The plan text must make explicit who validates Archon-side documentation
-    assert "Phase 0 doc checklist" in text or "Archon repo workflow" in text, (
-        "Plan codex does not specify the Archon doc validation mechanism. "
-        "Either 'Phase 0 doc checklist' or 'Archon repo workflow' must be named."
+    assert "Phase 0 doc checklist" in task01 or "Archon repo workflow" in task01, (
+        "Task 0.1 section does not specify the Archon doc validation mechanism. "
+        "Either 'Phase 0 doc checklist' or 'Archon repo workflow' must be named in the Task 0.1 section."
     )
 
 
-@pytest.mark.integration
 def test_phase0_contract_updates_documentation_index_for_followup_backlog_items() -> None:
     """Documentation index must be updated when FEAT-039 creates follow-up backlog items."""
     assert DOC_INDEX.exists(), (
