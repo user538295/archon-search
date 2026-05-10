@@ -1386,3 +1386,280 @@ async def test_p14_24_delete_document_sql_injection_rejected_by_doc_id_re(connec
 
     with pytest.raises(ValueError, match="Invalid doc_id"):
         await pipeline.delete_document("' OR '1'='1", "valid-collection")
+
+
+# ===========================================================================
+# FEAT-039 Task 2.4 — Eval trace execution path
+# ===========================================================================
+
+
+def _make_scored_candidate(
+    doc_id: str,
+    chunk_id: str,
+    text: str = "chunk text",
+    rrf_score: float = 0.5,
+    reranker_score: float | None = None,
+) -> "ScoredSearchCandidate":
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+
+    return ScoredSearchCandidate(
+        doc_id=doc_id,
+        chunk_id=chunk_id,
+        text=text,
+        source_path=f"/path/to/{doc_id}.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=0,
+            vector_score=0.9,
+            vector_score_kind="distance",
+            fts_rank=None,
+            fts_score=None,
+            fts_score_kind=None,
+            rrf_score=rrf_score,
+            reranker_score=reranker_score,
+        ),
+        collection="test-col",
+    )
+
+
+@pytest.mark.asyncio
+async def test_eval_trace_returns_pre_and_post_rerank_results(tmp_path):
+    """collect_search_trace returns (pre_rerank, post_rerank) both as EvalSearchResult lists."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.eval.types import EvalSearchResult
+    from archon_search.eval._tracing import collect_search_trace
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    doc_id = "a" * 64
+    pre_candidates = [_make_scored_candidate(doc_id, f"{doc_id}-000000", rrf_score=0.8)]
+    post_candidates = [_make_scored_candidate(doc_id, f"{doc_id}-000000", rrf_score=0.8, reranker_score=0.9)]
+
+    pipeline = SearchPipeline(
+        store=MagicMock(),
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    with (
+        patch("archon_search.eval._tracing._hybrid_search_with_trace", new=AsyncMock(return_value=pre_candidates)),
+        patch.object(pipeline._reranker, "_rerank_with_trace", new=AsyncMock(return_value=post_candidates)),
+    ):
+        pre, post = await collect_search_trace(
+            pipeline, "test query", "test-col",
+            candidate_depth=20, return_depth=5, metric_depth=10,
+        )
+
+    assert isinstance(pre, list)
+    assert isinstance(post, list)
+    assert len(pre) == 1
+    assert len(post) == 1
+    assert all(isinstance(r, EvalSearchResult) for r in pre)
+    assert all(isinstance(r, EvalSearchResult) for r in post)
+
+
+@pytest.mark.asyncio
+async def test_eval_trace_uses_service_query_path_with_trace_enabled(tmp_path):
+    """collect_search_trace calls the pipeline's own store and reranker trace helpers."""
+    from unittest.mock import AsyncMock, MagicMock, patch, call
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.eval._tracing import collect_search_trace
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    doc_id = "b" * 64
+    pre_candidates = [_make_scored_candidate(doc_id, f"{doc_id}-000000")]
+    post_candidates = [_make_scored_candidate(doc_id, f"{doc_id}-000000", reranker_score=0.7)]
+
+    pipeline = SearchPipeline(
+        store=MagicMock(),
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    hybrid_mock = AsyncMock(return_value=pre_candidates)
+    rerank_mock = AsyncMock(return_value=post_candidates)
+
+    with (
+        patch("archon_search.eval._tracing._hybrid_search_with_trace", new=hybrid_mock),
+        patch.object(pipeline._reranker, "_rerank_with_trace", new=rerank_mock),
+    ):
+        await collect_search_trace(
+            pipeline, "my query", "test-col",
+            candidate_depth=15, return_depth=3, metric_depth=5,
+        )
+
+    # Verify the store instance passed to trace is the pipeline's own store
+    hybrid_mock.assert_awaited_once()
+    call_args = hybrid_mock.call_args
+    assert call_args.args[0] is pipeline.store, "store instance must be pipeline's own store"
+    assert call_args.args[1] == "test-col"
+    assert call_args.args[3] == "my query"
+    assert call_args.args[4] == 15  # candidate_depth
+
+    # Verify reranker trace was called with return_depth
+    rerank_mock.assert_awaited_once()
+    assert rerank_mock.call_args.args[2] == 3  # return_depth
+
+
+@pytest.mark.asyncio
+async def test_eval_trace_fails_if_trace_path_diverges_from_search_components(tmp_path):
+    """Drift guard raises RuntimeError when embedder/store/reranker instances differ."""
+    from unittest.mock import MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.eval._tracing import collect_search_trace
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    pipeline = SearchPipeline(
+        store=MagicMock(),
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    # Tamper: replace embedder with a different instance after construction
+    original_embedder = pipeline._embedder
+    pipeline._embedder = make_embedder()  # different object — drift!
+
+    # The drift guard must detect that the pipeline's embedder changed
+    # We simulate this by verifying object identity check is performed
+    # by patching _get_pipeline_components to return mismatched objects
+    from archon_search.eval._tracing import _check_component_drift
+
+    with pytest.raises(RuntimeError, match="drift"):
+        _check_component_drift(
+            pipeline,
+            expected_embedder=original_embedder,  # the original, now mismatched
+            expected_store=pipeline.store,
+            expected_reranker=pipeline._reranker,
+        )
+
+
+@pytest.mark.asyncio
+async def test_eval_trace_matches_search_final_order_with_matching_depths(connected_store, col_name, tmp_path):
+    """post_rerank output order matches normal search() when depths equal pipeline defaults."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.eval._tracing import collect_search_trace
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    pipeline = SearchPipeline(
+        store=connected_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    md_file = tmp_path / "trace_doc.md"
+    md_file.write_text("# Trace Test\n\nSearchable content for eval trace matching.\n" * 10)
+    await pipeline.ingest_file(md_file, col_name)
+
+    normal_results = await pipeline.search("Searchable content", col_name)
+    _, post_rerank = await collect_search_trace(
+        pipeline, "Searchable content", col_name,
+        candidate_depth=pipeline._top_k_retrieve,
+        return_depth=pipeline._top_k_return,
+        metric_depth=pipeline._top_k_return,
+    )
+
+    # post_rerank chunk_ids must match normal search order
+    normal_chunk_ids = [r.chunk_id for r in normal_results]
+    trace_chunk_ids = [r.chunk_id for r in post_rerank]
+    assert normal_chunk_ids == trace_chunk_ids, (
+        f"Post-rerank trace order differs from search():\n"
+        f"  search: {normal_chunk_ids}\n"
+        f"  trace:  {trace_chunk_ids}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_eval_trace_common_prefix_matches_search_when_depths_differ(connected_store, col_name, tmp_path):
+    """When eval depths differ from pipeline defaults, the common prefix of results matches."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.eval._tracing import collect_search_trace
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    pipeline = SearchPipeline(
+        store=connected_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    md_file = tmp_path / "prefix_doc.md"
+    md_file.write_text("# Prefix Test\n\nContent for prefix comparison.\n" * 10)
+    await pipeline.ingest_file(md_file, col_name)
+
+    normal_results = await pipeline.search("prefix comparison", col_name)
+    _, post_rerank = await collect_search_trace(
+        pipeline, "prefix comparison", col_name,
+        candidate_depth=5,   # different from pipeline default (10)
+        return_depth=3,       # different from pipeline default (5)
+        metric_depth=3,
+    )
+
+    # Compare only the common prefix (min of both result counts)
+    prefix_len = min(len(normal_results), len(post_rerank))
+    assert prefix_len > 0, "Expected at least one result"
+    normal_prefix = [r.chunk_id for r in normal_results[:prefix_len]]
+    trace_prefix = [r.chunk_id for r in post_rerank[:prefix_len]]
+    assert normal_prefix == trace_prefix, (
+        f"Common prefix mismatch:\n  search: {normal_prefix}\n  trace: {trace_prefix}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_eval_trace_does_not_change_public_search_response(connected_store, col_name, tmp_path):
+    """Normal search() output is identical before and after collect_search_trace is called."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.eval._tracing import collect_search_trace
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    pipeline = SearchPipeline(
+        store=connected_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    md_file = tmp_path / "unchanged_doc.md"
+    md_file.write_text("# Unchanged Test\n\nSearch results must not change.\n" * 10)
+    await pipeline.ingest_file(md_file, col_name)
+
+    before = await pipeline.search("Search results", col_name)
+
+    await collect_search_trace(
+        pipeline, "Search results", col_name,
+        candidate_depth=10, return_depth=5, metric_depth=5,
+    )
+
+    after = await pipeline.search("Search results", col_name)
+
+    assert [r.chunk_id for r in before] == [r.chunk_id for r in after]
+    assert [r.score for r in before] == [r.score for r in after]
