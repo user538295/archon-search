@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import threading
 from typing import Any, Protocol, runtime_checkable
 
+from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import SearchResult
 
 
@@ -63,6 +65,40 @@ class Reranker:
             candidate.score = score
 
         return sorted(candidates, key=lambda c: c.score, reverse=True)[:top_k]
+
+    async def _rerank_with_trace(
+        self,
+        query: str,
+        candidates: list[ScoredSearchCandidate],
+        top_k: int,
+    ) -> list[ScoredSearchCandidate]:
+        """Eval trace path: rerank ScoredSearchCandidates, preserving score provenance.
+
+        Returns new ScoredSearchCandidate objects with reranker_score populated.
+        Input candidates are NOT mutated.
+        """
+        if not candidates:
+            return []
+
+        pairs = [(query, c.text) for c in candidates]
+        scores: list[float] = await asyncio.to_thread(self._backend.predict, pairs)
+
+        if len(scores) != len(candidates):
+            raise ValueError(
+                f"Backend returned {len(scores)} scores for {len(candidates)} candidates"
+            )
+
+        # Build new objects — never mutate input candidates
+        traced: list[ScoredSearchCandidate] = []
+        for candidate, reranker_score in zip(candidates, scores):
+            new_breakdown = dataclasses.replace(
+                candidate.score_breakdown, reranker_score=reranker_score
+            )
+            traced.append(dataclasses.replace(candidate, score_breakdown=new_breakdown))
+
+        # Stable sort by reranker_score descending (Python sort is stable → equal scores keep input order)
+        traced.sort(key=lambda c: c.score_breakdown.reranker_score or 0.0, reverse=True)
+        return traced[:top_k]
 
 
 def make_reranker(model_name: str, providers: list[str] | None = None) -> Reranker:

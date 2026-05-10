@@ -1,8 +1,11 @@
 """packages/archon-search/tests/test_reranker.py — unit tests for Reranker (fastembed backend)."""
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
+from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import SearchResult
 from archon_search.reranker import Reranker, RerankerBackend, make_reranker
 
@@ -214,6 +217,110 @@ def test_model_reranker_init_called_once_under_concurrent_predict() -> None:
         assert init_count == 1, f"Model __init__ called {init_count} times — lock missing"
     finally:
         sys.modules["fastembed.rerank.cross_encoder"].TextCrossEncoder = original
+
+
+# ===========================================================================
+# FEAT-039 Task 2.3 — Reranker trace preservation
+# ===========================================================================
+
+
+def _make_scored_candidate(
+    doc_id: str,
+    text: str,
+    rrf_score: float,
+    collection: str = "default",
+) -> ScoredSearchCandidate:
+    breakdown = SearchScoreBreakdown(
+        vector_rank=1,
+        vector_score=rrf_score,
+        vector_score_kind="similarity",
+        fts_rank=None,
+        fts_score=None,
+        fts_score_kind=None,
+        rrf_score=rrf_score,
+        reranker_score=None,
+    )
+    return ScoredSearchCandidate(
+        doc_id=doc_id,
+        chunk_id=f"{doc_id}-000000",
+        text=text,
+        source_path=f"/tmp/{doc_id}.md",
+        score_breakdown=breakdown,
+        collection=collection,
+    )
+
+
+@pytest.mark.asyncio
+async def test_rerank_trace_preserves_prerank_scores_and_adds_reranker_score() -> None:
+    """Reranked trace results keep fused/RRF score and add reranker_score."""
+    backend = _MockRerankerBackend(scores=[0.9, 0.3])
+    reranker = Reranker(backend)
+    candidates = [
+        _make_scored_candidate("doc0", "text 0", rrf_score=0.5),
+        _make_scored_candidate("doc1", "text 1", rrf_score=0.7),
+    ]
+
+    result = await reranker._rerank_with_trace("query", candidates, top_k=2)
+
+    assert len(result) == 2
+    # Sorted by reranker score descending: doc0 (0.9) first
+    assert result[0].doc_id == "doc0"
+    assert result[0].score_breakdown.reranker_score == pytest.approx(0.9)
+    assert result[0].score_breakdown.rrf_score == pytest.approx(0.5)  # original preserved
+
+    assert result[1].doc_id == "doc1"
+    assert result[1].score_breakdown.reranker_score == pytest.approx(0.3)
+    assert result[1].score_breakdown.rrf_score == pytest.approx(0.7)  # original preserved
+
+
+@pytest.mark.asyncio
+async def test_rerank_trace_does_not_mutate_prerank_results() -> None:
+    """Pre-rerank trace objects must remain unchanged after reranking runs."""
+    backend = _MockRerankerBackend(scores=[0.9, 0.1])
+    reranker = Reranker(backend)
+    candidates = [
+        _make_scored_candidate("doc0", "text 0", rrf_score=0.4),
+        _make_scored_candidate("doc1", "text 1", rrf_score=0.6),
+    ]
+    original_rrf_scores = [c.score_breakdown.rrf_score for c in candidates]
+    original_reranker_scores = [c.score_breakdown.reranker_score for c in candidates]
+
+    await reranker._rerank_with_trace("query", candidates, top_k=2)
+
+    # Input candidates must NOT be mutated
+    for candidate, orig_rrf, orig_reranker in zip(
+        candidates, original_rrf_scores, original_reranker_scores
+    ):
+        assert candidate.score_breakdown.rrf_score == pytest.approx(orig_rrf)
+        assert candidate.score_breakdown.reranker_score == orig_reranker
+
+
+@pytest.mark.asyncio
+async def test_rerank_trace_orders_equal_scores_deterministically() -> None:
+    """Equal reranker scores use stable secondary ordering (preserves input order)."""
+    backend = _MockRerankerBackend(scores=[0.5])  # all equal
+    reranker = Reranker(backend)
+    candidates = [
+        _make_scored_candidate("doc0", "text 0", rrf_score=0.1),
+        _make_scored_candidate("doc1", "text 1", rrf_score=0.2),
+        _make_scored_candidate("doc2", "text 2", rrf_score=0.3),
+    ]
+
+    result = await reranker._rerank_with_trace("query", candidates, top_k=3)
+
+    # All reranker scores equal → stable sort preserves original input order
+    assert [r.doc_id for r in result] == ["doc0", "doc1", "doc2"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_empty_candidates_keeps_no_scores() -> None:
+    """Empty candidate list returns cleanly with no scores."""
+    backend = _MockRerankerBackend()
+    reranker = Reranker(backend)
+
+    result = await reranker._rerank_with_trace("query", [], top_k=5)
+
+    assert result == []
 
 
 def test_model_reranker_uses_submodule_import_path() -> None:
