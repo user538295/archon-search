@@ -1232,3 +1232,430 @@ async def test_search_store_connect_does_not_create_tilde_dir_in_cwd(
 
     assert (tmp_path / "~").exists() is False
     assert (tmp_path / ".archon" / "search").exists() is True
+
+
+# ===========================================================================
+# FEAT-039 Task 2.2 — Hybrid-search trace provenance
+# ===========================================================================
+
+
+def test_hybrid_search_keeps_public_result_contract(tmp_path: Path) -> None:
+    """Normal hybrid_search results expose only SearchResult fields — no eval-only score fields."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+
+    doc_id = _doc_id()
+    chunk_id = f"{doc_id}-000000"
+
+    vec_row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "hello world",
+        "source_path": "/tmp/foo.md",
+        "_distance": 0.1,
+    }
+
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[vec_row]))))
+    )
+    mock_table.search = AsyncMock(
+        side_effect=Exception("fts index not found")
+    )
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", top_k=5))
+
+    assert len(results) == 1
+    result = results[0]
+    # Only public SearchResult fields exist
+    assert hasattr(result, "doc_id")
+    assert hasattr(result, "chunk_id")
+    assert hasattr(result, "text")
+    assert hasattr(result, "score")
+    assert hasattr(result, "source_path")
+    # No eval-only fields
+    assert not hasattr(result, "vector_score")
+    assert not hasattr(result, "fts_score")
+    assert not hasattr(result, "vector_rank")
+    assert not hasattr(result, "fts_rank")
+    assert not hasattr(result, "score_breakdown")
+
+
+def test_hybrid_search_trace_exposes_score_breakdown(tmp_path: Path) -> None:
+    """Trace candidates expose vector rank/score, FTS rank/score, score-kind, and RRF values."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search._diagnostics import ScoredSearchCandidate
+    from archon_search.store import _hybrid_search_with_trace
+
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+
+    doc_id = _doc_id()
+    chunk_id = f"{doc_id}-000000"
+
+    vec_row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "hello world",
+        "source_path": "/tmp/foo.md",
+        "_distance": 0.25,
+    }
+    fts_row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "hello world",
+        "source_path": "/tmp/foo.md",
+        "_score": 1.5,
+    }
+
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[vec_row]))))
+    )
+    fts_result = MagicMock()
+    fts_result.limit = MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[fts_row])))
+    mock_table.search = AsyncMock(return_value=fts_result)
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    candidates = asyncio.run(_hybrid_search_with_trace(store, "my-col", [0.0] * _DIM, "hello", 20))
+
+    assert len(candidates) == 1
+    cand = candidates[0]
+    assert isinstance(cand, ScoredSearchCandidate)
+    sb = cand.score_breakdown
+    assert sb.vector_rank is not None
+    assert sb.vector_score is not None
+    assert sb.vector_score_kind is not None
+    assert sb.fts_rank is not None
+    assert sb.fts_score is not None
+    assert sb.fts_score_kind is not None
+    assert sb.rrf_score > 0.0
+
+
+def test_hybrid_search_trace_documents_backend_score_field_mapping(tmp_path: Path) -> None:
+    """Trace extraction pins the backend row fields: vector uses _distance, FTS uses _score."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import _hybrid_search_with_trace
+
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+
+    doc_id = _doc_id()
+    chunk_id = f"{doc_id}-000000"
+    expected_distance = 0.42
+    expected_fts_score = 3.7
+
+    vec_row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "some text",
+        "source_path": "/tmp/bar.md",
+        "_distance": expected_distance,
+    }
+    fts_row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "some text",
+        "source_path": "/tmp/bar.md",
+        "_score": expected_fts_score,
+    }
+
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[vec_row]))))
+    )
+    fts_result = MagicMock()
+    fts_result.limit = MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[fts_row])))
+    mock_table.search = AsyncMock(return_value=fts_result)
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    candidates = asyncio.run(_hybrid_search_with_trace(store, "my-col", [0.0] * _DIM, "some text", 20))
+
+    assert len(candidates) == 1
+    sb = candidates[0].score_breakdown
+    assert abs(sb.vector_score - expected_distance) < 1e-6, (
+        f"vector_score should be _distance field value, got {sb.vector_score}"
+    )
+    assert abs(sb.fts_score - expected_fts_score) < 1e-6, (
+        f"fts_score should be _score field value, got {sb.fts_score}"
+    )
+
+
+def test_hybrid_search_trace_sets_missing_raw_scores_none(tmp_path: Path) -> None:
+    """Backend rows without _distance or _score fields yield None raw scores, not fabricated values."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import _hybrid_search_with_trace
+
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+
+    doc_id = _doc_id()
+    chunk_id = f"{doc_id}-000000"
+
+    # Row without _distance field
+    vec_row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "content",
+        "source_path": "/tmp/x.md",
+        # No _distance key
+    }
+    # FTS row without _score field
+    fts_row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "content",
+        "source_path": "/tmp/x.md",
+        # No _score key
+    }
+
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[vec_row]))))
+    )
+    fts_result = MagicMock()
+    fts_result.limit = MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[fts_row])))
+    mock_table.search = AsyncMock(return_value=fts_result)
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    candidates = asyncio.run(_hybrid_search_with_trace(store, "my-col", [0.0] * _DIM, "content", 20))
+
+    assert len(candidates) == 1
+    sb = candidates[0].score_breakdown
+    assert sb.vector_score is None, f"Expected None for missing _distance, got {sb.vector_score}"
+    assert sb.vector_score_kind is None
+    assert sb.fts_score is None, f"Expected None for missing _score, got {sb.fts_score}"
+    assert sb.fts_score_kind is None
+
+
+def test_hybrid_search_trace_sets_fts_score_none_without_index(tmp_path: Path) -> None:
+    """No FTS index yields fts_score=None in trace, not an exception."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import _hybrid_search_with_trace
+
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+
+    doc_id = _doc_id()
+    chunk_id = f"{doc_id}-000000"
+    vec_row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "some content",
+        "source_path": "/tmp/f.md",
+        "_distance": 0.5,
+    }
+
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[vec_row]))))
+    )
+    # Simulate no FTS index — raises error with "fts" in the message
+    mock_table.search = AsyncMock(side_effect=Exception("fts index not found"))
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    candidates = asyncio.run(_hybrid_search_with_trace(store, "my-col", [0.0] * _DIM, "some content", 20))
+
+    assert len(candidates) == 1
+    sb = candidates[0].score_breakdown
+    assert sb.fts_rank is None
+    assert sb.fts_score is None
+    assert sb.fts_score_kind is None
+    # vector fields still populated
+    assert sb.vector_rank == 0
+    assert sb.vector_score is not None
+
+
+def test_hybrid_search_trace_orders_equal_scores_deterministically(tmp_path: Path) -> None:
+    """Candidates with equal RRF scores must have a stable (deterministic) secondary ordering."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import _hybrid_search_with_trace
+
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+
+    doc_id = _doc_id()
+    # Two chunks with same rank in both vector and FTS (same RRF score)
+    rows = [
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-000000",
+            "text": "aaa",
+            "source_path": "/tmp/a.md",
+            "_distance": 0.3,
+        },
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-000001",
+            "text": "bbb",
+            "source_path": "/tmp/a.md",
+            "_distance": 0.3,
+        },
+    ]
+
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=rows))))
+    )
+    mock_table.search = AsyncMock(side_effect=Exception("fts index not found"))
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    results_1 = asyncio.run(_hybrid_search_with_trace(store, "my-col", [0.0] * _DIM, "x", 20))
+    results_2 = asyncio.run(_hybrid_search_with_trace(store, "my-col", [0.0] * _DIM, "x", 20))
+
+    # Order must be identical across calls (deterministic)
+    ids_1 = [c.chunk_id for c in results_1]
+    ids_2 = [c.chunk_id for c in results_2]
+    assert ids_1 == ids_2, f"Non-deterministic ordering: {ids_1} vs {ids_2}"
+
+
+def test_mcp_search_response_schema_matches_public_contract_without_eval_provenance() -> None:
+    """Serialized public SearchResult payloads match the public contract and exclude eval-only provenance."""
+    from dataclasses import asdict
+    from archon_search._types import SearchResult
+
+    result = SearchResult(
+        doc_id="abc123",
+        chunk_id="abc123-000000",
+        text="some text",
+        score=0.85,
+        source_path="/tmp/doc.md",
+    )
+    payload = asdict(result)
+    # Public contract fields
+    assert set(payload.keys()) == {"doc_id", "chunk_id", "text", "score", "source_path"}
+    # No eval provenance keys
+    for forbidden in ("vector_score", "fts_score", "vector_rank", "fts_rank", "score_breakdown"):
+        assert forbidden not in payload, f"Eval-only field {forbidden!r} leaked into public payload"
+
+
+def test_mcp_search_with_context_response_schema_matches_public_contract_without_eval_provenance() -> None:
+    """Context (multi-result) payloads match the public Search contract and exclude eval provenance."""
+    from dataclasses import asdict
+    from archon_search._types import SearchResult
+
+    results = [
+        SearchResult(
+            doc_id=f"id{i}",
+            chunk_id=f"id{i}-{i:06d}",
+            text=f"text {i}",
+            score=float(i) * 0.1,
+            source_path=f"/tmp/{i}.md",
+        )
+        for i in range(3)
+    ]
+    payloads = [asdict(r) for r in results]
+    for payload in payloads:
+        assert set(payload.keys()) == {"doc_id", "chunk_id", "text", "score", "source_path"}
+        for forbidden in ("vector_score", "fts_score", "vector_rank", "fts_rank", "score_breakdown"):
+            assert forbidden not in payload
+
+
+def test_eval_trace_helpers_are_not_public_package_exports() -> None:
+    """Internal trace helpers _hybrid_search_with_trace must NOT appear in the public package exports."""
+    import archon_search
+
+    public_names = dir(archon_search)
+    assert "_hybrid_search_with_trace" not in public_names, (
+        "_hybrid_search_with_trace must not be exported from archon_search public package"
+    )
+    # Also verify it is not accidentally importable from the top-level namespace
+    assert not hasattr(archon_search, "_hybrid_search_with_trace")
+
+
+def test_hybrid_search_trace_score_kind_values_match_backend_polarity(tmp_path: Path) -> None:
+    """vector_score_kind is 'distance' and fts_score_kind is 'bm25' for the LanceDB backend."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import _hybrid_search_with_trace
+
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+
+    doc_id = _doc_id()
+    chunk_id = f"{doc_id}-000000"
+
+    vec_row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "polarity test",
+        "source_path": "/tmp/p.md",
+        "_distance": 0.1,
+    }
+    fts_row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "polarity test",
+        "source_path": "/tmp/p.md",
+        "_score": 2.5,
+    }
+
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[vec_row]))))
+    )
+    fts_result = MagicMock()
+    fts_result.limit = MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[fts_row])))
+    mock_table.search = AsyncMock(return_value=fts_result)
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    candidates = asyncio.run(_hybrid_search_with_trace(store, "my-col", [0.0] * _DIM, "polarity test", 20))
+
+    assert len(candidates) == 1
+    sb = candidates[0].score_breakdown
+    assert sb.vector_score_kind == "distance", (
+        f"Expected 'distance' for LanceDB vector score kind, got {sb.vector_score_kind!r}"
+    )
+    assert sb.fts_score_kind == "bm25", (
+        f"Expected 'bm25' for LanceDB FTS score kind, got {sb.fts_score_kind!r}"
+    )

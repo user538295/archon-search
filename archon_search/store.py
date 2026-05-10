@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
 
 if TYPE_CHECKING:
@@ -430,6 +431,7 @@ class SearchStore:
     # Delete
     # ------------------------------------------------------------------
 
+
     async def delete_document(self, collection: str, doc_id: str) -> int:
         self._validate_collection(collection)
         db = self._require_connected()
@@ -588,3 +590,134 @@ class SearchStore:
             return 0
         rows = await table.query().select(["doc_id"]).to_list()
         return len({r["doc_id"] for r in rows})
+
+
+# ---------------------------------------------------------------------------
+# Private eval / diagnostic trace helper
+#
+# Raw-score semantics (LanceDB backend):
+#   - Vector search rows expose ``_distance`` (lower is better; kind="distance").
+#   - FTS rows expose ``_score`` (higher is better; BM25; kind="bm25").
+#   - RRF score is a separate fused rank score (higher is better).
+#
+# When a backend result row omits the expected raw-score field, the
+# corresponding score and score_kind are set to ``None`` — never fabricated.
+# When no FTS index exists the fts_* fields are all ``None``.
+# ---------------------------------------------------------------------------
+
+
+async def _hybrid_search_with_trace(
+    store: SearchStore,
+    collection: str,
+    query_vector: list[float],
+    query_text: str,
+    candidate_depth: int,
+) -> list[ScoredSearchCandidate]:
+    """Internal trace helper — returns full score provenance per candidate.
+
+    This is a private, eval/debug-only function.  It must NOT appear in the
+    public ``archon_search`` package exports.
+
+    Args:
+        store: A connected :class:`SearchStore` instance.
+        collection: Collection name (validated by the store).
+        query_vector: Embedding vector for vector search.
+        query_text: Text query for FTS search.
+        candidate_depth: Maximum number of raw candidates to fetch from each
+            search leg (analogous to ``fetch`` in :meth:`SearchStore.hybrid_search`).
+
+    Returns:
+        List of :class:`ScoredSearchCandidate` ordered by descending RRF score.
+        Ties are broken by ``chunk_id`` (ascending) for deterministic ordering.
+    """
+    store._validate_collection(collection)
+    db = store._require_connected()
+    try:
+        table = await db.open_table(collection)
+    except ValueError:
+        return []
+
+    # --- Vector search ---
+    vec_rows: list[dict[str, Any]] = await (
+        table.vector_search(query_vector).limit(candidate_depth).to_list()
+    )
+    # Map chunk_id → (rank, raw_distance | None)
+    vec_rank: dict[str, int] = {}
+    vec_raw: dict[str, float | None] = {}
+    for i, row in enumerate(vec_rows):
+        cid = row["chunk_id"]
+        vec_rank[cid] = i
+        raw = row.get("_distance")
+        vec_raw[cid] = float(raw) if raw is not None else None
+
+    # --- FTS search (degrades gracefully when no index) ---
+    fts_rows: list[dict[str, Any]] = []
+    fts_rank: dict[str, int] = {}
+    fts_raw: dict[str, float | None] = {}
+    try:
+        fts_q = await table.search(query_text, query_type="fts")
+        fts_rows = await fts_q.limit(candidate_depth).to_list()
+        for i, row in enumerate(fts_rows):
+            cid = row["chunk_id"]
+            fts_rank[cid] = i
+            raw = row.get("_score")
+            fts_raw[cid] = float(raw) if raw is not None else None
+    except Exception as exc:
+        exc_str = str(exc).lower()
+        if "index" in exc_str or "fts" in exc_str:
+            logger.warning(
+                "FTS index not available for collection %r, trace will have fts_score=None",
+                collection,
+            )
+        else:
+            raise
+
+    # --- Merge candidates ---
+    all_rows: dict[str, dict[str, Any]] = {r["chunk_id"]: r for r in vec_rows}
+    for r in fts_rows:
+        all_rows.setdefault(r["chunk_id"], r)
+
+    # --- Build ScoredSearchCandidate list ---
+    candidates: list[ScoredSearchCandidate] = []
+    for chunk_id, row in all_rows.items():
+        in_vec = chunk_id in vec_rank
+        in_fts = chunk_id in fts_rank
+
+        v_rank = vec_rank[chunk_id] if in_vec else None
+        v_score = vec_raw[chunk_id] if in_vec else None
+        # score_kind follows score: if raw score field was absent, kind is also None
+        v_kind: str | None = "distance" if (in_vec and v_score is not None) else None
+
+        f_rank = fts_rank[chunk_id] if in_fts else None
+        f_score = fts_raw[chunk_id] if in_fts else None
+        f_kind: str | None = "bm25" if (in_fts and f_score is not None) else None
+
+        rrf = 0.0
+        if in_vec:
+            rrf += _rrf_score(vec_rank[chunk_id])
+        if in_fts:
+            rrf += _rrf_score(fts_rank[chunk_id])
+
+        candidates.append(
+            ScoredSearchCandidate(
+                doc_id=row["doc_id"],
+                chunk_id=chunk_id,
+                text=row["text"],
+                source_path=row["source_path"],
+                score_breakdown=SearchScoreBreakdown(
+                    vector_rank=v_rank,
+                    vector_score=v_score,
+                    vector_score_kind=v_kind,
+                    fts_rank=f_rank,
+                    fts_score=f_score,
+                    fts_score_kind=f_kind,
+                    rrf_score=rrf,
+                    reranker_score=None,
+                ),
+                collection=collection,
+            )
+        )
+
+    # Stable sort: descending RRF, then ascending chunk_id for ties
+    candidates.sort(key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id))
+    return candidates
