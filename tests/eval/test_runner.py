@@ -9,8 +9,11 @@ import pytest
 from archon_search.eval.runner import (
     EvalLatencyCeilings,
     EvalQualityFloors,
+    EvalRuntimeConfig,
     EvalThresholds,
+    load_runtime_config,
     load_thresholds,
+    validate_routing_contract,
 )
 
 
@@ -116,3 +119,152 @@ def test_load_thresholds_rejects_wrong_type_for_routing_floor(tmp_path: Path) ->
     path = _write_toml(tmp_path, content)
     with pytest.raises(ValueError, match="routing_accuracy"):
         load_thresholds(path)
+
+
+# ---------------------------------------------------------------------------
+# EvalRuntimeConfig / load_runtime_config tests — Task 1.5
+# ---------------------------------------------------------------------------
+
+_VALID_RUNTIME_TOML = """
+[search]
+candidate_depth = 40
+return_depth = 20
+metric_depth = 10
+
+[routing]
+contract_enabled = true
+"""
+
+_COMMITTED_RUNTIME_TOML = Path(__file__).parent / "runtime.toml"
+
+
+def _write_runtime_toml(tmp_path: Path, content: str) -> Path:
+    p = tmp_path / "runtime.toml"
+    p.write_text(textwrap.dedent(content))
+    return p
+
+
+def test_load_runtime_config_reads_search_depths(tmp_path: Path) -> None:
+    """Valid TOML parses correctly into EvalRuntimeConfig."""
+    path = _write_runtime_toml(tmp_path, _VALID_RUNTIME_TOML)
+    cfg = load_runtime_config(path)
+
+    assert isinstance(cfg, EvalRuntimeConfig)
+    assert cfg.candidate_depth == 40
+    assert cfg.return_depth == 20
+    assert cfg.metric_depth == 10
+    assert cfg.routing_contract_enabled is True
+
+
+def test_committed_runtime_toml_exists_and_loads() -> None:
+    """The committed tests/eval/runtime.toml loads without error."""
+    assert _COMMITTED_RUNTIME_TOML.exists(), "tests/eval/runtime.toml must be committed"
+    cfg = load_runtime_config(_COMMITTED_RUNTIME_TOML)
+    assert isinstance(cfg, EvalRuntimeConfig)
+
+
+def test_committed_runtime_toml_uses_eval_depth_names() -> None:
+    """The committed runtime.toml uses the correct eval-specific depth key names."""
+    cfg = load_runtime_config(_COMMITTED_RUNTIME_TOML)
+    assert cfg.candidate_depth >= 1
+    assert cfg.return_depth >= 1
+    assert cfg.metric_depth >= 10
+
+
+def test_load_runtime_config_rejects_metric_depth_below_metric_k(tmp_path: Path) -> None:
+    """metric_depth < 10 raises ValueError (nDCG@10 requires depth >= 10)."""
+    content = """
+[search]
+candidate_depth = 40
+return_depth = 20
+metric_depth = 9
+
+[routing]
+contract_enabled = false
+"""
+    path = _write_runtime_toml(tmp_path, content)
+    with pytest.raises(ValueError, match="metric_depth"):
+        load_runtime_config(path)
+
+
+def test_load_runtime_config_rejects_return_depth_below_metric_depth(tmp_path: Path) -> None:
+    """return_depth < metric_depth raises ValueError."""
+    content = """
+[search]
+candidate_depth = 40
+return_depth = 9
+metric_depth = 10
+
+[routing]
+contract_enabled = false
+"""
+    path = _write_runtime_toml(tmp_path, content)
+    with pytest.raises(ValueError, match="return_depth"):
+        load_runtime_config(path)
+
+
+def test_load_runtime_config_rejects_candidate_depth_not_greater_than_return_depth(tmp_path: Path) -> None:
+    """candidate_depth <= return_depth raises ValueError."""
+    content = """
+[search]
+candidate_depth = 20
+return_depth = 20
+metric_depth = 10
+
+[routing]
+contract_enabled = false
+"""
+    path = _write_runtime_toml(tmp_path, content)
+    with pytest.raises(ValueError, match="candidate_depth"):
+        load_runtime_config(path)
+
+
+def test_runner_requires_routing_floor_when_routing_contract_enabled(tmp_path: Path) -> None:
+    """When routing_contract_enabled=True and thresholds.routing_accuracy is None, raise ValueError."""
+    runtime_path = _write_runtime_toml(tmp_path, _VALID_RUNTIME_TOML)
+    runtime_cfg = load_runtime_config(runtime_path)
+
+    # Thresholds with routing_accuracy=None (not set)
+    threshold_path = _write_toml(tmp_path, _FULL_QUALITY)
+    thresholds = load_thresholds(threshold_path)
+
+    assert thresholds.quality_floors.routing_accuracy is None
+    assert runtime_cfg.routing_contract_enabled is True
+
+    with pytest.raises(ValueError, match="routing_accuracy"):
+        validate_routing_contract(runtime_cfg, thresholds)
+
+
+def test_load_runtime_config_rejects_malformed_toml_syntax(tmp_path: Path) -> None:
+    """Invalid TOML syntax raises ValueError."""
+    path = tmp_path / "runtime.toml"
+    path.write_text("this is not valid toml ===\n[broken\n")
+    with pytest.raises(ValueError, match="[Ii]nvalid|[Pp]arse|TOML"):
+        load_runtime_config(path)
+
+
+def test_load_runtime_config_rejects_missing_search_table(tmp_path: Path) -> None:
+    """Missing [search] section raises ValueError."""
+    content = """
+[routing]
+contract_enabled = true
+"""
+    path = _write_runtime_toml(tmp_path, content)
+    with pytest.raises(ValueError, match="[Ss]earch"):
+        load_runtime_config(path)
+
+
+def test_load_runtime_config_rejects_wrong_type_for_depth_field(tmp_path: Path) -> None:
+    """Non-integer candidate_depth raises ValueError."""
+    content = """
+[search]
+candidate_depth = "forty"
+return_depth = 20
+metric_depth = 10
+
+[routing]
+contract_enabled = false
+"""
+    path = _write_runtime_toml(tmp_path, content)
+    with pytest.raises(ValueError, match="candidate_depth"):
+        load_runtime_config(path)
