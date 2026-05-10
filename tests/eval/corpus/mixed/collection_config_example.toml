@@ -1,0 +1,26 @@
+# Example collection configuration for archon-search
+
+[collections.code]
+description = "Python source code: utilities, algorithms, and system components"
+embedding_model = "bge-small-en-v1.5"
+chunk_size = 512
+chunk_overlap = 64
+watch = ["src/**/*.py", "lib/**/*.py"]
+
+[collections.docs]
+description = "Prose documentation: guides, references, ADRs, changelogs"
+embedding_model = "bge-small-en-v1.5"
+chunk_size = 512
+chunk_overlap = 64
+watch = ["docs/**/*.md", "README.md"]
+
+[collections.mixed]
+description = "Mixed content: ADRs with code samples, design documents with examples"
+embedding_model = "bge-small-en-v1.5"
+chunk_size = 512
+chunk_overlap = 64
+
+[routing]
+enabled = true
+strategy = "embedding"
+default_collection = "docs"

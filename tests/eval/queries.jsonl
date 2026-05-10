@@ -1,0 +1,27 @@
+{"query_id": "q-code-01", "text": "async HTTP client with retry logic and timeout", "collection": "code", "metric_scope": "retrieval"}
+{"query_id": "q-code-02", "text": "cosine similarity vector search", "collection": "code", "metric_scope": "retrieval"}
+{"query_id": "q-code-03", "text": "token bucket rate limiter asyncio", "collection": "code", "metric_scope": "retrieval"}
+{"query_id": "q-code-04", "text": "read and write JSONL files", "collection": "code", "metric_scope": "retrieval"}
+{"query_id": "q-code-05", "text": "load TOML config with environment variable overrides", "collection": "code", "metric_scope": "retrieval"}
+{"query_id": "q-code-06", "text": "split document text into overlapping chunks", "collection": "code", "metric_scope": "retrieval"}
+{"query_id": "q-code-07", "text": "LRU cache for embedding vectors", "collection": "code", "metric_scope": "retrieval"}
+{"query_id": "q-code-08", "text": "circuit breaker pattern for async calls", "collection": "code", "metric_scope": "retrieval"}
+{"query_id": "q-code-09", "text": "topological sort dependency graph cycle detection", "collection": "code", "metric_scope": "retrieval"}
+{"query_id": "q-code-10", "text": "rolling window mean and maximum statistics", "collection": "code", "metric_scope": "retrieval"}
+{"query_id": "q-docs-01", "text": "layered architecture domain driven design", "collection": "docs", "metric_scope": "retrieval"}
+{"query_id": "q-docs-02", "text": "how to install and run the server", "collection": "docs", "metric_scope": "retrieval"}
+{"query_id": "q-docs-03", "text": "configuration reference server port workers timeout", "collection": "docs", "metric_scope": "retrieval"}
+{"query_id": "q-docs-04", "text": "REST API endpoints authentication bearer token", "collection": "docs", "metric_scope": "retrieval"}
+{"query_id": "q-docs-05", "text": "production deployment checklist Docker systemd", "collection": "docs", "metric_scope": "retrieval"}
+{"query_id": "q-docs-06", "text": "HTTP error codes 429 rate limited retry backoff", "collection": "docs", "metric_scope": "retrieval"}
+{"query_id": "q-docs-07", "text": "test coverage minimum unit integration end-to-end pyramid", "collection": "docs", "metric_scope": "retrieval"}
+{"query_id": "q-docs-08", "text": "JWT authentication RBAC role based access control", "collection": "docs", "metric_scope": "retrieval"}
+{"query_id": "q-docs-09", "text": "database schema document chunk collection data model", "collection": "docs", "metric_scope": "retrieval"}
+{"query_id": "q-docs-10", "text": "Prometheus metrics latency histogram search requests", "collection": "docs", "metric_scope": "retrieval"}
+{"query_id": "q-mixed-01", "text": "LanceDB vector store HNSW index decision rationale", "collection": "mixed", "metric_scope": "retrieval"}
+{"query_id": "q-mixed-02", "text": "NDCG recall precision MRR evaluation metrics", "collection": "mixed", "metric_scope": "retrieval"}
+{"query_id": "q-mixed-03", "text": "bge embedding model benchmark NDCG selection", "collection": "mixed", "metric_scope": "retrieval"}
+{"query_id": "q-mixed-04", "text": "ingestion script bulk ingest httpx collection", "collection": "mixed", "metric_scope": "retrieval"}
+{"query_id": "q-mixed-05", "text": "health check endpoint 503 degraded subsystem", "collection": "mixed", "metric_scope": "retrieval"}
+{"query_id": "q-route-01", "text": "how to configure rate limiting for the API", "collection": null, "metric_scope": "routing"}
+{"query_id": "q-route-02", "text": "what embedding model should I use for code search", "collection": null, "metric_scope": "routing"}
