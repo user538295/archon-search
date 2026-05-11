@@ -56,6 +56,7 @@ class QueryEvalTrace:
     collection: str | None
     metric_scope: str
     results: list[EvalSearchResult] = field(default_factory=list)
+    pre_rerank_results: list[EvalSearchResult] | None = None
     router_correct: bool | None = None
     latency_ms: float = 0.0
 
