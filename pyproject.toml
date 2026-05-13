@@ -35,10 +35,18 @@ build-backend = "hatchling.build"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-addopts = "--cov=archon_search --cov-report=term-missing --cov-fail-under=85 -m 'not benchmark and not integration'"
+# --cov-fail-under=85 is intended for the default single-run invocation.
+# Split / matrix CI runs MUST combine coverage data (coverage combine) before
+# applying the fail-under threshold; otherwise the threshold should be passed
+# only on the combined report run, not on intermediate invocations.
+# `--no-cov` is a local-only override developers can pass on the CLI when
+# iterating; it must never be baked into addopts here.
+addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -m 'not live and not eval and not benchmark and not integration'"
 markers = [
     "benchmark: latency benchmark — requires a running archon-search server; skipped automatically when server is unreachable",
     "integration: integration tests requiring live infrastructure",
+    "eval: deterministic full-corpus FEAT-039 evaluation slice; excluded from default runs",
+    "live: tests that require live network or external services; excluded from default runs",
 ]
 
 [tool.uv]
