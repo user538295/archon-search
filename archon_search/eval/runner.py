@@ -683,6 +683,243 @@ async def run_eval_suite(
     )
 
 
+# ---------------------------------------------------------------------------
+# Task 3.4 — assert_thresholds + render_report
+# ---------------------------------------------------------------------------
+
+_QUALITY_FLOOR_FIELDS = (
+    "recall_at_1",
+    "recall_at_3",
+    "recall_at_5",
+    "mrr",
+    "ndcg_at_5",
+    "ndcg_at_10",
+    "routing_accuracy",
+)
+
+
+def _fmt(value: float | None) -> str:
+    return f"{value:.4f}" if isinstance(value, (int, float)) else "n/a"
+
+
+def assert_thresholds(report: EvalReport) -> None:
+    """Gate an :class:`EvalReport` against its configured thresholds.
+
+    Raises :class:`AssertionError` on:
+    - Missing thresholds (gating requires explicit thresholds).
+    - Any required quality metric below its floor.
+    - Any required quality metric ``None`` while a floor is configured.
+    - Any gated latency metric above its ceiling.
+    - Baseline present with ``thresholds_hash is None`` while gating is configured
+      (calibration-only baseline cannot serve as a gating baseline).
+    - Any quality floor set more than ``max_floor_drop_without_waiver`` below the
+      corresponding baseline metric without a named waiver in
+      ``baseline.waiver_ids``.
+
+    Skipped without error:
+    - Metric ``None`` AND floor ``None`` (note appended internally).
+    - Latency percentile with no ceiling configured.
+    """
+    if report.thresholds is None:
+        raise AssertionError(
+            "Cannot gate eval results: no thresholds configured. "
+            "Pass --thresholds <path> or set thresholds_path to enable gating. "
+            "Report-only (calibration) mode does not assert."
+        )
+
+    thresholds = report.thresholds
+    baseline = report.baseline
+
+    # Calibration-only baseline cannot gate.
+    if baseline is not None and baseline.thresholds_hash is None:
+        raise AssertionError(
+            "Baseline is calibration-only (thresholds_hash is None) but gating "
+            "thresholds are configured. Refresh the baseline against the current "
+            "thresholds (accept it as a gating baseline) before enabling gating."
+        )
+
+    failures: list[str] = []
+    floors = thresholds.quality_floors
+    metrics = report.metrics
+
+    # Quality floors --------------------------------------------------------
+    for field_name in _QUALITY_FLOOR_FIELDS:
+        floor: float | None = getattr(floors, field_name)
+        actual: float | None = getattr(metrics, field_name)
+        baseline_value: float | None = (
+            baseline.metrics.get(field_name) if baseline is not None else None
+        )
+
+        if floor is None:
+            if actual is None:
+                report.notes.append(
+                    f"{field_name}: metric is None and no floor configured — skipped."
+                )
+            continue
+
+        if actual is None:
+            failures.append(
+                f"{field_name}: metric is None but floor={floor:.4f} is configured "
+                f"(baseline={_fmt(baseline_value)}). Configure the metric or remove "
+                f"the floor."
+            )
+            continue
+
+        if actual < floor:
+            delta_threshold = actual - floor
+            delta_baseline = (
+                actual - baseline_value if baseline_value is not None else None
+            )
+            failures.append(
+                f"{field_name}: actual={actual:.4f} < floor={floor:.4f} "
+                f"(delta_from_threshold={delta_threshold:+.4f}, "
+                f"baseline={_fmt(baseline_value)}, "
+                f"delta_from_baseline="
+                f"{f'{delta_baseline:+.4f}' if delta_baseline is not None else 'n/a'})"
+            )
+
+        # Floor-drop policy vs baseline
+        if baseline_value is not None:
+            drop = baseline_value - floor
+            if drop > thresholds.max_floor_drop_without_waiver:
+                if field_name not in baseline.waiver_ids:
+                    failures.append(
+                        f"{field_name}: floor={floor:.4f} is {drop:+.4f} below "
+                        f"baseline={baseline_value:.4f} which exceeds "
+                        f"max_floor_drop_without_waiver="
+                        f"{thresholds.max_floor_drop_without_waiver:.4f}. "
+                        f"Add a named waiver to baseline.waiver_ids[{field_name!r}]."
+                    )
+
+    # Latency ceilings ------------------------------------------------------
+    ceilings = thresholds.latency_ceilings
+    for field_name in ("latency_p50_ms", "latency_p95_ms"):
+        ceiling: float | None = getattr(ceilings, field_name)
+        actual_l: float = getattr(metrics, field_name)
+        baseline_l: float | None = (
+            baseline.metrics.get(field_name) if baseline is not None else None
+        )
+        if ceiling is None:
+            continue
+        if actual_l > ceiling:
+            delta_threshold = actual_l - ceiling
+            delta_baseline = (
+                actual_l - baseline_l if baseline_l is not None else None
+            )
+            failures.append(
+                f"{field_name}: actual={actual_l:.2f}ms > ceiling={ceiling:.2f}ms "
+                f"(delta_from_threshold={delta_threshold:+.2f}, "
+                f"baseline={_fmt(baseline_l)}, "
+                f"delta_from_baseline="
+                f"{f'{delta_baseline:+.2f}' if delta_baseline is not None else 'n/a'})"
+            )
+
+    if failures:
+        raise AssertionError(
+            "Eval thresholds violated:\n  - " + "\n  - ".join(failures)
+        )
+
+
+_RENDERED_QUALITY_FIELDS = (
+    "recall_at_1",
+    "recall_at_3",
+    "recall_at_5",
+    "mrr",
+    "ndcg_at_5",
+    "ndcg_at_10",
+    "reranker_lift",
+    "routing_accuracy",
+)
+
+_RENDERED_LATENCY_FIELDS = ("latency_p50_ms", "latency_p95_ms")
+
+
+def render_report(report: EvalReport) -> str:
+    """Render *report* to a human-readable text block.
+
+    Includes all metric categories, baseline deltas (when a baseline is present),
+    notes (including routing skip), and a footer documenting that latency was
+    measured using deterministic eval backends.
+    """
+    metrics = report.metrics
+    baseline = report.baseline
+    lines: list[str] = []
+
+    lines.append("=== Archon Search Eval Report ===")
+    lines.append(f"generated_at: {report.generated_at.isoformat()}")
+    lines.append(f"corpus_root:  {report.corpus_root}")
+    lines.append(
+        f"queries:      {report.query_count} "
+        f"(routing_disabled={report.routing_disabled_queries}, "
+        f"routing_bypassed={report.routing_bypassed_queries})"
+    )
+    lines.append(f"documents:    {report.document_count}")
+    lines.append("")
+    lines.append("Quality metrics:")
+    for field_name in _RENDERED_QUALITY_FIELDS:
+        actual = getattr(metrics, field_name)
+        line = f"  {field_name:18s} = {_fmt(actual)}"
+        if baseline is not None:
+            bv = baseline.metrics.get(field_name)
+            if bv is not None and isinstance(actual, (int, float)):
+                delta = actual - bv
+                line += f"  (baseline={_fmt(bv)}, delta={delta:+.4f})"
+            elif bv is not None:
+                line += f"  (baseline={_fmt(bv)})"
+        lines.append(line)
+
+    if metrics.routing_accuracy is None:
+        lines.append("  routing_accuracy: skipped (no routing-scope queries or routing disabled)")
+
+    lines.append("")
+    lines.append("Latency (ms):")
+    for field_name in _RENDERED_LATENCY_FIELDS:
+        actual = getattr(metrics, field_name)
+        line = f"  {field_name:18s} = {actual:.2f}"
+        if baseline is not None:
+            bv = baseline.metrics.get(field_name)
+            if bv is not None:
+                delta = actual - bv
+                line += f"  (baseline={bv:.2f}, delta={delta:+.2f})"
+        lines.append(line)
+
+    if report.thresholds is not None:
+        lines.append("")
+        lines.append("Configured floors:")
+        floors = report.thresholds.quality_floors
+        for field_name in _QUALITY_FLOOR_FIELDS:
+            v = getattr(floors, field_name)
+            lines.append(f"  {field_name:18s} >= {_fmt(v)}")
+        c = report.thresholds.latency_ceilings
+        lines.append("Configured latency ceilings:")
+        for field_name in _RENDERED_LATENCY_FIELDS:
+            v = getattr(c, field_name)
+            lines.append(f"  {field_name:18s} <= {_fmt(v)}")
+
+    if report.notes:
+        lines.append("")
+        lines.append("Notes:")
+        for n in report.notes:
+            lines.append(f"  - {n}")
+
+    if baseline is not None:
+        lines.append("")
+        lines.append(
+            f"Baseline: eval_hash={baseline.eval_hash}, "
+            f"thresholds_hash={baseline.thresholds_hash}, "
+            f"command={baseline.command!r}"
+        )
+
+    lines.append("")
+    lines.append(
+        "Note: latency was measured using deterministic eval backends "
+        "(EvalEmbedderBackend, EvalRerankerBackend); values are not comparable "
+        "to production runtime latency."
+    )
+
+    return "\n".join(lines)
+
+
 async def _execute_retrieval_query(
     *,
     pipeline,

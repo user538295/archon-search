@@ -962,3 +962,279 @@ async def test_eval_runner_retrieval_queries_with_routing_contribute_to_routing_
 
     # Routing accuracy is computed across ALL non-bypassed queries — must be set.
     assert report.metrics.routing_accuracy is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 3.4 — assert_thresholds + render_report tests
+# ---------------------------------------------------------------------------
+
+from archon_search.eval.types import EvalMetrics
+
+
+def _make_metrics(
+    *,
+    recall_at_1: float = 0.70,
+    recall_at_3: float = 0.80,
+    recall_at_5: float = 0.85,
+    mrr: float = 0.75,
+    ndcg_at_5: float = 0.78,
+    ndcg_at_10: float = 0.80,
+    reranker_lift: float | None = 0.05,
+    routing_accuracy: float | None = 0.90,
+    latency_p50_ms: float = 25.0,
+    latency_p95_ms: float = 80.0,
+) -> EvalMetrics:
+    return EvalMetrics(
+        recall_at_1=recall_at_1,
+        recall_at_3=recall_at_3,
+        recall_at_5=recall_at_5,
+        mrr=mrr,
+        ndcg_at_5=ndcg_at_5,
+        ndcg_at_10=ndcg_at_10,
+        reranker_lift=reranker_lift,
+        routing_accuracy=routing_accuracy,
+        latency_p50_ms=latency_p50_ms,
+        latency_p95_ms=latency_p95_ms,
+    )
+
+
+def _make_quality_floors(**overrides) -> EvalQualityFloors:
+    defaults: dict[str, float | None] = dict(
+        recall_at_1=0.60,
+        recall_at_3=0.75,
+        recall_at_5=0.80,
+        mrr=0.65,
+        ndcg_at_5=0.70,
+        ndcg_at_10=0.72,
+        routing_accuracy=None,
+    )
+    defaults.update(overrides)
+    return EvalQualityFloors(**defaults)
+
+
+def _make_runtime_cfg() -> EvalRuntimeConfig:
+    return EvalRuntimeConfig(
+        candidate_depth=12,
+        return_depth=10,
+        metric_depth=10,
+        routing_contract_enabled=False,
+    )
+
+
+def _make_report(
+    *,
+    metrics: EvalMetrics | None = None,
+    thresholds: EvalThresholds | None = None,
+    baseline: EvalBaseline | None = None,
+    notes: list[str] | None = None,
+) -> EvalReport:
+    return EvalReport(
+        metrics=metrics if metrics is not None else _make_metrics(),
+        traces=[],
+        corpus_root=Path("/tmp/eval"),
+        runtime_config=_make_runtime_cfg(),
+        thresholds=thresholds,
+        baseline=baseline,
+        notes=notes or [],
+        routing_disabled_queries=0,
+        routing_bypassed_queries=0,
+        query_count=0,
+        document_count=0,
+    )
+
+
+from archon_search.eval.runner import assert_thresholds, render_report
+
+
+def test_run_eval_suite_report_only_without_thresholds() -> None:
+    """When thresholds is None, render_report still produces a report and
+    assert_thresholds raises with an actionable message."""
+    report = _make_report(thresholds=None)
+    out = render_report(report)
+    assert "recall_at_1" in out.lower() or "recall@1" in out.lower()
+
+
+def test_assert_thresholds_requires_thresholds_for_gating() -> None:
+    report = _make_report(thresholds=None)
+    with pytest.raises(AssertionError, match="threshold"):
+        assert_thresholds(report)
+
+
+def test_assert_thresholds_passes_on_synthetic_passing_report() -> None:
+    thresholds = EvalThresholds(quality_floors=_make_quality_floors())
+    report = _make_report(thresholds=thresholds)
+    assert_thresholds(report)  # should not raise
+
+
+def test_assert_thresholds_reports_quality_floor_regressions() -> None:
+    # actual recall_at_1=0.40 < floor=0.60
+    metrics = _make_metrics(recall_at_1=0.40)
+    thresholds = EvalThresholds(quality_floors=_make_quality_floors())
+    baseline = EvalBaseline(
+        eval_hash="h1",
+        metrics={"recall_at_1": 0.62},
+        runtime_config_hash="r1",
+        command="archon-search eval run",
+        thresholds_hash="t1",
+    )
+    report = _make_report(metrics=metrics, thresholds=thresholds, baseline=baseline)
+    with pytest.raises(AssertionError) as exc_info:
+        assert_thresholds(report)
+    msg = str(exc_info.value)
+    assert "recall_at_1" in msg
+    assert "0.4" in msg  # actual
+    assert "0.6" in msg  # threshold
+    # delta-from-threshold and delta-from-baseline both present
+    assert "baseline" in msg.lower()
+    assert "delta" in msg.lower() or "Δ" in msg
+
+
+def test_render_report_shows_baseline_deltas() -> None:
+    metrics = _make_metrics(recall_at_1=0.70)
+    baseline = EvalBaseline(
+        eval_hash="h1",
+        metrics={"recall_at_1": 0.65, "mrr": 0.70},
+        runtime_config_hash="r1",
+        command="archon-search eval run",
+        thresholds_hash="t1",
+    )
+    report = _make_report(metrics=metrics, baseline=baseline)
+    out = render_report(report)
+    assert "baseline" in out.lower()
+    # delta of +0.05 should appear
+    assert "0.05" in out or "+0.05" in out
+
+
+def test_assert_thresholds_fails_when_required_metric_is_none() -> None:
+    # routing_accuracy floor set but metric is None
+    floors = _make_quality_floors(routing_accuracy=0.80)
+    thresholds = EvalThresholds(quality_floors=floors)
+    metrics = _make_metrics(routing_accuracy=None)
+    report = _make_report(metrics=metrics, thresholds=thresholds)
+    with pytest.raises(AssertionError, match="routing_accuracy"):
+        assert_thresholds(report)
+
+
+def test_assert_thresholds_skips_omitted_floor_and_none_metric() -> None:
+    # routing_accuracy floor is None AND metric is None — should skip, not fail
+    floors = _make_quality_floors(routing_accuracy=None)
+    thresholds = EvalThresholds(quality_floors=floors)
+    metrics = _make_metrics(routing_accuracy=None)
+    report = _make_report(metrics=metrics, thresholds=thresholds)
+    assert_thresholds(report)  # no raise
+    assert any("routing_accuracy" in note and "skipped" in note for note in report.notes)
+
+
+def test_assert_thresholds_reports_latency_ceiling_regressions_when_enabled() -> None:
+    thresholds = EvalThresholds(
+        quality_floors=_make_quality_floors(),
+        latency_ceilings=EvalLatencyCeilings(latency_p50_ms=20.0, latency_p95_ms=60.0),
+    )
+    metrics = _make_metrics(latency_p50_ms=25.0, latency_p95_ms=80.0)
+    report = _make_report(metrics=metrics, thresholds=thresholds)
+    with pytest.raises(AssertionError) as exc_info:
+        assert_thresholds(report)
+    msg = str(exc_info.value)
+    assert "latency_p50_ms" in msg or "latency_p95_ms" in msg
+    assert "25" in msg or "80" in msg
+
+
+def test_assert_thresholds_does_not_fail_report_only_latency() -> None:
+    # Latency ceilings unset — even huge latency must not fail
+    thresholds = EvalThresholds(
+        quality_floors=_make_quality_floors(),
+        latency_ceilings=EvalLatencyCeilings(),
+    )
+    metrics = _make_metrics(latency_p50_ms=9999.0, latency_p95_ms=99999.0)
+    report = _make_report(metrics=metrics, thresholds=thresholds)
+    assert_thresholds(report)  # no raise
+
+
+def test_render_report_mentions_eval_backend_latency() -> None:
+    thresholds = EvalThresholds(quality_floors=_make_quality_floors())
+    report = _make_report(thresholds=thresholds)
+    out = render_report(report)
+    assert "deterministic" in out.lower() and "backend" in out.lower()
+
+
+def test_assert_thresholds_enforces_max_floor_drop_policy() -> None:
+    # Floor set 0.10 below baseline metric (>0.05 default); no waiver → fail
+    floors = _make_quality_floors(recall_at_3=0.60)
+    thresholds = EvalThresholds(
+        quality_floors=floors, max_floor_drop_without_waiver=0.05
+    )
+    baseline = EvalBaseline(
+        eval_hash="h1",
+        metrics={"recall_at_3": 0.75},  # baseline 0.75, floor 0.60 → drop 0.15
+        runtime_config_hash="r1",
+        command="cmd",
+        thresholds_hash="t1",
+    )
+    # Metric itself passes the (lowered) floor
+    metrics = _make_metrics(recall_at_3=0.70)
+    report = _make_report(metrics=metrics, thresholds=thresholds, baseline=baseline)
+    with pytest.raises(AssertionError, match="waiver"):
+        assert_thresholds(report)
+
+    # With a waiver named for that metric → passes
+    baseline_waived = EvalBaseline(
+        eval_hash="h1",
+        metrics={"recall_at_3": 0.75},
+        runtime_config_hash="r1",
+        command="cmd",
+        thresholds_hash="t1",
+        waiver_ids={"recall_at_3": "WAIVER-1"},
+    )
+    report2 = _make_report(metrics=metrics, thresholds=thresholds, baseline=baseline_waived)
+    assert_thresholds(report2)
+
+
+def test_assert_thresholds_rejects_calibration_only_baseline() -> None:
+    # baseline.thresholds_hash is None and thresholds is set → fail
+    thresholds = EvalThresholds(quality_floors=_make_quality_floors())
+    baseline = EvalBaseline(
+        eval_hash="h1",
+        metrics={"recall_at_1": 0.70},
+        runtime_config_hash="r1",
+        command="cmd",
+        thresholds_hash=None,
+    )
+    report = _make_report(thresholds=thresholds, baseline=baseline)
+    with pytest.raises(AssertionError, match="calibration"):
+        assert_thresholds(report)
+
+
+def test_assert_thresholds_with_none_thresholds_hash_and_no_current_thresholds_renders_report_only() -> None:
+    baseline = EvalBaseline(
+        eval_hash="h1",
+        metrics={"recall_at_1": 0.70},
+        runtime_config_hash="r1",
+        command="cmd",
+        thresholds_hash=None,
+    )
+    report = _make_report(thresholds=None, baseline=baseline)
+    out = render_report(report)
+    assert out  # renders successfully
+    # And assert_thresholds with no thresholds still raises (gating not configured)
+    with pytest.raises(AssertionError):
+        assert_thresholds(report)
+
+
+def test_render_report_includes_all_metric_categories() -> None:
+    metrics = _make_metrics(routing_accuracy=None)
+    report = _make_report(metrics=metrics, notes=["Routing accuracy not computed."])
+    out = render_report(report).lower()
+    for key in (
+        "recall_at_1",
+        "recall_at_3",
+        "recall_at_5",
+        "mrr",
+        "ndcg_at_5",
+        "ndcg_at_10",
+        "reranker_lift",
+        "latency_p50_ms",
+        "latency_p95_ms",
+    ):
+        assert key in out, f"missing {key} in rendered report"
+    # routing_accuracy: either the value or an explicit skip note
+    assert "routing" in out
