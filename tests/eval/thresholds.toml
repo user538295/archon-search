@@ -1,0 +1,27 @@
+# Eval quality floors for FEAT-039 Search Offline Evaluation Harness.
+#
+# Floors derived directly from the measured baseline committed in
+# tests/eval/baselines/baseline.md (calibration run on the committed corpus
+# + runtime.toml + deterministic eval backends). Floors are set equal to the
+# measured baseline so any regression in retrieval quality fails the gated
+# eval. Latency ceilings are intentionally omitted — latency is report-only
+# until production-comparable backends are wired in.
+#
+# Refresh procedure: when eval-determinism inputs change (documents.jsonl,
+# corpus files, queries.jsonl, labels.jsonl, routing/collections.jsonl,
+# eval/backends.py, runtime.toml), re-run the calibration command recorded
+# in baseline.json and update both baseline.json/.md and this file together.
+
+[quality_floors]
+recall_at_1     = 0.86
+recall_at_3     = 0.94
+recall_at_5     = 0.98
+mrr             = 1.0
+ndcg_at_5       = 0.9756955953575489
+ndcg_at_10      = 0.9793677493892313
+routing_accuracy = 0.9259259259259259
+
+[policy]
+# Floors lowered more than this delta below the measured baseline require a
+# reviewed waiver entry in baseline.json under "waiver_ids".
+max_floor_drop_without_waiver = 0.05

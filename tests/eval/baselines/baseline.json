@@ -1,0 +1,19 @@
+{
+  "command": "pytest -m eval tests/eval/test_eval_suite.py::test_eval_suite_report_only_smoke",
+  "eval_hash": "fcd2cc206d7102792a8c118c4fd66b978fdbfb152630b1927371d097a692cbbe",
+  "metrics": {
+    "latency_p50_ms": null,
+    "latency_p95_ms": null,
+    "mrr": 1.0,
+    "ndcg_at_10": 0.9793677493892313,
+    "ndcg_at_5": 0.9756955953575489,
+    "recall_at_1": 0.86,
+    "recall_at_3": 0.94,
+    "recall_at_5": 0.98,
+    "reranker_lift": 0.02302741700728006,
+    "routing_accuracy": 0.9259259259259259
+  },
+  "runtime_config_hash": "e8e138d46d15f008184d43e6a4b8e41837ed0d84cbf474b5f2bb0267457aea4d",
+  "thresholds_hash": "e3734b0a8f5491b5db89f1ffccb8d13541497ab736021ac362f6ff008de3661b",
+  "waiver_ids": {}
+}
