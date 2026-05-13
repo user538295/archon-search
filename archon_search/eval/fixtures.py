@@ -49,6 +49,7 @@ class EvalQuery:
     text: str
     collection: str | None
     metric_scope: Literal["retrieval", "routing"]
+    routing_bypass: bool = False
 
     def __post_init__(self) -> None:
         if self.metric_scope not in _VALID_METRIC_SCOPES:
@@ -210,6 +211,7 @@ def load_eval_corpus(root: Path) -> EvalCorpus:
                 text=row["text"],
                 collection=collection,
                 metric_scope=row["metric_scope"],
+                routing_bypass=bool(row.get("routing_bypass", False)),
             )
         )
 
