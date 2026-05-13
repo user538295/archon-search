@@ -15,9 +15,12 @@ import pytest
 from archon_search._diagnostics import SearchScoreBreakdown
 from archon_search.eval.fixtures import RelevanceLabel
 from archon_search.eval.metrics import (
+    compute_latency_percentiles,
     compute_mrr,
     compute_ndcg_at_k,
     compute_recall_at_k,
+    compute_reranker_lift,
+    compute_routing_accuracy,
     deduplicate_to_doc_rankings,
 )
 from archon_search.eval.types import EvalSearchResult, QueryEvalTrace
@@ -592,3 +595,146 @@ def test_ndcg_all_zero_grades_returns_zero() -> None:
     ]
     labels_mixed = _labels(("q1", "docA", 0), ("q2", "docD", 1))
     assert compute_ndcg_at_k(traces_mixed, labels_mixed, k=1) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Task 3.2 — Routing, reranker-lift, and latency metrics
+# ---------------------------------------------------------------------------
+
+def _routing_trace(
+    query_id: str,
+    *,
+    router_correct: bool | None,
+    metric_scope: str = "retrieval",
+) -> QueryEvalTrace:
+    return QueryEvalTrace(
+        query_id=query_id,
+        query_text=f"query {query_id}",
+        collection="test",
+        metric_scope=metric_scope,
+        results=[],
+        router_correct=router_correct,
+    )
+
+
+def test_compute_reranker_lift() -> None:
+    """Reranker lift is post - pre nDCG."""
+    assert compute_reranker_lift(0.4, 0.7) == pytest.approx(0.3)
+    assert compute_reranker_lift(0.5, 0.5) == pytest.approx(0.0)
+
+
+def test_compute_reranker_lift_is_negative_when_reranking_hurts() -> None:
+    """Negative lift is valid (report-only)."""
+    assert compute_reranker_lift(0.8, 0.6) == pytest.approx(-0.2)
+
+
+def test_compute_routing_accuracy_returns_none_when_not_enabled() -> None:
+    """Routing accuracy returns None when routing contract is disabled."""
+    traces = [_routing_trace("q1", router_correct=True)]
+    assert compute_routing_accuracy(traces, routing_contract_enabled=False) is None
+
+
+def test_compute_routing_accuracy_returns_none_when_all_queries_bypassed() -> None:
+    """When all queries bypass routing, accuracy is None."""
+    traces = [
+        _routing_trace("q1", router_correct=None),
+        _routing_trace("q2", router_correct=None),
+    ]
+    assert compute_routing_accuracy(traces, routing_contract_enabled=True) is None
+
+
+def test_compute_routing_accuracy_skips_bypassed_queries() -> None:
+    """Bypassed queries (router_correct=None) are excluded from the denominator."""
+    traces = [
+        _routing_trace("q1", router_correct=True),
+        _routing_trace("q2", router_correct=None),  # bypassed — skipped
+        _routing_trace("q3", router_correct=False),
+    ]
+    # 1 of 2 non-bypassed → 0.5
+    assert compute_routing_accuracy(traces, routing_contract_enabled=True) == pytest.approx(0.5)
+
+
+def test_compute_routing_accuracy_zero_when_all_non_bypassed_queries_fail() -> None:
+    """All-fail returns 0.0."""
+    traces = [
+        _routing_trace("q1", router_correct=False),
+        _routing_trace("q2", router_correct=False),
+    ]
+    assert compute_routing_accuracy(traces, routing_contract_enabled=True) == pytest.approx(0.0)
+
+
+def test_compute_routing_accuracy_one_when_all_non_bypassed_queries_pass() -> None:
+    """All-pass returns 1.0."""
+    traces = [
+        _routing_trace("q1", router_correct=True, metric_scope="retrieval"),
+        _routing_trace("q2", router_correct=True, metric_scope="routing"),
+    ]
+    assert compute_routing_accuracy(traces, routing_contract_enabled=True) == pytest.approx(1.0)
+
+
+def test_compute_routing_accuracy_mixed_pass_fail() -> None:
+    """Mixed pass/fail across both metric_scope values yields the correct fraction."""
+    traces = [
+        _routing_trace("q1", router_correct=True, metric_scope="retrieval"),
+        _routing_trace("q2", router_correct=False, metric_scope="retrieval"),
+        _routing_trace("q3", router_correct=True, metric_scope="routing"),
+        _routing_trace("q4", router_correct=False, metric_scope="routing"),
+        _routing_trace("q5", router_correct=None, metric_scope="retrieval"),  # bypassed
+    ]
+    # 2 / 4 non-bypassed pass → 0.5
+    assert compute_routing_accuracy(traces, routing_contract_enabled=True) == pytest.approx(0.5)
+
+
+def test_compute_latency_percentiles_empty_input() -> None:
+    """Empty list returns (0.0, 0.0) without raising."""
+    assert compute_latency_percentiles([]) == (0.0, 0.0)
+
+
+def test_compute_latency_percentiles_single_sample() -> None:
+    """n=1 returns that sample for both p50 and p95."""
+    assert compute_latency_percentiles([42.0]) == (42.0, 42.0)
+
+
+def test_compute_latency_percentiles() -> None:
+    """Nearest-rank p50/p95 stable for fixed inputs."""
+    # n=10: p50 → rank=ceil(0.5*10)=5 → index 4; p95 → rank=ceil(0.95*10)=10 → index 9
+    latencies = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+    p50, p95 = compute_latency_percentiles(latencies)
+    assert p50 == pytest.approx(5.0)
+    assert p95 == pytest.approx(10.0)
+
+
+def test_compute_latency_percentiles_nearest_rank_small_n() -> None:
+    """Small n: nearest-rank picks the correct sorted-index sample."""
+    # n=3: p50 → rank=ceil(0.5*3)=2 → index 1; p95 → rank=ceil(0.95*3)=3 → index 2
+    latencies = [10.0, 20.0, 30.0]
+    p50, p95 = compute_latency_percentiles(latencies)
+    assert p50 == pytest.approx(20.0)
+    assert p95 == pytest.approx(30.0)
+
+    # Unsorted input must still produce sorted-rank result.
+    latencies_unsorted = [30.0, 10.0, 20.0]
+    p50u, p95u = compute_latency_percentiles(latencies_unsorted)
+    assert p50u == pytest.approx(20.0)
+    assert p95u == pytest.approx(30.0)
+
+
+def test_compute_latency_percentiles_exact_integer_boundary() -> None:
+    """Exact integer boundaries must not be bumped by floating-point error.
+
+    - n=2, p50: rank=ceil(0.5*2)=1 → index 0
+    - n=4, p50: rank=ceil(0.5*4)=2 → index 1
+    - n=20, p95: rank=ceil(0.95*20)=19 → index 18 (NOT 19 due to 19.0000...0004)
+    """
+    # n=2 p50
+    p50_2, _ = compute_latency_percentiles([100.0, 200.0])
+    assert p50_2 == pytest.approx(100.0)
+
+    # n=4 p50
+    p50_4, _ = compute_latency_percentiles([10.0, 20.0, 30.0, 40.0])
+    assert p50_4 == pytest.approx(20.0)
+
+    # n=20 p95 — must yield index 18 (value 19.0), not index 19 (value 20.0)
+    latencies20 = [float(i) for i in range(1, 21)]  # 1.0 .. 20.0
+    _, p95_20 = compute_latency_percentiles(latencies20)
+    assert p95_20 == pytest.approx(19.0)

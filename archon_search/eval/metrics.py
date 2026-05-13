@@ -18,8 +18,11 @@ nDCG formula (0-indexed rank i):
 """
 from __future__ import annotations
 
+import logging
 import math
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 from archon_search.eval.fixtures import RelevanceLabel
 from archon_search.eval.types import EvalSearchResult, QueryEvalTrace
@@ -223,3 +226,73 @@ def compute_ndcg_at_k(
     if not per_query_ndcg:
         return 0.0
     return sum(per_query_ndcg) / len(per_query_ndcg)
+
+
+def compute_reranker_lift(pre_rerank_ndcg: float, post_rerank_ndcg: float) -> float:
+    """Return post - pre nDCG (report-only; negative values are valid).
+
+    Args:
+        pre_rerank_ndcg: nDCG@k computed on pre-rerank results.
+        post_rerank_ndcg: nDCG@k computed on post-rerank results.
+
+    Returns:
+        The arithmetic lift ``post_rerank_ndcg - pre_rerank_ndcg``.
+    """
+    return post_rerank_ndcg - pre_rerank_ndcg
+
+
+def compute_routing_accuracy(
+    traces: list[QueryEvalTrace],
+    *,
+    routing_contract_enabled: bool,
+) -> float | None:
+    """Fraction of non-bypassed queries with ``router_correct=True``.
+
+    Args:
+        traces: Query execution traces (both ``retrieval`` and ``routing`` scopes).
+        routing_contract_enabled: Whether routing is enabled for this run.
+
+    Returns:
+        Routing accuracy in [0.0, 1.0], or ``None`` when routing is disabled or
+        every trace bypasses routing (``router_correct is None``).
+    """
+    if not routing_contract_enabled:
+        return None
+
+    non_bypassed = [t for t in traces if t.router_correct is not None]
+    if not non_bypassed:
+        return None
+
+    correct = sum(1 for t in non_bypassed if t.router_correct)
+    return correct / len(non_bypassed)
+
+
+def compute_latency_percentiles(latencies_ms: list[float]) -> tuple[float, float]:
+    """Compute (p50, p95) using the nearest-rank method.
+
+    Nearest-rank: ``rank = ceil(p/100 * n)``; index = ``rank - 1`` over the
+    ascending-sorted samples. Floating-point boundary cases (e.g. ``0.95 * 20
+    = 19.000000000000004``) are stabilised with a small rounding before
+    ``ceil`` to avoid off-by-one bumps.
+
+    Args:
+        latencies_ms: Per-query latencies in milliseconds.
+
+    Returns:
+        ``(p50, p95)`` in milliseconds. Returns ``(0.0, 0.0)`` for an empty
+        input (logged as a warning).
+    """
+    if not latencies_ms:
+        logger.warning("compute_latency_percentiles: empty input, returning (0.0, 0.0)")
+        return (0.0, 0.0)
+
+    sorted_latencies = sorted(latencies_ms)
+    n = len(sorted_latencies)
+
+    def _at(p: float) -> float:
+        # Round to 9 dp before ceil to absorb fp drift like 19.000000000000004.
+        rank = int(math.ceil(round(p / 100.0 * n, 9)))
+        rank = max(1, min(rank, n))
+        return sorted_latencies[rank - 1]
+
+    return (_at(50.0), _at(95.0))
