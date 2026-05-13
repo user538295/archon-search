@@ -952,6 +952,24 @@ async def _execute_retrieval_query(
     pre_mapped = [_map_result(r, path_to_fixture, corpus_root) for r in pre_raw]
     post_mapped = [_map_result(r, path_to_fixture, corpus_root) for r in post_raw]
 
+    # Deterministic tie-breaking on equal scores (FEAT-039 spec): primary key
+    # is the ranking score (descending); ties break by doc_id then chunk_id
+    # (ascending). Pre-rerank uses rrf_score; post-rerank uses reranker_score
+    # when available, falling back to rrf_score. LanceDB tie ordering can
+    # differ between cold and warm runs — this finalization pass guarantees
+    # determinism in the eval harness without touching production search.
+    def _pre_key(r: EvalSearchResult) -> tuple[float, str, str]:
+        return (-r.score_breakdown.rrf_score, r.doc_id, r.chunk_id)
+
+    def _post_key(r: EvalSearchResult) -> tuple[float, str, str]:
+        score = r.score_breakdown.reranker_score
+        if score is None:
+            score = r.score_breakdown.rrf_score
+        return (-score, r.doc_id, r.chunk_id)
+
+    pre_mapped.sort(key=_pre_key)
+    post_mapped.sort(key=_post_key)
+
     # Under-depth diagnostic — based on post-rerank unique-doc count vs metric_depth,
     # gated by per-collection fixture-corpus size.
     available = per_col_unique.get(query.collection, 0)
