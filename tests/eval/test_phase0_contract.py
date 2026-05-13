@@ -312,7 +312,7 @@ PHASE0_CONTRACT = {
     # 5. Path-filtered PR workflow — no .github/workflows directory exists in this monorepo.
     #    This is a partial fulfillment: release-only gating is in place but no PR-level
     #    path-filtered workflow triggers the eval gate on every PR touching packages/archon-search/.
-    "pr_eval_gate_status": "absent — no .github/workflows directory exists; partial fulfillment only",
+    "pr_eval_gate_status": "present — .github/workflows/archon-search-pr.yml and archon-search-release.yml provide path-filtered eval gating",
     # 6. Release gate placement — guards in release.sh (branch/dirty-tree checks) run before
     #    the first mutation at line ~84 (sed update of install.py). Gate is before any mutation.
     "release_gate_before_first_mutation": True,

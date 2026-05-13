@@ -1,0 +1,23 @@
+# Allowlist for skipped or xfailed eval tests in PR/release CI gates.
+#
+# Empty by default — the gate fails if any eval test is skipped, xfailed, or
+# xpassed and not present here. Entries must be reviewed before merge.
+#
+# Each entry MUST have:
+#   nodeid   — exact pytest node id (NO wildcards, NO path prefixes)
+#   issue    — tracking issue URL or ID
+#   reviewer — GitHub login of the reviewer who approved this waiver
+#   reason   — one sentence explaining why the exception exists
+#   expiry   — YYYY-MM-DD date after which the entry is invalid
+#
+# Wildcards in nodeid, missing fields, or expired entries fail the gate.
+# Example (commented out):
+#
+# [[entries]]
+# nodeid = "tests/eval/test_eval_suite.py::test_example"
+# issue = "https://github.com/user538295/archon-assistant/issues/0"
+# reviewer = "user538295"
+# reason = "Flaky on macOS runners — see issue for details."
+# expiry = "2026-12-31"
+
+entries = []
