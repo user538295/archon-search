@@ -9,15 +9,17 @@ with ``-m eval`` (or ``pytest tests/eval/``).
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from archon_search.eval.runner import render_report, run_eval_suite
+from archon_search.eval.runner import assert_thresholds, render_report, run_eval_suite
 
 
 CORPUS_ROOT = Path(__file__).resolve().parent
 RUNTIME_CONFIG_PATH = CORPUS_ROOT / "runtime.toml"
+BASELINE_JSON = CORPUS_ROOT / "baselines" / "baseline.json"
 
 
 _QUALITY_METRIC_FIELDS = (
@@ -109,3 +111,139 @@ async def test_eval_suite_is_deterministic_except_latency() -> None:
         f"--- run 1 report ---\n{rendered1}\n"
         f"--- run 2 report ---\n{rendered2}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 4.4 — gated eval smoke tests
+# ---------------------------------------------------------------------------
+
+
+def _write_baseline(path: Path, base: dict, **overrides) -> Path:
+    """Write a copy of *base* with *overrides* applied to *path*."""
+    data = dict(base)
+    data.update(overrides)
+    path.write_text(json.dumps(data))
+    return path
+
+
+@pytest.mark.eval
+async def test_eval_suite_gated_smoke(thresholds_path: Path) -> None:
+    """Gated suite runs end-to-end against committed thresholds + baseline and
+    ``assert_thresholds`` does not raise."""
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=BASELINE_JSON,
+    )
+    assert_thresholds(report)  # must not raise
+
+
+@pytest.mark.eval
+async def test_eval_suite_gated_smoke_reports_baseline_deltas(
+    thresholds_path: Path,
+) -> None:
+    """Rendered report contains baseline delta lines."""
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=BASELINE_JSON,
+    )
+    rendered = render_report(report).lower()
+    assert "baseline" in rendered
+    assert "delta" in rendered
+
+
+@pytest.mark.eval
+async def test_eval_suite_gated_smoke_rejects_stale_benchmark_or_threshold_hashes(
+    thresholds_path: Path,
+    tmp_path: Path,
+) -> None:
+    """A baseline with a stale ``thresholds_hash`` (mismatching the current
+    thresholds.toml) fails gating with an explicit refresh message."""
+    base = json.loads(BASELINE_JSON.read_text())
+    stale = _write_baseline(
+        tmp_path / "baseline.json",
+        base,
+        thresholds_hash="0" * 64,  # obviously wrong
+    )
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=stale,
+    )
+    with pytest.raises(AssertionError, match="(?i)stale|refresh|hash"):
+        assert_thresholds(report)
+
+
+@pytest.mark.eval
+async def test_eval_suite_gated_smoke_rejects_calibration_only_baseline(
+    thresholds_path: Path,
+    tmp_path: Path,
+) -> None:
+    """Baseline with ``thresholds_hash: null`` fails gating with refresh message."""
+    base = json.loads(BASELINE_JSON.read_text())
+    calibration_only = _write_baseline(
+        tmp_path / "baseline.json",
+        base,
+        thresholds_hash=None,
+    )
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=calibration_only,
+    )
+    with pytest.raises(AssertionError, match="(?i)calibration|refresh"):
+        assert_thresholds(report)
+
+
+@pytest.mark.eval
+async def test_eval_suite_report_only_accepts_calibration_baseline_without_thresholds(
+    tmp_path: Path,
+) -> None:
+    """In report-only mode (no thresholds), a calibration-only baseline is
+    accepted: ``run_eval_suite`` succeeds and renders deltas; we do NOT call
+    ``assert_thresholds``."""
+    base = json.loads(BASELINE_JSON.read_text())
+    calibration_only = _write_baseline(
+        tmp_path / "baseline.json",
+        base,
+        thresholds_hash=None,
+    )
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=None,
+        baseline_path=calibration_only,
+    )
+    assert report.thresholds is None
+    assert report.baseline is not None
+    assert report.baseline.thresholds_hash is None
+    rendered = render_report(report).lower()
+    assert "baseline" in rendered
+    assert "delta" in rendered
+
+
+@pytest.mark.eval
+async def test_eval_suite_gated_smoke_rejects_stale_eval_hash(
+    thresholds_path: Path,
+    tmp_path: Path,
+) -> None:
+    """A baseline with an obviously-wrong ``eval_hash`` fails gating."""
+    base = json.loads(BASELINE_JSON.read_text())
+    stale = _write_baseline(
+        tmp_path / "baseline.json",
+        base,
+        eval_hash="0" * 64,
+    )
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=stale,
+    )
+    with pytest.raises(AssertionError, match="(?i)stale|refresh|hash"):
+        assert_thresholds(report)

@@ -232,6 +232,11 @@ from archon_search.eval.fixtures import (
 )
 from archon_search.eval.types import EvalMetrics, EvalSearchResult, QueryEvalTrace
 from archon_search.eval._tracing import collect_search_trace
+from archon_search.eval._hashing import (
+    compute_eval_hash,
+    compute_runtime_config_hash,
+    compute_thresholds_hash,
+)
 
 
 @dataclass
@@ -346,6 +351,12 @@ class EvalReport:
     query_count: int = 0
     document_count: int = 0
     generated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # Hashes of the current inputs used to produce this report. Populated by
+    # ``run_eval_suite`` and compared against ``baseline`` in
+    # ``assert_thresholds`` to detect stale baselines.
+    current_eval_hash: str | None = None
+    current_runtime_config_hash: str | None = None
+    current_thresholds_hash: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -668,6 +679,14 @@ async def run_eval_suite(
         latency_p95_ms=p95,
     )
 
+    current_eval_hash = compute_eval_hash(corpus_root)
+    current_runtime_config_hash = compute_runtime_config_hash(Path(runtime_config_path))
+    current_thresholds_hash = (
+        compute_thresholds_hash(Path(thresholds_path))
+        if thresholds_path is not None
+        else None
+    )
+
     return EvalReport(
         metrics=metrics,
         traces=traces,
@@ -680,6 +699,9 @@ async def run_eval_suite(
         routing_bypassed_queries=routing_bypassed_queries,
         query_count=len(traces),
         document_count=len(corpus.documents),
+        current_eval_hash=current_eval_hash,
+        current_runtime_config_hash=current_runtime_config_hash,
+        current_thresholds_hash=current_thresholds_hash,
     )
 
 
@@ -737,6 +759,43 @@ def assert_thresholds(report: EvalReport) -> None:
             "thresholds are configured. Refresh the baseline against the current "
             "thresholds (accept it as a gating baseline) before enabling gating."
         )
+
+    # Staleness check: when both thresholds and baseline are present, the
+    # baseline's recorded hashes must match the current inputs. Any drift means
+    # the baseline no longer describes the system under test and must be
+    # refreshed before gating can proceed.
+    if baseline is not None:
+        stale: list[str] = []
+        if (
+            report.current_eval_hash is not None
+            and baseline.eval_hash != report.current_eval_hash
+        ):
+            stale.append(
+                f"eval_hash: baseline={baseline.eval_hash} != "
+                f"current={report.current_eval_hash}"
+            )
+        if (
+            report.current_runtime_config_hash is not None
+            and baseline.runtime_config_hash != report.current_runtime_config_hash
+        ):
+            stale.append(
+                f"runtime_config_hash: baseline={baseline.runtime_config_hash} != "
+                f"current={report.current_runtime_config_hash}"
+            )
+        if (
+            report.current_thresholds_hash is not None
+            and baseline.thresholds_hash != report.current_thresholds_hash
+        ):
+            stale.append(
+                f"thresholds_hash: baseline={baseline.thresholds_hash} != "
+                f"current={report.current_thresholds_hash}"
+            )
+        if stale:
+            raise AssertionError(
+                "Stale baseline — recorded hashes differ from current inputs. "
+                "Refresh the baseline before re-enabling gating:\n  - "
+                + "\n  - ".join(stale)
+            )
 
     failures: list[str] = []
     floors = thresholds.quality_floors
