@@ -79,8 +79,9 @@ def test_lifespan_runs_initial_prune_before_writer_starts(tmp_path: Path) -> Non
     log_dir = tmp_path / "telemetry"
     log_dir.mkdir()
 
-    # Create a file that is 31 days old (> retention_days=30)
-    old_date = datetime.date.today() - datetime.timedelta(days=31)
+    # Create a file that is 31 days old (> retention_days=30).
+    # Use UTC to match Pruner.prune_once() which also uses datetime.now(UTC).date().
+    old_date = datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=31)
     old_file = log_dir / f"{old_date.isoformat()}.jsonl"
     old_file.write_text('{"query_id":"old"}\n', encoding="utf-8")
 

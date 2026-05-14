@@ -52,7 +52,7 @@ def create_app(
 
         # Shutdown: drain writer before cancelling background tasks
         if app.state.telemetry_writer is not None:
-            await writer.drain_and_stop()
+            await app.state.telemetry_writer.drain_and_stop()
         tasks = list(app.state._background_tasks)
         for task in tasks:
             task.cancel()
