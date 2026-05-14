@@ -57,6 +57,55 @@ Each entry is a JSON object containing: `query_id` (random UUID), `timestamp` (U
 
 ---
 
+## Telemetry Read-Back API
+
+Both endpoints return `{"enabled": false}` when telemetry is disabled.
+
+### `GET /telemetry/stats`
+
+Aggregated query statistics over an optional time window.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `since` | YYYY-MM-DD | Start date (inclusive, optional) |
+| `until` | YYYY-MM-DD | End date (inclusive, optional) |
+
+Response shape summary:
+
+```json
+{
+  "schema_version": 1,
+  "enabled": true,
+  "total_queries": 42,
+  "success_rate": 0.95,
+  "latency_ms": {"p50": 120, "p95": 380},
+  "by_endpoint": {"search": 30, "route": 12},
+  "by_collection": {"docs": 25, "code": 17},
+  "error_breakdown": {"timeout": 2, "internal_error": 0}
+}
+```
+
+`success_rate` is `null` when no queries exist in the window.
+
+### `GET /telemetry/entries`
+
+Paginated raw log entries.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `since` | YYYY-MM-DD | Start date (optional) |
+| `until` | YYYY-MM-DD | End date (optional) |
+| `collection` | string | Filter by collection name (optional) |
+| `endpoint` | string | Filter by endpoint (optional) |
+| `status` | string | Filter by status (optional) |
+| `error_kind` | string | Filter by error kind (optional) |
+| `offset` | int | Pagination offset, default 0 |
+| `limit` | int | Page size, 1–200, default 50 |
+
+Response includes `entries`, `next_offset`, and `total_in_window`. Clients should continue calling with the returned `next_offset` until `entries` is empty (equivalently, until `next_offset >= total_in_window`).
+
+---
+
 ## Evaluation
 
 `packages/archon-search/tests/eval/` hosts the FEAT-039 offline evaluation harness: a synthetic retrieval corpus, query/label fixtures, deterministic eval backends, committed thresholds, and a measured baseline. The harness is the sanctioned regression gate for retrieval, reranking, routing, and latency changes.
