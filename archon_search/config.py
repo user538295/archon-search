@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import tomlkit
+
+_logger = logging.getLogger("archon.search")
 
 
 class ConfigError(Exception):
@@ -181,9 +184,15 @@ def load_config(path: Path | None = None) -> SearchConfig:
             raise ConfigError("[telemetry].retention_days must be >= 1")
         telemetry.retention_days = retention_days
     if "export_enabled" in telemetry_cfg:
-        telemetry.export_enabled = _coerce_bool(
+        export_enabled = _coerce_bool(
             telemetry_cfg["export_enabled"], "[telemetry].export_enabled"
         )
+        if export_enabled:
+            _logger.warning("telemetry: export attempt rejected")
+            raise ConfigError(
+                "[telemetry].export_enabled is reserved for FEAT-039c and must be false in v1"
+            )
+        telemetry.export_enabled = export_enabled
     if "log_dir" in telemetry_cfg:
         log_dir = str(telemetry_cfg["log_dir"])
         if not log_dir:
