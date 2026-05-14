@@ -212,3 +212,196 @@ def test_stats_uses_asyncio_to_thread(tmp_path: Path) -> None:
     assert len(captured) == 1
     # The function passed to to_thread should be a bound method named read_entries
     assert captured[0].__name__ == "read_entries"
+
+
+# ---------------------------------------------------------------------------
+# Entries helpers
+# ---------------------------------------------------------------------------
+
+
+def _search_entry(
+    *,
+    status: str = "ok",
+    collection: str = "col_a",
+    endpoint: str = "search",
+    error_kind: str | None = None,
+) -> dict:
+    entry: dict = {
+        "query_id": "aabbcc112233",
+        "timestamp": "2026-05-15T00:00:00Z",
+        "endpoint": endpoint,
+        "latency_ms": 12.5,
+        "status": status,
+        "collection": collection,
+        "result_count": 3,
+        "result_doc_ids": ["d1", "d2", "d3"],
+    }
+    if error_kind is not None:
+        entry["error_kind"] = error_kind
+    return entry
+
+
+def _route_entry(*, collection: str = "col_b") -> dict:
+    return {
+        "query_id": "bbccdd223344",
+        "timestamp": "2026-05-15T00:00:00Z",
+        "endpoint": "route",
+        "latency_ms": 25.0,
+        "status": "ok",
+        "collections": [collection],
+        "decomposer_invoked": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Entries tests
+# ---------------------------------------------------------------------------
+
+
+def test_entries_disabled_returns_enabled_false() -> None:
+    config = _make_config(enabled=False)
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/entries")
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+
+
+def test_entries_pagination_offset_limit(tmp_path: Path) -> None:
+    """5 entries in JSONL, limit=2 → next_offset=2, total_in_window=5."""
+    today_utc = datetime.now(UTC).date()
+    file_path = tmp_path / f"{today_utc.isoformat()}.jsonl"
+    _write_jsonl(file_path, [_search_entry() for _ in range(5)])
+
+    config = _make_config(enabled=True, log_dir=str(tmp_path))
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/entries?limit=2")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["entries"]) == 2
+    assert body["next_offset"] == 2
+    assert body["total_in_window"] == 5
+
+
+def test_entries_filter_by_status(tmp_path: Path) -> None:
+    today_utc = datetime.now(UTC).date()
+    file_path = tmp_path / f"{today_utc.isoformat()}.jsonl"
+    ok_entry = _search_entry(status="ok")
+    err_entry = _search_entry(status="timeout", error_kind="timeout")
+    _write_jsonl(file_path, [ok_entry, err_entry])
+
+    config = _make_config(enabled=True, log_dir=str(tmp_path))
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/entries?status=ok")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_in_window"] == 1
+    assert all(e["status"] == "ok" for e in body["entries"])
+
+
+def test_entries_filter_by_endpoint(tmp_path: Path) -> None:
+    today_utc = datetime.now(UTC).date()
+    file_path = tmp_path / f"{today_utc.isoformat()}.jsonl"
+    _write_jsonl(file_path, [_search_entry(endpoint="search"), _route_entry()])
+
+    config = _make_config(enabled=True, log_dir=str(tmp_path))
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/entries?endpoint=search")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_in_window"] == 1
+    assert body["entries"][0]["endpoint"] == "search"
+
+
+def test_entries_filter_by_error_kind(tmp_path: Path) -> None:
+    today_utc = datetime.now(UTC).date()
+    file_path = tmp_path / f"{today_utc.isoformat()}.jsonl"
+    timeout_entry = _search_entry(status="timeout", error_kind="timeout")
+    internal_entry = _search_entry(status="internal_error", error_kind="internal_error")
+    _write_jsonl(file_path, [_search_entry(), timeout_entry, internal_entry])
+
+    config = _make_config(enabled=True, log_dir=str(tmp_path))
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/entries?error_kind=timeout")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_in_window"] == 1
+    assert body["entries"][0]["error_kind"] == "timeout"
+
+
+def test_entries_filter_by_collection(tmp_path: Path) -> None:
+    today_utc = datetime.now(UTC).date()
+    file_path = tmp_path / f"{today_utc.isoformat()}.jsonl"
+    _write_jsonl(
+        file_path,
+        [_search_entry(collection="col_a"), _search_entry(collection="col_b")],
+    )
+
+    config = _make_config(enabled=True, log_dir=str(tmp_path))
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/entries?collection=col_a")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_in_window"] == 1
+    assert body["entries"][0]["collection"] == "col_a"
+
+
+def test_entries_invalid_status_returns_422() -> None:
+    config = _make_config(enabled=True)
+    client = TestClient(_make_test_app(config))
+    # "error" is not a valid Status value
+    response = client.get("/telemetry/entries?status=error")
+    assert response.status_code == 422
+
+
+def test_entries_invalid_endpoint_returns_422() -> None:
+    config = _make_config(enabled=True)
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/entries?endpoint=bogus")
+    assert response.status_code == 422
+
+
+def test_entries_invalid_error_kind_returns_422() -> None:
+    config = _make_config(enabled=True)
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/entries?error_kind=bad_kind")
+    assert response.status_code == 422
+
+
+def test_entries_since_after_until_returns_400() -> None:
+    config = _make_config(enabled=True)
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/entries?since=2026-05-15&until=2026-05-14")
+    assert response.status_code == 400
+
+
+def test_entries_schema_version_is_1(tmp_path: Path) -> None:
+    config = _make_config(enabled=True, log_dir=str(tmp_path))
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/entries")
+    assert response.status_code == 200
+    assert response.json()["schema_version"] == 1
+
+
+def test_entries_only_documented_fields(tmp_path: Path) -> None:
+    """Each returned entry contains required fields and no undocumented keys."""
+    from archon_search.telemetry.entry import DOCUMENTED_SCHEMA_FIELDS
+
+    today_utc = datetime.now(UTC).date()
+    file_path = tmp_path / f"{today_utc.isoformat()}.jsonl"
+    _write_jsonl(file_path, [_search_entry()])
+
+    config = _make_config(enabled=True, log_dir=str(tmp_path))
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/entries")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["entries"]) == 1
+    entry = body["entries"][0]
+
+    required_fields = {"query_id", "timestamp", "endpoint", "latency_ms", "status"}
+    for field in required_fields:
+        assert field in entry, f"missing required field: {field}"
+
+    # No keys outside documented schema
+    extra_keys = set(k for k, v in entry.items() if v is not None) - DOCUMENTED_SCHEMA_FIELDS
+    assert not extra_keys, f"undocumented fields present: {extra_keys}"
