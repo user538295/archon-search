@@ -29,6 +29,8 @@ Query telemetry is **opt-in and disabled by default**. When enabled, every `sear
 
 ### Enabling
 
+Telemetry is `enabled = false` by default. To opt in, set the flag in `~/.archon/archon-search.toml`:
+
 ```toml
 # ~/.archon/archon-search.toml
 [telemetry]
@@ -47,7 +49,7 @@ Each entry is a JSON object containing: `query_id` (random UUID), `timestamp` (U
 
 ### Path-derived `doc_id` risk
 
-`result_doc_ids` are derived from the source file path on disk (e.g., `/Users/<name>/Documents/<project>/<file>.md`). When telemetry is enabled, these paths appear in the log files. Operators accept this when they opt in. A hashed-doc-id mode is planned for a future release (FEAT-039c). See [ADR 10](../../Documentation/ADRs/10_search_query_telemetry.md) for the full privacy contract and trade-off rationale.
+`result_doc_ids` are derived from the source file path on disk (e.g., `/Users/<name>/Documents/<project>/<file>.md`). When telemetry is enabled, these paths appear in the log files — **doc_ids may reveal filesystem paths**, including username and directory structure. Operators accept this when they opt in. A hashed-doc-id mode is planned for a future release (FEAT-039c). See [ADR 10](../../Documentation/ADRs/10_search_query_telemetry.md) for the full privacy contract and trade-off rationale.
 
 ### `export_enabled` is not available
 
