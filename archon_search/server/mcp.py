@@ -72,10 +72,23 @@ def create_app(
         context_window: int = 1,
     ) -> list[dict[str, Any]]:
         """Search and return surrounding chunks for richer context."""
+        start = monotonic()
         try:
             results = await pipeline.search_with_context(
                 query, collection or default_collection, context_window
             )
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_search_tool_result(
+                            endpoint="search_with_context",
+                            collection=collection or default_collection,
+                            result_doc_ids=[r["result"].doc_id for r in results],
+                            latency_ms=(monotonic() - start) * 1000.0,
+                        )
+                    )
+                except Exception:
+                    logger.warning("telemetry: search_with_context entry enqueue failed", exc_info=True)
             return [
                 {
                     "result": asdict(r["result"]),
@@ -85,6 +98,18 @@ def create_app(
                 for r in results
             ]
         except Exception as exc:
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_error(
+                            endpoint="search_with_context",
+                            status="internal_error",
+                            error_kind="other",
+                            latency_ms=(monotonic() - start) * 1000.0,
+                        )
+                    )
+                except Exception:
+                    logger.warning("telemetry: search_with_context error entry enqueue failed", exc_info=True)
             logger.exception("search_with_context failed")
             return [{"error": str(exc)}]
 
