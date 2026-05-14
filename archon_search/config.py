@@ -13,6 +13,14 @@ class ConfigError(Exception):
 
 
 @dataclass
+class TelemetryConfig:
+    enabled: bool = False
+    retention_days: int = 30
+    export_enabled: bool = False
+    log_dir: str = "~/.archon/search-logs"
+
+
+@dataclass
 class SearchConfig:
     # [server]
     host: str = "127.0.0.1"
@@ -35,6 +43,8 @@ class SearchConfig:
     # [logging]
     level: str = "INFO"
     log_file: str = "~/.archon/logs/archon-search.log"
+    # [telemetry]
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -160,5 +170,25 @@ def load_config(path: Path | None = None) -> SearchConfig:
         config.level = str(log_cfg["level"])
     if "log_file" in log_cfg:
         config.log_file = str(log_cfg["log_file"])
+
+    telemetry_cfg = doc.get("telemetry", {})
+    telemetry = TelemetryConfig()
+    if "enabled" in telemetry_cfg:
+        telemetry.enabled = _coerce_bool(telemetry_cfg["enabled"], "[telemetry].enabled")
+    if "retention_days" in telemetry_cfg:
+        retention_days = _coerce_int(telemetry_cfg["retention_days"], "[telemetry].retention_days")
+        if retention_days < 1:
+            raise ConfigError("[telemetry].retention_days must be >= 1")
+        telemetry.retention_days = retention_days
+    if "export_enabled" in telemetry_cfg:
+        telemetry.export_enabled = _coerce_bool(
+            telemetry_cfg["export_enabled"], "[telemetry].export_enabled"
+        )
+    if "log_dir" in telemetry_cfg:
+        log_dir = str(telemetry_cfg["log_dir"])
+        if not log_dir:
+            raise ConfigError("[telemetry].log_dir must be a non-empty string")
+        telemetry.log_dir = log_dir
+    config.telemetry = telemetry
 
     return config
