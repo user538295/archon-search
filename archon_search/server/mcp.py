@@ -37,25 +37,31 @@ def create_app(
         try:
             results = await pipeline.search(query, collection or default_collection)
             if writer is not None:
-                writer.enqueue(
-                    TelemetryEntry.from_search_tool_result(
-                        endpoint="search",
-                        collection=collection or default_collection,
-                        result_doc_ids=[r.doc_id for r in results],
-                        latency_ms=(monotonic() - start) * 1000.0,
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_search_tool_result(
+                            endpoint="search",
+                            collection=collection or default_collection,
+                            result_doc_ids=[r.doc_id for r in results],
+                            latency_ms=(monotonic() - start) * 1000.0,
+                        )
                     )
-                )
+                except Exception:
+                    logger.warning("telemetry: search entry enqueue failed", exc_info=True)
             return [asdict(r) for r in results]
         except Exception as exc:
             if writer is not None:
-                writer.enqueue(
-                    TelemetryEntry.from_error(
-                        endpoint="search",
-                        status="internal_error",
-                        error_kind="other",
-                        latency_ms=(monotonic() - start) * 1000.0,
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_error(
+                            endpoint="search",
+                            status="internal_error",
+                            error_kind="other",
+                            latency_ms=(monotonic() - start) * 1000.0,
+                        )
                     )
-                )
+                except Exception:
+                    logger.warning("telemetry: search error entry enqueue failed", exc_info=True)
             logger.exception("search failed")
             return [{"error": str(exc)}]
 

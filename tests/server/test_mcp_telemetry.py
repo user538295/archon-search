@@ -117,10 +117,9 @@ async def test_search_tool_logs_error_entry_on_exception(caplog: pytest.LogCaptu
     assert entry.status == "internal_error"
     assert entry.error_kind == "other"
 
-    assert any(
-        "RuntimeError" in r.getMessage() or "boom" in r.getMessage() or "search failed" in r.getMessage()
-        for r in caplog.records
-    )
+    # caplog.text includes the full formatted output (message + exception traceback),
+    # so "RuntimeError" appears there even though getMessage() returns only the message string.
+    assert "RuntimeError" in caplog.text
 
 
 @pytest.mark.asyncio
