@@ -7,6 +7,8 @@ keyword-only safe arguments.
 
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -58,3 +60,74 @@ class TelemetryEntry(BaseModel):
     decomposer_invoked: bool | None = None
 
     error_kind: ErrorKind | None = None
+
+    @staticmethod
+    def _new_query_id() -> str:
+        return uuid.uuid4().hex
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    @classmethod
+    def from_search_tool_result(
+        cls,
+        *,
+        endpoint: Literal["search", "search_with_context"],
+        collection: str,
+        result_doc_ids: list[str],
+        latency_ms: float,
+    ) -> TelemetryEntry:
+        if endpoint not in ("search", "search_with_context"):
+            raise ValueError(
+                f"from_search_tool_result endpoint must be 'search' or "
+                f"'search_with_context', got {endpoint!r}"
+            )
+        return cls(
+            query_id=cls._new_query_id(),
+            timestamp=cls._now_iso(),
+            endpoint=endpoint,
+            latency_ms=latency_ms,
+            status="ok",
+            collection=collection,
+            result_count=len(result_doc_ids),
+            result_doc_ids=result_doc_ids,
+        )
+
+    @classmethod
+    def from_route_response(
+        cls,
+        *,
+        collections: list[str],
+        decomposer_invoked: bool,
+        latency_ms: float,
+    ) -> TelemetryEntry:
+        return cls(
+            query_id=cls._new_query_id(),
+            timestamp=cls._now_iso(),
+            endpoint="route",
+            latency_ms=latency_ms,
+            status="ok",
+            collections=collections,
+            decomposer_invoked=decomposer_invoked,
+        )
+
+    @classmethod
+    def from_error(
+        cls,
+        *,
+        endpoint: EndpointKind,
+        status: Status,
+        error_kind: ErrorKind,
+        latency_ms: float,
+    ) -> TelemetryEntry:
+        if status == "ok":
+            raise ValueError("from_error requires a non-'ok' status")
+        return cls(
+            query_id=cls._new_query_id(),
+            timestamp=cls._now_iso(),
+            endpoint=endpoint,
+            latency_ms=latency_ms,
+            status=status,
+            error_kind=error_kind,
+        )
