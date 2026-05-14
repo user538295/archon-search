@@ -20,6 +20,7 @@ from archon_search.server.routes_jobs import router as jobs_router
 from archon_search.server.routes_route import router as route_router
 from archon_search.server.routes_state import router as state_router
 from archon_search.server.routes_status import router as status_router
+from archon_search.server.routes_telemetry import router as telemetry_router
 from archon_search.telemetry.pruner import Pruner
 from archon_search.telemetry.writer import TelemetryWriter
 
@@ -72,6 +73,7 @@ def create_app(
     app.include_router(status_router)
     app.include_router(state_router)
     app.include_router(route_router)
+    app.include_router(telemetry_router)
     return app
 
 

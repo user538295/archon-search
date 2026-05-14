@@ -74,3 +74,37 @@ def test_server_collection_derivation_uses_last_path_component() -> None:
     col2 = path_to_collection_name("/beta/sessions")
     assert col1 == "sessions"
     assert col2 == "sessions"
+
+
+# ---------------------------------------------------------------------------
+# Task 3.4: telemetry router registration (FEAT-039c)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def telemetry_config(tmp_path: Path) -> SearchConfig:
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.telemetry.enabled = True
+    cfg.telemetry.log_dir = str(tmp_path / "telemetry-logs")
+    return cfg
+
+
+def test_telemetry_stats_route_registered(telemetry_config: SearchConfig, job_store: JobStore) -> None:
+    """GET /telemetry/stats must be registered (not 404) when telemetry is enabled."""
+    from starlette.testclient import TestClient
+
+    app = create_app(telemetry_config, job_store)
+    with TestClient(app) as client:
+        response = client.get("/telemetry/stats")
+    assert response.status_code != 404, f"Route not registered — got {response.status_code}"
+
+
+def test_telemetry_entries_route_registered(telemetry_config: SearchConfig, job_store: JobStore) -> None:
+    """GET /telemetry/entries must be registered (not 404) when telemetry is enabled."""
+    from starlette.testclient import TestClient
+
+    app = create_app(telemetry_config, job_store)
+    with TestClient(app) as client:
+        response = client.get("/telemetry/entries")
+    assert response.status_code != 404, f"Route not registered — got {response.status_code}"
