@@ -1,0 +1,41 @@
+# archon-search.toml — Search server configuration
+# Copy to ~/.archon/archon-search.toml and edit as needed.
+# All values shown are the defaults; omit any section or key to use its default.
+
+[server]
+host = "127.0.0.1"
+port = 8765
+
+[database]
+db_path = "~/.archon/search"
+embedding_model = "BAAI/bge-small-en-v1.5"
+reranker_model = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+chunk_size = 512
+auto_reindex_on_chunk_size_change = true
+# providers = []                     # CPU (default)
+# providers = ["CUDAExecutionProvider"]        # NVIDIA GPU
+# providers = ["CoreMLExecutionProvider"]      # Apple Silicon
+
+[routing]
+routing_shortlist_size = 8
+routing_confidence_threshold = 0.30
+max_parallel_collections = 3
+
+[collections]
+pinned_collections = []
+collections = []
+watch = false
+
+[logging]
+level = "INFO"
+log_file = "~/.archon/logs/archon-search.log"
+
+[telemetry]
+# Opt-in query telemetry. Disabled by default.
+# When enabled, each search/route call appends one JSONL line to a daily
+# file under log_dir. No raw query text is ever recorded.
+# See packages/archon-search/README.md for the full privacy contract.
+enabled = false
+retention_days = 30
+log_dir = "~/.archon/search-logs"
+# export_enabled = false   # reserved for FEAT-039c; setting true raises ConfigError
