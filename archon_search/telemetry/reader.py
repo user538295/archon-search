@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from archon_search.telemetry.entry import TelemetryEntry
+from archon_search.telemetry.entry import EndpointKind, ErrorKind, Status, TelemetryEntry
 
 _ALL_ERROR_KINDS = (
     "empty_query",
@@ -187,3 +187,38 @@ class TelemetryReader:
             "by_collection": by_collection,
             "error_breakdown": error_breakdown,
         }
+
+    def filter_entries(
+        self,
+        entries: list[TelemetryEntry],
+        *,
+        collection: str | None = None,
+        endpoint: EndpointKind | None = None,
+        status: Status | None = None,
+        error_kind: ErrorKind | None = None,
+    ) -> list[TelemetryEntry]:
+        """Return entries matching all provided (non-None) filters (AND semantics)."""
+        result = entries
+        if endpoint is not None:
+            result = [e for e in result if e.endpoint == endpoint]
+        if status is not None:
+            result = [e for e in result if e.status == status]
+        if error_kind is not None:
+            result = [e for e in result if e.error_kind == error_kind]
+        if collection is not None:
+            result = [
+                e for e in result
+                if e.collection == collection
+                or (e.collections is not None and collection in e.collections)
+            ]
+        return result
+
+    def paginate(
+        self,
+        entries: list[TelemetryEntry],
+        offset: int,
+        limit: int,
+    ) -> tuple[list[TelemetryEntry], int]:
+        """Return (page, total_in_window) where total_in_window == len(entries)."""
+        total_in_window = len(entries)
+        return entries[offset : offset + limit], total_in_window

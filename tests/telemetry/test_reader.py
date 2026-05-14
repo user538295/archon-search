@@ -431,3 +431,162 @@ def test_compute_stats_schema_keys() -> None:
     assert stats["since"] == "2026-05-01"
     assert stats["until"] == "2026-05-14"
     assert stats["skipped_lines"] == 3
+
+
+# ---------------------------------------------------------------------------
+# filter_entries
+# ---------------------------------------------------------------------------
+
+
+def _make_entry(
+    *,
+    endpoint: str = "search",
+    status: str = "ok",
+    collection: str | None = "col_a",
+    collections: list[str] | None = None,
+    error_kind: str | None = None,
+    latency_ms: float = 10.0,
+) -> TelemetryEntry:
+    return TelemetryEntry(
+        query_id="qid",
+        timestamp="2026-05-14T12:00:00Z",
+        endpoint=endpoint,  # type: ignore[arg-type]
+        latency_ms=latency_ms,
+        status=status,  # type: ignore[arg-type]
+        collection=collection,
+        collections=collections,
+        error_kind=error_kind,  # type: ignore[arg-type]
+    )
+
+
+def test_filter_entries_by_endpoint() -> None:
+    """Filter by endpoint returns only matching entries."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [
+        _make_entry(endpoint="search"),
+        _make_entry(endpoint="route", collection=None, collections=["col_a"]),
+        _make_entry(endpoint="search"),
+    ]
+    result = reader.filter_entries(entries, endpoint="search")
+    assert len(result) == 2
+    assert all(e.endpoint == "search" for e in result)
+
+
+def test_filter_entries_by_status() -> None:
+    """Filter by status returns only matching entries."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [
+        _make_entry(status="ok"),
+        _make_entry(status="timeout", collection=None, error_kind="timeout"),
+        _make_entry(status="ok"),
+    ]
+    result = reader.filter_entries(entries, status="ok")
+    assert len(result) == 2
+    assert all(e.status == "ok" for e in result)
+
+
+def test_filter_entries_by_error_kind() -> None:
+    """Filter by error_kind returns only matching entries."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [
+        _make_entry(status="timeout", collection=None, error_kind="timeout"),
+        _make_entry(status="internal_error", collection=None, error_kind="internal_error"),
+        _make_entry(status="timeout", collection=None, error_kind="timeout"),
+    ]
+    result = reader.filter_entries(entries, error_kind="timeout")
+    assert len(result) == 2
+    assert all(e.error_kind == "timeout" for e in result)
+
+
+def test_filter_entries_by_collection_singular() -> None:
+    """Filter by collection matches e.collection == X (singular field)."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [
+        _make_entry(collection="col_a"),
+        _make_entry(collection="col_b"),
+        _make_entry(collection="col_a"),
+    ]
+    result = reader.filter_entries(entries, collection="col_a")
+    assert len(result) == 2
+    assert all(e.collection == "col_a" for e in result)
+
+
+def test_filter_entries_by_collection_routing_plural() -> None:
+    """Filter by collection matches X in e.collections (plural field for route entries)."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [
+        _make_entry(endpoint="route", collection=None, collections=["col_a", "col_b"]),
+        _make_entry(endpoint="route", collection=None, collections=["col_c"]),
+        _make_entry(endpoint="route", collection=None, collections=["col_b"]),
+    ]
+    result = reader.filter_entries(entries, collection="col_b")
+    assert len(result) == 2
+
+
+def test_filter_entries_and_semantics() -> None:
+    """status=ok + error_kind=timeout is contradictory → empty list."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [
+        _make_entry(status="ok"),
+        _make_entry(status="timeout", collection=None, error_kind="timeout"),
+    ]
+    result = reader.filter_entries(entries, status="ok", error_kind="timeout")
+    assert result == []
+
+
+def test_filter_entries_and_semantics_valid_intersection() -> None:
+    """endpoint=search + status=ok on mixed dataset returns only matching entries."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [
+        _make_entry(endpoint="search", status="ok"),
+        _make_entry(endpoint="search", status="timeout", collection=None, error_kind="timeout"),
+        _make_entry(endpoint="route", status="ok", collection=None, collections=["col_a"]),
+    ]
+    result = reader.filter_entries(entries, endpoint="search", status="ok")
+    assert len(result) == 1
+    assert result[0].endpoint == "search"
+    assert result[0].status == "ok"
+
+
+def test_filter_entries_no_filter() -> None:
+    """All None filters → full list unchanged, same order."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [_make_entry(collection="col_a"), _make_entry(collection="col_b")]
+    result = reader.filter_entries(entries)
+    assert result == entries
+
+
+# ---------------------------------------------------------------------------
+# paginate
+# ---------------------------------------------------------------------------
+
+
+def _make_entries(n: int) -> list[TelemetryEntry]:
+    return [_make_entry(collection=f"col_{i}") for i in range(n)]
+
+
+def test_paginate_basic() -> None:
+    """offset=0, limit=2 → 2 entries, total_in_window == len(all)."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = _make_entries(5)
+    page, total = reader.paginate(entries, offset=0, limit=2)
+    assert len(page) == 2
+    assert total == 5
+
+
+def test_paginate_last_page() -> None:
+    """Partial last page is returned, total_in_window is the full list length."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = _make_entries(5)
+    page, total = reader.paginate(entries, offset=4, limit=10)
+    assert len(page) == 1
+    assert total == 5
+
+
+def test_paginate_offset_beyond_end() -> None:
+    """offset beyond end → [], correct total_in_window."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = _make_entries(5)
+    page, total = reader.paginate(entries, offset=999, limit=10)
+    assert page == []
+    assert total == 5
