@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -89,9 +89,7 @@ def test_route_handler_logs_entry_on_success() -> None:
     assert isinstance(entry, TelemetryEntry)
     assert entry.endpoint == "route"
     assert entry.status == "ok"
-    assert entry.collections is not None
-    assert "col_a" in entry.collections  # pinned
-    assert "col_b" in entry.collections  # routable
+    assert entry.collections == ["col_a", "col_b"]
     assert entry.decomposer_invoked is True
     assert entry.latency_ms >= 0.0
 
@@ -150,9 +148,8 @@ def test_route_handler_logs_error_entry_on_timeout() -> None:
     fake_router = _FakeColRouter(raise_on_get=asyncio.TimeoutError())
 
     with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
-        with patch("archon_search.server.routes_route.asyncio.wait_for", side_effect=asyncio.TimeoutError()):
-            with TestClient(app) as client:
-                resp = client.post("/route", json={"query": "hello"})
+        with TestClient(app) as client:
+            resp = client.post("/route", json={"query": "hello"})
 
     assert resp.status_code == 504
     writer.enqueue.assert_called_once()
@@ -230,7 +227,7 @@ def test_route_handler_no_entries_when_writer_none() -> None:
 
     assert resp.status_code == 200
 
-    # Also verify error paths don't raise with writer=None
+    # Validation error paths — should not raise with writer=None
     with TestClient(app) as client:
         resp = client.post("/route", json={"query": ""})
     assert resp.status_code == 400
@@ -238,3 +235,143 @@ def test_route_handler_no_entries_when_writer_none() -> None:
     with TestClient(app) as client:
         resp = client.post("/route", json={"query": "hello", "slots": 0})
     assert resp.status_code == 400
+
+    # Timeout path — should not raise with writer=None
+    timeout_router = _FakeColRouter(raise_on_get=asyncio.TimeoutError())
+    with patch("archon_search.server.routes_route._build_router", return_value=timeout_router):
+        with TestClient(app) as client:
+            resp = client.post("/route", json={"query": "hello"})
+    assert resp.status_code == 504
+
+    # Internal exception path — should not raise with writer=None
+    crash_router = _FakeColRouter(raise_on_get=RuntimeError("crash"))
+    with patch("archon_search.server.routes_route._build_router", return_value=crash_router):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.post("/route", json={"query": "hello"})
+    assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# Test 8: _redact_validation fallback — unknown 400 detail maps to validation_error
+# ---------------------------------------------------------------------------
+
+
+def test_redact_validation_fallback_returns_validation_error() -> None:
+    """_redact_validation unknown detail strings fall back to 'validation_error'."""
+    from archon_search.server.routes_route import _redact_validation
+
+    assert _redact_validation("some unexpected validation detail") == "validation_error"
+    assert _redact_validation("") == "validation_error"
+    assert _redact_validation("query must not be empty") == "empty_query"  # known string
+    assert _redact_validation("slots must be >= 1") == "slot_out_of_range"  # known string
+
+
+# ---------------------------------------------------------------------------
+# Test 9: enqueue raises → response is still correct for all paths
+# ---------------------------------------------------------------------------
+
+
+def test_route_handler_enqueue_raises_does_not_affect_response(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If writer.enqueue raises on success path, the route response is unaffected."""
+    writer = _make_mock_writer()
+    writer.enqueue.side_effect = RuntimeError("disk full")
+    app = _make_test_app(writer)
+
+    fake_router = _FakeColRouter(pre_context="ctx", routable=["c"], decomposer=False)
+
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
+        with caplog.at_level(logging.WARNING, logger="archon.search"):
+            with TestClient(app) as client:
+                resp = client.post("/route", json={"query": "hello"})
+
+    assert resp.status_code == 200
+    writer.enqueue.assert_called_once()
+    assert any("telemetry enqueue failed" in r.message for r in caplog.records)
+
+
+def test_route_handler_enqueue_raises_on_timeout_still_returns_504(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Enqueue failure on timeout path must not swallow the 504."""
+    writer = _make_mock_writer()
+    writer.enqueue.side_effect = RuntimeError("disk full")
+    app = _make_test_app(writer)
+
+    fake_router = _FakeColRouter(raise_on_get=asyncio.TimeoutError())
+
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
+        with caplog.at_level(logging.WARNING, logger="archon.search"):
+            with TestClient(app) as client:
+                resp = client.post("/route", json={"query": "hello"})
+
+    assert resp.status_code == 504
+    writer.enqueue.assert_called_once()
+    assert any("telemetry enqueue failed" in r.message for r in caplog.records)
+
+
+def test_route_handler_enqueue_raises_on_exception_still_returns_500(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Enqueue failure on internal exception path must not swallow the 500."""
+    writer = _make_mock_writer()
+    writer.enqueue.side_effect = RuntimeError("disk full")
+    app = _make_test_app(writer)
+
+    fake_router = _FakeColRouter(raise_on_get=RuntimeError("crash"))
+
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
+        with caplog.at_level(logging.WARNING, logger="archon.search"):
+            with TestClient(app, raise_server_exceptions=False) as client:
+                resp = client.post("/route", json={"query": "hello"})
+
+    assert resp.status_code == 500
+    writer.enqueue.assert_called_once()
+    assert any("telemetry enqueue failed" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Test 10: query text sentinel must not appear in error-path telemetry entry
+# ---------------------------------------------------------------------------
+
+
+def test_route_handler_query_text_never_in_error_entry_args() -> None:
+    """Query text sentinel must not appear in error-path telemetry entry fields."""
+    sentinel = "PRIVACY-LEAK-SENTINEL-ROUTE-ERROR"
+    writer = _make_mock_writer()
+    app = _make_test_app(writer)
+
+    fake_router = _FakeColRouter(raise_on_get=RuntimeError("internal boom"))
+
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.post("/route", json={"query": sentinel})
+
+    assert resp.status_code == 500
+    writer.enqueue.assert_called_once()
+    entry: TelemetryEntry = writer.enqueue.call_args[0][0]
+    assert sentinel not in str(entry.model_dump())
+
+
+# ---------------------------------------------------------------------------
+# Test 11: non-400 HTTPException → no telemetry entry, re-raises correctly
+# ---------------------------------------------------------------------------
+
+
+def test_route_handler_non_400_http_exception_produces_no_telemetry() -> None:
+    """Non-400 HTTPExceptions are re-raised without telemetry (by design)."""
+    from fastapi import HTTPException as _HTTPException
+
+    writer = _make_mock_writer()
+    app = _make_test_app(writer)
+
+    with patch(
+        "archon_search.server.routes_route._build_router",
+        side_effect=_HTTPException(status_code=503, detail="service unavailable"),
+    ):
+        with TestClient(app) as client:
+            resp = client.post("/route", json={"query": "hello"})
+
+    assert resp.status_code == 503
+    writer.enqueue.assert_not_called()

@@ -100,48 +100,60 @@ async def route(body: RouteRequest, request: Request) -> Any:
             decomposer_invoked=col_router.decomposer_was_invoked,
         )
         if writer is not None:
-            writer.enqueue(
-                TelemetryEntry.from_route_response(
-                    collections=resp.pinned_names + resp.routable_names,
-                    decomposer_invoked=resp.decomposer_invoked,
-                    latency_ms=(monotonic() - start) * 1000.0,
+            try:
+                writer.enqueue(
+                    TelemetryEntry.from_route_response(
+                        collections=resp.pinned_names + resp.routable_names,
+                        decomposer_invoked=resp.decomposer_invoked,
+                        latency_ms=(monotonic() - start) * 1000.0,
+                    )
                 )
-            )
+            except Exception as tel_exc:
+                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
         return resp
 
     except asyncio.TimeoutError:
         if writer is not None:
-            writer.enqueue(
-                TelemetryEntry.from_error(
-                    endpoint="route",
-                    status="timeout",
-                    error_kind="timeout",
-                    latency_ms=(monotonic() - start) * 1000.0,
+            try:
+                writer.enqueue(
+                    TelemetryEntry.from_error(
+                        endpoint="route",
+                        status="timeout",
+                        error_kind="timeout",
+                        latency_ms=(monotonic() - start) * 1000.0,
+                    )
                 )
-            )
+            except Exception as tel_exc:
+                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
         raise HTTPException(status_code=504, detail="routing timed out")
 
     except HTTPException as exc:
         if exc.status_code == 400 and writer is not None:
-            writer.enqueue(
-                TelemetryEntry.from_error(
-                    endpoint="route",
-                    status="validation_error",
-                    error_kind=_redact_validation(exc.detail),
-                    latency_ms=(monotonic() - start) * 1000.0,
+            try:
+                writer.enqueue(
+                    TelemetryEntry.from_error(
+                        endpoint="route",
+                        status="validation_error",
+                        error_kind=_redact_validation(exc.detail),
+                        latency_ms=(monotonic() - start) * 1000.0,
+                    )
                 )
-            )
+            except Exception as tel_exc:
+                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
         raise
 
     except Exception as exc:
         if writer is not None:
-            writer.enqueue(
-                TelemetryEntry.from_error(
-                    endpoint="route",
-                    status="internal_error",
-                    error_kind="other",
-                    latency_ms=(monotonic() - start) * 1000.0,
+            try:
+                writer.enqueue(
+                    TelemetryEntry.from_error(
+                        endpoint="route",
+                        status="internal_error",
+                        error_kind="other",
+                        latency_ms=(monotonic() - start) * 1000.0,
+                    )
                 )
-            )
-        logger.error("route handler failed: %s", type(exc).__name__, exc_info=True)
+            except Exception as tel_exc:
+                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+        logger.error("route handler failed: %s", type(exc).__name__)
         raise
