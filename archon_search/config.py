@@ -188,11 +188,10 @@ def load_config(path: Path | None = None) -> SearchConfig:
             telemetry_cfg["export_enabled"], "[telemetry].export_enabled"
         )
         if export_enabled:
-            _logger.warning("telemetry: export attempt rejected")
-            raise ConfigError(
-                "[telemetry].export_enabled is reserved for FEAT-039c and must be false in v1"
-            )
-        telemetry.export_enabled = export_enabled
+            _logger.warning("telemetry: export_enabled is reserved for FEAT-039d and will be ignored")
+            telemetry.export_enabled = False
+        else:
+            telemetry.export_enabled = export_enabled
     if "log_dir" in telemetry_cfg:
         log_dir = str(telemetry_cfg["log_dir"])
         if not log_dir:
