@@ -7,6 +7,7 @@ from archon_search.telemetry.entry import (
     Status,
     TelemetryEntry,
 )
+from archon_search.telemetry.reader import TelemetryReader
 
 __all__ = [
     "DOCUMENTED_SCHEMA_FIELDS",
@@ -14,4 +15,5 @@ __all__ = [
     "ErrorKind",
     "Status",
     "TelemetryEntry",
+    "TelemetryReader",
 ]
