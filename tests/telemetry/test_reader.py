@@ -241,3 +241,193 @@ def test_read_entries_skips_oserror_file(
     assert len(entries) == 1
     assert entries[0].query_id == "q1"
     assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# compute_stats
+# ---------------------------------------------------------------------------
+
+
+def _ok_search(latency_ms: float = 10.0, collection: str = "col_a") -> TelemetryEntry:
+    return TelemetryEntry(
+        query_id="qid",
+        timestamp="2026-05-14T12:00:00Z",
+        endpoint="search",
+        latency_ms=latency_ms,
+        status="ok",
+        collection=collection,
+    )
+
+
+def _ok_route(latency_ms: float = 20.0, collections: list[str] | None = None) -> TelemetryEntry:
+    return TelemetryEntry(
+        query_id="qid",
+        timestamp="2026-05-14T12:00:00Z",
+        endpoint="route",
+        latency_ms=latency_ms,
+        status="ok",
+        collections=collections if collections is not None else ["col_a"],
+    )
+
+
+def _error_entry(
+    endpoint: str = "search",
+    error_kind: str = "timeout",
+    latency_ms: float = 5.0,
+) -> TelemetryEntry:
+    return TelemetryEntry(
+        query_id="qid",
+        timestamp="2026-05-14T12:00:00Z",
+        endpoint=endpoint,  # type: ignore[arg-type]
+        latency_ms=latency_ms,
+        status="timeout",
+        error_kind=error_kind,  # type: ignore[arg-type]
+    )
+
+
+def test_compute_stats_total_queries() -> None:
+    """len(entries) is reflected in total_queries."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [_ok_search(), _ok_search(), _ok_search()]
+    since = date(2026, 5, 14)
+    until = date(2026, 5, 14)
+
+    stats = reader.compute_stats(entries, since, until, skipped_lines=0)
+
+    assert stats["total_queries"] == 3
+
+
+def test_compute_stats_success_rate_zero_queries() -> None:
+    """Empty entry list → success_rate is None."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    stats = reader.compute_stats([], date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    assert stats["success_rate"] is None
+
+
+def test_compute_stats_success_rate_formula() -> None:
+    """3 ok out of 4 entries → success_rate == 0.75."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [
+        _ok_search(),
+        _ok_search(),
+        _ok_search(),
+        _error_entry(),
+    ]
+    stats = reader.compute_stats(entries, date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    assert stats["success_rate"] == pytest.approx(0.75)
+
+
+def test_compute_stats_latency_nearest_rank() -> None:
+    """Known dataset: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100] → p50=50, p95=95 nearest-rank."""
+    # 10 elements; nearest-rank: p50 idx = ceil(50/100*10)-1 = 5-1=4 → 50
+    # p95 idx = ceil(95/100*10)-1 = ceil(9.5)-1 = 10-1 = 9 → 100
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [_ok_search(latency_ms=float(v)) for v in range(10, 110, 10)]
+    stats = reader.compute_stats(entries, date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    assert stats["latency_ms"]["p50"] == pytest.approx(50.0)
+    assert stats["latency_ms"]["p95"] == pytest.approx(100.0)
+
+
+def test_compute_stats_latency_null_when_no_entries() -> None:
+    """Zero entries → latency_ms == {p50: None, p95: None}."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    stats = reader.compute_stats([], date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    assert stats["latency_ms"] == {"p50": None, "p95": None}
+
+
+def test_compute_stats_by_endpoint_counts() -> None:
+    """search and route entries are counted in by_endpoint with correct ok/error breakdown."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [
+        _ok_search(),
+        _ok_search(),
+        _error_entry(endpoint="search"),
+        _ok_route(),
+    ]
+    stats = reader.compute_stats(entries, date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    ep = stats["by_endpoint"]
+    assert ep["search"]["total"] == 3
+    assert ep["search"]["ok"] == 2
+    assert ep["search"]["error"] == 1
+    assert ep["route"]["total"] == 1
+    assert ep["route"]["ok"] == 1
+    assert ep["route"]["error"] == 0
+
+
+def test_compute_stats_by_collection_fan_out() -> None:
+    """Route entry with collections=['A','B'] increments both A and B."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [_ok_route(collections=["A", "B"])]
+    stats = reader.compute_stats(entries, date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    bc = stats["by_collection"]
+    assert bc["A"] == {"total": 1, "ok": 1}
+    assert bc["B"] == {"total": 1, "ok": 1}
+
+
+def test_compute_stats_by_collection_excludes_error_entries() -> None:
+    """Error entries (no collection/collections) are not counted in by_collection."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [
+        _ok_search(collection="col_x"),
+        _error_entry(endpoint="search"),
+    ]
+    stats = reader.compute_stats(entries, date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    bc = stats["by_collection"]
+    assert "col_x" in bc
+    assert bc["col_x"] == {"total": 1, "ok": 1}
+    # Error entry has no collection → not in by_collection
+    assert len(bc) == 1
+
+
+def test_compute_stats_error_breakdown_all_keys_present() -> None:
+    """All 6 ErrorKind literal values are always present, zero-filled if absent."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    stats = reader.compute_stats([], date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    eb = stats["error_breakdown"]
+    expected_keys = {
+        "empty_query",
+        "slot_out_of_range",
+        "timeout",
+        "internal_error",
+        "validation_error",
+        "other",
+    }
+    assert set(eb.keys()) == expected_keys
+    assert all(v == 0 for v in eb.values())
+
+
+def test_compute_stats_invariant_error_breakdown_vs_by_endpoint() -> None:
+    """sum(error_breakdown.values()) == sum(ep['error'] for ep in by_endpoint.values())."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [
+        _ok_search(),
+        _error_entry(endpoint="search", error_kind="timeout"),
+        _error_entry(endpoint="route", error_kind="internal_error"),
+    ]
+    stats = reader.compute_stats(entries, date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    eb_total = sum(stats["error_breakdown"].values())
+    ep_errors = sum(ep["error"] for ep in stats["by_endpoint"].values())
+    assert eb_total == ep_errors == 2
+
+
+def test_compute_stats_schema_keys() -> None:
+    """Return dict contains all required top-level keys with correct types/values."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    since = date(2026, 5, 1)
+    until = date(2026, 5, 14)
+    stats = reader.compute_stats([_ok_search()], since, until, skipped_lines=3)
+
+    assert stats["schema_version"] == 1
+    assert stats["enabled"] is True
+    assert stats["since"] == "2026-05-01"
+    assert stats["until"] == "2026-05-14"
+    assert stats["skipped_lines"] == 3
