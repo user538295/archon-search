@@ -200,3 +200,54 @@ class TestPrunerStart:
             # await should propagate CancelledError — no other exception must leak.
             with pytest.raises(asyncio.CancelledError):
                 await task
+
+    @pytest.mark.asyncio
+    async def test_pruner_loop_survives_prune_once_exception(self, tmp_path: Path) -> None:
+        """If prune_once raises, the loop should survive and not die."""
+        pruner = Pruner(tmp_path, retention_days=30)
+        call_count = 0
+        sleep_events: list[float] = []
+
+        async def fake_sleep(seconds: float) -> None:
+            sleep_events.append(seconds)
+            if len(sleep_events) >= 2:
+                raise asyncio.CancelledError()
+
+        original_prune = pruner.prune_once
+
+        def failing_then_ok(**kwargs: object) -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise PermissionError("no access")
+            return original_prune(**kwargs)  # type: ignore[arg-type]
+
+        with patch("archon_search.telemetry.pruner.asyncio.sleep", side_effect=fake_sleep):
+            with patch.object(pruner, "prune_once", side_effect=failing_then_ok):
+                task = await pruner.start()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        assert call_count == 2  # loop ran twice despite first failure
+
+    @pytest.mark.asyncio
+    async def test_pruner_start_is_idempotent(self, tmp_path: Path) -> None:
+        """Repeated calls to start() return the same task, not a new one."""
+        pruner = Pruner(tmp_path, retention_days=30)
+        sleep_event = asyncio.Event()
+
+        async def fake_sleep(seconds: float) -> None:
+            sleep_event.set()
+            await asyncio.Event().wait()  # block forever
+
+        with patch("archon_search.telemetry.pruner.asyncio.sleep", side_effect=fake_sleep):
+            task1 = await pruner.start()
+            await sleep_event.wait()  # ensure first task is running
+            task2 = await pruner.start()
+
+        assert task1 is task2  # same task returned
+        task1.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task1

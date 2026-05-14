@@ -16,6 +16,7 @@ class Pruner:
     def __init__(self, log_dir: Path, retention_days: int) -> None:
         self._log_dir = log_dir
         self._retention_days = retention_days
+        self._task: asyncio.Task[None] | None = None
 
     def prune_once(self, *, now: date | None = None) -> int:
         """Synchronous. Returns count of files deleted.
@@ -53,11 +54,17 @@ class Pruner:
         return deleted
 
     async def start(self) -> asyncio.Task[None]:
-        """Create and return a background task running the 24-hour prune loop."""
-        return asyncio.create_task(self._run())
+        """Create and return a background task running the 24-hour prune loop. Idempotent."""
+        if self._task is not None and not self._task.done():
+            return self._task
+        self._task = asyncio.create_task(self._run())
+        return self._task
 
     async def _run(self) -> None:
         """Infinite loop: prune once, then sleep 24 hours. Exits on cancellation."""
         while True:
-            self.prune_once()
+            try:
+                self.prune_once()
+            except Exception:
+                logger.warning("pruner: unexpected error in prune_once", exc_info=True)
             await asyncio.sleep(86400)
