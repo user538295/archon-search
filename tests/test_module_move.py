@@ -48,27 +48,7 @@ def test_importable_modules(module_path: str, class_name: str) -> None:
     assert cls is not None
 
 
-# ---------------------------------------------------------------------------
-# Verify cross-package imports were NOT rewritten to archon_search.*
-# ---------------------------------------------------------------------------
-
-_CROSS_PACKAGE_IMPORTS: list[tuple[str, str]] = [
-    # (filename, expected import string that must still exist)
-    # description_generator.py intentionally removed: _get_env_lock was inlined in Task 2.2
-    # install.py intentionally removed: archon.* imports removed in Task 2.3
-    # notification_monitor.py intentionally removed: file deleted in Task 2.4
-]
-
 _ARCHON_SEARCH_SRC = Path(__file__).parent.parent / "archon_search"
-
-
-@pytest.mark.parametrize("filename,expected_import", _CROSS_PACKAGE_IMPORTS)
-def test_cross_package_imports_preserved(filename: str, expected_import: str) -> None:
-    """Cross-package 'from archon.' imports must NOT have been rewritten to 'from archon_search.'."""
-    source = (_ARCHON_SEARCH_SRC / filename).read_text(encoding="utf-8")
-    assert expected_import in source, (
-        f"{filename}: expected cross-package import not found: {expected_import!r}"
-    )
 
 
 def test_notification_monitor_deleted() -> None:
