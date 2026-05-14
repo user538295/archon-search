@@ -66,3 +66,30 @@ def test_readme_links_to_adr_10() -> None:
     assert "ADRs/10_search_query_telemetry.md" in text, (
         "README must link to ADR 10 (ADRs/10_search_query_telemetry.md)"
     )
+
+
+ARCH_DOC_PATH = (
+    Path(__file__).parents[4]
+    / "Documentation"
+    / "Architecture"
+    / "180_search_architecture.md"
+)
+
+DOC_INDEX_PATH = (
+    Path(__file__).parents[4]
+    / "Documentation"
+    / "990_documentation_index_and_contribution_guide.md"
+)
+
+
+def test_arch_doc_mentions_telemetry_section() -> None:
+    arch_doc = ARCH_DOC_PATH.read_text(encoding="utf-8")
+    assert "## Telemetry (FEAT-039b)" in arch_doc
+    assert "ADRs/10_search_query_telemetry.md" in arch_doc
+    assert "TelemetryWriter" in arch_doc
+
+
+def test_doc_index_includes_telemetry_plan_and_adr() -> None:
+    index = DOC_INDEX_PATH.read_text(encoding="utf-8")
+    assert "| `Documentation/Backlog/FEAT-039b-search-telemetry-and-privacy-plan.md`" in index
+    assert "| `Documentation/ADRs/10_search_query_telemetry.md`" in index
