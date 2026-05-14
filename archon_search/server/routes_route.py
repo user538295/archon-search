@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from time import monotonic
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -11,6 +13,9 @@ from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.router import MultiCollectionRouter
 from archon_search.sync import path_to_collection_name
+from archon_search.telemetry.entry import ErrorKind, TelemetryEntry
+
+logger = logging.getLogger("archon.search")
 
 router = APIRouter()
 
@@ -46,6 +51,15 @@ def _build_router(
     )
 
 
+def _redact_validation(detail: str) -> ErrorKind:
+    """Map validation error detail strings to privacy-safe ErrorKind literals."""
+    if detail == "query must not be empty":
+        return "empty_query"
+    if detail == "slots must be >= 1":
+        return "slot_out_of_range"
+    return "validation_error"
+
+
 @router.post("/route", response_model=RouteResponse)
 async def route(body: RouteRequest, request: Request) -> Any:
     """Route a query to the appropriate search collections.
@@ -54,22 +68,22 @@ async def route(body: RouteRequest, request: Request) -> Any:
     the resolved pinned and routable collection names and a flag indicating
     whether the decomposer will be invoked.
     """
-    if not body.query or not body.query.strip():
-        raise HTTPException(status_code=400, detail="query must not be empty")
-
-    if body.slots is not None and body.slots < 1:
-        raise HTTPException(status_code=400, detail="slots must be >= 1")
-
-    config: SearchConfig = request.app.state.config
-
-    shortlist_size = body.slots if body.slots is not None else config.routing_shortlist_size
-
-    embedder: Embedder | None = getattr(request.app.state, "embedder", None)
-    col_router = _build_router(config, shortlist_size, embedder=embedder)
-
-    pinned_names = [path_to_collection_name(p) for p in config.pinned_collections]
+    start = monotonic()
+    writer = getattr(request.app.state, "telemetry_writer", None)
 
     try:
+        if not body.query or not body.query.strip():
+            raise HTTPException(status_code=400, detail="query must not be empty")
+
+        if body.slots is not None and body.slots < 1:
+            raise HTTPException(status_code=400, detail="slots must be >= 1")
+
+        config: SearchConfig = request.app.state.config
+        shortlist_size = body.slots if body.slots is not None else config.routing_shortlist_size
+        embedder: Embedder | None = getattr(request.app.state, "embedder", None)
+        col_router = _build_router(config, shortlist_size, embedder=embedder)
+        pinned_names = [path_to_collection_name(p) for p in config.pinned_collections]
+
         pre_context = await asyncio.wait_for(
             col_router.get_pre_context(
                 query=body.query,
@@ -78,12 +92,56 @@ async def route(body: RouteRequest, request: Request) -> Any:
             ),
             timeout=30.0,
         )
+
+        resp = RouteResponse(
+            pre_context=pre_context,
+            pinned_names=pinned_names,
+            routable_names=col_router.last_routable_names,
+            decomposer_invoked=col_router.decomposer_was_invoked,
+        )
+        if writer is not None:
+            writer.enqueue(
+                TelemetryEntry.from_route_response(
+                    collections=resp.pinned_names + resp.routable_names,
+                    decomposer_invoked=resp.decomposer_invoked,
+                    latency_ms=(monotonic() - start) * 1000.0,
+                )
+            )
+        return resp
+
     except asyncio.TimeoutError:
+        if writer is not None:
+            writer.enqueue(
+                TelemetryEntry.from_error(
+                    endpoint="route",
+                    status="timeout",
+                    error_kind="timeout",
+                    latency_ms=(monotonic() - start) * 1000.0,
+                )
+            )
         raise HTTPException(status_code=504, detail="routing timed out")
 
-    return RouteResponse(
-        pre_context=pre_context,
-        pinned_names=pinned_names,
-        routable_names=col_router.last_routable_names,
-        decomposer_invoked=col_router.decomposer_was_invoked,
-    )
+    except HTTPException as exc:
+        if exc.status_code == 400 and writer is not None:
+            writer.enqueue(
+                TelemetryEntry.from_error(
+                    endpoint="route",
+                    status="validation_error",
+                    error_kind=_redact_validation(exc.detail),
+                    latency_ms=(monotonic() - start) * 1000.0,
+                )
+            )
+        raise
+
+    except Exception as exc:
+        if writer is not None:
+            writer.enqueue(
+                TelemetryEntry.from_error(
+                    endpoint="route",
+                    status="internal_error",
+                    error_kind="other",
+                    latency_ms=(monotonic() - start) * 1000.0,
+                )
+            )
+        logger.error("route handler failed: %s", type(exc).__name__, exc_info=True)
+        raise
