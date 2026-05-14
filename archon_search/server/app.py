@@ -20,6 +20,8 @@ from archon_search.server.routes_jobs import router as jobs_router
 from archon_search.server.routes_route import router as route_router
 from archon_search.server.routes_state import router as state_router
 from archon_search.server.routes_status import router as status_router
+from archon_search.telemetry.pruner import Pruner
+from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger("archon-search")
 
@@ -33,8 +35,24 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        # Startup: initialise telemetry if enabled
+        if config.telemetry.enabled:
+            log_dir = Path(config.telemetry.log_dir).expanduser()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            pruner = Pruner(log_dir, config.telemetry.retention_days)
+            await asyncio.to_thread(pruner.prune_once)
+            writer = TelemetryWriter(log_dir)
+            app.state._background_tasks.add(await writer.start())
+            app.state._background_tasks.add(await pruner.start())
+            app.state.telemetry_writer = writer
+        else:
+            app.state.telemetry_writer = None
+
         yield
-        # Shutdown: cancel all in-flight background tasks
+
+        # Shutdown: drain writer before cancelling background tasks
+        if app.state.telemetry_writer is not None:
+            await writer.drain_and_stop()
         tasks = list(app.state._background_tasks)
         for task in tasks:
             task.cancel()
