@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from fastmcp import Context, FastMCP
@@ -12,11 +13,17 @@ from starlette.responses import JSONResponse
 
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingState, IndexingStatus
+from archon_search.telemetry.entry import TelemetryEntry
+from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger("archon.search")
 
 
-def create_app(pipeline: SearchPipeline, default_collection: str) -> FastMCP:
+def create_app(
+    pipeline: SearchPipeline,
+    default_collection: str,
+    writer: TelemetryWriter | None = None,
+) -> FastMCP:
     """Create a FastMCP app with 9 RAG tools registered."""
     app = FastMCP("archon-search")
 
@@ -26,10 +33,29 @@ def create_app(pipeline: SearchPipeline, default_collection: str) -> FastMCP:
         collection: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search for relevant document chunks using hybrid vector + FTS search."""
+        start = monotonic()
         try:
             results = await pipeline.search(query, collection or default_collection)
+            if writer is not None:
+                writer.enqueue(
+                    TelemetryEntry.from_search_tool_result(
+                        endpoint="search",
+                        collection=collection or default_collection,
+                        result_doc_ids=[r.doc_id for r in results],
+                        latency_ms=(monotonic() - start) * 1000.0,
+                    )
+                )
             return [asdict(r) for r in results]
         except Exception as exc:
+            if writer is not None:
+                writer.enqueue(
+                    TelemetryEntry.from_error(
+                        endpoint="search",
+                        status="internal_error",
+                        error_kind="other",
+                        latency_ms=(monotonic() - start) * 1000.0,
+                    )
+                )
             logger.exception("search failed")
             return [{"error": str(exc)}]
 
