@@ -29,6 +29,9 @@ from archon_search.telemetry.entry import TelemetryEntry
 
 _logger = logging.getLogger("archon.search")
 
+# Maximum serialized byte size for a single JSONL entry.
+MAX_ENTRY_BYTES = 8192
+
 # Rate-limit window for warnings (one warning per kind per window).
 _WARN_WINDOW_S = 60.0
 
@@ -126,6 +129,7 @@ class TelemetryWriter:
             entry = await self._queue.get()
             try:
                 now = self._clock()
+                entry = self._truncate_to_fit(entry)
                 payload = self._serialize(entry)
                 self._append(now, payload)
             except (OSError, ValueError) as exc:
@@ -151,6 +155,47 @@ class TelemetryWriter:
         path = self._file_for(when)
         with path.open("ab") as fh:
             fh.write(payload)
+
+    def _truncate_to_fit(
+        self, entry: TelemetryEntry, limit_bytes: int = MAX_ENTRY_BYTES
+    ) -> TelemetryEntry:
+        """Return entry unchanged if it fits; otherwise binary-search the largest
+        result_doc_ids prefix that still serializes within limit_bytes.
+
+        Raises ValueError if even an empty result_doc_ids list exceeds limit_bytes.
+        """
+        if len(self._serialize(entry)) <= limit_bytes:
+            return entry
+
+        # If there are no result_doc_ids to truncate, we cannot reduce the size.
+        if entry.result_doc_ids is None:
+            raise ValueError(
+                "entry exceeds MAX_ENTRY_BYTES and has no result_doc_ids to truncate"
+            )
+
+        # Check whether common fields alone fit with empty doc_ids.
+        base = entry.model_copy(update={"result_doc_ids": [], "truncated": True})
+        if len(self._serialize(base)) > limit_bytes:
+            raise ValueError(
+                "entry exceeds MAX_ENTRY_BYTES even with empty result_doc_ids"
+            )
+
+        # Binary search for the largest prefix of result_doc_ids that fits.
+        ids = entry.result_doc_ids or []
+        lo, hi = 0, len(ids)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            candidate = entry.model_copy(
+                update={"result_doc_ids": ids[:mid], "truncated": True}
+            )
+            if len(self._serialize(candidate)) <= limit_bytes:
+                lo = mid
+            else:
+                hi = mid - 1
+
+        return entry.model_copy(
+            update={"result_doc_ids": ids[:lo], "truncated": True}
+        )
 
     def _warn_rate_limited(self, kind: str, message: str) -> None:
         now = time.monotonic()

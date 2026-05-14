@@ -311,3 +311,297 @@ async def test_writer_drain_is_idempotent(tmp_path: Path) -> None:
     # Second call must not raise.
     await writer.drain_and_stop()
     await writer.drain_and_stop()
+
+
+# ---------------------------------------------------------------------------
+# Task 2.2 — oversized-entry truncation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_writer_truncates_oversized_entry(tmp_path: Path) -> None:
+    """1000 doc_ids each 50 chars long → written line ≤ 8192 bytes, truncated=true."""
+    fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: fixed)
+
+    big_ids = ["x" * 50 for _ in range(1000)]
+    entry = TelemetryEntry(
+        query_id="big",
+        timestamp="2026-05-14T12:00:00Z",
+        endpoint="search",
+        latency_ms=1.0,
+        status="ok",
+        collection="default",
+        result_count=len(big_ids),
+        result_doc_ids=big_ids,
+    )
+
+    await writer.start()
+    writer.enqueue(entry)
+    await writer.drain_and_stop()
+
+    log_file = tmp_path / "2026-05-14.jsonl"
+    lines = log_file.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    line_bytes = lines[0].encode("utf-8")
+    assert len(line_bytes) <= 8192, f"line is {len(line_bytes)} bytes, expected ≤ 8192"
+    parsed = json.loads(lines[0])
+    assert parsed.get("truncated") is True
+
+
+@pytest.mark.asyncio
+async def test_writer_keeps_short_entry_untouched(tmp_path: Path) -> None:
+    """A small entry must not have a 'truncated' key in the serialized output."""
+    fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: fixed)
+
+    await writer.start()
+    writer.enqueue(_make_entry())
+    await writer.drain_and_stop()
+
+    log_file = tmp_path / "2026-05-14.jsonl"
+    parsed = json.loads(log_file.read_text(encoding="utf-8").splitlines()[0])
+    assert "truncated" not in parsed
+
+
+def test_truncate_to_fit_binary_search_correctness() -> None:
+    """The result must be the largest prefix that still fits within the limit."""
+    from archon_search.telemetry.writer import MAX_ENTRY_BYTES, TelemetryWriter
+
+    writer = TelemetryWriter(Path("/tmp"))  # log_dir unused in this call
+    big_ids = ["x" * 50 for _ in range(1000)]
+    entry = TelemetryEntry(
+        query_id="bs",
+        timestamp="2026-05-14T12:00:00Z",
+        endpoint="search",
+        latency_ms=1.0,
+        status="ok",
+        collection="default",
+        result_count=len(big_ids),
+        result_doc_ids=big_ids,
+    )
+
+    result = writer._truncate_to_fit(entry, MAX_ENTRY_BYTES)
+
+    # Must fit.
+    serialized = writer._serialize(result)
+    assert len(serialized) <= MAX_ENTRY_BYTES
+
+    # Must be truncated and flagged.
+    assert result.truncated is True
+    assert result.result_doc_ids is not None
+    kept = len(result.result_doc_ids)
+
+    # Adding one more id must break the limit (largest-prefix property).
+    if kept < len(big_ids):
+        one_more = result.model_copy(
+            update={
+                "result_doc_ids": big_ids[: kept + 1],
+                "truncated": True,
+            }
+        )
+        assert len(writer._serialize(one_more)) > MAX_ENTRY_BYTES
+
+
+def test_truncate_to_fit_raises_when_even_zero_doc_ids_too_large() -> None:
+    """When common fields alone exceed the limit, ValueError must be raised."""
+    from archon_search.telemetry.writer import TelemetryWriter
+
+    writer = TelemetryWriter(Path("/tmp"))
+    # A very small limit that even a minimal serialized entry will exceed.
+    entry = TelemetryEntry(
+        query_id="tiny",
+        timestamp="2026-05-14T12:00:00Z",
+        endpoint="search",
+        latency_ms=1.0,
+        status="ok",
+        collection="default",
+        result_count=0,
+        result_doc_ids=[],
+    )
+
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="exceeds MAX_ENTRY_BYTES"):
+        writer._truncate_to_fit(entry, limit_bytes=10)
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 — new tests for result_doc_ids=None edge cases and drain-loop coverage
+# ---------------------------------------------------------------------------
+
+
+def test_writer_truncate_to_fit_raises_for_none_doc_ids() -> None:
+    """_truncate_to_fit raises ValueError when entry has result_doc_ids=None and is oversized."""
+    from archon_search.telemetry.writer import TelemetryWriter
+
+    writer = TelemetryWriter(Path("/tmp"))
+    # A route entry has result_doc_ids=None by design.
+    entry = TelemetryEntry.from_route_response(
+        collections=["col1", "col2"],
+        decomposer_invoked=True,
+        latency_ms=5.0,
+    )
+    # Force a tiny limit so the entry is "oversized".
+    with pytest.raises(ValueError, match="no result_doc_ids to truncate"):
+        writer._truncate_to_fit(entry, limit_bytes=10)
+
+
+@pytest.mark.asyncio
+async def test_writer_handles_route_entry_exceeding_limit_as_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """ValueError from _truncate_to_fit is caught in drain loop; writer stays alive."""
+    fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: fixed)
+
+    route_entry = TelemetryEntry.from_route_response(
+        collections=["col1"],
+        decomposer_invoked=False,
+        latency_ms=3.0,
+    )
+
+    caplog.set_level(logging.WARNING, logger="archon.search")
+
+    # Patch _truncate_to_fit to always raise for this specific oversized call.
+    real_truncate = writer._truncate_to_fit
+
+    def truncate_raises(entry: TelemetryEntry, limit_bytes: int = 8192) -> TelemetryEntry:
+        if entry.result_doc_ids is None:
+            raise ValueError("entry exceeds MAX_ENTRY_BYTES and has no result_doc_ids to truncate")
+        return real_truncate(entry, limit_bytes)
+
+    writer._truncate_to_fit = truncate_raises  # type: ignore[method-assign]
+
+    await writer.start()
+    writer.enqueue(route_entry)
+    # Enqueue a normal entry afterwards to prove the drain loop is still alive.
+    writer.enqueue(_make_entry("after-route"))
+    await writer.drain_and_stop()
+
+    # The normal entry must have been written.
+    log_file = tmp_path / "2026-05-14.jsonl"
+    assert log_file.exists()
+    content = log_file.read_text(encoding="utf-8")
+    assert "after-route" in content
+
+    # A warning about the failed write must have been emitted.
+    write_warnings = [r for r in caplog.records if "write failed" in r.getMessage().lower()]
+    assert len(write_warnings) >= 1
+
+
+@pytest.mark.asyncio
+async def test_writer_valueerror_from_truncation_caught_in_drain_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Monkeypatched _truncate_to_fit raising ValueError: drain completes, warning logged, writer survives."""
+    fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: fixed)
+
+    monkeypatch.setattr(
+        writer,
+        "_truncate_to_fit",
+        lambda entry, limit_bytes=8192: (_ for _ in ()).throw(ValueError("synthetic error")),
+    )
+
+    caplog.set_level(logging.WARNING, logger="archon.search")
+
+    await writer.start()
+    writer.enqueue(_make_entry("raises"))
+    await writer.drain_and_stop()
+
+    # 1. Drain task completed without crashing (drain_and_stop didn't raise).
+    assert writer._task is None  # task was cleaned up normally
+
+    # 2. A WARNING was logged.
+    warn_records = [r for r in caplog.records if r.levelno == logging.WARNING and "archon.search" in r.name]
+    assert len(warn_records) >= 1
+
+    # 3. Writer can process a subsequent entry (start again to prove not broken).
+    await writer.start()
+    writer.enqueue(_make_entry("after-error"))
+    # Remove the monkeypatch for the second round.
+    monkeypatch.setattr(writer, "_truncate_to_fit", TelemetryWriter._truncate_to_fit.__get__(writer))
+    await writer.drain_and_stop()
+
+
+@pytest.mark.asyncio
+async def test_writer_write_error_warning_is_rate_limited(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When _truncate_to_fit always raises, 10 enqueued entries produce only 1 WARNING."""
+    fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: fixed)
+
+    monkeypatch.setattr(
+        writer,
+        "_truncate_to_fit",
+        lambda entry, limit_bytes=8192: (_ for _ in ()).throw(ValueError("always fails")),
+    )
+
+    caplog.set_level(logging.WARNING, logger="archon.search")
+
+    await writer.start()
+    for i in range(10):
+        writer.enqueue(_make_entry(f"q{i}"))
+    await writer.drain_and_stop()
+
+    write_warnings = [
+        r for r in caplog.records
+        if "write failed" in r.getMessage().lower()
+    ]
+    assert len(write_warnings) == 1, (
+        f"expected exactly 1 rate-limited warning, got {len(write_warnings)}"
+    )
+
+
+def test_writer_keeps_error_entry_untouched() -> None:
+    """An error entry that fits within the limit is returned as-is (no truncated field)."""
+    from archon_search.telemetry.writer import MAX_ENTRY_BYTES, TelemetryWriter
+
+    writer = TelemetryWriter(Path("/tmp"))
+    entry = TelemetryEntry.from_error(
+        endpoint="search",
+        status="timeout",
+        error_kind="timeout",
+        latency_ms=30000.0,
+    )
+
+    result = writer._truncate_to_fit(entry, MAX_ENTRY_BYTES)
+
+    # Must be the same object (returned unchanged).
+    assert result is entry
+    # Must not have a truncated field set.
+    assert result.truncated is None
+
+
+@pytest.mark.asyncio
+async def test_writer_keeps_short_entry_result_doc_ids_intact(tmp_path: Path) -> None:
+    """A short entry must pass through _truncate_to_fit with result_doc_ids preserved."""
+    fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: fixed)
+
+    original_ids = ["doc-1", "doc-2", "doc-3"]
+    entry = TelemetryEntry(
+        query_id="short",
+        timestamp="2026-05-14T12:00:00Z",
+        endpoint="search",
+        latency_ms=5.0,
+        status="ok",
+        collection="default",
+        result_count=len(original_ids),
+        result_doc_ids=original_ids,
+    )
+
+    await writer.start()
+    writer.enqueue(entry)
+    await writer.drain_and_stop()
+
+    log_file = tmp_path / "2026-05-14.jsonl"
+    parsed = json.loads(log_file.read_text(encoding="utf-8").splitlines()[0])
+    assert "truncated" not in parsed
+    assert parsed["result_doc_ids"] == original_ids
