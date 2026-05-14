@@ -1,7 +1,8 @@
-"""Telemetry log pruner — filename-based daily retention (FEAT-039b, Task 2.3)."""
+"""Telemetry log pruner — filename-based daily retention (FEAT-039b, Task 2.3/2.4)."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -50,3 +51,13 @@ class Pruner:
                     logger.warning("pruner: failed to delete %s", path)
 
         return deleted
+
+    async def start(self) -> asyncio.Task[None]:
+        """Create and return a background task running the 24-hour prune loop."""
+        return asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        """Infinite loop: prune once, then sleep 24 hours. Exits on cancellation."""
+        while True:
+            self.prune_once()
+            await asyncio.sleep(86400)

@@ -1,10 +1,12 @@
-"""Tests for Pruner.prune_once — Task 2.3 (TDD: tests first)."""
+"""Tests for Pruner — Task 2.3 (prune_once) and Task 2.4 (start/_run)."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import unittest.mock
 
@@ -146,3 +148,55 @@ class TestPruneOnce:
         assert count == 1
         assert today_file.exists()
         assert not yesterday_file.exists()
+
+
+class TestPrunerStart:
+    @pytest.mark.asyncio
+    async def test_pruner_start_runs_prune_once_immediately(self, tmp_path: Path) -> None:
+        """prune_once is called before the first asyncio.sleep."""
+        pruner = Pruner(tmp_path, retention_days=30)
+        prune_once_calls: list[None] = []
+
+        original_prune_once = pruner.prune_once
+
+        def tracking_prune_once(**kwargs: object) -> int:
+            prune_once_calls.append(None)
+            return original_prune_once(**kwargs)  # type: ignore[arg-type]
+
+        pruner.prune_once = tracking_prune_once  # type: ignore[method-assign]
+
+        sleep_barrier: asyncio.Future[None] = asyncio.get_event_loop().create_future()
+
+        async def fake_sleep(delay: float) -> None:
+            # Signal that we've reached the sleep point, then block until cancelled.
+            sleep_barrier.set_result(None)
+            await asyncio.Event().wait()  # blocks until task is cancelled
+
+        with patch("archon_search.telemetry.pruner.asyncio.sleep", side_effect=fake_sleep):
+            task = await pruner.start()
+            # Wait until _run has called prune_once and hit the first sleep.
+            await asyncio.wait_for(sleep_barrier, timeout=2.0)
+
+        assert len(prune_once_calls) >= 1, "prune_once should be called before the first sleep"
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    @pytest.mark.asyncio
+    async def test_pruner_cancellation_exits_cleanly(self, tmp_path: Path) -> None:
+        """Cancelling the task returned by start() raises no unhandled exception."""
+        pruner = Pruner(tmp_path, retention_days=30)
+
+        started = asyncio.Event()
+
+        async def fake_sleep(delay: float) -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        with patch("archon_search.telemetry.pruner.asyncio.sleep", side_effect=fake_sleep):
+            task = await pruner.start()
+            await asyncio.wait_for(started.wait(), timeout=2.0)
+            task.cancel()
+            # await should propagate CancelledError — no other exception must leak.
+            with pytest.raises(asyncio.CancelledError):
+                await task
