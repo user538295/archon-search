@@ -310,8 +310,13 @@ async def test_H3_8_ingest_cancel_while_running_transitions_to_cancelling(
     app = create_app(config, job_store, config_path=tmp_path / "config.toml")
     app.state.ingest_pipeline = blocking_pipeline
 
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {key}"},
+    ) as client:
         async with app.router.lifespan_context(app):
             post_resp = await client.post(
                 "/ingest", json={"collection": "docs"}
