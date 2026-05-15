@@ -9,20 +9,32 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-EndpointKind = Literal["search", "search_with_context", "route"]
-Status = Literal["ok", "validation_error", "timeout", "internal_error"]
-ErrorKind = Literal[
-    "empty_query",
-    "slot_out_of_range",
-    "timeout",
-    "internal_error",
-    "validation_error",
-    "other",
-]
+
+class EndpointKind(StrEnum):
+    search = "search"
+    search_with_context = "search_with_context"
+    route = "route"
+
+
+class Status(StrEnum):
+    ok = "ok"
+    validation_error = "validation_error"
+    timeout = "timeout"
+    internal_error = "internal_error"
+
+
+class ErrorKind(StrEnum):
+    empty_query = "empty_query"
+    slot_out_of_range = "slot_out_of_range"
+    timeout = "timeout"
+    internal_error = "internal_error"
+    validation_error = "validation_error"
+    other = "other"
 
 DOCUMENTED_SCHEMA_FIELDS: frozenset[str] = frozenset(
     {
