@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import os
+
 import tomlkit
 from fastapi.testclient import TestClient
 
@@ -26,7 +28,8 @@ def _make_client(
     config.db_path = str(tmp_path / "search")
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store, config_path=tmp_path / "config.toml")
-    return TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
 
 def _patch_router(
@@ -229,7 +232,8 @@ def _make_ingest_client(
     app = create_app(config, job_store, config_path=tmp_path / "config.toml")
     if pipeline_fn is not None:
         app.state.ingest_pipeline = pipeline_fn
-    return TestClient(app), app
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"}), app
 
 
 # ---------------------------------------------------------------------------
@@ -601,7 +605,8 @@ def test_H3_18_indexing_state_fields_filtered(tmp_path: Path) -> None:
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store, config_path=tmp_path / "config.toml")
     app.state.state_store.write(state)
-    test_client = TestClient(app)
+    _key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    test_client = TestClient(app, headers={"Authorization": f"Bearer {_key}"})
 
     response = test_client.get("/indexing-state")
     assert response.status_code == 200

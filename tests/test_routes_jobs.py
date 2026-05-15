@@ -20,11 +20,11 @@ def tmp_store(tmp_path: Path) -> JobStore:
 
 
 @pytest.fixture
-def client(tmp_path: Path, tmp_store: JobStore) -> TestClient:
+def client(tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]) -> TestClient:
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     app = create_app(config, tmp_store)
-    return TestClient(app)
+    return TestClient(app, headers=auth_headers)
 
 
 # ---------------------------------------------------------------------------

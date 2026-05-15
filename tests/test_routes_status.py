@@ -1,6 +1,7 @@
 """Tests for GET /status endpoint (Task 5.3a)."""
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,7 +28,8 @@ def _make_client_with_state(tmp_db: Path, state: IndexingState) -> TestClient:
     config.db_path = str(tmp_db)
     job_store = JobStore(path=tmp_db / "jobs.json")
     app = create_app(config, job_store)
-    return TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
 
 def test_status_returns_running_and_collections(tmp_db: Path) -> None:
@@ -131,7 +133,8 @@ def test_status_no_state_file(tmp_db: Path) -> None:
     config.db_path = str(tmp_db)
     job_store = JobStore(path=tmp_db / "jobs.json")
     app = create_app(config, job_store)
-    c = TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
     response = c.get("/status")
     assert response.status_code == 200
     data = response.json()
@@ -158,7 +161,8 @@ def test_status_config_paths_converted_to_names(tmp_db: Path) -> None:
     config.pinned_collections = ["/notes"]
     job_store = JobStore(path=tmp_db / "jobs.json")
     app = create_app(config, job_store)
-    c = TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     response = c.get("/status")
     assert response.status_code == 200

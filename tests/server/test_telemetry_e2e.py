@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 import types
 import uuid
@@ -181,7 +182,8 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
             # search_with_context error
             await err_mcp.tools["search_with_context"](query="q4", collection=None)
 
-    with TestClient(app) as client:
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    with TestClient(app, headers={"Authorization": f"Bearer {key}"}) as client:
         writer = app.state.telemetry_writer
         assert writer is not None, "Writer must be set when telemetry is enabled"
 
@@ -277,7 +279,8 @@ def test_handler_does_not_leak_query_text_into_log(
     with caplog.at_level(logging.WARNING, logger="archon.search"):
         # raise_server_exceptions=False so internal errors return 500 instead of
         # propagating as Python exceptions and short-circuiting the test.
-        with TestClient(app, raise_server_exceptions=False) as client:
+        key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+        with TestClient(app, headers={"Authorization": f"Bearer {key}"}, raise_server_exceptions=False) as client:
             writer = app.state.telemetry_writer
             assert writer is not None
 
@@ -390,7 +393,8 @@ def test_disabled_telemetry_writes_no_files(tmp_path: Path) -> None:
 
     fake_router = _FakeColRouter(routable=["col_a"], decomposer=False)
 
-    with TestClient(app) as client:
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    with TestClient(app, headers={"Authorization": f"Bearer {key}"}) as client:
         # Success path
         with patch(
             "archon_search.server.routes_route._build_router", return_value=fake_router

@@ -1,6 +1,7 @@
 """Tests for GET /indexing-state endpoint (Task 5.4)."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,8 @@ def _make_client(tmp_db: Path) -> TestClient:
     config.db_path = str(tmp_db)
     job_store = JobStore(path=tmp_db / "jobs.json")
     app = create_app(config, job_store)
-    return TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
 
 def _make_client_with_state(tmp_db: Path, state: IndexingState) -> TestClient:

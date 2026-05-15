@@ -20,6 +20,10 @@ from _search_stubs_shim import install_stubs  # noqa: E402
 
 install_stubs()
 
+# Fixed test API key injected into all tests so create_app() uses a known key.
+TEST_API_KEY = "0" * 64
+os.environ["ARCHON_SEARCH_API_KEY"] = TEST_API_KEY
+
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -109,6 +113,12 @@ def connected_store(tmp_path_factory: pytest.TempPathFactory):  # type: ignore[n
     asyncio.run(store.connect())
     yield store
     asyncio.run(store.disconnect())
+
+
+@pytest.fixture
+def auth_headers() -> dict[str, str]:
+    """Bearer auth headers using the test API key."""
+    return {"Authorization": f"Bearer {TEST_API_KEY}"}
 
 
 @pytest.fixture

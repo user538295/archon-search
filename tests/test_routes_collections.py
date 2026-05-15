@@ -1,6 +1,7 @@
 """Tests for GET/POST/DELETE /collections/* endpoints (Task 5.7)."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,9 +28,9 @@ def config(tmp_path: Path) -> SearchConfig:
 
 
 @pytest.fixture
-def client(config: SearchConfig, tmp_store: JobStore) -> TestClient:
+def client(config: SearchConfig, tmp_store: JobStore, auth_headers: dict[str, str]) -> TestClient:
     app = create_app(config, tmp_store)
-    return TestClient(app)
+    return TestClient(app, headers=auth_headers)
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +54,8 @@ def test_list_collections_shows_configured(tmp_path: Path, tmp_store: JobStore) 
     cfg.db_path = str(tmp_path / "search")
     cfg.collections = [str(src)]
     app = create_app(cfg, tmp_store)
-    c = TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     response = c.get("/collections/")
     assert response.status_code == 200
@@ -84,7 +86,8 @@ def test_add_collection_persists_and_starts_ingest(
     src = tmp_path / "myproject"
     src.mkdir()
     app = create_app(config, tmp_store)
-    c = TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     with patch("archon_search.server.routes_collections.asyncio.create_task",
                side_effect=lambda coro: (coro.close(), MagicMock())[1]):
@@ -110,7 +113,8 @@ def test_add_duplicate_collection_returns_409(
     src = tmp_path / "myproject"
     src.mkdir()
     app = create_app(config, tmp_store)
-    c = TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     with patch("archon_search.server.routes_collections.asyncio.create_task",
                side_effect=lambda coro: (coro.close(), MagicMock())[1]):
@@ -138,7 +142,8 @@ def test_add_collection_already_pinned_returns_409(
     cfg.db_path = str(tmp_path / "search")
     cfg.pinned_collections = [str(pinned)]
     app = create_app(cfg, tmp_store)
-    c = TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     response = c.post("/collections/", json={"path": str(pinned)})
     assert response.status_code == 409
@@ -166,7 +171,8 @@ def test_remove_collection_deletes_config_and_data(
     mock_search_store.drop_collection = AsyncMock()
     app.state.search_store = mock_search_store
 
-    c = TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     name = path_to_collection_name(str(src))
 
@@ -198,7 +204,8 @@ def test_remove_pinned_only_collection_rejected(
     cfg.pinned_collections = [str(src)]
     # NOT in cfg.collections
     app = create_app(cfg, tmp_store)
-    c = TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     name = path_to_collection_name(str(src))
 
@@ -223,7 +230,8 @@ def test_get_collection_info(
     cfg.db_path = str(tmp_path / "search")
     cfg.collections = [str(src)]
     app = create_app(cfg, tmp_store)
-    c = TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     name = path_to_collection_name(str(src))
 
@@ -261,7 +269,8 @@ def test_reindex_returns_ingest_job(
     cfg.db_path = str(tmp_path / "search")
     cfg.collections = [str(src)]
     app = create_app(cfg, tmp_store)
-    c = TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     name = path_to_collection_name(str(src))
 

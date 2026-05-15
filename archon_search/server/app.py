@@ -13,7 +13,9 @@ from fastapi import FastAPI
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.jobs.store import JobStore
+from archon_search.key_manager import load_or_generate_key
 from archon_search.progress import IndexingStateStore
+from archon_search.server.middleware_auth import APIKeyMiddleware
 from archon_search.server.routes_collections import router as collections_router
 from archon_search.server.routes_health import router as health_router
 from archon_search.server.routes_jobs import router as jobs_router
@@ -33,6 +35,7 @@ def create_app(
     config_path: Path | str | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application instance."""
+    api_key, key_source = load_or_generate_key()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -60,6 +63,8 @@ def create_app(
         await asyncio.gather(*tasks, return_exceptions=True)
 
     app = FastAPI(title="archon-search", lifespan=lifespan)
+    app.add_middleware(APIKeyMiddleware, api_key=api_key)
+    logger.info("API key authentication enabled (source: %s)", key_source)
     app.state.config = config
     app.state.job_store = job_store
     app.state.config_path = Path(config_path) if config_path is not None else None

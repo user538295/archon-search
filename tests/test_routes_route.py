@@ -1,6 +1,7 @@
 """Tests for POST /route endpoint (Task 5.5)."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,7 +27,8 @@ def _make_client(
     config.routing_confidence_threshold = confidence_threshold
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
-    return TestClient(app)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
 
 def _patch_router(
