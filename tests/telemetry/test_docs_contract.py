@@ -20,7 +20,7 @@ REQUIRED_HEADINGS = [
     "## Consequences",
     "## Privacy",
     "## Why `export_enabled` is not a security boundary",
-    "## Open questions / FEAT-039c hooks",
+    "## Open questions / FEAT-039d hooks",
 ]
 
 REQUIRED_SUBSTRING = "absence of export code"
