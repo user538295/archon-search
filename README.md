@@ -4,6 +4,10 @@ Archon Search — standalone hybrid retrieval and routing server extracted from 
 
 The package provides a FastAPI-based REST/MCP control plane over a LanceDB vector store, fastembed embeddings, a cross-encoder reranker, and a multi-collection router. It runs as its own process and is consumed by Archon via HTTP through `archon/ai/search_client.py`.
 
+## Authentication
+
+All endpoints except `GET /health` require a `Bearer` token via the `Authorization` header. On first start, the server auto-generates a key and writes it to `~/.archon/.search.env` (permissions 600). `SearchClient` picks this up automatically — no manual configuration needed for local use. To override (Docker/CI), set the `ARCHON_SEARCH_API_KEY` environment variable; it takes priority over the file.
+
 ## Quick start
 
 Install package dependencies (including dev/eval extras):
