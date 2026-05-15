@@ -178,7 +178,7 @@ async def remove_collection(name: str, request: Request) -> JSONResponse:
 
 
 @router.get("/{name}", response_model=None)
-def get_collection_info(name: str, request: Request) -> JSONResponse:
+async def get_collection_info(name: str, request: Request) -> JSONResponse:
     """Return CollectionDetail for a single collection. 404 if not found."""
     config: SearchConfig = request.app.state.config
     state_store = request.app.state.state_store
@@ -192,7 +192,6 @@ def get_collection_info(name: str, request: Request) -> JSONResponse:
 
     # Pull extra detail from state if available
     embedding_model = config.embedding_model
-    centroid_present = False
     last_indexed: str | None = None
     try:
         state = state_store.read()
@@ -202,11 +201,26 @@ def get_collection_info(name: str, request: Request) -> JSONResponse:
     except Exception:  # noqa: BLE001
         pass
 
+    # Fetch real doc_count and centroid_present from search store
+    doc_count = 0
+    centroid_present = False
+    search_store = getattr(request.app.state, "search_store", None)
+    if search_store is not None:
+        try:
+            doc_count = await search_store.count_documents(name)
+        except Exception:  # noqa: BLE001
+            doc_count = 0
+        try:
+            meta = await search_store.get_collection_meta(name)
+            centroid_present = bool(meta is not None and meta.centroid)
+        except Exception:  # noqa: BLE001
+            centroid_present = False
+
     data = {
         "name": name,
         "path": resolved,
         "description": "",
-        "doc_count": 0,
+        "doc_count": doc_count,
         "chunk_count": 0,
         "status": status,
         "embedding_model": embedding_model,

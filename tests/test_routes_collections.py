@@ -288,3 +288,114 @@ def test_reindex_unknown_collection_returns_404(client: TestClient) -> None:
     """POST /collections/{name}/reindex for unknown collection returns 404."""
     response = client.post("/collections/nonexistent-collection/reindex")
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /collections/{name} — real doc_count and centroid_present (Task 3.1)
+# ---------------------------------------------------------------------------
+
+
+def test_collection_info_doc_count_real(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} returns real doc_count from SearchStore."""
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=3)
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    name = path_to_collection_name(str(src))
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    assert response.json()["doc_count"] == 3
+
+
+def test_collection_info_doc_count_zero_on_store_error(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} returns doc_count=0 when SearchStore raises."""
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(side_effect=RuntimeError("db error"))
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    name = path_to_collection_name(str(src))
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    assert response.json()["doc_count"] == 0
+
+
+def test_collection_info_centroid_present_true(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} returns centroid_present=true when centroid is set."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    meta = CollectionMeta(name=path_to_collection_name(str(src)), centroid=[0.1, 0.2])
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=0)
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    name = path_to_collection_name(str(src))
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    assert response.json()["centroid_present"] is True
+
+
+def test_collection_info_centroid_present_false(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} returns centroid_present=false when centroid is None."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    meta = CollectionMeta(name=path_to_collection_name(str(src)), centroid=None)
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=0)
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    name = path_to_collection_name(str(src))
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    assert response.json()["centroid_present"] is False

@@ -16,6 +16,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.key_manager import load_or_generate_key
 from archon_search.progress import IndexingStateStore
 from archon_search.server.middleware_auth import APIKeyMiddleware
+from archon_search.store import SearchStore
 from archon_search.server.routes_collections import router as collections_router
 from archon_search.server.routes_health import router as health_router
 from archon_search.server.routes_jobs import router as jobs_router
@@ -40,6 +41,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        # Startup: connect search store
+        await app.state.search_store.connect()
+
         # Startup: initialise telemetry if enabled
         if config.telemetry.enabled:
             log_dir = Path(config.telemetry.log_dir).expanduser()
@@ -54,6 +58,9 @@ def create_app(
             app.state.telemetry_writer = None
 
         yield
+
+        # Shutdown: disconnect search store
+        await app.state.search_store.disconnect()
 
         # Shutdown: drain writer before cancelling background tasks
         if app.state.telemetry_writer is not None:
@@ -71,7 +78,7 @@ def create_app(
     app.state.config_path = Path(config_path) if config_path is not None else None
     app.state._background_tasks: set = set()
     app.state.state_store = IndexingStateStore(config.db_path)
-    app.state.search_store = None
+    app.state.search_store = SearchStore(config.db_path)
     app.state.embedder = Embedder(ModelEmbedder(config.embedding_model, providers=config.providers or None))
     app.include_router(collections_router)
     app.include_router(health_router)
