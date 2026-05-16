@@ -866,6 +866,57 @@ def test_row_to_meta_null_namespace_defaults() -> None:
 
 
 # ---------------------------------------------------------------------------
+# update_collection_meta namespace tests (Task 2.3 — FEAT-042)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_writes_namespace(connected_store: SearchStore) -> None:
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="ns-test-col", namespace="tenant-x")
+    await connected_store.update_collection_meta(meta)
+
+    db = connected_store._require_connected()
+    table = await db.open_table("_archon_collection_meta")
+    rows = (await table.query().to_arrow()).to_pylist()
+    matching = [r for r in rows if r["name"] == "ns-test-col"]
+    assert len(matching) == 1
+    assert matching[0]["namespace"] == "tenant-x"
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_round_trip_namespace_preserved(connected_store: SearchStore) -> None:
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="ns-roundtrip-col", namespace="foo")
+    await connected_store.update_collection_meta(meta)
+
+    result = await connected_store.get_collection_meta("ns-roundtrip-col")
+    assert result is not None
+    assert result.namespace == "foo"
+
+
+@pytest.mark.asyncio
+async def test_get_all_collections_meta_returns_namespace(connected_store: SearchStore) -> None:
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta1 = CollectionMeta(name="ns-all-col-a")
+    meta2 = CollectionMeta(name="ns-all-col-b")
+    await connected_store.update_collection_meta(meta1)
+    await connected_store.update_collection_meta(meta2)
+
+    all_meta = await connected_store.get_all_collections_meta()
+    names = {m.name for m in all_meta}
+    assert "ns-all-col-a" in names
+    assert "ns-all-col-b" in names
+    for m in all_meta:
+        if m.name in {"ns-all-col-a", "ns-all-col-b"}:
+            assert m.namespace == DEFAULT_NAMESPACE
+
+
+# ---------------------------------------------------------------------------
 # CollectionMeta tests (Task 1.1 — FEAT-022)
 # ---------------------------------------------------------------------------
 

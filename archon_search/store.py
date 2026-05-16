@@ -312,6 +312,7 @@ class SearchStore:
                     "last_indexed": last_indexed_str,
                     "last_described": last_described_str,
                     "described_at_doc_count": described_at,
+                    "namespace": meta.namespace,
                 }
             ]
         )
