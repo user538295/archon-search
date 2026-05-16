@@ -2145,6 +2145,130 @@ async def test_delete_collection_meta_validates_name(connected_store: SearchStor
         await connected_store.delete_collection_meta("../evil", "default")
 
 
+# ---------------------------------------------------------------------------
+# update_collection_meta namespace validation tests (Task 1.5 — FEAT-043)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_invalid_namespace_raises(connected_store: SearchStore) -> None:
+    """Invalid namespace (has space) raises ValueError before any DB write."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="foo", namespace="has space")
+    with pytest.raises(ValueError):
+        await connected_store.update_collection_meta(meta)
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_valid_namespace_passes(connected_store: SearchStore) -> None:
+    """Valid namespace completes without error."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="foo-valid", namespace="tenantA")
+    await connected_store.update_collection_meta(meta)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_same_namespace_upsert(connected_store: SearchStore) -> None:
+    """Insert (foo, tenantA), update (foo, tenantA) with new data → only one row, updated."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta1 = CollectionMeta(name="foo-upsert", namespace="tenantA", doc_count=1, chunk_count=2, embedding_model="m1")
+    await connected_store.update_collection_meta(meta1)
+
+    meta2 = CollectionMeta(name="foo-upsert", namespace="tenantA", doc_count=5, chunk_count=10, embedding_model="m2")
+    await connected_store.update_collection_meta(meta2)
+
+    result = await connected_store.get_collection_meta("foo-upsert", namespace="tenantA")
+    assert result is not None
+    assert result.doc_count == 5
+    assert result.embedding_model == "m2"
+
+    # Only one row for this name
+    all_meta = await connected_store.get_all_collections_meta()
+    matching = [m for m in all_meta if m.name == "foo-upsert"]
+    assert len(matching) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_cross_namespace_overwrite_raises(connected_store: SearchStore) -> None:
+    """Existing row (foo, tenantA), call with (foo, tenantB) → ValueError; original row still present."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta_a = CollectionMeta(name="foo-cross", namespace="tenantA", doc_count=1, chunk_count=2, embedding_model="m")
+    await connected_store.update_collection_meta(meta_a)
+
+    meta_b = CollectionMeta(name="foo-cross", namespace="tenantB", doc_count=3, chunk_count=6, embedding_model="m")
+    with pytest.raises(ValueError, match="tenantA"):
+        await connected_store.update_collection_meta(meta_b)
+
+    # Original row must still be intact
+    result = await connected_store.get_collection_meta("foo-cross", namespace="tenantA")
+    assert result is not None
+    assert result.namespace == "tenantA"
+    assert result.doc_count == 1
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_first_insert(connected_store: SearchStore) -> None:
+    """No existing row for 'new-name' → completes; row created with namespace='tenantA'."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="brand-new-col", namespace="tenantA", doc_count=7, chunk_count=14, embedding_model="m")
+    await connected_store.update_collection_meta(meta)
+
+    result = await connected_store.get_collection_meta("brand-new-col", namespace="tenantA")
+    assert result is not None
+    assert result.namespace == "tenantA"
+    assert result.doc_count == 7
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_invalid_namespace_raises_before_db() -> None:
+    """Validation must fire before any DB write — verified with unconnected store."""
+    from archon_search.collection_meta import CollectionMeta
+
+    store = SearchStore(":memory:")  # not connected — any DB call would raise
+    meta = CollectionMeta(name="col", namespace="bad namespace!")
+    with pytest.raises(ValueError, match="Invalid namespace"):
+        await store.update_collection_meta(meta)
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_legacy_null_namespace_treated_as_default(
+    connected_store: SearchStore,
+) -> None:
+    """Legacy rows with NULL namespace are treated as DEFAULT_NAMESPACE."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    # Insert a row with namespace=None directly to simulate legacy data
+    col_name = "legacy-col"
+    meta_initial = CollectionMeta(name=col_name, namespace=DEFAULT_NAMESPACE, doc_count=1, chunk_count=2, embedding_model="m1")
+    await connected_store.update_collection_meta(meta_initial)
+
+    # Patch the stored row to have NULL namespace (simulating pre-namespace schema)
+    db = connected_store._require_connected()
+    table = await db.open_table("_archon_collection_meta")
+    import pyarrow as pa
+    rows = await table.query().to_list()
+    patched = [{**r, "namespace": None} for r in rows if r["name"] == col_name]
+    await table.delete(f"name = '{col_name}'")
+    if patched:
+        schema = table.schema
+        patched_with_null = [{**patched[0], "namespace": None}]
+        await table.add(patched_with_null)
+
+    # Now update with DEFAULT_NAMESPACE — should succeed (NULL treated as DEFAULT_NAMESPACE)
+    meta_update = CollectionMeta(name=col_name, namespace=DEFAULT_NAMESPACE, doc_count=5, chunk_count=10, embedding_model="m2")
+    await connected_store.update_collection_meta(meta_update)  # must not raise
+
+    result = await connected_store.get_collection_meta(col_name, namespace=DEFAULT_NAMESPACE)
+    assert result is not None
+    assert result.doc_count == 5
+
+
 def test_hybrid_search_trace_score_kind_values_match_backend_polarity(tmp_path: Path) -> None:
     """vector_score_kind is 'distance' and fts_score_kind is 'bm25' for the LanceDB backend."""
     import asyncio

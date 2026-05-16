@@ -314,6 +314,7 @@ class SearchStore:
             raise
 
     async def update_collection_meta(self, meta: "CollectionMeta") -> None:
+        _validate_namespace(meta.namespace)
         self._validate_collection(meta.name)
         db = self._require_connected()
         all_names: list[str] = (await db.list_tables()).tables
@@ -325,7 +326,19 @@ class SearchStore:
             # name is validated against _COLLECTION_RE (alphanumeric + underscore/dash),
             # so it is safe to use directly in the SQL filter expression.
             rows = await table.query().to_list()
-            if any(r["name"] == meta.name for r in rows):
+            existing = next((r for r in rows if r["name"] == meta.name), None)
+            if existing is not None:
+                existing_ns = existing.get("namespace") or DEFAULT_NAMESPACE
+                if existing_ns != meta.namespace:
+                    logger.error(
+                        "update_collection_meta: name %r is registered under namespace %r, "
+                        "refusing to overwrite with namespace %r",
+                        meta.name, existing_ns, meta.namespace,
+                    )
+                    raise ValueError(
+                        f"Collection {meta.name!r} belongs to namespace {existing_ns!r}; "
+                        f"cannot reassign to {meta.namespace!r}"
+                    )
                 await table.delete(f"name = '{meta.name}'")
 
         centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
