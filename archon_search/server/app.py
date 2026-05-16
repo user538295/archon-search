@@ -72,7 +72,7 @@ def create_app(
         await asyncio.gather(*tasks, return_exceptions=True)
 
     app = FastAPI(title="archon-search", lifespan=lifespan)
-    app.add_middleware(APIKeyMiddleware, api_key=api_key)
+    app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces=config.namespaces)
     logger.info("API key authentication enabled (source: %s)", key_source)
     app.state.config = config
     app.state.job_store = job_store

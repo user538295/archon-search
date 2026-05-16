@@ -146,3 +146,79 @@ async def test_lifespan_calls_migrate_namespace(config: SearchConfig, job_store:
         assert "connect" in call_order
         assert "migrate_namespace" in call_order
         assert call_order.index("connect") < call_order.index("migrate_namespace")
+
+
+# ---------------------------------------------------------------------------
+# Task 2.2 — create_app() passes namespaces to middleware (FEAT-043)
+# ---------------------------------------------------------------------------
+
+
+def test_create_app_passes_namespaces_to_middleware(tmp_path: Path, job_store: JobStore) -> None:
+    """create_app() with non-empty config.namespaces passes that dict to APIKeyMiddleware.
+
+    FastAPI stores middleware kwargs at add_middleware() time (lazy instantiation), so we
+    inspect app.user_middleware to verify the correct kwargs were registered.
+    """
+    from archon_search.server.middleware_auth import APIKeyMiddleware
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.namespaces = {"abc123": "tenantA", "def456": "tenantB"}
+
+    app = create_app(cfg, job_store)
+
+    # Find the APIKeyMiddleware entry in the registered middleware stack
+    middleware_entry = next(
+        (m for m in app.user_middleware if m.cls is APIKeyMiddleware),
+        None,
+    )
+    assert middleware_entry is not None, "APIKeyMiddleware not registered"
+    assert middleware_entry.kwargs.get("namespaces") == {"abc123": "tenantA", "def456": "tenantB"}
+
+
+def test_create_app_empty_namespaces_no_error(tmp_path: Path, job_store: JobStore) -> None:
+    """create_app() with config.namespaces == {} creates middleware without error; existing key still works."""
+    from starlette.testclient import TestClient
+    from unittest.mock import AsyncMock, patch
+    from archon_search.store import SearchStore
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    # namespaces defaults to {} — no [namespaces] section
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+    ):
+        app = create_app(cfg, job_store)
+        # Retrieve the api_key that was generated so we can use it in the request
+        from archon_search.key_manager import load_or_generate_key
+        api_key, _ = load_or_generate_key()
+        with TestClient(app) as client:
+            response = client.get("/health")
+    # /health is public — must be 200 regardless of auth
+    assert response.status_code == 200
+
+
+def test_health_endpoint_unauthenticated_200(tmp_path: Path, job_store: JobStore) -> None:
+    """GET /health with NO Authorization header returns 200 even when namespaces is non-empty."""
+    from starlette.testclient import TestClient
+    from unittest.mock import AsyncMock, patch
+    from archon_search.store import SearchStore
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.namespaces = {"abc123": "tenantA"}
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app) as client:
+            # No Authorization header
+            response = client.get("/health")
+
+    assert response.status_code == 200
