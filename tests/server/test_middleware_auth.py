@@ -188,7 +188,9 @@ class TestFullAppAuth:
         assert resp.status_code == 200
 
     @pytest.mark.skip(reason="Requires SearchApiKeyAuth from Task 4.1 (not yet implemented)")
-    def test_key_roundtrip_generate_then_auth(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_key_roundtrip_generate_then_auth(  # noqa: ANN201
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Integration: generate key via key_manager, use SearchApiKeyAuth to request a protected endpoint."""
         import archon_search.key_manager as km
         from archon_search.ai.search_client import SearchApiKeyAuth  # noqa: F401 — Task 4.1
@@ -212,3 +214,136 @@ class TestFullAppAuth:
             # Make a request via SearchApiKeyAuth — would need async client
             resp = tc.get("/status", headers={"Authorization": f"Bearer {key}"})
             assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Task 2.1 — Multi-key namespace resolution tests
+# ---------------------------------------------------------------------------
+
+KEY_A = "a" * 64
+KEY_B = "b" * 64
+KEY_DEFAULT = VALID_KEY  # same as 'a' * 64 — reuse for clarity
+
+
+def _make_ns_app(api_key: str, namespaces: dict[str, str] | None = None) -> FastAPI:
+    """Minimal app with APIKeyMiddleware configured with given namespaces."""
+    app = FastAPI()
+    app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces=namespaces)
+
+    @app.get("/me")
+    async def me(request: Request) -> dict:
+        return {"namespace": request.state.namespace}
+
+    return app
+
+
+class TestNamespaceResolution:
+    def test_middleware_single_key_no_namespaces_fallback(self) -> None:
+        """namespaces={}, valid token matches api_key → DEFAULT_NAMESPACE."""
+        from archon_search.constants import DEFAULT_NAMESPACE
+
+        app = _make_ns_app(api_key=KEY_A, namespaces={})
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/me", headers={"Authorization": f"Bearer {KEY_A}"})
+        assert resp.status_code == 200
+        assert resp.json()["namespace"] == DEFAULT_NAMESPACE
+
+    def test_middleware_named_key_resolves_namespace(self) -> None:
+        """Key in namespaces dict resolves to its mapped namespace."""
+        DISTINCT_DEFAULT = "d" * 64
+        app = _make_ns_app(api_key=DISTINCT_DEFAULT, namespaces={KEY_A: "tenantA"})
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/me", headers={"Authorization": f"Bearer {KEY_A}"})
+        assert resp.status_code == 200
+        assert resp.json()["namespace"] == "tenantA"
+
+    def test_middleware_second_key_resolves_different_namespace(self) -> None:
+        """Two keys; key B resolves to 'tenantB', not 'tenantA'."""
+        app = _make_ns_app(api_key=KEY_DEFAULT, namespaces={KEY_A: "tenantA", KEY_B: "tenantB"})
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/me", headers={"Authorization": f"Bearer {KEY_B}"})
+        assert resp.status_code == 200
+        assert resp.json()["namespace"] == "tenantB"
+
+    def test_middleware_unknown_key_401(self) -> None:
+        """Token not in namespaces and not matching api_key → 401."""
+        unknown = "c" * 64
+        app = _make_ns_app(api_key=KEY_A, namespaces={KEY_B: "tenantB"})
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/me", headers={"Authorization": f"Bearer {unknown}"})
+        assert resp.status_code == 401
+        assert resp.headers.get("WWW-Authenticate") == "Bearer"
+
+    def test_middleware_invalid_namespace_500(self) -> None:
+        """Key maps to invalid namespace ('has space') → 500."""
+        app = _make_ns_app(api_key=KEY_DEFAULT, namespaces={KEY_A: "has space"})
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/me", headers={"Authorization": f"Bearer {KEY_A}"})
+        assert resp.status_code == 500
+
+    def test_middleware_no_early_exit(self) -> None:
+        """All namespace keys evaluated even after a match (no early exit)."""
+        call_count = 0
+        real_compare = secrets.compare_digest
+
+        def counting_compare(a: str, b: str) -> bool:
+            nonlocal call_count
+            call_count += 1
+            return real_compare(a, b)
+
+        namespaces = {KEY_A: "tenantA", KEY_B: "tenantB"}
+        app = _make_ns_app(api_key=KEY_DEFAULT, namespaces=namespaces)
+
+        with patch("archon_search.server.middleware_auth.secrets.compare_digest", side_effect=counting_compare):
+            client = TestClient(app, raise_server_exceptions=False)
+            client.get("/me", headers={"Authorization": f"Bearer {KEY_A}"})
+
+        # Must have been called for both namespace entries (2 calls) + possibly the fallback check
+        assert call_count >= 2, f"Expected >= 2 compare_digest calls, got {call_count}"
+
+    def test_middleware_namespace_on_request_state(self) -> None:
+        """After successful dispatch, request.state.namespace is accessible in handler."""
+        app = _make_ns_app(api_key=KEY_DEFAULT, namespaces={KEY_A: "tenantA"})
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/me", headers={"Authorization": f"Bearer {KEY_A}"})
+        assert resp.status_code == 200
+        assert "namespace" in resp.json()
+        assert resp.json()["namespace"] == "tenantA"
+
+    def test_middleware_multiple_keys_same_namespace(self) -> None:
+        """Key rotation: two keys mapping to same namespace both resolve correctly."""
+        namespaces = {KEY_A: "tenantA", KEY_B: "tenantA"}
+        app = _make_ns_app(api_key=KEY_DEFAULT, namespaces=namespaces)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        resp_a = client.get("/me", headers={"Authorization": f"Bearer {KEY_A}"})
+        resp_b = client.get("/me", headers={"Authorization": f"Bearer {KEY_B}"})
+
+        assert resp_a.status_code == 200
+        assert resp_b.status_code == 200
+        assert resp_a.json()["namespace"] == "tenantA"
+        assert resp_b.json()["namespace"] == "tenantA"
+
+    def test_middleware_api_key_also_in_namespaces(self) -> None:
+        """If api_key is also in namespaces, the namespace loop wins (not DEFAULT_NAMESPACE)."""
+        from archon_search.constants import DEFAULT_NAMESPACE
+
+        # api_key == KEY_A; namespaces maps the same KEY_A to "tenantA"
+        app = _make_ns_app(api_key=KEY_A, namespaces={KEY_A: "tenantA"})
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/me", headers={"Authorization": f"Bearer {KEY_A}"})
+        assert resp.status_code == 200
+        # Must resolve to "tenantA" (namespace loop precedence), not DEFAULT_NAMESPACE
+        assert resp.json()["namespace"] == "tenantA"
+        assert resp.json()["namespace"] != DEFAULT_NAMESPACE
+
+    def test_middleware_api_key_distinct_from_namespaces_fallback(self) -> None:
+        """api_key is distinct from all namespace keys; token matching api_key → DEFAULT_NAMESPACE."""
+        from archon_search.constants import DEFAULT_NAMESPACE
+
+        DISTINCT_API_KEY = "x" * 64
+        app = _make_ns_app(api_key=DISTINCT_API_KEY, namespaces={KEY_A: "tenantA"})
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/me", headers={"Authorization": f"Bearer {DISTINCT_API_KEY}"})
+        assert resp.status_code == 200
+        assert resp.json()["namespace"] == DEFAULT_NAMESPACE
