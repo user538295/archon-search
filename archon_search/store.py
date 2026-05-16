@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
-from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.constants import DEFAULT_NAMESPACE, _validate_namespace
 
 if TYPE_CHECKING:
     import lancedb
@@ -257,8 +257,9 @@ class SearchStore:
             namespace=row.get("namespace") or DEFAULT_NAMESPACE,
         )
 
-    async def get_collection_meta(self, name: str) -> "CollectionMeta | None":
+    async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> "CollectionMeta | None":
         self._validate_collection(name)
+        _validate_namespace(namespace)
         db = self._require_connected()
         all_names: list[str] = (await db.list_tables()).tables
         if _META_TABLE not in all_names:
@@ -266,7 +267,10 @@ class SearchStore:
         table = await db.open_table(_META_TABLE)
         # Fetch all rows and filter in Python to avoid SQL injection concerns
         rows = await table.query().to_list()
-        matching = [r for r in rows if r["name"] == name]
+        matching = [
+            r for r in rows
+            if r["name"] == name and (r.get("namespace") or DEFAULT_NAMESPACE) == namespace
+        ]
         if not matching:
             return None
         return self._row_to_meta(matching[0])

@@ -906,7 +906,7 @@ async def test_update_collection_meta_round_trip_namespace_preserved(connected_s
     meta = CollectionMeta(name="ns-roundtrip-col", namespace="foo")
     await connected_store.update_collection_meta(meta)
 
-    result = await connected_store.get_collection_meta("ns-roundtrip-col")
+    result = await connected_store.get_collection_meta("ns-roundtrip-col", namespace="foo")
     assert result is not None
     assert result.namespace == "foo"
 
@@ -1987,6 +1987,99 @@ def test_eval_trace_helpers_are_not_public_package_exports() -> None:
     )
     # Also verify it is not accidentally importable from the top-level namespace
     assert not hasattr(archon_search, "_hybrid_search_with_trace")
+
+
+# ---------------------------------------------------------------------------
+# get_collection_meta namespace filter tests (Task 1.3 — FEAT-042)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_collection_meta_correct_namespace(connected_store: SearchStore) -> None:
+    """get_collection_meta returns meta when namespace matches."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="ns-filter-col", namespace="tenantA", doc_count=1, chunk_count=2, embedding_model="m")
+    await connected_store.update_collection_meta(meta)
+
+    result = await connected_store.get_collection_meta("ns-filter-col", namespace="tenantA")
+    assert result is not None
+    assert result.namespace == "tenantA"
+
+
+@pytest.mark.asyncio
+async def test_get_collection_meta_wrong_namespace_returns_none(connected_store: SearchStore) -> None:
+    """get_collection_meta returns None when namespace does not match."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="ns-wrong-col", namespace="tenantA", doc_count=1, chunk_count=2, embedding_model="m")
+    await connected_store.update_collection_meta(meta)
+
+    result = await connected_store.get_collection_meta("ns-wrong-col", namespace="tenantB")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_collection_meta_default_namespace(connected_store: SearchStore) -> None:
+    """get_collection_meta with no namespace arg returns the default-namespace row."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta = CollectionMeta(name="ns-default-col", namespace=DEFAULT_NAMESPACE, doc_count=0, chunk_count=0, embedding_model="m")
+    await connected_store.update_collection_meta(meta)
+
+    result = await connected_store.get_collection_meta("ns-default-col")
+    assert result is not None
+    assert result.namespace == DEFAULT_NAMESPACE
+
+
+@pytest.mark.asyncio
+async def test_get_collection_meta_missing_namespace_field_fallback(tmp_path: Path) -> None:
+    """Legacy rows without namespace column are matched when querying DEFAULT_NAMESPACE."""
+    import pyarrow as pa
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    store = SearchStore(tmp_path / "db_legacy_ns")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        # Create meta table WITHOUT namespace column (simulates pre-migration row)
+        old_schema = pa.schema([
+            pa.field("name", pa.utf8()),
+            pa.field("description", pa.utf8()),
+            pa.field("centroid_json", pa.utf8()),
+            pa.field("doc_count", pa.int64()),
+            pa.field("chunk_count", pa.int64()),
+            pa.field("embedding_model", pa.utf8()),
+            pa.field("last_indexed", pa.utf8()),
+            pa.field("last_described", pa.utf8()),
+            pa.field("described_at_doc_count", pa.int64()),
+        ])
+        table = await db.create_table("_archon_collection_meta", schema=old_schema)
+        await table.add([{
+            "name": "legacy-col",
+            "description": "",
+            "centroid_json": "",
+            "doc_count": 3,
+            "chunk_count": 6,
+            "embedding_model": "model-x",
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": -1,
+        }])
+
+        result = await store.get_collection_meta("legacy-col", namespace=DEFAULT_NAMESPACE)
+        assert result is not None
+        assert result.namespace == DEFAULT_NAMESPACE
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_collection_meta_invalid_namespace_raises(connected_store: SearchStore) -> None:
+    """get_collection_meta raises ValueError for invalid namespace argument."""
+    with pytest.raises(ValueError):
+        await connected_store.get_collection_meta("any-col", namespace="")
 
 
 def test_hybrid_search_trace_score_kind_values_match_backend_polarity(tmp_path: Path) -> None:
