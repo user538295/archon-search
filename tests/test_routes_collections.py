@@ -30,6 +30,12 @@ def config(tmp_path: Path) -> SearchConfig:
 @pytest.fixture
 def client(config: SearchConfig, tmp_store: JobStore, auth_headers: dict[str, str]) -> TestClient:
     app = create_app(config, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
     return TestClient(app, headers=auth_headers)
 
 
@@ -54,6 +60,15 @@ def test_list_collections_shows_configured(tmp_path: Path, tmp_store: JobStore) 
     cfg.db_path = str(tmp_path / "search")
     cfg.collections = [str(src)]
     app = create_app(cfg, tmp_store)
+
+    # No meta rows — collection with no meta row is included for DEFAULT_NAMESPACE
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
@@ -402,12 +417,136 @@ def test_collection_info_centroid_present_false(
 
 
 # ---------------------------------------------------------------------------
+# GET /collections/ namespace filter (Task 4.1 — FEAT-043)
+# ---------------------------------------------------------------------------
+
+
+def test_list_collections_filters_by_namespace(tmp_path: Path, tmp_store: JobStore) -> None:
+    """GET /collections/ returns only collections whose meta row matches the caller's namespace."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src_a = tmp_path / "colA"
+    src_a.mkdir()
+    src_b = tmp_path / "colB"
+    src_b.mkdir()
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src_a), str(src_b)]
+
+    key_a = "a" * 64
+    key_b = "b" * 64
+    cfg.namespaces = {key_a: "tenantA", key_b: "tenantB"}
+
+    app = create_app(cfg, tmp_store)
+
+    name_a = path_to_collection_name(str(src_a))
+    name_b = path_to_collection_name(str(src_b))
+
+    meta_a = CollectionMeta(name=name_a, namespace="tenantA")
+    meta_b = CollectionMeta(name=name_b, namespace="tenantB")
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[meta_a, meta_b])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {key_a}"})
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    data = response.json()
+    names = [e["name"] for e in data]
+    assert name_a in names
+    assert name_b not in names
+
+
+def test_list_collections_no_meta_default_ns(tmp_path: Path, tmp_store: JobStore) -> None:
+    """Collection with no meta row: included for DEFAULT_NAMESPACE, excluded for other namespaces."""
+    src = tmp_path / "colX"
+    src.mkdir()
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    key_a = "a" * 64
+    cfg.namespaces = {key_a: "tenantA"}
+
+    app = create_app(cfg, tmp_store)
+
+    # No meta rows at all
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    default_key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+
+    # DEFAULT_NAMESPACE caller → collection with no meta row is included
+    c_default = TestClient(app, headers={"Authorization": f"Bearer {default_key}"})
+    resp_default = c_default.get("/collections/")
+    assert resp_default.status_code == 200
+    assert len(resp_default.json()) == 1
+
+    # tenantA caller → collection with no meta row is excluded
+    c_a = TestClient(app, headers={"Authorization": f"Bearer {key_a}"})
+    resp_a = c_a.get("/collections/")
+    assert resp_a.status_code == 200
+    assert resp_a.json() == []
+
+
+def test_list_collections_single_key_backward_compat(tmp_path: Path, tmp_store: JobStore) -> None:
+    """Single-key deployment (no namespaces config): DEFAULT_NAMESPACE sees all collections."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src1 = tmp_path / "col1"
+    src1.mkdir()
+    src2 = tmp_path / "col2"
+    src2.mkdir()
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src1), str(src2)]
+    # no namespaces configured — single-key fallback to DEFAULT_NAMESPACE
+
+    app = create_app(cfg, tmp_store)
+
+    name1 = path_to_collection_name(str(src1))
+    name2 = path_to_collection_name(str(src2))
+
+    meta1 = CollectionMeta(name=name1, namespace="default")
+    meta2 = CollectionMeta(name=name2, namespace="default")
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[meta1, meta2])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    default_key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {default_key}"})
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    data = response.json()
+    names = [e["name"] for e in data]
+    assert name1 in names
+    assert name2 in names
+
+
+# ---------------------------------------------------------------------------
 # namespace field in GET /collections/ (Task 4.1 — FEAT-042)
 # ---------------------------------------------------------------------------
 
 
 def test_routes_list_collections_namespace(tmp_path: Path, tmp_store: JobStore) -> None:
     """GET /collections/ response entries include "namespace": "default"."""
+    from archon_search.collection_meta import CollectionMeta
+
     src = tmp_path / "docs"
     src.mkdir()
     cfg = SearchConfig()
@@ -415,8 +554,10 @@ def test_routes_list_collections_namespace(tmp_path: Path, tmp_store: JobStore) 
     cfg.collections = [str(src)]
     app = create_app(cfg, tmp_store)
 
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default")
     mock_store = MagicMock()
-    mock_store.list_collections = AsyncMock(return_value=[])
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[meta])
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()

@@ -70,14 +70,26 @@ def _maybe_save_config(config: SearchConfig, request: Request) -> None:
 
 
 @router.get("/", response_model=None)
-def list_collections(request: Request) -> JSONResponse:
+async def list_collections(request: Request) -> JSONResponse:
     """List all known collections with basic metadata."""
     config: SearchConfig = request.app.state.config
     state_store = request.app.state.state_store
+    search_store = request.app.state.search_store
+    ns: str = request.state.namespace
+
+    all_meta = await search_store.get_all_collections_meta()
+    ns_names = {m.name for m in all_meta if m.namespace == ns}
+    meta_by_name = {m.name: m for m in all_meta}
 
     path_to_name = _all_collection_paths(config)
     result = []
     for name, resolved in path_to_name.items():
+        if name in ns_names:
+            namespace = meta_by_name[name].namespace
+        elif name not in meta_by_name and ns == DEFAULT_NAMESPACE:
+            namespace = DEFAULT_NAMESPACE
+        else:
+            continue
         status = _collection_status(config, state_store, name)
         entry = {
             "name": name,
@@ -85,7 +97,7 @@ def list_collections(request: Request) -> JSONResponse:
             "description": "",
             "doc_count": 0,
             "chunk_count": 0,
-            "namespace": DEFAULT_NAMESPACE,
+            "namespace": namespace,
             "status": status,
         }
         result.append(entry)
