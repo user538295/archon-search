@@ -4,6 +4,8 @@ from __future__ import annotations
 import dataclasses
 from datetime import datetime
 
+from archon_search.constants import DEFAULT_NAMESPACE
+
 
 @dataclasses.dataclass
 class CollectionMeta:
@@ -18,3 +20,4 @@ class CollectionMeta:
     last_indexed: datetime | None = None
     last_described: datetime | None = None
     described_at_doc_count: int | None = None
+    namespace: str = DEFAULT_NAMESPACE

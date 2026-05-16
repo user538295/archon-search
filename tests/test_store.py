@@ -747,6 +747,33 @@ def test_fts_exception_filter_reraises_non_fts_errors() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CollectionMeta namespace field tests (Task 1.1 — FEAT-042)
+# ---------------------------------------------------------------------------
+
+
+def test_collection_meta_namespace_field() -> None:
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="x")
+    assert meta.namespace == "default"
+
+
+def test_collection_meta_namespace_custom() -> None:
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="x", namespace="foo")
+    assert meta.namespace == "foo"
+
+
+def test_collection_meta_namespace_equals_constant() -> None:
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta = CollectionMeta(name="x")
+    assert meta.namespace == DEFAULT_NAMESPACE
+
+
+# ---------------------------------------------------------------------------
 # CollectionMeta tests (Task 1.1 — FEAT-022)
 # ---------------------------------------------------------------------------
 
