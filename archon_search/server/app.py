@@ -43,6 +43,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Startup: connect search store
         await app.state.search_store.connect()
+        await app.state.search_store.migrate_namespace()
 
         # Startup: initialise telemetry if enabled
         if config.telemetry.enabled:

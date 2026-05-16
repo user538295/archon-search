@@ -108,3 +108,41 @@ def test_telemetry_entries_route_registered(telemetry_config: SearchConfig, job_
     with TestClient(app) as client:
         response = client.get("/telemetry/entries")
     assert response.status_code != 404, f"Route not registered — got {response.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# migrate_namespace lifespan wiring (Task 3.2 — FEAT-042)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lifespan_calls_migrate_namespace(config: SearchConfig, job_store: JobStore) -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from archon_search.store import SearchStore
+
+    call_order: list[str] = []
+
+    async def fake_connect(self: SearchStore) -> None:  # type: ignore[override]
+        call_order.append("connect")
+
+    async def fake_migrate(self: SearchStore) -> None:  # type: ignore[override]
+        call_order.append("migrate_namespace")
+
+    async def fake_disconnect(self: SearchStore) -> None:  # type: ignore[override]
+        call_order.append("disconnect")
+
+    with (
+        patch.object(SearchStore, "connect", new=fake_connect),
+        patch.object(SearchStore, "migrate_namespace", new=fake_migrate),
+        patch.object(SearchStore, "disconnect", new=fake_disconnect),
+    ):
+        app = create_app(config, job_store)
+        from starlette.testclient import TestClient
+
+        with TestClient(app):
+            pass
+
+        assert "connect" in call_order
+        assert "migrate_namespace" in call_order
+        assert call_order.index("connect") < call_order.index("migrate_namespace")
