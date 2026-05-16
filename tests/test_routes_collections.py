@@ -432,3 +432,39 @@ def test_routes_list_collections_namespace(tmp_path: Path, tmp_store: JobStore) 
     for entry in data:
         assert "namespace" in entry
         assert entry["namespace"] == "default"
+
+
+# ---------------------------------------------------------------------------
+# namespace field in GET /collections/{name} (Task 4.2 — FEAT-042)
+# ---------------------------------------------------------------------------
+
+
+def test_routes_get_collection_namespace(tmp_path: Path, tmp_store: JobStore) -> None:
+    """GET /collections/{name} response includes "namespace": "default"."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    meta = CollectionMeta(name=path_to_collection_name(str(src)))
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=0)
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    name = path_to_collection_name(str(src))
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    data = response.json()
+    assert "namespace" in data
+    assert data["namespace"] == "default"

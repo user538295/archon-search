@@ -228,6 +228,7 @@ async def get_collection_info(name: str, request: Request) -> JSONResponse:
         "embedding_model": embedding_model,
         "centroid_present": centroid_present,
         "last_indexed": last_indexed,
+        "namespace": DEFAULT_NAMESPACE,
     }
     return JSONResponse(content=data)
 
