@@ -48,6 +48,8 @@ class SearchConfig:
     log_file: str = "~/.archon/logs/archon-search.log"
     # [telemetry]
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
+    # [namespaces]
+    namespaces: dict[str, str] = field(default_factory=dict)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -198,5 +200,15 @@ def load_config(path: Path | None = None) -> SearchConfig:
             raise ConfigError("[telemetry].log_dir must be a non-empty string")
         telemetry.log_dir = log_dir
     config.telemetry = telemetry
+
+    raw_ns = doc.get("namespaces", {})
+    namespaces: dict[str, str] = {}
+    for k, v in raw_ns.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            raise ConfigError(
+                f"[namespaces] entries must be string key = string value; got {k!r} = {v!r}"
+            )
+        namespaces[k] = v
+    config.namespaces = namespaces
 
     return config

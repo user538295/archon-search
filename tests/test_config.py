@@ -204,6 +204,7 @@ def test_c11_13_search_config_no_args_all_defaults_valid() -> None:
     assert config.watch is False
     assert config.level == "INFO"
     assert config.log_file == "~/.archon/logs/archon-search.log"
+    assert config.namespaces == {}
 
 
 def test_c11_14_nonexistent_path_returns_defaults(tmp_path: Path) -> None:
@@ -349,3 +350,61 @@ def test_c11_22_routing_confidence_threshold_above_one_raises(tmp_path: Path) ->
     toml_file.write_text("[routing]\nrouting_confidence_threshold = 1.1\n", encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(path=toml_file)
+
+
+# ---------------------------------------------------------------------------
+# [namespaces] section tests
+# ---------------------------------------------------------------------------
+
+
+def test_config_namespaces_populated(tmp_path: Path) -> None:
+    """TOML with [namespaces] section → config.namespaces populated."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[namespaces]\nkeyA = "tenantA"\n', encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.namespaces == {"keyA": "tenantA"}
+
+
+def test_config_namespaces_absent(tmp_path: Path) -> None:
+    """TOML with no [namespaces] section → config.namespaces == {}."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[server]\nport = 8765\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.namespaces == {}
+
+
+def test_config_namespaces_empty_section(tmp_path: Path) -> None:
+    """[namespaces] present but empty → config.namespaces == {}."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[namespaces]\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.namespaces == {}
+
+
+def test_save_config_does_not_destroy_existing_namespaces(tmp_path: Path) -> None:
+    """save_config() round-trip preserves [namespaces] entries unchanged."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        '[namespaces]\nkeyA = "tenantA"\nkeyB = "tenantB"\n\n[collections]\ncollections = []\npinned_collections = []\n',
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    config.collections = ["/new/path"]
+    save_config(config, toml_file)
+
+    reloaded = load_config(path=toml_file)
+    assert reloaded.namespaces == {"keyA": "tenantA", "keyB": "tenantB"}
+
+
+def test_config_namespaces_non_string_value_raises(tmp_path: Path) -> None:
+    """[namespaces] with integer value → ConfigError."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[namespaces]\nkeyA = 42\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_search_config_default_namespaces_empty() -> None:
+    """SearchConfig() with no args has namespaces == {}."""
+    config = SearchConfig()
+    assert config.namespaces == {}
