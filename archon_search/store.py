@@ -280,6 +280,25 @@ class SearchStore:
         rows = await table.query().to_list()
         return [self._row_to_meta(row) for row in rows]
 
+    async def migrate_namespace(self) -> None:
+        """Idempotent: adds namespace column to _archon_collection_meta if absent."""
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        table = await db.open_table(_META_TABLE)
+        schema_names = (await table.schema()).names
+        if "namespace" in schema_names:
+            return
+        try:
+            await table.add_columns({"namespace": f"'{DEFAULT_NAMESPACE}'"})
+            logger.info("namespace migration: added namespace column to %s", _META_TABLE)
+        except Exception as exc:
+            if "already exists" in str(exc).lower():
+                logger.warning("Concurrent migration: namespace column already added — %s", exc)
+                return
+            raise
+
     async def update_collection_meta(self, meta: "CollectionMeta") -> None:
         self._validate_collection(meta.name)
         db = self._require_connected()

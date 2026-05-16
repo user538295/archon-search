@@ -931,6 +931,204 @@ async def test_get_all_collections_meta_returns_namespace(connected_store: Searc
 
 
 # ---------------------------------------------------------------------------
+# migrate_namespace tests (Task 3.1 — FEAT-042)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_migrate_namespace_no_meta_table(tmp_path: Path) -> None:
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.migrate_namespace()  # no _archon_collection_meta — must be no-op
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_namespace_empty_table(tmp_path: Path) -> None:
+    import pyarrow as pa
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        old_schema = pa.schema([
+            pa.field("name", pa.utf8()),
+            pa.field("description", pa.utf8()),
+            pa.field("centroid_json", pa.utf8()),
+            pa.field("doc_count", pa.int64()),
+            pa.field("chunk_count", pa.int64()),
+            pa.field("embedding_model", pa.utf8()),
+            pa.field("last_indexed", pa.utf8()),
+            pa.field("last_described", pa.utf8()),
+            pa.field("described_at_doc_count", pa.int64()),
+        ])
+        await db.create_table("_archon_collection_meta", schema=old_schema)
+        await store.migrate_namespace()
+        table = await db.open_table("_archon_collection_meta")
+        assert "namespace" in (await table.schema()).names
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_namespace_existing_rows(tmp_path: Path) -> None:
+    import pyarrow as pa
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        old_schema = pa.schema([
+            pa.field("name", pa.utf8()),
+            pa.field("description", pa.utf8()),
+            pa.field("centroid_json", pa.utf8()),
+            pa.field("doc_count", pa.int64()),
+            pa.field("chunk_count", pa.int64()),
+            pa.field("embedding_model", pa.utf8()),
+            pa.field("last_indexed", pa.utf8()),
+            pa.field("last_described", pa.utf8()),
+            pa.field("described_at_doc_count", pa.int64()),
+        ])
+        table = await db.create_table("_archon_collection_meta", schema=old_schema)
+        await table.add([{
+            "name": "old-col",
+            "description": "",
+            "centroid_json": "",
+            "doc_count": 0,
+            "chunk_count": 0,
+            "embedding_model": "",
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": -1,
+        }])
+        await store.migrate_namespace()
+        # re-open to get fresh schema after add_columns
+        table = await db.open_table("_archon_collection_meta")
+        assert "namespace" in (await table.schema()).names
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_namespace_already_migrated(tmp_path: Path) -> None:
+    import pyarrow as pa
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        old_schema = pa.schema([
+            pa.field("name", pa.utf8()),
+            pa.field("description", pa.utf8()),
+            pa.field("centroid_json", pa.utf8()),
+            pa.field("doc_count", pa.int64()),
+            pa.field("chunk_count", pa.int64()),
+            pa.field("embedding_model", pa.utf8()),
+            pa.field("last_indexed", pa.utf8()),
+            pa.field("last_described", pa.utf8()),
+            pa.field("described_at_doc_count", pa.int64()),
+        ])
+        await db.create_table("_archon_collection_meta", schema=old_schema)
+        await store.migrate_namespace()  # first call — triggers add_columns
+        await store.migrate_namespace()  # second call — hits schema-check early return
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_namespace_rows_backfilled(tmp_path: Path) -> None:
+    import pyarrow as pa
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        old_schema = pa.schema([
+            pa.field("name", pa.utf8()),
+            pa.field("description", pa.utf8()),
+            pa.field("centroid_json", pa.utf8()),
+            pa.field("doc_count", pa.int64()),
+            pa.field("chunk_count", pa.int64()),
+            pa.field("embedding_model", pa.utf8()),
+            pa.field("last_indexed", pa.utf8()),
+            pa.field("last_described", pa.utf8()),
+            pa.field("described_at_doc_count", pa.int64()),
+        ])
+        table = await db.create_table("_archon_collection_meta", schema=old_schema)
+        await table.add([{
+            "name": "backfill-col",
+            "description": "",
+            "centroid_json": "",
+            "doc_count": 0,
+            "chunk_count": 0,
+            "embedding_model": "",
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": -1,
+        }])
+        await store.migrate_namespace()
+        table = await db.open_table("_archon_collection_meta")
+        arrow_table = await table.query().to_arrow()
+        values = arrow_table.column("namespace").to_pylist()
+        assert all(v == DEFAULT_NAMESPACE for v in values)
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_namespace_add_columns_duplicate_raises_runtime_error(tmp_path: Path) -> None:
+    """Verify the real LanceDB exception for duplicate add_columns matches our handler."""
+    import pyarrow as pa
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        schema = pa.schema([pa.field("name", pa.utf8()), pa.field("namespace", pa.utf8())])
+        table = await db.create_table("_archon_verify_exc", schema=schema)
+        with pytest.raises(RuntimeError) as exc_info:
+            await table.add_columns({"namespace": "'default'"})
+        assert "already exists" in str(exc_info.value).lower()
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_namespace_concurrent_race(tmp_path: Path) -> None:
+    import lancedb.table
+    from unittest.mock import AsyncMock, patch
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        import pyarrow as pa
+        old_schema = pa.schema([
+            pa.field("name", pa.utf8()),
+            pa.field("description", pa.utf8()),
+            pa.field("centroid_json", pa.utf8()),
+            pa.field("doc_count", pa.int64()),
+            pa.field("chunk_count", pa.int64()),
+            pa.field("embedding_model", pa.utf8()),
+            pa.field("last_indexed", pa.utf8()),
+            pa.field("last_described", pa.utf8()),
+            pa.field("described_at_doc_count", pa.int64()),
+        ])
+        await db.create_table("_archon_collection_meta", schema=old_schema)
+        with patch.object(
+            lancedb.table.AsyncTable,
+            "add_columns",
+            new=AsyncMock(side_effect=RuntimeError("Column namespace already exists in the dataset")),
+        ):
+            await store.migrate_namespace()  # must not raise
+    finally:
+        await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
 # CollectionMeta tests (Task 1.1 — FEAT-022)
 # ---------------------------------------------------------------------------
 
