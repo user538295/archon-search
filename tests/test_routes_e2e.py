@@ -267,7 +267,7 @@ def test_H3_6_ingest_job_transitions_pending_to_done(tmp_path: Path) -> None:
 # H3.7 — failing pipeline → FAILED status, error non-empty
 # ---------------------------------------------------------------------------
 def test_H3_7_ingest_job_failure_sets_failed_status(tmp_path: Path) -> None:
-    async def failing_pipeline(job_id: str, store: object, body: object) -> None:
+    async def failing_pipeline(job_id: str, store: object, body: object, **kwargs: object) -> None:
         raise RuntimeError("pipeline exploded")
 
     client, app = _make_ingest_client(tmp_path, pipeline_fn=failing_pipeline)
@@ -300,7 +300,7 @@ async def test_H3_8_ingest_cancel_while_running_transitions_to_cancelling(
     started = asyncio.Event()
     blocked = asyncio.Event()
 
-    async def blocking_pipeline(job_id: str, store: object, body: object) -> None:
+    async def blocking_pipeline(job_id: str, store: object, body: object, **kwargs: object) -> None:
         started.set()
         await blocked.wait()
 
@@ -375,7 +375,7 @@ def test_H3_10_two_concurrent_ingest_creates_distinct_job_ids(tmp_path: Path) ->
 def test_H3_11_x_ingested_by_header_replaces_body_value(tmp_path: Path) -> None:
     captured: dict = {}
 
-    async def capturing_pipeline(job_id: str, store: object, body: object) -> None:
+    async def capturing_pipeline(job_id: str, store: object, body: object, **kwargs: object) -> None:
         captured["ingested_by"] = body.ingested_by  # type: ignore[attr-defined]
 
     client, _ = _make_ingest_client(tmp_path, pipeline_fn=capturing_pipeline)

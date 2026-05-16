@@ -12,7 +12,7 @@ from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
-from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
+from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _run_pipeline
 from archon_search.types import IngestJob
 
 
@@ -231,6 +231,45 @@ async def test_default_ingest_task_takes_namespace_param(tmp_path: Path) -> None
     completed = store.get(job.job_id)
     assert completed is not None
     assert completed.status == JobStatus.DONE
+
+
+# ---------------------------------------------------------------------------
+# Task 3.5 — _run_pipeline and _default_ingest_task namespace forwarding
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_run_pipeline_forwards_namespace(tmp_path: Path) -> None:
+    """_run_pipeline passes namespace= kwarg to pipeline_fn."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create()
+    body = IngestRequest(collection="docs")
+
+    received: dict = {}
+
+    async def mock_fn(job_id: str, s: JobStore, b: IngestRequest, namespace: str = "default") -> None:
+        received["namespace"] = namespace
+
+    await _run_pipeline(job.job_id, store, body, namespace="tenantA", pipeline_fn=mock_fn)
+
+    assert received["namespace"] == "tenantA"
+
+
+@pytest.mark.anyio
+async def test_default_ingest_task_forwards_namespace_to_run_pipeline(tmp_path: Path) -> None:
+    """_default_ingest_task passes its namespace to _run_pipeline (and on to pipeline_fn)."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create()
+    body = IngestRequest(collection="docs")
+
+    received: dict = {}
+
+    async def mock_fn(job_id: str, s: JobStore, b: IngestRequest, namespace: str = "default") -> None:
+        received["namespace"] = namespace
+
+    await _default_ingest_task(job.job_id, store, body, namespace="tenantA", pipeline_fn=mock_fn)
+
+    assert received["namespace"] == "tenantA"
 
 
 def test_ingest_request_ignores_body_namespace(tmp_path: Path, auth_headers: dict[str, str]) -> None:

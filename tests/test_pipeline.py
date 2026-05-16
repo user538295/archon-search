@@ -1663,3 +1663,156 @@ async def test_eval_trace_does_not_change_public_search_response(connected_store
 
     assert [r.chunk_id for r in before] == [r.chunk_id for r in after]
     assert [r.score for r in before] == [r.score for r in after]
+
+
+# ===========================================================================
+# FEAT-043 Task 3.5 — namespace propagation through SearchPipeline
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_namespace_param(tmp_path) -> None:
+    """ingest_directory forwards namespace to store.get_collection_meta and CollectionMeta."""
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, MagicMock, call
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.delete_document = AsyncMock(return_value=0)
+    store.ingest_chunks = AsyncMock(return_value=1)
+    store.rebuild_fts_index = AsyncMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=64),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    (tmp_path / "doc.md").write_text("# Hello\n\nContent for namespace test.\n" * 5)
+
+    await pipeline.ingest_directory(tmp_path, "my-col", namespace="tenantA")
+
+    # store.get_collection_meta must be called with namespace="tenantA"
+    store.get_collection_meta.assert_awaited_once_with("my-col", namespace="tenantA")
+
+    # CollectionMeta passed to update_collection_meta must carry namespace="tenantA"
+    store.update_collection_meta.assert_awaited_once()
+    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved_meta.namespace == "tenantA"
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_default_namespace(tmp_path) -> None:
+    """ingest_directory without explicit namespace defaults to DEFAULT_NAMESPACE."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.delete_document = AsyncMock(return_value=0)
+    store.ingest_chunks = AsyncMock(return_value=1)
+    store.rebuild_fts_index = AsyncMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=64),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    (tmp_path / "doc.md").write_text("# Hello\n\nContent for default namespace test.\n" * 5)
+
+    await pipeline.ingest_directory(tmp_path, "my-col")
+
+    store.get_collection_meta.assert_awaited_once_with("my-col", namespace=DEFAULT_NAMESPACE)
+    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved_meta.namespace == DEFAULT_NAMESPACE
+
+
+@pytest.mark.asyncio
+async def test_recompute_collection_meta_namespace_param(tmp_path) -> None:
+    """recompute_collection_meta forwards namespace to store.get_collection_meta and CollectionMeta."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    existing_meta = CollectionMeta(name="my-col", namespace="tenantA")
+
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing_meta)
+    store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4], [0.3, 0.4, 0.5, 0.6]])
+    store.count_documents = AsyncMock(return_value=2)
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    await pipeline.recompute_collection_meta("my-col", namespace="tenantA")
+
+    store.get_collection_meta.assert_awaited_once_with("my-col", namespace="tenantA")
+    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved_meta.namespace == "tenantA"
+
+
+@pytest.mark.asyncio
+async def test_get_collection_meta_namespace_param() -> None:
+    """get_collection_meta forwards namespace to store.get_collection_meta."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    expected_meta = CollectionMeta(name="my-col", namespace="tenantA")
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=expected_meta)
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    result = await pipeline.get_collection_meta("my-col", namespace="tenantA")
+
+    store.get_collection_meta.assert_awaited_once_with("my-col", namespace="tenantA")
+    assert result is expected_meta

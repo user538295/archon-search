@@ -43,10 +43,11 @@ async def _run_pipeline(
     store: JobStore,
     body: IngestRequest,
     pipeline_fn: Callable[..., Awaitable[None]] | None,
+    namespace: str = DEFAULT_NAMESPACE,
 ) -> None:
     """Run the ingest pipeline (real or stub). Raises on failure."""
     if pipeline_fn is not None:
-        await pipeline_fn(job_id, store, body)
+        await pipeline_fn(job_id, store, body, namespace=namespace)
     else:
         # Stub: succeed immediately
         await asyncio.sleep(0)
@@ -62,7 +63,7 @@ async def _default_ingest_task(
     """Lifecycle wrapper: PENDING → RUNNING → DONE/FAILED/CANCELLED."""
     try:
         store.update(job_id, status=JobStatus.RUNNING)
-        await _run_pipeline(job_id, store, body, pipeline_fn)
+        await _run_pipeline(job_id, store, body, pipeline_fn, namespace=namespace)
         # Check for cancellation before marking DONE
         job = store.get(job_id)
         if job and job.status == JobStatus.CANCELLING:

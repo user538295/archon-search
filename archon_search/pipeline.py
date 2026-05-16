@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestResult, SearchResult
+from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.collection_meta import CollectionMeta
 from archon_search.description_generator import _should_regenerate, generate_description
 from archon_search.chunker import DocumentChunker
@@ -124,6 +125,7 @@ class SearchPipeline:
         force_regenerate_description: bool = False,
         exclude_paths: frozenset[str] | None = None,
         on_file_complete: Callable[[Path], None] | None = None,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> list[IngestResult]:
         # Collect and filter files
         files: list[Path] = []
@@ -182,7 +184,7 @@ class SearchPipeline:
             batch_chunk_count = sum(r.chunks_created for r in ok_results)
 
             # Read existing meta to preserve description state across ingests
-            existing_meta = await self.store.get_collection_meta(collection)
+            existing_meta = await self.store.get_collection_meta(collection, namespace=namespace)
             description = existing_meta.description if existing_meta else None
             described_at = existing_meta.described_at_doc_count if existing_meta else None
             last_described = existing_meta.last_described if existing_meta else None
@@ -204,6 +206,7 @@ class SearchPipeline:
                 last_indexed=datetime.now(UTC),
                 last_described=last_described,
                 described_at_doc_count=described_at,
+                namespace=namespace,
             )
             await self.store.update_collection_meta(meta)
 
@@ -266,20 +269,20 @@ class SearchPipeline:
     async def get_all_collections_meta(self) -> list[CollectionMeta]:
         return await self.store.get_all_collections_meta()
 
-    async def get_collection_meta(self, name: str) -> CollectionMeta | None:
-        return await self.store.get_collection_meta(name)
+    async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> CollectionMeta | None:
+        return await self.store.get_collection_meta(name, namespace=namespace)
 
     async def list_documents(self, collection: str, limit: int = 100) -> list[DocumentInfo]:
         return await self.store.list_documents(collection, limit)
 
-    async def recompute_collection_meta(self, collection: str) -> None:
+    async def recompute_collection_meta(self, collection: str, namespace: str = DEFAULT_NAMESPACE) -> None:
         """Recompute and persist CollectionMeta (centroid, doc/chunk counts) for a collection.
 
         Reads all vectors from the store, recomputes the centroid, and updates the
         collection metadata.  Preserves any existing description and last_described fields.
         No-op if the collection is empty.
         """
-        existing_meta = await self.store.get_collection_meta(collection)
+        existing_meta = await self.store.get_collection_meta(collection, namespace=namespace)
         vectors = await self.store.get_all_vectors(collection)
         if not vectors:
             return
@@ -303,6 +306,7 @@ class SearchPipeline:
             last_indexed=datetime.now(UTC),
             last_described=last_described,
             described_at_doc_count=described_at,
+            namespace=namespace,
         )
         await self.store.update_collection_meta(meta)
 
