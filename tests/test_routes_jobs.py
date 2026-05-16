@@ -8,10 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from archon_search.config import SearchConfig
-from archon_search.jobs.model import JobStatus
+from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.jobs.model import JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
+from archon_search.types import IngestJob
 
 
 @pytest.fixture
@@ -178,3 +180,35 @@ async def test_ingest_background_task_completes(tmp_path: Path) -> None:
     completed = store.get(job.job_id)
     assert completed is not None
     assert completed.status == JobStatus.DONE
+
+
+# ---------------------------------------------------------------------------
+# job_to_dict — Task 3.2
+# ---------------------------------------------------------------------------
+
+
+def test_job_to_dict_includes_namespace() -> None:
+    """job_to_dict() output must include 'namespace' key."""
+    job = IngestJob(
+        job_id="test-job-1",
+        status=JobStatus.PENDING,
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+        namespace="tenantA",
+    )
+    result = job_to_dict(job)
+    assert "namespace" in result
+    assert result["namespace"] == "tenantA"
+
+
+def test_job_to_dict_default_namespace() -> None:
+    """IngestJob with no explicit namespace → 'namespace': 'default' in dict."""
+    job = IngestJob(
+        job_id="test-job-2",
+        status=JobStatus.PENDING,
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+    )
+    result = job_to_dict(job)
+    assert "namespace" in result
+    assert result["namespace"] == DEFAULT_NAMESPACE

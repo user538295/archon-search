@@ -17,6 +17,7 @@ def job_to_dict(job: IngestJob) -> dict:
         "updated_at": job.updated_at,
         "result": job.result,
         "error": job.error,
+        "namespace": job.namespace,
     }
 
 
