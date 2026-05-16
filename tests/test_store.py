@@ -866,6 +866,20 @@ def test_row_to_meta_null_namespace_defaults() -> None:
 
 
 # ---------------------------------------------------------------------------
+# list_collections namespace tests (Task 2.4 — FEAT-042)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_collections_includes_namespace(connected_store: SearchStore) -> None:
+    await connected_store.ensure_collection("ns-list-col", _DIM)
+    collections = await connected_store.list_collections()
+    matching = [c for c in collections if c.name == "ns-list-col"]
+    assert len(matching) == 1
+    assert matching[0].namespace == "default"
+
+
+# ---------------------------------------------------------------------------
 # update_collection_meta namespace tests (Task 2.3 — FEAT-042)
 # ---------------------------------------------------------------------------
 

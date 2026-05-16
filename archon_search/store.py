@@ -222,7 +222,7 @@ class SearchStore:
                 # count distinct doc_ids via Arrow column (avoids materializing dicts)
                 arrow_table = await table.query().select(["doc_id"]).to_arrow()
                 doc_count = len(arrow_table.column("doc_id").unique())
-                result.append(CollectionInfo(name=name, doc_count=doc_count, chunk_count=chunk_count))
+                result.append(CollectionInfo(name=name, doc_count=doc_count, chunk_count=chunk_count, namespace=DEFAULT_NAMESPACE))
             except (RuntimeError, ValueError, OSError) as exc:
                 logger.warning("Could not inspect collection %s: %s", name, exc)
         return result
