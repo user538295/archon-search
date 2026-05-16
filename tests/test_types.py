@@ -166,6 +166,23 @@ def test_chunk_serializable():
     assert json.dumps(d)  # must be JSON-serializable
 
 
+def test_ingest_job_namespace_default():
+    job = IngestJob(job_id="x", status=JobStatus.PENDING, created_at="t", updated_at="t")
+    assert job.namespace == "default"
+
+
+def test_ingest_job_namespace_explicit():
+    job = IngestJob(job_id="x", status=JobStatus.PENDING, created_at="t", updated_at="t", namespace="tenantA")
+    assert job.namespace == "tenantA"
+
+
+def test_ingest_job_splat_pre_5c_dict():
+    from archon_search.constants import DEFAULT_NAMESPACE
+    item = {"job_id": "x", "status": JobStatus.PENDING, "created_at": "t", "updated_at": "t"}
+    job = IngestJob(**item)
+    assert job.namespace == DEFAULT_NAMESPACE
+
+
 def test_all_types_json_serializable():
     instances = [
         IngestJob(job_id="j", status=JobStatus.DONE, created_at="t", updated_at="t"),

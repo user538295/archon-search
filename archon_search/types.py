@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from archon_search.constants import DEFAULT_NAMESPACE
+
 
 class JobStatus(str, Enum):
     PENDING = "PENDING"
@@ -22,6 +24,7 @@ class IngestJob:
     updated_at: str
     result: dict | None = None
     error: str | None = None
+    namespace: str = DEFAULT_NAMESPACE
 
 
 @dataclass
