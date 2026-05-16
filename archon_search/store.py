@@ -275,6 +275,16 @@ class SearchStore:
             return None
         return self._row_to_meta(matching[0])
 
+    async def delete_collection_meta(self, name: str, namespace: str) -> None:
+        self._validate_collection(name)
+        _validate_namespace(namespace)
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        table = await db.open_table(_META_TABLE)
+        await table.delete(f"name = '{name}' AND namespace = '{namespace}'")
+
     async def get_all_collections_meta(self) -> "list[CollectionMeta]":
         db = self._require_connected()
         all_names: list[str] = (await db.list_tables()).tables

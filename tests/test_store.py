@@ -2082,6 +2082,69 @@ async def test_get_collection_meta_invalid_namespace_raises(connected_store: Sea
         await connected_store.get_collection_meta("any-col", namespace="")
 
 
+# ---------------------------------------------------------------------------
+# delete_collection_meta tests (Task 1.4 — FEAT-043)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_collection_meta_namespace_safety_filter(connected_store: SearchStore) -> None:
+    """delete_collection_meta with wrong namespace is a no-op; correct namespace deletes."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="del-ns-col", namespace="tenantA", doc_count=1, chunk_count=2, embedding_model="m")
+    await connected_store.update_collection_meta(meta)
+
+    # Confirm row exists
+    assert await connected_store.get_collection_meta("del-ns-col", namespace="tenantA") is not None
+
+    # Wrong namespace — no-op
+    await connected_store.delete_collection_meta("del-ns-col", "tenantB")
+    assert await connected_store.get_collection_meta("del-ns-col", namespace="tenantA") is not None
+
+    # Correct namespace — deletes
+    await connected_store.delete_collection_meta("del-ns-col", "tenantA")
+    assert await connected_store.get_collection_meta("del-ns-col", namespace="tenantA") is None
+
+
+@pytest.mark.asyncio
+async def test_delete_collection_meta_noop_when_table_absent(tmp_path: Path) -> None:
+    """No _META_TABLE → no exception, no-op."""
+    store = SearchStore(tmp_path / "db_del_noop")
+    await store.connect()
+    try:
+        await store.delete_collection_meta("some-col", "default")  # must not raise
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_delete_collection_meta_noop_when_row_missing(connected_store: SearchStore) -> None:
+    """Table exists but no matching row → no exception."""
+    from archon_search.collection_meta import CollectionMeta
+
+    # Create meta table by inserting an unrelated row
+    meta = CollectionMeta(name="other-col", namespace="default", doc_count=0, chunk_count=0, embedding_model="m")
+    await connected_store.update_collection_meta(meta)
+
+    # Delete a row that doesn't exist — must not raise
+    await connected_store.delete_collection_meta("nonexistent-col", "default")
+
+
+@pytest.mark.asyncio
+async def test_delete_collection_meta_validates_namespace(connected_store: SearchStore) -> None:
+    """Invalid namespace string → ValueError before any DB access."""
+    with pytest.raises(ValueError):
+        await connected_store.delete_collection_meta("valid-col", "")
+
+
+@pytest.mark.asyncio
+async def test_delete_collection_meta_validates_name(connected_store: SearchStore) -> None:
+    """Invalid name string → ValueError before any DB access."""
+    with pytest.raises(ValueError):
+        await connected_store.delete_collection_meta("../evil", "default")
+
+
 def test_hybrid_search_trace_score_kind_values_match_backend_polarity(tmp_path: Path) -> None:
     """vector_score_kind is 'distance' and fts_score_kind is 'bm25' for the LanceDB backend."""
     import asyncio
