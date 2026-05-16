@@ -214,6 +214,8 @@ class SearchStore:
         db = self._require_connected()
         all_names: list[str] = (await db.list_tables()).tables
         names = [n for n in all_names if not n.startswith(_ARCHON_PREFIX)]
+        all_meta = await self.get_all_collections_meta()
+        meta_by_name = {m.name: m for m in all_meta}
         result: list[CollectionInfo] = []
         for name in names:
             try:
@@ -222,7 +224,9 @@ class SearchStore:
                 # count distinct doc_ids via Arrow column (avoids materializing dicts)
                 arrow_table = await table.query().select(["doc_id"]).to_arrow()
                 doc_count = len(arrow_table.column("doc_id").unique())
-                result.append(CollectionInfo(name=name, doc_count=doc_count, chunk_count=chunk_count, namespace=DEFAULT_NAMESPACE))
+                meta = meta_by_name.get(name)
+                namespace = meta.namespace if meta else DEFAULT_NAMESPACE
+                result.append(CollectionInfo(name=name, doc_count=doc_count, chunk_count=chunk_count, namespace=namespace))
             except (RuntimeError, ValueError, OSError) as exc:
                 logger.warning("Could not inspect collection %s: %s", name, exc)
         return result

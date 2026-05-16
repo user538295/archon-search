@@ -2269,6 +2269,98 @@ async def test_update_collection_meta_legacy_null_namespace_treated_as_default(
     assert result.doc_count == 5
 
 
+# ---------------------------------------------------------------------------
+# list_collections namespace tests (Task 1.6 — FEAT-043)
+# ---------------------------------------------------------------------------
+
+
+def test_list_collections_namespace_from_meta(tmp_path: Path) -> None:
+    """list_collections() reads namespace from meta row, not hardcoded DEFAULT_NAMESPACE.
+
+    Verifies that get_all_collections_meta() is called once (batch read) and that
+    the returned CollectionInfo has the namespace from the meta row.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import pyarrow as pa
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["tenant-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+
+    mock_table = MagicMock()
+    mock_table.count_rows = AsyncMock(return_value=3)
+    arrow_table = pa.table({"doc_id": ["doc1", "doc2", "doc3"]})
+    query_mock = MagicMock()
+    query_mock.select = MagicMock(return_value=query_mock)
+    query_mock.to_arrow = AsyncMock(return_value=arrow_table)
+    mock_table.query = MagicMock(return_value=query_mock)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    meta = CollectionMeta(name="tenant-col", namespace="tenantA")
+    with patch.object(store, "get_all_collections_meta", new=AsyncMock(return_value=[meta])) as mock_get_all, \
+         patch.object(store, "get_collection_meta") as mock_get_one:
+        collections = asyncio.run(store.list_collections())
+
+        # batch read called exactly once
+        mock_get_all.assert_called_once()
+        # per-name lookup must NOT be called
+        mock_get_one.assert_not_called()
+
+    assert len(collections) == 1
+    assert collections[0].name == "tenant-col"
+    assert collections[0].namespace == "tenantA", (
+        f"Expected namespace 'tenantA' from meta, got {collections[0].namespace!r}"
+    )
+    # ensure it is NOT the hardcoded default
+    assert collections[0].namespace != DEFAULT_NAMESPACE
+
+
+def test_list_collections_orphan_table_defaults(tmp_path: Path) -> None:
+    """list_collections() falls back to DEFAULT_NAMESPACE for tables with no meta row."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import pyarrow as pa
+
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["orphan-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+
+    mock_table = MagicMock()
+    mock_table.count_rows = AsyncMock(return_value=1)
+    arrow_table = pa.table({"doc_id": ["docA"]})
+    query_mock = MagicMock()
+    query_mock.select = MagicMock(return_value=query_mock)
+    query_mock.to_arrow = AsyncMock(return_value=arrow_table)
+    mock_table.query = MagicMock(return_value=query_mock)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    # No meta rows — orphan table
+    with patch.object(store, "get_all_collections_meta", new=AsyncMock(return_value=[])):
+        collections = asyncio.run(store.list_collections())
+
+    assert len(collections) == 1
+    assert collections[0].name == "orphan-col"
+    assert collections[0].namespace == DEFAULT_NAMESPACE, (
+        f"Expected DEFAULT_NAMESPACE fallback for orphan table, got {collections[0].namespace!r}"
+    )
+
+
 def test_hybrid_search_trace_score_kind_values_match_backend_polarity(tmp_path: Path) -> None:
     """vector_score_kind is 'distance' and fts_score_kind is 'bm25' for the LanceDB backend."""
     import asyncio
