@@ -152,6 +152,7 @@ class SearchStore:
                 pa.field("last_indexed", pa.utf8()),
                 pa.field("last_described", pa.utf8()),
                 pa.field("described_at_doc_count", pa.int64()),
+                pa.field("namespace", pa.utf8()),
             ]
         )
 

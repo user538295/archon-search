@@ -801,6 +801,20 @@ def test_collection_info_namespace_equals_constant() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Store schema namespace tests (Task 2.1 — FEAT-042)
+# ---------------------------------------------------------------------------
+
+
+def test_meta_schema_includes_namespace() -> None:
+    import pyarrow as pa
+
+    schema = SearchStore._meta_schema()
+    assert "namespace" in schema.names
+    idx = schema.get_field_index("namespace")
+    assert schema.field(idx).type == pa.utf8()
+
+
+# ---------------------------------------------------------------------------
 # CollectionMeta tests (Task 1.1 — FEAT-022)
 # ---------------------------------------------------------------------------
 
