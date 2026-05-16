@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from archon_search.constants import DEFAULT_NAMESPACE
+
 
 @dataclass
 class ChunkRecord:
@@ -40,6 +42,7 @@ class CollectionInfo:
     name: str
     doc_count: int
     chunk_count: int
+    namespace: str = DEFAULT_NAMESPACE
 
 
 @dataclass

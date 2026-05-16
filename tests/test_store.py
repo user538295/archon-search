@@ -774,6 +774,33 @@ def test_collection_meta_namespace_equals_constant() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CollectionInfo namespace field tests (Task 1.2 — FEAT-042)
+# ---------------------------------------------------------------------------
+
+
+def test_collection_info_namespace_field() -> None:
+    from archon_search._types import CollectionInfo
+
+    info = CollectionInfo(name="x", doc_count=0, chunk_count=0)
+    assert info.namespace == "default"
+
+
+def test_collection_info_namespace_custom() -> None:
+    from archon_search._types import CollectionInfo
+
+    info = CollectionInfo(name="x", doc_count=0, chunk_count=0, namespace="foo")
+    assert info.namespace == "foo"
+
+
+def test_collection_info_namespace_equals_constant() -> None:
+    from archon_search._types import CollectionInfo
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    info = CollectionInfo(name="x", doc_count=0, chunk_count=0)
+    assert info.namespace == DEFAULT_NAMESPACE
+
+
+# ---------------------------------------------------------------------------
 # CollectionMeta tests (Task 1.1 — FEAT-022)
 # ---------------------------------------------------------------------------
 
