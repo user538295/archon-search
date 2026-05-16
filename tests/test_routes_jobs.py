@@ -212,3 +212,42 @@ def test_job_to_dict_default_namespace() -> None:
     result = job_to_dict(job)
     assert "namespace" in result
     assert result["namespace"] == DEFAULT_NAMESPACE
+
+
+# ---------------------------------------------------------------------------
+# Task 3.4 — _default_ingest_task namespace parameter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_default_ingest_task_takes_namespace_param(tmp_path: Path) -> None:
+    """_default_ingest_task accepts namespace as 4th positional param and completes."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create()
+    body = IngestRequest(collection="docs")
+
+    await _default_ingest_task(job.job_id, store, body, namespace="tenantA")
+
+    completed = store.get(job.job_id)
+    assert completed is not None
+    assert completed.status == JobStatus.DONE
+
+
+def test_ingest_request_ignores_body_namespace(tmp_path: Path, auth_headers: dict[str, str]) -> None:
+    """POST /ingest with unknown 'namespace' field in body: no 422, job uses request namespace."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, store)
+    client = TestClient(app, headers=auth_headers)
+
+    response = client.post(
+        "/ingest",
+        json={"collection": "docs", "namespace": "attacker-namespace"},
+    )
+    # Must not return 422 — unknown fields are silently ignored by Pydantic
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+    # The job namespace must NOT be "attacker-namespace"; it comes from request.state.namespace
+    assert data.get("namespace") != "attacker-namespace"
