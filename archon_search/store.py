@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
+from archon_search.constants import DEFAULT_NAMESPACE
 
 if TYPE_CHECKING:
     import lancedb
@@ -253,6 +254,7 @@ class SearchStore:
             last_indexed=last_indexed,
             last_described=last_described,
             described_at_doc_count=described_at,
+            namespace=row.get("namespace") or DEFAULT_NAMESPACE,
         )
 
     async def get_collection_meta(self, name: str) -> "CollectionMeta | None":

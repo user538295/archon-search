@@ -814,6 +814,57 @@ def test_meta_schema_includes_namespace() -> None:
     assert schema.field(idx).type == pa.utf8()
 
 
+def test_row_to_meta_reads_namespace() -> None:
+    row = {
+        "name": "col1",
+        "description": None,
+        "centroid_json": None,
+        "doc_count": 0,
+        "chunk_count": 0,
+        "embedding_model": None,
+        "last_indexed": None,
+        "last_described": None,
+        "described_at_doc_count": -1,
+        "namespace": "custom",
+    }
+    meta = SearchStore._row_to_meta(row)
+    assert meta.namespace == "custom"
+
+
+def test_row_to_meta_missing_namespace_defaults() -> None:
+    row = {
+        "name": "col1",
+        "description": None,
+        "centroid_json": None,
+        "doc_count": 0,
+        "chunk_count": 0,
+        "embedding_model": None,
+        "last_indexed": None,
+        "last_described": None,
+        "described_at_doc_count": -1,
+        # no "namespace" key — simulates pre-migration row
+    }
+    meta = SearchStore._row_to_meta(row)
+    assert meta.namespace == "default"
+
+
+def test_row_to_meta_null_namespace_defaults() -> None:
+    row = {
+        "name": "col1",
+        "description": None,
+        "centroid_json": None,
+        "doc_count": 0,
+        "chunk_count": 0,
+        "embedding_model": None,
+        "last_indexed": None,
+        "last_described": None,
+        "described_at_doc_count": -1,
+        "namespace": None,  # null column value from LanceDB
+    }
+    meta = SearchStore._row_to_meta(row)
+    assert meta.namespace == "default"
+
+
 # ---------------------------------------------------------------------------
 # CollectionMeta tests (Task 1.1 — FEAT-022)
 # ---------------------------------------------------------------------------
