@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import JOBS_FILE, IngestJob, JobStatus
 
 logger = logging.getLogger("archon")
@@ -34,13 +35,14 @@ class JobStore:
     # Public API
     # ------------------------------------------------------------------
 
-    def create(self) -> IngestJob:
+    def create(self, namespace: str = DEFAULT_NAMESPACE) -> IngestJob:
         now = _now_iso()
         job = IngestJob(
             job_id=str(uuid.uuid4()),
             status=JobStatus.PENDING,
             created_at=now,
             updated_at=now,
+            namespace=namespace,
         )
         self._jobs[job.job_id] = job
         self._write_atomic()

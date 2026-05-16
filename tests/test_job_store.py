@@ -343,3 +343,60 @@ def test_write_atomic_failure_leaves_tmp_file(tmp_path: Path) -> None:
             s.create()
 
     assert tmp_file.exists(), ".tmp file must remain on disk when rename() fails"
+
+
+# ---------------------------------------------------------------------------
+# Task 3.3 (FEAT-043) — JobStore.create(namespace=...) parameter
+# ---------------------------------------------------------------------------
+
+
+def test_job_store_create_with_namespace(tmp_path: Path) -> None:
+    s = JobStore(path=tmp_path / "jobs.json")
+    job = s.create(namespace="tenantA")
+    assert job.namespace == "tenantA"
+
+
+def test_job_store_create_default_namespace(tmp_path: Path) -> None:
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    s = JobStore(path=tmp_path / "jobs.json")
+    job = s.create()
+    assert job.namespace == DEFAULT_NAMESPACE
+
+
+def test_job_store_persists_namespace(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "jobs.json"
+    s = JobStore(path=jobs_path)
+    job = s.create(namespace="tenantB")
+
+    # Reload from disk
+    s2 = JobStore(path=jobs_path)
+    reloaded = s2.get(job.job_id)
+    assert reloaded is not None
+    assert reloaded.namespace == "tenantB"
+
+
+def test_job_store_load_pre_5c_json(tmp_path: Path) -> None:
+    """JSON entries lacking 'namespace' key should load with DEFAULT_NAMESPACE."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    from datetime import datetime, timezone
+
+    jobs_path = tmp_path / "jobs.json"
+    now = datetime.now(timezone.utc).isoformat()
+    data = [
+        {
+            "job_id": "aaaa-bbbb",
+            "status": "DONE",
+            "created_at": now,
+            "updated_at": now,
+            "result": None,
+            "error": None,
+            # intentionally no "namespace" key
+        }
+    ]
+    jobs_path.write_text(json.dumps(data))
+    s = JobStore(path=jobs_path)
+    job = s.get("aaaa-bbbb")
+    assert job is not None
+    assert job.namespace == DEFAULT_NAMESPACE
