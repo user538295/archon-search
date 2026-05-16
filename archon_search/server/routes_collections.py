@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from archon_search.config import SearchConfig, save_config
+from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
@@ -84,6 +85,7 @@ def list_collections(request: Request) -> JSONResponse:
             "description": "",
             "doc_count": 0,
             "chunk_count": 0,
+            "namespace": DEFAULT_NAMESPACE,
             "status": status,
         }
         result.append(entry)

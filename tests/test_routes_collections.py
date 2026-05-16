@@ -399,3 +399,36 @@ def test_collection_info_centroid_present_false(
     response = c.get(f"/collections/{name}")
     assert response.status_code == 200
     assert response.json()["centroid_present"] is False
+
+
+# ---------------------------------------------------------------------------
+# namespace field in GET /collections/ (Task 4.1 — FEAT-042)
+# ---------------------------------------------------------------------------
+
+
+def test_routes_list_collections_namespace(tmp_path: Path, tmp_store: JobStore) -> None:
+    """GET /collections/ response entries include "namespace": "default"."""
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    mock_store = MagicMock()
+    mock_store.list_collections = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) >= 1
+    for entry in data:
+        assert "namespace" in entry
+        assert entry["namespace"] == "default"
