@@ -167,10 +167,18 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JSONRe
 async def remove_collection(name: str, request: Request) -> JSONResponse:
     """Remove a collection: delete config entry and drop LanceDB data."""
     config: SearchConfig = request.app.state.config
+    search_store = getattr(request.app.state, "search_store", None)
+    ns: str = request.state.namespace
 
     path_to_name = _all_collection_paths(config)
     if name not in path_to_name:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    # Namespace check: meta row must exist and belong to the caller's namespace
+    if search_store is not None:
+        meta = await search_store.get_collection_meta(name, namespace=ns)
+        if meta is None:
+            raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
     resolved = path_to_name[name]
 
@@ -207,13 +215,13 @@ async def remove_collection(name: str, request: Request) -> JSONResponse:
 
     _maybe_save_config(config, request)
 
-    # Best-effort: drop LanceDB table if store is available
-    search_store = getattr(request.app.state, "search_store", None)
+    # Drop LanceDB table and meta row
     if search_store is not None:
         try:
             await search_store.drop_collection(name)
         except (KeyError, RuntimeError):
             pass  # table doesn't exist — that's fine
+        await search_store.delete_collection_meta(name, ns)
 
     return JSONResponse(content={"name": name, "deleted": True})
 

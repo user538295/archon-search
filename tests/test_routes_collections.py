@@ -196,8 +196,12 @@ def test_remove_collection_deletes_config_and_data(
     app = create_app(cfg, tmp_store)
 
     # Fix 9: wire a mock search_store and assert drop_collection was called
+    from archon_search.collection_meta import CollectionMeta as _CM
+    _meta = _CM(name=path_to_collection_name(str(src)), namespace="default")
     mock_search_store = MagicMock()
+    mock_search_store.get_collection_meta = AsyncMock(return_value=_meta)
     mock_search_store.drop_collection = AsyncMock()
+    mock_search_store.delete_collection_meta = AsyncMock()
     app.state.search_store = mock_search_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -798,6 +802,130 @@ def test_add_collection_job_has_correct_namespace(
     # Also verify the stub meta was written with the correct namespace
     call_arg = mock_store.update_collection_meta.call_args[0][0]
     assert call_arg.namespace == caller_ns
+
+
+# ---------------------------------------------------------------------------
+# DELETE /collections/{name} — namespace enforcement (Task 4.3 — FEAT-043)
+# ---------------------------------------------------------------------------
+
+
+def test_remove_collection_cross_namespace_404(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """DELETE returns 404 when meta row exists for a different namespace; config is unchanged."""
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    caller_key = "c" * 64
+    cfg.namespaces = {caller_key: "tenantC"}
+
+    name = path_to_collection_name(str(src))
+    # get_collection_meta filters by namespace in the real store.
+    # Since the meta belongs to "tenantOther", a query for "tenantC" returns None.
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+    response = c.delete(f"/collections/{name}")
+
+    assert response.status_code == 404
+    assert name in response.json()["detail"]
+    # Config must not be mutated
+    assert str(src) in cfg.collections
+
+
+def test_remove_collection_deletes_meta_row(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """Successful DELETE calls delete_collection_meta with the correct name + namespace."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    caller_key = "d" * 64
+    caller_ns = "tenantD"
+    cfg.namespaces = {caller_key: caller_ns}
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace=caller_ns)
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.drop_collection = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+    response = c.delete(f"/collections/{name}")
+
+    assert response.status_code == 200
+    mock_store.delete_collection_meta.assert_called_once_with(name, caller_ns)
+
+
+def test_remove_collection_success_drops_table_and_meta(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """Successful DELETE calls both drop_collection AND delete_collection_meta; meta absent after."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    caller_key = "e" * 64
+    caller_ns = "tenantE"
+    cfg.namespaces = {caller_key: caller_ns}
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace=caller_ns)
+
+    # Simulate meta row is present before delete, absent after
+    deleted = {"done": False}
+
+    async def _get_meta(n: str, namespace: str = "default") -> CollectionMeta | None:
+        return None if deleted["done"] else meta
+
+    async def _delete_meta(n: str, ns: str) -> None:
+        deleted["done"] = True
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(side_effect=_get_meta)
+    mock_store.drop_collection = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock(side_effect=_delete_meta)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+    response = c.delete(f"/collections/{name}")
+
+    assert response.status_code == 200
+    mock_store.drop_collection.assert_called_once_with(name)
+    mock_store.delete_collection_meta.assert_called_once_with(name, caller_ns)
+    assert deleted["done"] is True
 
 
 def test_add_collection_rollback_save_failure(
