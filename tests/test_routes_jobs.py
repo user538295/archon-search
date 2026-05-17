@@ -339,6 +339,27 @@ def test_delete_job_same_namespace_proceeds(tmp_path: Path) -> None:
     assert response.status_code in (200, 202)
 
 
+# ---------------------------------------------------------------------------
+# Task 5.3 — POST /ingest namespace propagation
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_passes_namespace_to_job(tmp_path: Path) -> None:
+    """POST /ingest with state.namespace='tenantA' → job has 'namespace': 'tenantA'."""
+    tenant_key = "c" * 64
+    store = JobStore(path=tmp_path / "jobs.json")
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.namespaces = {tenant_key: "tenantA"}
+    app = create_app(config, store)
+    client = TestClient(app, headers={"Authorization": f"Bearer {tenant_key}"})
+
+    response = client.post("/ingest", json={"collection": "docs"})
+    assert response.status_code == 202
+    data = response.json()
+    assert data["namespace"] == "tenantA"
+
+
 def test_ingest_request_ignores_body_namespace(tmp_path: Path, auth_headers: dict[str, str]) -> None:
     """POST /ingest with unknown 'namespace' field in body: no 422, job uses request namespace."""
     store = JobStore(path=tmp_path / "jobs.json")

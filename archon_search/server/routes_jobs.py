@@ -93,8 +93,9 @@ async def ingest(body: IngestRequest, request: Request) -> JSONResponse:
     # Populate ingested_by from HTTP header if present
     ingested_by = request.headers.get("X-Ingested-By", "archon-search-cli")
     body.ingested_by = ingested_by
-    job = store.create()
-    task = asyncio.create_task(_default_ingest_task(job.job_id, store, body, pipeline_fn=pipeline_fn))
+    ns = request.state.namespace
+    job = store.create(namespace=ns)
+    task = asyncio.create_task(_default_ingest_task(job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn))
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
     return JSONResponse(content=job_to_dict(job), status_code=202)
