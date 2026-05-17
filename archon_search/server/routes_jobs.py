@@ -106,6 +106,8 @@ async def get_job(job_id: str, request: Request) -> JSONResponse:
     job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.namespace != request.state.namespace:
+        raise HTTPException(status_code=404, detail="Job not found")
     return JSONResponse(content=job_to_dict(job))
 
 
@@ -114,6 +116,8 @@ async def delete_job(job_id: str, request: Request) -> JSONResponse:
     store: JobStore = request.app.state.job_store
     job = store.get(job_id)
     if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.namespace != request.state.namespace:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status in _TERMINAL_STATUSES:
         return JSONResponse(content=job_to_dict(job), status_code=200)

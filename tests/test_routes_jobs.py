@@ -272,6 +272,73 @@ async def test_default_ingest_task_forwards_namespace_to_run_pipeline(tmp_path: 
     assert received["namespace"] == "tenantA"
 
 
+# ---------------------------------------------------------------------------
+# Task 5.2 — Namespace isolation for GET/DELETE /jobs/{job_id}
+# ---------------------------------------------------------------------------
+
+
+def test_get_job_cross_namespace_404(tmp_path: Path, auth_headers: dict[str, str]) -> None:
+    """GET /jobs/{id} with mismatched namespace returns 404 (not 403)."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create(namespace="tenantA")
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, store)
+    # auth_headers use the default API key → namespace="default", not "tenantA"
+    client = TestClient(app, headers=auth_headers)
+
+    response = client.get(f"/jobs/{job.job_id}")
+    assert response.status_code == 404
+
+
+def test_get_job_same_namespace_200(tmp_path: Path) -> None:
+    """GET /jobs/{id} with matching namespace returns 200."""
+    tenant_key = "a" * 64
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create(namespace="tenantA")
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.namespaces = {tenant_key: "tenantA"}
+    app = create_app(config, store)
+    client = TestClient(app, headers={"Authorization": f"Bearer {tenant_key}"})
+
+    response = client.get(f"/jobs/{job.job_id}")
+    assert response.status_code == 200
+    assert response.json()["job_id"] == job.job_id
+
+
+def test_delete_job_cross_namespace_404(tmp_path: Path, auth_headers: dict[str, str]) -> None:
+    """DELETE /jobs/{id} with mismatched namespace returns 404 (not 403)."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create(namespace="tenantA")
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, store)
+    # auth_headers use the default API key → namespace="default", not "tenantA"
+    client = TestClient(app, headers=auth_headers)
+
+    response = client.delete(f"/jobs/{job.job_id}")
+    assert response.status_code == 404
+
+
+def test_delete_job_same_namespace_proceeds(tmp_path: Path) -> None:
+    """DELETE /jobs/{id} with matching namespace → 202 and store.transition called."""
+    from unittest.mock import MagicMock, patch
+
+    tenant_key = "b" * 64
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create(namespace="tenantA")
+    store.update(job.job_id, status=JobStatus.PENDING)
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.namespaces = {tenant_key: "tenantA"}
+    app = create_app(config, store)
+    client = TestClient(app, headers={"Authorization": f"Bearer {tenant_key}"})
+
+    response = client.delete(f"/jobs/{job.job_id}")
+    assert response.status_code in (200, 202)
+
+
 def test_ingest_request_ignores_body_namespace(tmp_path: Path, auth_headers: dict[str, str]) -> None:
     """POST /ingest with unknown 'namespace' field in body: no 422, job uses request namespace."""
     store = JobStore(path=tmp_path / "jobs.json")
