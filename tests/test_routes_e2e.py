@@ -30,6 +30,7 @@ def _make_client(
     app = create_app(config, job_store, config_path=tmp_path / "config.toml")
     mock_store = MagicMock()
     mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
     mock_store.drop_collection = AsyncMock()
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()

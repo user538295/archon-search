@@ -101,6 +101,13 @@ def test_add_collection_persists_and_starts_ingest(
     src = tmp_path / "myproject"
     src.mkdir()
     app = create_app(config, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
@@ -128,6 +135,13 @@ def test_add_duplicate_collection_returns_409(
     src = tmp_path / "myproject"
     src.mkdir()
     app = create_app(config, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
@@ -609,3 +623,216 @@ def test_routes_get_collection_namespace(tmp_path: Path, tmp_store: JobStore) ->
     data = response.json()
     assert "namespace" in data
     assert data["namespace"] == "default"
+
+
+# ---------------------------------------------------------------------------
+# POST /collections/ — namespace enforcement (Task 4.2 — FEAT-043)
+# ---------------------------------------------------------------------------
+
+
+def _make_app_with_mock_store(
+    cfg: "SearchConfig",
+    tmp_store: "JobStore",
+    mock_store: "MagicMock",
+) -> "TestClient":
+    """Helper: create app with a pre-wired mock search_store."""
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+    return app
+
+
+def test_add_collection_global_uniqueness_409(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ returns 409 when the collection name is already in meta (any namespace)."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    name = path_to_collection_name(str(src))
+    existing_meta = CollectionMeta(name=name, namespace="other-ns")
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[existing_meta])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": str(src)})
+    assert response.status_code == 409
+    assert "already registered" in response.json()["detail"]
+
+
+def test_add_collection_writes_stub_meta(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """Successful POST /collections/ writes a stub meta row before ingest completes."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 202
+    # Verify update_collection_meta was called with a CollectionMeta stub
+    mock_store.update_collection_meta.assert_called_once()
+    call_arg = mock_store.update_collection_meta.call_args[0][0]
+    assert isinstance(call_arg, CollectionMeta)
+    expected_name = path_to_collection_name(str(src.resolve()))
+    assert call_arg.name == expected_name
+
+
+def test_add_collection_rollback_on_meta_failure(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ returns 500 and reverts config when update_collection_meta raises non-ValueError."""
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock(side_effect=RuntimeError("disk error"))
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 500
+    # Config must be reverted — the path should not be in collections
+    updated_config: SearchConfig = app.state.config
+    assert str(src.resolve()) not in updated_config.collections
+
+
+def test_add_collection_cross_namespace_race_returns_409(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ returns 409 (not 500) when update_collection_meta raises ValueError (TOCTOU race)."""
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock(
+        side_effect=ValueError("Collection belongs to other namespace")
+    )
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 409
+    # Config must be reverted
+    updated_config: SearchConfig = app.state.config
+    assert str(src.resolve()) not in updated_config.collections
+
+
+def test_add_collection_job_has_correct_namespace(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """Created job's namespace matches the caller's namespace."""
+    src = tmp_path / "myproject"
+    src.mkdir()
+
+    caller_ns = "tenantX"
+    caller_key = "x" * 64
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.namespaces = {caller_key: caller_ns}
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 202
+    data = response.json()
+    assert data["namespace"] == caller_ns
+
+    # Also verify the stub meta was written with the correct namespace
+    call_arg = mock_store.update_collection_meta.call_args[0][0]
+    assert call_arg.namespace == caller_ns
+
+
+def test_add_collection_rollback_save_failure(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ returns 500 when both update_collection_meta AND rollback _maybe_save_config raise."""
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    # Set a config_path so _maybe_save_config is invoked
+    cfg_file = tmp_path / "search.toml"
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock(side_effect=RuntimeError("disk error"))
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    # Inject config_path so _maybe_save_config is called during rollback
+    app.state.config_path = str(cfg_file)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    call_count = 0
+
+    def failing_save(config: object, config_path: object) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 2:
+            raise OSError("disk full")
+
+    with patch("archon_search.server.routes_collections.save_config", side_effect=failing_save):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 500

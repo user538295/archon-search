@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
@@ -110,10 +111,12 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JSONRe
     """Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob."""
     config: SearchConfig = request.app.state.config
     store: JobStore = request.app.state.job_store
+    search_store = request.app.state.search_store
+    ns: str = request.state.namespace
 
     resolved = str(Path(body.path).expanduser().resolve())
 
-    # Fix 2: dedup check against resolved paths from both lists
+    # Dedup check against resolved paths from both lists
     existing_resolved = {
         str(Path(p).expanduser().resolve())
         for p in config.collections + config.pinned_collections
@@ -121,15 +124,39 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JSONRe
     if resolved in existing_resolved:
         return JSONResponse({"detail": "collection already registered"}, status_code=409)
 
+    # Global name uniqueness check across all namespaces
+    collection_name = path_to_collection_name(resolved)
+    all_meta = await search_store.get_all_collections_meta()
+    if any(m.name == collection_name for m in all_meta):
+        return JSONResponse({"detail": "collection name already registered"}, status_code=409)
+
     config.collections.append(resolved)
     _maybe_save_config(config, request)
 
+    # Write stub meta — rollback config on failure
+    try:
+        await search_store.update_collection_meta(CollectionMeta(name=collection_name, namespace=ns))
+    except ValueError:
+        # TOCTOU race: name claimed by another namespace between check and write
+        config.collections.remove(resolved)
+        _maybe_save_config(config, request)
+        return JSONResponse({"detail": "collection name already registered"}, status_code=409)
+    except Exception:
+        config.collections.remove(resolved)
+        try:
+            _maybe_save_config(config, request)
+        except Exception:
+            logger.exception("Failed to rollback config after stub meta write failure")
+        return JSONResponse({"detail": "internal error"}, status_code=500)
+
     ingested_by = request.headers.get("X-Ingested-By", "archon-search-cli")
-    job = store.create()
+    job = store.create(namespace=ns)
     ingest_body = IngestRequest(
-        collection=path_to_collection_name(resolved), path=resolved, ingested_by=ingested_by
+        collection=collection_name, path=resolved, ingested_by=ingested_by
     )
-    task = asyncio.create_task(_default_ingest_task(job.job_id, store, ingest_body))
+    task = asyncio.create_task(
+        _default_ingest_task(job.job_id, store, ingest_body, namespace=ns)
+    )
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
 
