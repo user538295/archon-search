@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
@@ -56,23 +57,30 @@ class SearchResultSchema(BaseModel):
 
 
 @router.post("/search", response_model=list[SearchResultSchema])
-async def search(body: SearchRequest, request: Request) -> list[SearchResultSchema]:
+async def search(body: SearchRequest, request: Request) -> list[SearchResultSchema] | JSONResponse:
     config = request.app.state.config
     embedder = request.app.state.embedder
+    store = request.app.state.search_store
+    ns = request.state.namespace
+
+    try:
+        meta = await store.get_collection_meta(body.collection, namespace=ns)
+    except Exception as exc:
+        logger.error("search: meta lookup failed for collection %r: %s", body.collection, exc, exc_info=True)
+        return JSONResponse({"detail": "service unavailable"}, status_code=503)
+
+    if meta is None:
+        return JSONResponse({"detail": "collection not found"}, status_code=404)
+
     try:
         vector = await embedder.embed_one(body.query)
-        store = SearchStore(config.db_path)
-        await store.connect()
-        try:
-            candidates = await store.hybrid_search(
-                body.collection, vector, body.query, top_k=body.top_k * 3
-            )
-            backend = ModelReranker(config.reranker_model, providers=config.providers or None)
-            reranker = Reranker(backend)
-            reranked = await reranker.rerank(body.query, candidates, top_k=body.top_k)
-            return [SearchResultSchema.from_result(r) for r in reranked]
-        finally:
-            await store.disconnect()
+        candidates = await store.hybrid_search(
+            body.collection, vector, body.query, top_k=body.top_k * 3
+        )
+        backend = ModelReranker(config.reranker_model, providers=config.providers or None)
+        reranker = Reranker(backend)
+        reranked = await reranker.rerank(body.query, candidates, top_k=body.top_k)
+        return [SearchResultSchema.from_result(r) for r in reranked]
     except Exception as exc:
         logger.warning("search failed for collection %r: %s", body.collection, exc, exc_info=True)
         return []

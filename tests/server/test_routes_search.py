@@ -42,21 +42,21 @@ def _make_search_result(n: int = 1) -> SearchResult:
 
 
 def test_search_returns_results(tmp_path: Path) -> None:
+    from archon_search.collection_meta import CollectionMeta
+
     results = [_make_search_result(1), _make_search_result(2)]
     app, client = _make_app(tmp_path)
     app.state.embedder.embed_one = AsyncMock(return_value=[0.1] * 128)
 
     store_mock = MagicMock()
-    store_mock.connect = AsyncMock()
-    store_mock.disconnect = AsyncMock()
+    store_mock.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="my-col", namespace="default"))
     store_mock.hybrid_search = AsyncMock(return_value=results)
+    app.state.search_store = store_mock
+
     reranker_mock = MagicMock()
     reranker_mock.rerank = AsyncMock(return_value=results)
 
-    with (
-        patch("archon_search.server.routes_search.SearchStore", return_value=store_mock),
-        patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock),
-    ):
+    with patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock):
         response = client.post("/search", json={"collection": "my-col", "query": "test query"})
 
     assert response.status_code == 200
@@ -76,19 +76,18 @@ def test_search_returns_results(tmp_path: Path) -> None:
 
 
 def test_search_collection_not_found_returns_empty(tmp_path: Path) -> None:
+    """Collection not found via namespace check → 404 (not 200+[])."""
     app, client = _make_app(tmp_path)
     app.state.embedder.embed_one = AsyncMock(return_value=[0.1] * 128)
 
     store_mock = MagicMock()
-    store_mock.connect = AsyncMock()
-    store_mock.disconnect = AsyncMock()
-    store_mock.hybrid_search = AsyncMock(side_effect=ValueError("Table not found"))
+    store_mock.get_collection_meta = AsyncMock(return_value=None)
+    store_mock.hybrid_search = AsyncMock()
+    app.state.search_store = store_mock
 
-    with patch("archon_search.server.routes_search.SearchStore", return_value=store_mock):
-        response = client.post("/search", json={"collection": "nonexistent", "query": "test"})
+    response = client.post("/search", json={"collection": "nonexistent", "query": "test"})
 
-    assert response.status_code == 200
-    assert response.json() == []
+    assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -163,18 +162,18 @@ def test_search_whitespace_collection(tmp_path: Path) -> None:
 
 
 def test_search_store_exception_returns_empty(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Exception in hybrid_search (after successful meta lookup) → log WARNING + return []."""
+    from archon_search.collection_meta import CollectionMeta
+
     app, client = _make_app(tmp_path)
     app.state.embedder.embed_one = AsyncMock(return_value=[0.1] * 128)
 
     store_mock = MagicMock()
-    store_mock.connect = AsyncMock()
-    store_mock.disconnect = AsyncMock()
+    store_mock.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col", namespace="default"))
     store_mock.hybrid_search = AsyncMock(side_effect=RuntimeError("db failure"))
+    app.state.search_store = store_mock
 
-    with (
-        patch("archon_search.server.routes_search.SearchStore", return_value=store_mock),
-        caplog.at_level(logging.WARNING, logger="archon.search"),
-    ):
+    with caplog.at_level(logging.WARNING, logger="archon.search"):
         response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 200
@@ -188,14 +187,17 @@ def test_search_store_exception_returns_empty(tmp_path: Path, caplog: pytest.Log
 
 
 def test_search_top_k_forwarded(tmp_path: Path) -> None:
+    from archon_search.collection_meta import CollectionMeta
+
     results = [_make_search_result(i) for i in range(1, 11)]
     app, client = _make_app(tmp_path)
     app.state.embedder.embed_one = AsyncMock(return_value=[0.1] * 128)
 
     store_mock = MagicMock()
-    store_mock.connect = AsyncMock()
-    store_mock.disconnect = AsyncMock()
+    store_mock.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col", namespace="default"))
     store_mock.hybrid_search = AsyncMock(return_value=results)
+    app.state.search_store = store_mock
+
     captured: dict = {}
 
     async def fake_rerank(query: str, candidates: list, top_k: int) -> list:
@@ -205,10 +207,7 @@ def test_search_top_k_forwarded(tmp_path: Path) -> None:
     reranker_mock = MagicMock()
     reranker_mock.rerank = fake_rerank
 
-    with (
-        patch("archon_search.server.routes_search.SearchStore", return_value=store_mock),
-        patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock),
-    ):
+    with patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock):
         client.post("/search", json={"collection": "col", "query": "q", "top_k": 3})
 
     assert captured["top_k"] == 3
@@ -223,11 +222,17 @@ def test_search_top_k_forwarded(tmp_path: Path) -> None:
 
 
 def test_search_embedder_failure_returns_empty(tmp_path: Path) -> None:
+    from archon_search.collection_meta import CollectionMeta
+
     app, client = _make_app(tmp_path)
     app.state.embedder.embed_one = AsyncMock(side_effect=RuntimeError("model error"))
 
-    with patch("archon_search.server.routes_search.SearchStore"):
-        response = client.post("/search", json={"collection": "col", "query": "test"})
+    store_mock = MagicMock()
+    store_mock.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col", namespace="default"))
+    store_mock.hybrid_search = AsyncMock()
+    app.state.search_store = store_mock
+
+    response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 200
     assert response.json() == []
@@ -238,32 +243,140 @@ def test_search_embedder_failure_returns_empty(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_search_reranker_failure_disconnect_called(tmp_path: Path) -> None:
+def test_search_reranker_failure_returns_empty(tmp_path: Path) -> None:
+    """Reranker failure → 200 + [] (shared store, no disconnect needed)."""
+    from archon_search.collection_meta import CollectionMeta
+
     results = [_make_search_result(1)]
     app, client = _make_app(tmp_path)
     app.state.embedder.embed_one = AsyncMock(return_value=[0.1] * 128)
 
     store_mock = MagicMock()
-    store_mock.connect = AsyncMock()
-    store_mock.disconnect = AsyncMock()
+    store_mock.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col", namespace="default"))
     store_mock.hybrid_search = AsyncMock(return_value=results)
+    app.state.search_store = store_mock
 
     reranker_mock = MagicMock()
     reranker_mock.rerank = AsyncMock(side_effect=ValueError("score count mismatch"))
 
-    with (
-        patch("archon_search.server.routes_search.SearchStore", return_value=store_mock),
-        patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock),
-    ):
+    with patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock):
         response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 200
     assert response.json() == []
-    store_mock.disconnect.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
 # 8. Integration: ingest a doc, search, verify result appears
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 9. Shared store — handler uses request.app.state.search_store (Task 5.1)
+# ---------------------------------------------------------------------------
+
+
+def test_search_uses_app_state_store(tmp_path: Path) -> None:
+    """POST /search must use request.app.state.search_store — no fresh SearchStore() per request."""
+    from archon_search.collection_meta import CollectionMeta
+
+    results = [_make_search_result(1)]
+    app, client = _make_app(tmp_path)
+    app.state.embedder.embed_one = AsyncMock(return_value=[0.1] * 128)
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="my-col", namespace="default"))
+    mock_store.hybrid_search = AsyncMock(return_value=results)
+    app.state.search_store = mock_store
+
+    reranker_mock = MagicMock()
+    reranker_mock.rerank = AsyncMock(return_value=results)
+
+    with (
+        patch("archon_search.server.routes_search.SearchStore") as store_cls_mock,
+        patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock),
+    ):
+        response = client.post("/search", json={"collection": "my-col", "query": "test"})
+
+    assert response.status_code == 200
+    store_cls_mock.assert_not_called()
+    mock_store.hybrid_search.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 10. Same namespace — hybrid_search is called (not short-circuited)
+# ---------------------------------------------------------------------------
+
+
+def test_search_same_namespace_proceeds(tmp_path: Path) -> None:
+    """When get_collection_meta returns a meta row, hybrid_search() is called."""
+    from archon_search.collection_meta import CollectionMeta
+
+    results = [_make_search_result(1)]
+    app, client = _make_app(tmp_path)
+    app.state.embedder.embed_one = AsyncMock(return_value=[0.1] * 128)
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="my-col", namespace="default"))
+    mock_store.hybrid_search = AsyncMock(return_value=results)
+    app.state.search_store = mock_store
+
+    reranker_mock = MagicMock()
+    reranker_mock.rerank = AsyncMock(return_value=results)
+
+    with patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock):
+        response = client.post("/search", json={"collection": "my-col", "query": "test"})
+
+    assert response.status_code == 200
+    mock_store.hybrid_search.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 11. Cross-namespace — returns 404 (Task 5.1)
+# ---------------------------------------------------------------------------
+
+
+def test_search_cross_namespace_404(tmp_path: Path) -> None:
+    """When get_collection_meta returns None (wrong namespace), response is 404."""
+    app, client = _make_app(tmp_path)
+    app.state.embedder.embed_one = AsyncMock(return_value=[0.1] * 128)
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.hybrid_search = AsyncMock()
+    app.state.search_store = mock_store
+
+    response = client.post("/search", json={"collection": "other-col", "query": "test"})
+
+    assert response.status_code == 404
+    mock_store.hybrid_search.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 12. Store exception on meta lookup — returns 503 (Task 5.1)
+# ---------------------------------------------------------------------------
+
+
+def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """When get_collection_meta raises (LanceDB error), response is 503, not 404 or 200."""
+    app, client = _make_app(tmp_path)
+    app.state.embedder.embed_one = AsyncMock(return_value=[0.1] * 128)
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(side_effect=RuntimeError("lancedb failure"))
+    mock_store.hybrid_search = AsyncMock()
+    app.state.search_store = mock_store
+
+    with caplog.at_level(logging.ERROR, logger="archon.search"):
+        response = client.post("/search", json={"collection": "col", "query": "test"})
+
+    assert response.status_code == 503
+    mock_store.hybrid_search.assert_not_called()
+    assert any("service unavailable" in record.message.lower() or "lancedb" in record.message.lower() or "col" in record.message for record in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Integration
 # ---------------------------------------------------------------------------
 
 
