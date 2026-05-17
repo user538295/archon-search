@@ -1,4 +1,4 @@
-"""Suite 3 — archon-search /route endpoint e2e tests (Task 6.1: H3.1–H3.5, E3.1–E3.5b, H3.6b; Task 6.2: H3.6–H3.11, E3.5–E3.7)."""
+"""Suite 3 — archon-search /route endpoint e2e tests (Task 6.1: H3.1–H3.5, E3.1–E3.5b, H3.6b; Task 6.2: H3.6–H3.11, E3.5–E3.7; Task 6.1-ns: two-namespace isolation)."""
 from __future__ import annotations
 
 import asyncio
@@ -682,3 +682,186 @@ def test_H3_20_status_pid_matches_current_process(tmp_path: Path) -> None:
     response = client.get("/status")
     assert response.status_code == 200
     assert response.json()["pid"] == os.getpid()
+
+
+# ===========================================================================
+# Suite — two-namespace isolation integration tests (Task 6.1-ns)
+# ===========================================================================
+
+
+def _make_two_namespace_clients(
+    tmp_path: Path,
+) -> tuple[TestClient, TestClient]:
+    """Create two TestClients authenticated as keyA (tenantA) and keyB (tenantB).
+
+    Returns (client_a, client_b).  The app is wired with:
+      config.namespaces = {"keyA": "tenantA", "keyB": "tenantB"}
+      mock_store: tenantA owns "col_a", tenantB owns "col_b"
+    """
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.namespaces = {"keyA": "tenantA", "keyB": "tenantB"}
+    # Register both collection paths so route helpers (_all_collection_paths) know their names
+    config.collections = [str(tmp_path / "col-a"), str(tmp_path / "col-b")]
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store, config_path=tmp_path / "config.toml")
+
+    meta_a = CollectionMeta(name="col_a", namespace="tenantA")
+    meta_b = CollectionMeta(name="col_b", namespace="tenantB")
+    all_meta = [meta_a, meta_b]
+
+    def _get_meta(name: str, namespace: str = "default") -> CollectionMeta | None:
+        for m in all_meta:
+            if m.name == name and m.namespace == namespace:
+                return m
+        return None
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=all_meta)
+    mock_store.get_collection_meta = AsyncMock(side_effect=_get_meta)
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.drop_collection = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    client_a = TestClient(app, headers={"Authorization": "Bearer keyA"})
+    client_b = TestClient(app, headers={"Authorization": "Bearer keyB"})
+    return client_a, client_b
+
+
+# ---------------------------------------------------------------------------
+# test_two_namespace_collection_isolation — key A sees only tenantA collection
+# ---------------------------------------------------------------------------
+def test_two_namespace_collection_isolation(tmp_path: Path) -> None:
+    client_a, client_b = _make_two_namespace_clients(tmp_path)
+
+    resp_a = client_a.get("/collections/")
+    assert resp_a.status_code == 200
+    names_a = [e["name"] for e in resp_a.json()]
+    assert "col_a" in names_a
+    assert "col_b" not in names_a
+
+    resp_b = client_b.get("/collections/")
+    assert resp_b.status_code == 200
+    names_b = [e["name"] for e in resp_b.json()]
+    assert "col_b" in names_b
+    assert "col_a" not in names_b
+
+
+# ---------------------------------------------------------------------------
+# test_two_namespace_search_isolation — key A cannot search key B's collection (404)
+# ---------------------------------------------------------------------------
+def test_two_namespace_search_isolation(tmp_path: Path) -> None:
+    client_a, _ = _make_two_namespace_clients(tmp_path)
+
+    response = client_a.post("/search", json={"collection": "col_b", "query": "hello"})
+    assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# test_two_namespace_status_isolation — key A /status has only tenantA collections
+# ---------------------------------------------------------------------------
+def test_two_namespace_status_isolation(tmp_path: Path) -> None:
+    client_a, client_b = _make_two_namespace_clients(tmp_path)
+
+    resp_a = client_a.get("/status")
+    assert resp_a.status_code == 200
+    names_a = [c["name"] for c in resp_a.json()["collections"]]
+    assert "col_a" in names_a
+    assert "col_b" not in names_a
+
+    resp_b = client_b.get("/status")
+    assert resp_b.status_code == 200
+    names_b = [c["name"] for c in resp_b.json()["collections"]]
+    assert "col_b" in names_b
+    assert "col_a" not in names_b
+
+
+# ---------------------------------------------------------------------------
+# test_two_namespace_job_isolation — key A cannot see key B's job (404)
+# ---------------------------------------------------------------------------
+def test_two_namespace_job_isolation(tmp_path: Path) -> None:
+    client_a, client_b = _make_two_namespace_clients(tmp_path)
+
+    # key B creates a job
+    resp = client_b.post("/ingest", json={"collection": "col_b"})
+    assert resp.status_code == 202
+    job_id = resp.json()["job_id"]
+
+    # key A tries to read key B's job
+    resp_a = client_a.get(f"/jobs/{job_id}")
+    assert resp_a.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# test_two_namespace_collection_detail_isolation — key A /collections/{name} for B's → 404
+# ---------------------------------------------------------------------------
+def test_two_namespace_collection_detail_isolation(tmp_path: Path) -> None:
+    client_a, _ = _make_two_namespace_clients(tmp_path)
+
+    response = client_a.get("/collections/col_b")
+    assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# test_two_namespace_delete_isolation — key A DELETE B's collection → 404; B's still exists
+# ---------------------------------------------------------------------------
+def test_two_namespace_delete_isolation(tmp_path: Path) -> None:
+    client_a, client_b = _make_two_namespace_clients(tmp_path)
+
+    # key A cannot delete key B's collection
+    resp = client_a.delete("/collections/col_b")
+    assert resp.status_code == 404
+
+    # key B's collection still accessible to key B
+    resp_b = client_b.get("/collections/")
+    assert resp_b.status_code == 200
+    names_b = [e["name"] for e in resp_b.json()]
+    assert "col_b" in names_b
+
+
+# ---------------------------------------------------------------------------
+# test_single_key_backward_compat — namespaces={}, existing single key → all collections visible
+# ---------------------------------------------------------------------------
+def test_single_key_backward_compat(tmp_path: Path) -> None:
+    """Single-key mode: no namespaces dict → all collections resolve to DEFAULT_NAMESPACE."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    # Empty namespaces — single-key backward-compat mode
+    config.namespaces = {}
+    config.collections = [str(tmp_path / "col-x"), str(tmp_path / "col-y")]
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store, config_path=tmp_path / "config.toml")
+
+    all_meta = [
+        CollectionMeta(name="col_x", namespace=DEFAULT_NAMESPACE),
+        CollectionMeta(name="col_y", namespace=DEFAULT_NAMESPACE),
+    ]
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=all_meta)
+    mock_store.get_collection_meta = AsyncMock(
+        side_effect=lambda name, namespace="default": CollectionMeta(name=name, namespace=namespace)
+    )
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.drop_collection = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    resp = client.get("/collections/")
+    assert resp.status_code == 200
+    names = [e["name"] for e in resp.json()]
+    assert "col_x" in names
+    assert "col_y" in names
