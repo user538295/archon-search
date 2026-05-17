@@ -19,9 +19,10 @@ except PackageNotFoundError:
 
 
 @router.get("/status")
-def status(request: Request) -> dict:
+async def status(request: Request) -> dict:
     """Return rich operator-facing status including service info and per-collection progress."""
     config: SearchConfig = request.app.state.config
+    ns: str = request.state.namespace
 
     # Service / process fields
     pid = os.getpid()
@@ -31,6 +32,11 @@ def status(request: Request) -> dict:
         "version": _VERSION,
         "collections": [],
     }
+
+    # Resolve which collection names belong to the caller's namespace
+    search_store = request.app.state.search_store
+    all_meta = await search_store.get_all_collections_meta()
+    ns_names: set[str] = {m.name for m in all_meta if m.namespace == ns}
 
     # Load indexing state for collection progress (state_store created once in create_app)
     state_store = request.app.state.state_store
@@ -53,6 +59,9 @@ def status(request: Request) -> dict:
     config_names: set[str] = {path_to_collection_name(p) for p in config.collections}
     pinned_names: set[str] = {path_to_collection_name(p) for p in config.pinned_collections}
     all_names: set[str] = config_names | pinned_names | set(collections_progress.keys())
+
+    # Filter to only names in the caller's namespace
+    all_names &= ns_names
 
     collection_entries = []
     for name in sorted(all_names):
