@@ -82,7 +82,14 @@ async def route(body: RouteRequest, request: Request) -> Any:
         shortlist_size = body.slots if body.slots is not None else config.routing_shortlist_size
         embedder: Embedder | None = getattr(request.app.state, "embedder", None)
         col_router = _build_router(config, shortlist_size, embedder=embedder)
-        pinned_names = [path_to_collection_name(p) for p in config.pinned_collections]
+
+        ns: str = request.state.namespace
+        store = request.app.state.search_store
+        all_meta = await store.get_all_collections_meta()
+        ns_names = {m.name for m in all_meta if m.namespace == ns}
+
+        all_pinned = [path_to_collection_name(p) for p in config.pinned_collections]
+        pinned_names = [n for n in all_pinned if n in ns_names]
 
         pre_context = await asyncio.wait_for(
             col_router.get_pre_context(

@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from archon_search.collection_meta import CollectionMeta
+from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
@@ -18,7 +20,10 @@ from archon_search.telemetry.writer import TelemetryWriter
 # ---------------------------------------------------------------------------
 
 
-def _make_test_app(writer: TelemetryWriter | None = None) -> FastAPI:
+def _make_test_app(
+    writer: TelemetryWriter | None = None,
+    all_meta: list[CollectionMeta] | None = None,
+) -> FastAPI:
     """Create a minimal FastAPI app with only the route router and mocked state."""
     from archon_search.config import SearchConfig
     from archon_search.server.routes_route import router
@@ -26,6 +31,19 @@ def _make_test_app(writer: TelemetryWriter | None = None) -> FastAPI:
     app = FastAPI()
     app.state.config = SearchConfig()
     app.state.telemetry_writer = writer
+
+    # Wire a mock search_store so the namespace filter can call get_all_collections_meta().
+    # Namespace is injected via middleware below; all collections resolve to DEFAULT_NAMESPACE.
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=all_meta or [])
+    app.state.search_store = mock_store
+
+    # Inject namespace into request.state so the handler can read it without real middleware.
+    @app.middleware("http")
+    async def _inject_namespace(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.namespace = DEFAULT_NAMESPACE
+        return await call_next(request)
+
     app.include_router(router)
     return app
 
@@ -68,7 +86,8 @@ class _FakeColRouter:
 
 def test_route_handler_logs_entry_on_success() -> None:
     writer = _make_mock_writer()
-    app = _make_test_app(writer)
+    # col_a is pinned and belongs to DEFAULT_NAMESPACE so the namespace filter includes it.
+    app = _make_test_app(writer, all_meta=[CollectionMeta(name="col_a", namespace=DEFAULT_NAMESPACE)])
 
     fake_router = _FakeColRouter(
         pre_context="some context",

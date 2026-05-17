@@ -12,6 +12,7 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
+from archon_search.sync import path_to_collection_name
 
 
 def _make_client(
@@ -27,6 +28,20 @@ def _make_client(
     config.routing_confidence_threshold = confidence_threshold
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
+
+    # Wire a mock store so the namespace filter in POST /route can call get_all_collections_meta().
+    # The default single key resolves to "default" namespace; all pinned collections resolve
+    # to that namespace so existing test assertions are unaffected.
+    pinned_names = [path_to_collection_name(p) for p in (pinned_collections or [])]
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(
+        return_value=[CollectionMeta(name=n, namespace="default") for n in pinned_names]
+    )
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
@@ -296,3 +311,120 @@ def test_slots_negative_returns_400(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
     response = client.post("/route", json={"query": "hello", "slots": -1})
     assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# 13. Namespace filter — only pinned collections belonging to caller's namespace
+#     are included in routing candidates (Task 5.4 — FEAT-043)
+# ---------------------------------------------------------------------------
+
+
+def _make_app_with_namespaces(
+    tmp_path: Path,
+    pinned_paths: list[str],
+    namespaces: dict[str, str],
+    all_meta: list[CollectionMeta],
+) -> tuple:
+    """Return (app, mock_store) with namespace-aware config wired up."""
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.pinned_collections = pinned_paths
+    config.routing_shortlist_size = 8
+    config.routing_confidence_threshold = 0.30
+    config.namespaces = namespaces
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=all_meta)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+    return app, mock_store
+
+
+def test_route_filters_pinned_by_namespace(tmp_path: Path) -> None:
+    """Pinned collections in a different namespace are excluded from routing candidates."""
+    key_a = "a" * 64
+    key_b = "b" * 64
+
+    # Two pinned paths — one will be meta-tagged to tenantA, one to tenantB
+    path_a = "/docs/tenantA"
+    path_b = "/docs/tenantB"
+    name_a = path_to_collection_name(path_a)
+    name_b = path_to_collection_name(path_b)
+
+    meta_a = CollectionMeta(name=name_a, namespace="tenantA")
+    meta_b = CollectionMeta(name=name_b, namespace="tenantB")
+
+    app, mock_store = _make_app_with_namespaces(
+        tmp_path,
+        pinned_paths=[path_a, path_b],
+        namespaces={key_a: "tenantA", key_b: "tenantB"},
+        all_meta=[meta_a, meta_b],
+    )
+
+    router_mock = _patch_router(pre_context=None, routable_names=[], decomposer_invoked=False)
+
+    with patch("archon_search.server.routes_route._build_router", return_value=router_mock):
+        client = TestClient(app, headers={"Authorization": f"Bearer {key_a}"})
+        response = client.post("/route", json={"query": "anything"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert name_a in data["pinned_names"]
+    assert name_b not in data["pinned_names"]
+
+
+def test_route_includes_pinned_for_correct_namespace(tmp_path: Path) -> None:
+    """A pinned collection belonging to the caller's namespace is included in routing candidates."""
+    key_a = "a" * 64
+
+    path_a = "/data/myproject"
+    name_a = path_to_collection_name(path_a)
+    meta_a = CollectionMeta(name=name_a, namespace="tenantA")
+
+    app, mock_store = _make_app_with_namespaces(
+        tmp_path,
+        pinned_paths=[path_a],
+        namespaces={key_a: "tenantA"},
+        all_meta=[meta_a],
+    )
+
+    router_mock = _patch_router(pre_context=None, routable_names=[], decomposer_invoked=False)
+
+    with patch("archon_search.server.routes_route._build_router", return_value=router_mock):
+        client = TestClient(app, headers={"Authorization": f"Bearer {key_a}"})
+        response = client.post("/route", json={"query": "anything"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert name_a in data["pinned_names"]
+
+
+def test_route_no_pinned_for_namespace(tmp_path: Path) -> None:
+    """When no pinned collection belongs to the caller's namespace, pinned_names is empty."""
+    key_a = "a" * 64
+
+    # Pinned path exists in config but its meta row belongs to a DIFFERENT namespace
+    path_x = "/data/other"
+    name_x = path_to_collection_name(path_x)
+    meta_x = CollectionMeta(name=name_x, namespace="tenantB")
+
+    app, mock_store = _make_app_with_namespaces(
+        tmp_path,
+        pinned_paths=[path_x],
+        namespaces={key_a: "tenantA"},
+        all_meta=[meta_x],
+    )
+
+    router_mock = _patch_router(pre_context=None, routable_names=[], decomposer_invoked=False)
+
+    with patch("archon_search.server.routes_route._build_router", return_value=router_mock):
+        client = TestClient(app, headers={"Authorization": f"Bearer {key_a}"})
+        response = client.post("/route", json={"query": "anything"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["pinned_names"] == []

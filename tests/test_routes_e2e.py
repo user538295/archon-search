@@ -25,13 +25,24 @@ def _make_client(
     config: SearchConfig | None = None,
 ) -> TestClient:
     """Create a TestClient with a fresh isolated app instance."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+    from archon_search.sync import path_to_collection_name
+
     if config is None:
         config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store, config_path=tmp_path / "config.toml")
+
+    # Build meta rows for all pinned collections so the namespace filter in POST /route
+    # includes them (they belong to DEFAULT_NAMESPACE, which is what the single test key resolves to).
+    pinned_meta = [
+        CollectionMeta(name=path_to_collection_name(p), namespace=DEFAULT_NAMESPACE)
+        for p in config.pinned_collections
+    ]
+
     mock_store = MagicMock()
-    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.get_all_collections_meta = AsyncMock(return_value=pinned_meta)
     mock_store.get_collection_meta = AsyncMock(
         side_effect=lambda name, namespace="default": CollectionMeta(name=name, namespace=namespace)
     )
