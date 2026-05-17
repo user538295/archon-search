@@ -288,17 +288,23 @@ async def reindex_collection(name: str, request: Request) -> JSONResponse:
     """Start a reindex job for an existing collection. 404 if not found."""
     config: SearchConfig = request.app.state.config
     store: JobStore = request.app.state.job_store
+    search_store = request.app.state.search_store
+    ns: str = request.state.namespace
 
     path_to_name = _all_collection_paths(config)
     if name not in path_to_name:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
+    meta = await search_store.get_collection_meta(name, namespace=ns)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
     resolved = path_to_name[name]
 
     ingested_by = request.headers.get("X-Ingested-By", "archon-search-cli")
-    job = store.create()
+    job = store.create(namespace=ns)
     ingest_body = IngestRequest(collection=name, path=resolved, ingested_by=ingested_by)
-    task = asyncio.create_task(_default_ingest_task(job.job_id, store, ingest_body))
+    task = asyncio.create_task(_default_ingest_task(job.job_id, store, ingest_body, namespace=ns))
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
 

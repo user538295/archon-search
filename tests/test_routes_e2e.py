@@ -12,6 +12,8 @@ import os
 import tomlkit
 from fastapi.testclient import TestClient
 
+from archon_search.collection_meta import CollectionMeta
+
 from archon_search.config import SearchConfig
 from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
@@ -30,8 +32,12 @@ def _make_client(
     app = create_app(config, job_store, config_path=tmp_path / "config.toml")
     mock_store = MagicMock()
     mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.get_collection_meta = AsyncMock(
+        side_effect=lambda name, namespace="default": CollectionMeta(name=name, namespace=namespace)
+    )
     mock_store.update_collection_meta = AsyncMock()
     mock_store.drop_collection = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock()
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()

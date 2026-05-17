@@ -230,6 +230,8 @@ def test_remove_pinned_only_collection_rejected(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """DELETE rejects a path that is in pinned_collections but NOT in collections."""
+    from archon_search.collection_meta import CollectionMeta
+
     src = tmp_path / "pinned-only"
     src.mkdir()
     cfg = SearchConfig()
@@ -237,10 +239,18 @@ def test_remove_pinned_only_collection_rejected(
     cfg.pinned_collections = [str(src)]
     # NOT in cfg.collections
     app = create_app(cfg, tmp_store)
-    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default")
+    mock_search_store = MagicMock()
+    mock_search_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_search_store.migrate_namespace = AsyncMock()
+    mock_search_store.connect = AsyncMock()
+    mock_search_store.disconnect = AsyncMock()
+    app.state.search_store = mock_search_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     response = c.delete(f"/collections/{name}")
     assert response.status_code in (400, 409)
@@ -307,16 +317,26 @@ def test_reindex_returns_ingest_job(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/{name}/reindex starts a job and returns IngestJob (202)."""
+    from archon_search.collection_meta import CollectionMeta
+
     src = tmp_path / "docs"
     src.mkdir()
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
     cfg.collections = [str(src)]
     app = create_app(cfg, tmp_store)
-    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default")
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     with patch("archon_search.server.routes_collections.asyncio.create_task",
                side_effect=lambda coro: (coro.close(), MagicMock())[1]):
@@ -1057,6 +1077,126 @@ def test_get_collection_info_centroid_from_namespace_meta(
     # get_collection_meta should have been called exactly once (namespace-gated call),
     # not twice (once for namespace check + once bare).
     mock_store.get_collection_meta.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# POST /collections/{name}/reindex — namespace enforcement (Task 4.5 — FEAT-043)
+# ---------------------------------------------------------------------------
+
+
+def test_reindex_cross_namespace_404(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/reindex returns 404 when meta row belongs to a different namespace."""
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    caller_key = "r" * 64
+    cfg.namespaces = {caller_key: "tenantR"}
+
+    # meta row belongs to tenantOther — namespace filter returns None for tenantR
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+    name = path_to_collection_name(str(src))
+
+    response = c.post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 404
+
+
+def test_reindex_same_namespace_succeeds(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/reindex returns 202 when meta row belongs to caller's namespace."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    caller_key = "s" * 64
+    caller_ns = "tenantS"
+    cfg.namespaces = {caller_key: caller_ns}
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace=caller_ns)
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+    assert data["status"] == JobStatus.PENDING.value
+
+
+def test_reindex_job_namespace(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/reindex creates a job with the caller's namespace."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    caller_key = "t" * 64
+    caller_ns = "tenantT"
+    cfg.namespaces = {caller_key: caller_ns}
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace=caller_ns)
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 202
+    data = response.json()
+    assert data["namespace"] == caller_ns
+
+    # Also verify the job in the store has the correct namespace
+    job = tmp_store.get(data["job_id"])
+    assert job is not None
+    assert job.namespace == caller_ns
 
 
 def test_add_collection_rollback_save_failure(
