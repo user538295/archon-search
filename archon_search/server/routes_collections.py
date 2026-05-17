@@ -231,10 +231,19 @@ async def get_collection_info(name: str, request: Request) -> JSONResponse:
     """Return CollectionDetail for a single collection. 404 if not found."""
     config: SearchConfig = request.app.state.config
     state_store = request.app.state.state_store
+    ns: str = request.state.namespace
 
     path_to_name = _all_collection_paths(config)
     if name not in path_to_name:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    # Namespace gate: 404 for cross-namespace access; also fetches meta for centroid/namespace.
+    search_store = getattr(request.app.state, "search_store", None)
+    meta = None
+    if search_store is not None:
+        meta = await search_store.get_collection_meta(name, namespace=ns)
+        if meta is None:
+            raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
     resolved = path_to_name[name]
     status = _collection_status(config, state_store, name)
@@ -250,20 +259,14 @@ async def get_collection_info(name: str, request: Request) -> JSONResponse:
     except Exception:  # noqa: BLE001
         pass
 
-    # Fetch real doc_count and centroid_present from search store
+    # Fetch real doc_count from search store; reuse already-fetched meta for centroid.
     doc_count = 0
-    centroid_present = False
-    search_store = getattr(request.app.state, "search_store", None)
+    centroid_present = bool(meta is not None and meta.centroid)
     if search_store is not None:
         try:
             doc_count = await search_store.count_documents(name)
         except Exception:  # noqa: BLE001
             doc_count = 0
-        try:
-            meta = await search_store.get_collection_meta(name)
-            centroid_present = bool(meta is not None and meta.centroid)
-        except Exception:  # noqa: BLE001
-            centroid_present = False
 
     data = {
         "name": name,
@@ -275,7 +278,7 @@ async def get_collection_info(name: str, request: Request) -> JSONResponse:
         "embedding_model": embedding_model,
         "centroid_present": centroid_present,
         "last_indexed": last_indexed,
-        "namespace": DEFAULT_NAMESPACE,
+        "namespace": meta.namespace if meta is not None else DEFAULT_NAMESPACE,
     }
     return JSONResponse(content=data)
 

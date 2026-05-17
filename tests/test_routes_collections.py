@@ -257,16 +257,27 @@ def test_get_collection_info(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET /collections/{name} returns CollectionDetail fields."""
+    from archon_search.collection_meta import CollectionMeta
+
     src = tmp_path / "docs"
     src.mkdir()
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
     cfg.collections = [str(src)]
     app = create_app(cfg, tmp_store)
-    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default")
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=0)
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     response = c.get(f"/collections/{name}")
     assert response.status_code == 200
@@ -332,6 +343,8 @@ def test_collection_info_doc_count_real(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET /collections/{name} returns real doc_count from SearchStore."""
+    from archon_search.collection_meta import CollectionMeta
+
     src = tmp_path / "docs"
     src.mkdir()
     cfg = SearchConfig()
@@ -339,14 +352,15 @@ def test_collection_info_doc_count_real(
     cfg.collections = [str(src)]
     app = create_app(cfg, tmp_store)
 
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default")
     mock_store = MagicMock()
     mock_store.count_documents = AsyncMock(return_value=3)
-    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
     app.state.search_store = mock_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
-    name = path_to_collection_name(str(src))
 
     response = c.get(f"/collections/{name}")
     assert response.status_code == 200
@@ -357,6 +371,8 @@ def test_collection_info_doc_count_zero_on_store_error(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET /collections/{name} returns doc_count=0 when SearchStore raises."""
+    from archon_search.collection_meta import CollectionMeta
+
     src = tmp_path / "docs"
     src.mkdir()
     cfg = SearchConfig()
@@ -364,14 +380,15 @@ def test_collection_info_doc_count_zero_on_store_error(
     cfg.collections = [str(src)]
     app = create_app(cfg, tmp_store)
 
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default")
     mock_store = MagicMock()
     mock_store.count_documents = AsyncMock(side_effect=RuntimeError("db error"))
-    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
     app.state.search_store = mock_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
-    name = path_to_collection_name(str(src))
 
     response = c.get(f"/collections/{name}")
     assert response.status_code == 200
@@ -926,6 +943,120 @@ def test_remove_collection_success_drops_table_and_meta(
     mock_store.drop_collection.assert_called_once_with(name)
     mock_store.delete_collection_meta.assert_called_once_with(name, caller_ns)
     assert deleted["done"] is True
+
+
+# ---------------------------------------------------------------------------
+# GET /collections/{name} — namespace enforcement (Task 4.4 — FEAT-043)
+# ---------------------------------------------------------------------------
+
+
+def test_get_collection_info_cross_namespace_404(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} returns 404 when meta row belongs to a different namespace."""
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    caller_key = "a" * 64
+    cfg.namespaces = {caller_key: "tenantA"}
+
+    app = create_app(cfg, tmp_store)
+    # meta row belongs to tenantB — namespace filter returns None for tenantA caller
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+    name = path_to_collection_name(str(src))
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 404
+
+
+def test_get_collection_info_namespace_in_response(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} response includes the actual namespace from meta (not hardcoded default)."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    caller_key = "b" * 64
+    caller_ns = "tenantB"
+    cfg.namespaces = {caller_key: caller_ns}
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace=caller_ns)
+
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=0)
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+    response = c.get(f"/collections/{name}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["namespace"] == caller_ns
+
+
+def test_get_collection_info_centroid_from_namespace_meta(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} returns centroid_present=True using the namespace-filtered meta (no second bare lookup)."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    caller_key = "c" * 64
+    caller_ns = "tenantC"
+    cfg.namespaces = {caller_key: caller_ns}
+
+    name = path_to_collection_name(str(src))
+    # meta has a centroid set — a bare get_collection_meta(name) (no namespace)
+    # would return None after Task 1.3 (defaults to DEFAULT_NAMESPACE), so
+    # centroid_present would be False if the handler did a second bare lookup.
+    meta = CollectionMeta(name=name, namespace=caller_ns, centroid=[0.1, 0.2, 0.3])
+
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=5)
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+    response = c.get(f"/collections/{name}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["centroid_present"] is True
+    # get_collection_meta should have been called exactly once (namespace-gated call),
+    # not twice (once for namespace check + once bare).
+    mock_store.get_collection_meta.assert_called_once()
 
 
 def test_add_collection_rollback_save_failure(
