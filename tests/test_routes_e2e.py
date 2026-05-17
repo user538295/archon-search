@@ -34,11 +34,16 @@ def _make_client(
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store, config_path=tmp_path / "config.toml")
 
-    # Build meta rows for all pinned collections so the namespace filter in POST /route
-    # includes them (they belong to DEFAULT_NAMESPACE, which is what the single test key resolves to).
+    # Build meta rows for all configured collections (pinned + watch-list) so the namespace filter
+    # in routes that call get_all_collections_meta() includes them.  They all belong to
+    # DEFAULT_NAMESPACE, which is what the single test key resolves to.
+    all_configured_names = {
+        path_to_collection_name(p)
+        for p in list(config.pinned_collections) + list(config.collections)
+    }
     pinned_meta = [
-        CollectionMeta(name=path_to_collection_name(p), namespace=DEFAULT_NAMESPACE)
-        for p in config.pinned_collections
+        CollectionMeta(name=name, namespace=DEFAULT_NAMESPACE)
+        for name in all_configured_names
     ]
 
     mock_store = MagicMock()
@@ -616,6 +621,7 @@ def test_H3_17_fresh_collection_status_not_yet_indexed(tmp_path: Path) -> None:
 # H3.18 — /indexing-state fields filtered to expected set
 # ---------------------------------------------------------------------------
 def test_H3_18_indexing_state_fields_filtered(tmp_path: Path) -> None:
+    from archon_search.constants import DEFAULT_NAMESPACE
     from archon_search.progress import CollectionProgress, IndexingState, IndexingStatus
     from archon_search.server.routes_state import _COLLECTION_API_FIELDS
 
@@ -635,6 +641,14 @@ def test_H3_18_indexing_state_fields_filtered(tmp_path: Path) -> None:
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store, config_path=tmp_path / "config.toml")
     app.state.state_store.write(state)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(
+        return_value=[CollectionMeta(name="docs", namespace=DEFAULT_NAMESPACE)]
+    )
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
     _key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     test_client = TestClient(app, headers={"Authorization": f"Bearer {_key}"})
 

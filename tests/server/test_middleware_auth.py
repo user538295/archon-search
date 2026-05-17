@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import secrets
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -132,6 +132,12 @@ def _make_full_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[
     config.db_path = str(tmp_path / "search")
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
     return TestClient(app, raise_server_exceptions=False), VALID_KEY
 
 
