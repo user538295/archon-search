@@ -16,6 +16,8 @@ _NAMESPACE_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}")
 
 def _validate_namespace(name: str) -> None:
     """Raise ValueError if name is not a valid namespace identifier."""
+    if name == "deny-all":
+        raise ValueError("Namespace name 'deny-all' is reserved and cannot be used.")
     if not _NAMESPACE_RE.fullmatch(name):
         raise ValueError(
             f"Invalid namespace {name!r}: must match ^[a-zA-Z0-9][a-zA-Z0-9_-]{{0,63}}$"
