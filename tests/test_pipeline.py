@@ -108,8 +108,9 @@ async def test_pipeline_ingest_is_idempotent(connected_store, col_name, tmp_path
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Idempotent Test\n\nSome content here.\n" * 10)
 
-    await pipeline.ingest_file(md_file, col_name)
-    await pipeline.ingest_file(md_file, col_name)
+    # Use ingest_directory so collection meta is written (required by list_documents namespace guard)
+    await pipeline.ingest_directory(tmp_path, col_name)
+    await pipeline.ingest_directory(tmp_path, col_name)
 
     docs = await pipeline.list_documents(col_name)
     assert len(docs) == 1
@@ -283,7 +284,10 @@ async def test_pipeline_delete_document(connected_store, col_name, tmp_path):
     md_file = tmp_path / "del_doc.md"
     md_file.write_text("# Delete Test\n\nContent to be deleted.\n" * 5)
 
-    result = await pipeline.ingest_file(md_file, col_name)
+    # Use ingest_directory so collection meta is written (required by delete_document namespace guard)
+    results = await pipeline.ingest_directory(tmp_path, col_name)
+    assert len(results) == 1
+    result = results[0]
     assert result.status == "ok"
 
     deleted = await pipeline.delete_document(result.doc_id, col_name)
@@ -461,8 +465,9 @@ async def test_pipeline_ingest_file_parse_error_preserves_existing_chunks(connec
     md_file = tmp_path / "existing.md"
     md_file.write_text("# Existing Content\n\nThis should be preserved.\n" * 10)
 
-    # Ingest successfully first
-    first_result = await pipeline.ingest_file(md_file, col_name)
+    # Use ingest_directory to create collection meta (required by list_documents namespace guard)
+    results = await pipeline.ingest_directory(tmp_path, col_name)
+    first_result = results[0]
     assert first_result.status == "ok"
 
     # Now mock parser to fail
@@ -486,11 +491,13 @@ async def test_pipeline_ingest_file_empty_content_preserves_existing_chunks(conn
     md_file = tmp_path / "empty_content.md"
     md_file.write_text("# First Ingest\n\nThis should be preserved.\n" * 10)
 
-    first_result = await pipeline.ingest_file(md_file, col_name)
+    # Use ingest_directory to create collection meta (required by list_documents namespace guard)
+    results = await pipeline.ingest_directory(tmp_path, col_name)
+    first_result = results[0]
     assert first_result.status == "ok"
     assert first_result.chunks_created > 0
 
-    # Overwrite with empty content
+    # Overwrite with empty content and re-ingest via ingest_file
     md_file.write_text("")
 
     second_result = await pipeline.ingest_file(md_file, col_name)
@@ -1377,16 +1384,21 @@ def test_p14_23_add_collection_sql_injection_rejected_by_validate_collection() -
 
 
 @pytest.mark.asyncio
-async def test_p14_24_delete_document_sql_injection_rejected_by_doc_id_re(connected_store) -> None:
+async def test_p14_24_delete_document_sql_injection_rejected_by_doc_id_re(connected_store, col_name, tmp_path) -> None:
     """P14.24 — doc_id containing SQL injection payload raises ValueError before SQL construction.
 
     _DOC_ID_RE requires exactly 64 hex chars; any deviation (including injection strings)
     is rejected with ValueError before any SQL is built or executed.
+
+    A valid collection with meta must exist first so the namespace guard passes
+    and the doc_id validation in the store layer is reached.
     """
     pipeline = make_pipeline(connected_store)
+    (tmp_path / "doc.md").write_text("# P14.24 test\n\nContent.\n" * 5)
+    await pipeline.ingest_directory(tmp_path, col_name)
 
     with pytest.raises(ValueError, match="Invalid doc_id"):
-        await pipeline.delete_document("' OR '1'='1", "valid-collection")
+        await pipeline.delete_document("' OR '1'='1", col_name)
 
 
 # ===========================================================================
@@ -1953,3 +1965,165 @@ async def test_search_with_context_still_works_after_type_change(connected_store
         assert "result" in item
         assert "context_before" in item
         assert "context_after" in item
+
+
+# ===========================================================================
+# FEAT-045 Task 3.2 — namespace guard for get_all_collections_meta, list_documents, delete_document
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_all_collections_meta_filters_by_namespace() -> None:
+    """get_all_collections_meta(namespace) returns only collections in that namespace."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    meta_a = CollectionMeta(name="col-a", namespace="tenantA")
+    meta_b = CollectionMeta(name="col-b", namespace="tenantB")
+
+    store = MagicMock()
+    store.get_all_collections_meta = AsyncMock(return_value=[meta_a, meta_b])
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    result = await pipeline.get_all_collections_meta(namespace="tenantA")
+
+    assert result == [meta_a]
+
+
+@pytest.mark.asyncio
+async def test_list_documents_wrong_namespace_returns_empty() -> None:
+    """list_documents returns [] when the collection belongs to a different namespace."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    # get_collection_meta returns None → collection not in requested namespace
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.list_documents = AsyncMock()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    result = await pipeline.list_documents("col-a", namespace="tenantB")
+
+    assert result == []
+    store.get_collection_meta.assert_awaited_once_with("col-a", namespace="tenantB")
+    store.list_documents.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_documents_correct_namespace_succeeds() -> None:
+    """list_documents delegates to store when the collection belongs to the correct namespace."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    meta = CollectionMeta(name="col-a", namespace="tenantA")
+    doc = DocumentInfo(doc_id="a" * 64, source_path="/some/path.md", chunk_count=2, indexed_at="2026-01-01T00:00:00")
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=meta)
+    store.list_documents = AsyncMock(return_value=[doc])
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    result = await pipeline.list_documents("col-a", namespace="tenantA")
+
+    assert result == [doc]
+    store.get_collection_meta.assert_awaited_once_with("col-a", namespace="tenantA")
+    store.list_documents.assert_awaited_once_with("col-a", 100)
+
+
+@pytest.mark.asyncio
+async def test_delete_document_wrong_namespace_raises() -> None:
+    """delete_document raises ValueError when collection is not in the requested namespace."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.delete_document = AsyncMock()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    doc_id = "a" * 64
+    with pytest.raises(ValueError, match="not found in namespace"):
+        await pipeline.delete_document(doc_id, "col-a", namespace="tenantB")
+
+    store.delete_document.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_correct_namespace_succeeds() -> None:
+    """delete_document delegates to store when collection belongs to the correct namespace."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    meta = CollectionMeta(name="col-a", namespace="tenantA")
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=meta)
+    store.delete_document = AsyncMock(return_value=3)
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    doc_id = "a" * 64
+    deleted = await pipeline.delete_document(doc_id, "col-a", namespace="tenantA")
+
+    assert deleted == 3
+    store.delete_document.assert_awaited_once_with("col-a", doc_id)

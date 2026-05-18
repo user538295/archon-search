@@ -343,19 +343,26 @@ class SearchPipeline:
     # Document management
     # ------------------------------------------------------------------
 
-    async def delete_document(self, doc_id: str, collection: str) -> int:
+    async def delete_document(self, doc_id: str, collection: str, namespace: str = DEFAULT_NAMESPACE) -> int:
+        meta = await self.store.get_collection_meta(collection, namespace=namespace)
+        if meta is None:
+            raise ValueError(f"collection {collection!r} not found in namespace {namespace!r}")
         return await self.store.delete_document(collection, doc_id)
 
     async def list_collections(self) -> list[CollectionInfo]:
         return await self.store.list_collections()
 
-    async def get_all_collections_meta(self) -> list[CollectionMeta]:
-        return await self.store.get_all_collections_meta()
+    async def get_all_collections_meta(self, namespace: str = DEFAULT_NAMESPACE) -> list[CollectionMeta]:
+        all_meta = await self.store.get_all_collections_meta()
+        return [m for m in all_meta if m.namespace == namespace]
 
     async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> CollectionMeta | None:
         return await self.store.get_collection_meta(name, namespace=namespace)
 
-    async def list_documents(self, collection: str, limit: int = 100) -> list[DocumentInfo]:
+    async def list_documents(self, collection: str, limit: int = 100, namespace: str = DEFAULT_NAMESPACE) -> list[DocumentInfo]:
+        meta = await self.store.get_collection_meta(collection, namespace=namespace)
+        if meta is None:
+            return []
         return await self.store.list_documents(collection, limit)
 
     async def recompute_collection_meta(self, collection: str, namespace: str = DEFAULT_NAMESPACE) -> None:
