@@ -51,3 +51,40 @@ def test_openapi_schema_is_cached(app) -> None:  # type: ignore[no-untyped-def]
     first = app.openapi()
     second = app.openapi()
     assert first is second, "openapi() should return the cached schema object"
+
+
+from starlette.testclient import TestClient  # noqa: E402
+
+
+def test_cors_options_preflight_returns_headers(app) -> None:  # type: ignore[no-untyped-def]
+    """OPTIONS /search returns Access-Control-Allow-Origin: * without requiring auth."""
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.options(
+        "/search",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert response.headers.get("access-control-allow-origin") == "*"
+
+
+def test_cors_get_health_returns_headers(app) -> None:  # type: ignore[no-untyped-def]
+    """GET /health response includes Access-Control-Allow-Origin."""
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert response.headers.get("access-control-allow-origin") == "*"
+
+
+def test_cors_preflight_to_protected_endpoint_not_blocked(app) -> None:  # type: ignore[no-untyped-def]
+    """OPTIONS /search returns CORS headers and NOT 401 (preflight must bypass auth)."""
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.options(
+        "/search",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert response.status_code != 401
+    assert response.headers.get("access-control-allow-origin") == "*"

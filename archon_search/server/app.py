@@ -9,6 +9,7 @@ from typing import AsyncGenerator
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from archon_search.config import SearchConfig
@@ -114,6 +115,7 @@ def create_app(
 
     app = FastAPI(title="archon-search", lifespan=lifespan)
     app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces=config.namespaces)
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     logger.info("API key authentication enabled (source: %s)", key_source)
     app.state.config = config
     app.state.job_store = job_store
