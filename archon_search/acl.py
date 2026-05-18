@@ -2,8 +2,9 @@
 
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from archon_search.constants import _NAMESPACE_RE
 
@@ -175,6 +176,42 @@ def read_acl_sidecar(doc_path: Path) -> list[str] | None:
             )
 
     return valid if valid else None
+
+
+_T = TypeVar("_T")
+
+
+def is_acl_allowed(acl: list[str] | None, namespace: str) -> bool:
+    """Return True if the given namespace is permitted by acl.
+
+    Rules:
+        - acl is None → True (default-open)
+        - acl == []   → False (deny-all)
+        - not namespace → False (empty namespace fails closed for protected chunks)
+        - namespace in acl → True; otherwise False
+    Comparison is case-sensitive.
+    """
+    if acl is None:
+        return True
+    if not namespace:
+        return False
+    return namespace in acl
+
+
+def apply_acl_filter(
+    items: list[_T],
+    get_acl: Callable[[_T], list[str] | None],
+    namespace: str,
+) -> tuple[list[_T], bool]:
+    """Filter items by ACL, returning (passing_items, any_were_dropped)."""
+    passing: list[_T] = []
+    dropped = False
+    for item in items:
+        if is_acl_allowed(get_acl(item), namespace):
+            passing.append(item)
+        else:
+            dropped = True
+    return passing, dropped
 
 
 def resolve_acl(doc_path: Path, front_matter_acl: Any) -> list[str] | None:

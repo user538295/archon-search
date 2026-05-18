@@ -5,6 +5,8 @@ import logging
 import pytest
 
 from archon_search.acl import (
+    apply_acl_filter,
+    is_acl_allowed,
     is_acl_namespace_valid,
     parse_acl_value,
     read_acl_sidecar,
@@ -312,3 +314,79 @@ def test_resolve_acl_explicit_null_front_matter_falls_through_to_sidecar(
     sidecar.write_text("ns3\n")
     result = resolve_acl(doc, None)
     assert result == ["ns3"]
+
+
+# ---------------------------------------------------------------------------
+# is_acl_allowed
+# ---------------------------------------------------------------------------
+
+
+def test_is_acl_allowed_null_open() -> None:
+    assert is_acl_allowed(None, "ns1") is True
+
+
+def test_is_acl_allowed_deny_all() -> None:
+    assert is_acl_allowed([], "ns1") is False
+
+
+def test_is_acl_allowed_match() -> None:
+    assert is_acl_allowed(["ns1", "ns2"], "ns1") is True
+
+
+def test_is_acl_allowed_no_match() -> None:
+    assert is_acl_allowed(["ns2"], "ns1") is False
+
+
+def test_is_acl_allowed_case_sensitive() -> None:
+    assert is_acl_allowed(["TenantA"], "tenanta") is False
+
+
+def test_is_acl_allowed_empty_namespace_denies_protected() -> None:
+    assert is_acl_allowed(["ns1"], "") is False
+
+
+def test_is_acl_allowed_none_namespace() -> None:
+    assert is_acl_allowed(["ns1"], "") is False
+
+
+# ---------------------------------------------------------------------------
+# apply_acl_filter
+# ---------------------------------------------------------------------------
+
+
+def test_apply_acl_filter_removes_denied() -> None:
+    items = [
+        {"acl": ["ns1"], "v": "a"},
+        {"acl": ["ns2"], "v": "b"},
+        {"acl": ["ns1", "ns2"], "v": "c"},
+    ]
+    result, dropped = apply_acl_filter(items, lambda x: x["acl"], "ns1")
+    assert [i["v"] for i in result] == ["a", "c"]
+    assert dropped is True
+
+
+def test_apply_acl_filter_all_open() -> None:
+    items = [{"acl": None, "v": "a"}, {"acl": None, "v": "b"}]
+    result, dropped = apply_acl_filter(items, lambda x: x["acl"], "ns1")
+    assert len(result) == 2
+    assert dropped is False
+
+
+def test_apply_acl_filter_deny_all() -> None:
+    items = [{"acl": [], "v": "a"}, {"acl": [], "v": "b"}]
+    result, dropped = apply_acl_filter(items, lambda x: x["acl"], "ns1")
+    assert result == []
+    assert dropped is True
+
+
+def test_apply_acl_filter_empty_list() -> None:
+    result, dropped = apply_acl_filter([], lambda x: None, "ns1")
+    assert result == []
+    assert dropped is False
+
+
+def test_apply_acl_filter_all_denied() -> None:
+    items = [{"acl": ["ns2"], "v": "a"}, {"acl": ["ns3"], "v": "b"}]
+    result, dropped = apply_acl_filter(items, lambda x: x["acl"], "ns1")
+    assert result == []
+    assert dropped is True
