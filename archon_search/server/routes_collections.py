@@ -15,7 +15,7 @@ from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
-from archon_search.server.schemas import CollectionDetail, CollectionSummary, ErrorDetail
+from archon_search.server.schemas import CollectionDetail, CollectionSummary, ErrorDetail, JobResponse
 from archon_search.sync import path_to_collection_name
 
 logger = logging.getLogger("archon-search")
@@ -106,8 +106,13 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
     return result
 
 
-@router.post("/", status_code=202, response_model=None)
-async def add_collection(body: AddCollectionRequest, request: Request) -> JSONResponse:
+_ERROR_401 = {401: {"model": ErrorDetail}}
+_ERROR_401_404 = {401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}}
+_ERROR_401_409 = {401: {"model": ErrorDetail}, 409: {"model": ErrorDetail}}
+
+
+@router.post("/", status_code=202, response_model=JobResponse, responses=_ERROR_401_409)
+async def add_collection(body: AddCollectionRequest, request: Request) -> JobResponse | JSONResponse:
     """Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob."""
     config: SearchConfig = request.app.state.config
     store: JobStore = request.app.state.job_store
@@ -160,7 +165,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JSONRe
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
 
-    return JSONResponse(content=job_to_dict(job), status_code=202)
+    return JobResponse(**job_to_dict(job))
 
 
 @router.delete("/{name}", response_model=None)
@@ -291,8 +296,8 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
     return CollectionDetail(**data)
 
 
-@router.post("/{name}/reindex", status_code=202, response_model=None)
-async def reindex_collection(name: str, request: Request) -> JSONResponse:
+@router.post("/{name}/reindex", status_code=202, response_model=JobResponse, responses=_ERROR_401_404)
+async def reindex_collection(name: str, request: Request) -> JobResponse:
     """Start a reindex job for an existing collection. 404 if not found."""
     config: SearchConfig = request.app.state.config
     store: JobStore = request.app.state.job_store
@@ -316,4 +321,4 @@ async def reindex_collection(name: str, request: Request) -> JSONResponse:
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
 
-    return JSONResponse(content=job_to_dict(job), status_code=202)
+    return JobResponse(**job_to_dict(job))

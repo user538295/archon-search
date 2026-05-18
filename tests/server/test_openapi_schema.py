@@ -335,3 +335,51 @@ def test_indexing_state_empty_when_no_state_file(
     assert response.status_code == 200
     body = response.json()
     assert body == {"collections": {}, "last_updated": None, "trigger": None}
+
+
+def test_add_collection_202_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
+    """POST /collections/ 202 response schema matches JobResponse shape."""
+    schema = app.openapi()
+    post_op = schema["paths"]["/collections/"]["post"]
+    assert "202" in post_op["responses"], "POST /collections/ must declare a 202 response"
+    resp_202 = post_op["responses"]["202"]
+    content = resp_202.get("content", {})
+    json_schema = content.get("application/json", {}).get("schema", {})
+    ref = json_schema.get("$ref", "")
+    assert ref, "POST /collections/ 202 response must reference a named schema ($ref)"
+    schema_name = ref.split("/")[-1]
+    props = schema["components"]["schemas"][schema_name].get("properties", {})
+    for field in ("job_id", "status", "created_at", "updated_at", "namespace"):
+        assert field in props, f"JobResponse schema must have '{field}' property"
+
+
+def test_ingest_202_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
+    """POST /ingest 202 response schema matches JobResponse shape."""
+    schema = app.openapi()
+    post_op = schema["paths"]["/ingest"]["post"]
+    assert "202" in post_op["responses"], "POST /ingest must declare a 202 response"
+    resp_202 = post_op["responses"]["202"]
+    content = resp_202.get("content", {})
+    json_schema = content.get("application/json", {}).get("schema", {})
+    ref = json_schema.get("$ref", "")
+    assert ref, "POST /ingest 202 response must reference a named schema ($ref)"
+    schema_name = ref.split("/")[-1]
+    props = schema["components"]["schemas"][schema_name].get("properties", {})
+    for field in ("job_id", "status", "created_at", "updated_at", "namespace"):
+        assert field in props, f"JobResponse schema must have '{field}' property"
+
+
+def test_reindex_202_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
+    """POST /collections/{name}/reindex 202 response schema matches JobResponse shape."""
+    schema = app.openapi()
+    post_op = schema["paths"]["/collections/{name}/reindex"]["post"]
+    assert "202" in post_op["responses"], "POST /collections/{name}/reindex must declare a 202 response"
+    resp_202 = post_op["responses"]["202"]
+    content = resp_202.get("content", {})
+    json_schema = content.get("application/json", {}).get("schema", {})
+    ref = json_schema.get("$ref", "")
+    assert ref, "POST /collections/{name}/reindex 202 response must reference a named schema ($ref)"
+    schema_name = ref.split("/")[-1]
+    props = schema["components"]["schemas"][schema_name].get("properties", {})
+    for field in ("job_id", "status", "created_at", "updated_at", "namespace"):
+        assert field in props, f"JobResponse schema must have '{field}' property"

@@ -12,6 +12,7 @@ from pydantic import BaseModel, field_validator
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
+from archon_search.server.schemas import ErrorDetail, JobResponse
 
 logger = logging.getLogger("archon-search")
 
@@ -84,8 +85,11 @@ async def _default_ingest_task(
             pass
 
 
-@router.post("/ingest", status_code=202)
-async def ingest(body: IngestRequest, request: Request) -> JSONResponse:
+_ERROR_401 = {401: {"model": ErrorDetail}}
+
+
+@router.post("/ingest", status_code=202, response_model=JobResponse, responses=_ERROR_401)
+async def ingest(body: IngestRequest, request: Request) -> JobResponse:
     store: JobStore = request.app.state.job_store
     pipeline_fn: Callable[..., Awaitable[None]] | None = getattr(
         request.app.state, "ingest_pipeline", None
@@ -98,7 +102,7 @@ async def ingest(body: IngestRequest, request: Request) -> JSONResponse:
     task = asyncio.create_task(_default_ingest_task(job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn))
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
-    return JSONResponse(content=job_to_dict(job), status_code=202)
+    return JobResponse(**job_to_dict(job))
 
 
 @router.get("/jobs/{job_id}")
