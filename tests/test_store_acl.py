@@ -525,3 +525,136 @@ async def test_fetch_adjacent_chunks_missing_acl_defaults_none(tmp_path):
             assert chunk.acl is None, f"Expected acl=None for missing column, got {chunk.acl}"
     finally:
         await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Task 4.1: get_acl_stats() tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_acl_stats_counts_protected_and_open(tmp_path):
+    """get_acl_stats() returns (2, 1) for 2 acl-protected and 1 open chunk."""
+    from archon_search.store import SearchStore
+    from archon_search._types import ChunkRecord
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection("stats_mixed", embedding_dim=4)
+        doc_id = "a" * 64
+        chunks = [
+            ChunkRecord(
+                doc_id=doc_id,
+                chunk_id=f"{doc_id}-{i:06d}",
+                text=f"chunk {i}",
+                vector=[0.1, 0.2, 0.3, 0.4],
+                source_path="/tmp/doc.md",
+                indexed_at="2024-01-01T00:00:00+00:00",
+                acl=["ns1"] if i < 2 else None,
+            )
+            for i in range(3)
+        ]
+        await store.ingest_chunks("stats_mixed", chunks)
+
+        protected, open_ = await store.get_acl_stats("stats_mixed")
+        assert protected == 2, f"Expected 2 protected, got {protected}"
+        assert open_ == 1, f"Expected 1 open, got {open_}"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_acl_stats_empty_collection(tmp_path):
+    """get_acl_stats() returns (0, 0) for a collection with no chunks."""
+    from archon_search.store import SearchStore
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection("stats_empty", embedding_dim=4)
+
+        protected, open_ = await store.get_acl_stats("stats_empty")
+        assert protected == 0, f"Expected 0 protected, got {protected}"
+        assert open_ == 0, f"Expected 0 open, got {open_}"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_acl_stats_all_open(tmp_path):
+    """get_acl_stats() returns (0, N) when all chunks have acl=None."""
+    from archon_search.store import SearchStore
+    from archon_search._types import ChunkRecord
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection("stats_all_open", embedding_dim=4)
+        doc_id = "b" * 64
+        chunks = [
+            ChunkRecord(
+                doc_id=doc_id,
+                chunk_id=f"{doc_id}-{i:06d}",
+                text=f"chunk {i}",
+                vector=[0.1, 0.2, 0.3, 0.4],
+                source_path="/tmp/doc.md",
+                indexed_at="2024-01-01T00:00:00+00:00",
+                acl=None,
+            )
+            for i in range(3)
+        ]
+        await store.ingest_chunks("stats_all_open", chunks)
+
+        protected, open_ = await store.get_acl_stats("stats_all_open")
+        assert protected == 0, f"Expected 0 protected, got {protected}"
+        assert open_ == 3, f"Expected 3 open, got {open_}"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_acl_stats_all_protected(tmp_path):
+    """get_acl_stats() returns (N, 0) when all chunks have acl=["ns1"]."""
+    from archon_search.store import SearchStore
+    from archon_search._types import ChunkRecord
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection("stats_all_protected", embedding_dim=4)
+        doc_id = "c" * 64
+        chunks = [
+            ChunkRecord(
+                doc_id=doc_id,
+                chunk_id=f"{doc_id}-{i:06d}",
+                text=f"chunk {i}",
+                vector=[0.1, 0.2, 0.3, 0.4],
+                source_path="/tmp/doc.md",
+                indexed_at="2024-01-01T00:00:00+00:00",
+                acl=["ns1"],
+            )
+            for i in range(4)
+        ]
+        await store.ingest_chunks("stats_all_protected", chunks)
+
+        protected, open_ = await store.get_acl_stats("stats_all_protected")
+        assert protected == 4, f"Expected 4 protected, got {protected}"
+        assert open_ == 0, f"Expected 0 open, got {open_}"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_acl_stats_collection_not_found(tmp_path):
+    """get_acl_stats() returns (0, 0) when collection does not exist."""
+    from archon_search.store import SearchStore
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        protected, open_ = await store.get_acl_stats("nonexistent")
+        assert protected == 0, f"Expected 0 protected, got {protected}"
+        assert open_ == 0, f"Expected 0 open, got {open_}"
+    finally:
+        await store.disconnect()

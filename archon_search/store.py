@@ -686,6 +686,29 @@ class SearchStore:
         rows = await table.query().select(["doc_id"]).to_list()
         return len({r["doc_id"] for r in rows})
 
+    async def get_acl_stats(self, collection: str) -> tuple[int, int]:
+        """Return (acl_protected_count, acl_open_count) for all chunks in a collection.
+
+        acl_protected_count — rows where acl IS NOT NULL.
+        acl_open_count      — rows where acl IS NULL.
+
+        Returns (0, 0) if the collection does not exist.
+        No namespace filter — aggregate-only operator.
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return (0, 0)
+        import pyarrow.compute as pc  # noqa: PLC0415
+
+        arrow_table = await table.query().select(["acl"]).to_arrow()
+        acl_col = arrow_table.column("acl")
+        acl_open_count = int(pc.sum(pc.is_null(acl_col)).as_py() or 0)
+        acl_protected_count = len(acl_col) - acl_open_count
+        return (acl_protected_count, acl_open_count)
+
 
 # ---------------------------------------------------------------------------
 # Private eval / diagnostic trace helper
