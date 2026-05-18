@@ -197,3 +197,57 @@ def test_status_401_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
     props = model_schema.get("properties", {})
     assert "detail" in props, "401 response schema must have a 'detail' property"
     assert props["detail"].get("type") == "string", "'detail' property must be of type string"
+
+
+def test_indexing_state_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
+    """GET /indexing-state 200 response schema must have a 'collections' object property."""
+    schema = app.openapi()
+    get_op = schema["paths"]["/indexing-state"]["get"]
+    resp_200 = get_op["responses"]["200"]
+    content = resp_200.get("content", {})
+    json_schema = content.get("application/json", {}).get("schema", {})
+    ref = json_schema.get("$ref", "")
+    if ref:
+        schema_name = ref.split("/")[-1]
+        model_schema = schema["components"]["schemas"][schema_name]
+    else:
+        model_schema = json_schema
+    props = model_schema.get("properties", {})
+    assert "collections" in props, "IndexingStateResponse must have 'collections' property"
+    assert props["collections"].get("type") == "object", "'collections' must be of type object"
+
+
+def test_indexing_state_empty_when_no_state_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /indexing-state returns {"collections": {}} when the state store has no data."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.config import SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
+
+    valid_key = "b" * 64
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", valid_key)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    full_app = create_app(cfg, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    full_app.state.search_store = mock_store
+
+    # state_store.read() returns None — no state file
+    mock_state_store = MagicMock()
+    mock_state_store.read.return_value = None
+    full_app.state.state_store = mock_state_store
+
+    client = TestClient(full_app, raise_server_exceptions=False)
+    response = client.get("/indexing-state", headers={"Authorization": f"Bearer {valid_key}"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {"collections": {}, "last_updated": None, "trigger": None}
