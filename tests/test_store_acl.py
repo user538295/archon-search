@@ -271,3 +271,147 @@ async def test_app_lifespan_calls_migrate_acl():
     ns_idx = call_names.index("migrate_namespace")
     acl_idx = call_names.index("migrate_acl")
     assert acl_idx > ns_idx, "migrate_acl() must be called after migrate_namespace()"
+
+
+# ---------------------------------------------------------------------------
+# Task 3.1: hybrid_search() returns acl field in SearchResult
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_and_hybrid_search_returns_acl_field(tmp_path):
+    """hybrid_search() maps acl from stored row into SearchResult.acl."""
+    from archon_search.store import SearchStore
+    from archon_search._types import ChunkRecord
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection("hs_acl_test", embedding_dim=4)
+        chunk = ChunkRecord(
+            doc_id="c" * 64,
+            chunk_id=("c" * 64) + "-000000",
+            text="namespace restricted content",
+            vector=[0.1, 0.2, 0.3, 0.4],
+            source_path="/tmp/restricted.md",
+            indexed_at="2024-01-01T00:00:00+00:00",
+            acl=["ns1"],
+        )
+        await store.ingest_chunks("hs_acl_test", [chunk])
+        await store.rebuild_fts_index("hs_acl_test")
+
+        results = await store.hybrid_search(
+            "hs_acl_test",
+            query_vector=[0.1, 0.2, 0.3, 0.4],
+            query_text="namespace restricted",
+            top_k=5,
+        )
+
+        assert len(results) == 1
+        assert results[0].acl == ["ns1"], f"Expected acl==['ns1'], got {results[0].acl}"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_hybrid_search_null_acl_chunk(tmp_path):
+    """hybrid_search() returns acl=None for chunks ingested with acl=None."""
+    from archon_search.store import SearchStore
+    from archon_search._types import ChunkRecord
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection("hs_null_acl", embedding_dim=4)
+        chunk = ChunkRecord(
+            doc_id="d" * 64,
+            chunk_id=("d" * 64) + "-000000",
+            text="public content no acl",
+            vector=[0.1, 0.2, 0.3, 0.4],
+            source_path="/tmp/public.md",
+            indexed_at="2024-01-01T00:00:00+00:00",
+            acl=None,
+        )
+        await store.ingest_chunks("hs_null_acl", [chunk])
+        await store.rebuild_fts_index("hs_null_acl")
+
+        results = await store.hybrid_search(
+            "hs_null_acl",
+            query_vector=[0.1, 0.2, 0.3, 0.4],
+            query_text="public content",
+            top_k=5,
+        )
+
+        assert len(results) == 1
+        assert results[0].acl is None, f"Expected acl=None, got {results[0].acl}"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_hybrid_search_row_missing_acl_column_defaults_none(tmp_path):
+    """hybrid_search() uses .get('acl') — missing acl column yields acl=None, no KeyError."""
+    import lancedb
+    import pyarrow as pa
+    from archon_search.store import SearchStore
+
+    db_path = tmp_path / "db"
+
+    # Create a table WITHOUT the acl column to simulate a pre-ACL chunk table.
+    schema_without_acl = pa.schema(
+        [
+            pa.field("doc_id", pa.utf8()),
+            pa.field("chunk_id", pa.utf8()),
+            pa.field("text", pa.utf8()),
+            pa.field("vector", pa.list_(pa.float32(), 4)),
+            pa.field("source_path", pa.utf8()),
+            pa.field("indexed_at", pa.utf8()),
+            pa.field("file_type", pa.utf8()),
+            pa.field("language", pa.utf8()),
+            pa.field("metadata", pa.utf8()),
+            pa.field("custom_score", pa.float32()),
+            pa.field("ingested_by", pa.utf8()),
+            pa.field("updated_at", pa.utf8()),
+            # acl column intentionally omitted
+        ]
+    )
+
+    db_path.mkdir(parents=True, exist_ok=True)
+    raw_db = await lancedb.connect_async(str(db_path))
+    await raw_db.create_table(
+        "legacy_col",
+        data=[
+            {
+                "doc_id": "e" * 64,
+                "chunk_id": ("e" * 64) + "-000000",
+                "text": "legacy chunk without acl",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "source_path": "/tmp/legacy.md",
+                "indexed_at": "2024-01-01T00:00:00+00:00",
+                "file_type": "",
+                "language": "",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "archon-search-cli",
+                "updated_at": "2024-01-01T00:00:00+00:00",
+            }
+        ],
+        schema=schema_without_acl,
+    )
+    raw_db.close()
+
+    store = SearchStore(db_path)
+    await store.connect()
+    try:
+        # Should not raise KeyError — must use .get("acl")
+        results = await store.hybrid_search(
+            "legacy_col",
+            query_vector=[0.1, 0.2, 0.3, 0.4],
+            query_text="legacy chunk",
+            top_k=5,
+        )
+
+        assert len(results) == 1
+        assert results[0].acl is None, f"Expected acl=None for missing column, got {results[0].acl}"
+    finally:
+        await store.disconnect()

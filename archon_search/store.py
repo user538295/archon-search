@@ -505,16 +505,21 @@ class SearchStore:
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
-        return [
-            SearchResult(
-                doc_id=row["doc_id"],
-                chunk_id=row["chunk_id"],
-                text=row["text"],
-                score=score,
-                source_path=row["source_path"],
+        results = []
+        for score, row in scored[:top_k]:
+            raw_acl = row.get("acl")
+            row_acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
+            results.append(
+                SearchResult(
+                    doc_id=row["doc_id"],
+                    chunk_id=row["chunk_id"],
+                    text=row["text"],
+                    score=score,
+                    source_path=row["source_path"],
+                    acl=row_acl,
+                )
             )
-            for score, row in scored[:top_k]
-        ]
+        return results
 
     # ------------------------------------------------------------------
     # Delete
