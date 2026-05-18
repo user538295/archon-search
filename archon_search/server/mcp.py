@@ -35,20 +35,20 @@ def create_app(
         """Search for relevant document chunks using hybrid vector + FTS search."""
         start = monotonic()
         try:
-            results = await pipeline.search(query, collection or default_collection)
+            result_obj = await pipeline.search(query, collection or default_collection)
             if writer is not None:
                 try:
                     writer.enqueue(
                         TelemetryEntry.from_search_tool_result(
                             endpoint="search",
                             collection=collection or default_collection,
-                            result_doc_ids=[r.doc_id for r in results],
+                            result_doc_ids=[r.doc_id for r in result_obj.results],
                             latency_ms=(monotonic() - start) * 1000.0,
                         )
                     )
                 except Exception:
                     logger.warning("telemetry: search entry enqueue failed", exc_info=True)
-            return [asdict(r) for r in results]
+            return [asdict(r) for r in result_obj.results]
         except Exception as exc:
             if writer is not None:
                 try:

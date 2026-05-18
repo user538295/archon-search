@@ -127,8 +127,10 @@ def _read_all_jsonl(log_dir: Path) -> list[dict[str, Any]]:
 
 
 def _make_ok_pipeline(results: list[SearchResult]) -> MagicMock:
+    from archon_search.pipeline import SearchPipelineResult
+
     pipeline = MagicMock()
-    pipeline.search = AsyncMock(return_value=results)
+    pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=results, acl_filtered=False))
     swc_results = [{"result": r, "context_before": [], "context_after": []} for r in results]
     pipeline.search_with_context = AsyncMock(return_value=swc_results)
     return pipeline

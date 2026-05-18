@@ -16,6 +16,7 @@ if "fastmcp" not in sys.modules:
     sys.modules["fastmcp"] = _fastmcp
 
 from archon_search._types import SearchResult
+from archon_search.pipeline import SearchPipelineResult
 from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
@@ -61,7 +62,9 @@ def _make_pipeline(
     if raises is not None:
         pipeline.search = AsyncMock(side_effect=raises)
     else:
-        pipeline.search = AsyncMock(return_value=results or [])
+        pipeline.search = AsyncMock(
+            return_value=SearchPipelineResult(results=results or [], acl_filtered=False)
+        )
     return pipeline
 
 

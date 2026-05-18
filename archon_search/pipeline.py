@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -23,6 +24,13 @@ if TYPE_CHECKING:
     from archon_search.config import SearchConfig
 
 logger = logging.getLogger("archon")
+
+
+@dataclass
+class SearchPipelineResult:
+    results: list[SearchResult]
+    acl_filtered: bool
+
 
 _BINARY_EXTENSIONS = frozenset(
     {
@@ -288,19 +296,20 @@ class SearchPipeline:
 
     async def search(
         self, query: str, collection: str, namespace: str = DEFAULT_NAMESPACE
-    ) -> list[SearchResult]:
+    ) -> SearchPipelineResult:
         vector = await self._embedder.embed_one(query)
         candidates = await self.store.hybrid_search(collection, vector, query, top_k=self._top_k_retrieve)
-        candidates, _ = apply_acl_filter(candidates, lambda r: r.acl, namespace)
-        return await self._reranker.rerank(query, candidates, top_k=self._top_k_return)
+        candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, namespace)
+        results = await self._reranker.rerank(query, candidates, top_k=self._top_k_return)
+        return SearchPipelineResult(results=results, acl_filtered=acl_filtered)
 
     async def search_with_context(
         self, query: str, collection: str, context_window: int = 1, namespace: str = DEFAULT_NAMESPACE
     ) -> list[dict[str, Any]]:
-        results = await self.search(query, collection, namespace=namespace)
+        result_obj = await self.search(query, collection, namespace=namespace)
         output: list[dict[str, Any]] = []
 
-        for result in results:
+        for result in result_obj.results:
             try:
                 center_idx = int(result.chunk_id.split("-")[-1])
             except ValueError:

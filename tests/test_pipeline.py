@@ -236,11 +236,12 @@ async def test_pipeline_search_returns_ranked_results(connected_store, col_name,
     md_file.write_text("# Search Test\n\nThis document contains searchable content.\n" * 10)
 
     await pipeline.ingest_file(md_file, col_name)
-    results = await pipeline.search("searchable content", col_name)
+    result = await pipeline.search("searchable content", col_name)
 
-    assert isinstance(results, list)
-    assert len(results) > 0
-    assert all(isinstance(r, SearchResult) for r in results)
+    from archon_search.pipeline import SearchPipelineResult
+    assert isinstance(result, SearchPipelineResult)
+    assert len(result.results) > 0
+    assert all(isinstance(r, SearchResult) for r in result.results)
 
 
 @pytest.mark.asyncio
@@ -315,8 +316,8 @@ async def test_pipeline_ingest_file_fts_searchable(connected_store, col_name, tm
 
     await pipeline.ingest_file(md_file, col_name)
 
-    results = await pipeline.search(unique_word, col_name)
-    assert len(results) > 0
+    result = await pipeline.search(unique_word, col_name)
+    assert len(result.results) > 0
 
 
 @pytest.mark.asyncio
@@ -1572,7 +1573,7 @@ async def test_eval_trace_matches_search_final_order_with_matching_depths(connec
     md_file.write_text("# Trace Test\n\nSearchable content for eval trace matching.\n" * 10)
     await pipeline.ingest_file(md_file, col_name)
 
-    normal_results = await pipeline.search("Searchable content", col_name)
+    normal_result_obj = await pipeline.search("Searchable content", col_name)
     _, post_rerank = await collect_search_trace(
         pipeline, "Searchable content", col_name,
         candidate_depth=pipeline._top_k_retrieve,
@@ -1581,7 +1582,7 @@ async def test_eval_trace_matches_search_final_order_with_matching_depths(connec
     )
 
     # post_rerank chunk_ids must match normal search order
-    normal_chunk_ids = [r.chunk_id for r in normal_results]
+    normal_chunk_ids = [r.chunk_id for r in normal_result_obj.results]
     trace_chunk_ids = [r.chunk_id for r in post_rerank]
     assert normal_chunk_ids == trace_chunk_ids, (
         f"Post-rerank trace order differs from search():\n"
@@ -1612,7 +1613,7 @@ async def test_eval_trace_common_prefix_matches_search_when_depths_differ(connec
     md_file.write_text("# Prefix Test\n\nContent for prefix comparison.\n" * 10)
     await pipeline.ingest_file(md_file, col_name)
 
-    normal_results = await pipeline.search("prefix comparison", col_name)
+    normal_result_obj = await pipeline.search("prefix comparison", col_name)
     _, post_rerank = await collect_search_trace(
         pipeline, "prefix comparison", col_name,
         candidate_depth=5,   # different from pipeline default (10)
@@ -1621,6 +1622,7 @@ async def test_eval_trace_common_prefix_matches_search_when_depths_differ(connec
     )
 
     # Compare only the common prefix (min of both result counts)
+    normal_results = normal_result_obj.results
     prefix_len = min(len(normal_results), len(post_rerank))
     assert prefix_len > 0, "Expected at least one result"
     normal_prefix = [r.chunk_id for r in normal_results[:prefix_len]]
@@ -1661,8 +1663,8 @@ async def test_eval_trace_does_not_change_public_search_response(connected_store
 
     after = await pipeline.search("Search results", col_name)
 
-    assert [r.chunk_id for r in before] == [r.chunk_id for r in after]
-    assert [r.score for r in before] == [r.score for r in after]
+    assert [r.chunk_id for r in before.results] == [r.chunk_id for r in after.results]
+    assert [r.score for r in before.results] == [r.score for r in after.results]
 
 
 # ===========================================================================
@@ -1816,3 +1818,138 @@ async def test_get_collection_meta_namespace_param() -> None:
 
     store.get_collection_meta.assert_awaited_once_with("my-col", namespace="tenantA")
     assert result is expected_meta
+
+
+# ===========================================================================
+# FEAT-045 Task 3.1 — SearchPipelineResult return type for search()
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_search_returns_pipeline_result(connected_store, col_name, tmp_path) -> None:
+    """pipeline.search() returns a SearchPipelineResult instance, not a bare list."""
+    from archon_search.pipeline import SearchPipeline, SearchPipelineResult
+
+    pipeline = make_pipeline(connected_store)
+    md_file = tmp_path / "result_type_doc.md"
+    md_file.write_text("# Type Test\n\nContent for return-type check.\n" * 10)
+    await pipeline.ingest_file(md_file, col_name)
+
+    result = await pipeline.search("Content for return-type", col_name)
+
+    assert isinstance(result, SearchPipelineResult)
+    assert isinstance(result.results, list)
+    assert all(isinstance(r, SearchResult) for r in result.results)
+
+
+@pytest.mark.asyncio
+async def test_search_acl_filtered_true_when_chunks_filtered(tmp_path) -> None:
+    """When ACL filter removes candidates, acl_filtered=True in the result."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline, SearchPipelineResult
+    from archon_search._types import ChunkRecord, SearchResult
+
+    # A candidate with a restricted ACL (only "tenantX" allowed)
+    restricted_result = SearchResult(
+        doc_id="a" * 64,
+        chunk_id=("a" * 64) + "-000000",
+        text="secret content",
+        score=0.9,
+        source_path="/secret.md",
+        acl=["tenantX"],  # not the default namespace
+    )
+
+    class AclFilterStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+            return [restricted_result]
+
+    pipeline = SearchPipeline(
+        store=AclFilterStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    # Pre-warm embedder
+    await pipeline._embedder.embed(["warmup"])
+
+    result = await pipeline.search("secret", "test-col")
+
+    assert isinstance(result, SearchPipelineResult)
+    assert result.acl_filtered is True
+    assert result.results == []  # all filtered out
+
+
+@pytest.mark.asyncio
+async def test_search_acl_filtered_false_when_all_pass(tmp_path) -> None:
+    """When no ACL filtering occurs, acl_filtered=False in the result."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline, SearchPipelineResult
+
+    # A candidate with no ACL restriction (acl=None → open)
+    open_result = SearchResult(
+        doc_id="b" * 64,
+        chunk_id=("b" * 64) + "-000000",
+        text="open content",
+        score=0.9,
+        source_path="/open.md",
+        acl=None,
+    )
+
+    class OpenAclStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+            return [open_result]
+
+    pipeline = SearchPipeline(
+        store=OpenAclStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    result = await pipeline.search("open", "test-col")
+
+    assert isinstance(result, SearchPipelineResult)
+    assert result.acl_filtered is False
+    assert len(result.results) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_still_works_after_type_change(connected_store, col_name, tmp_path) -> None:
+    """search_with_context() returns list of dicts with result/context_before/context_after keys."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    pipeline = SearchPipeline(
+        store=connected_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=32),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    md_file = tmp_path / "swc_type_doc.md"
+    md_file.write_text("# SWC Test\n\n" + ("content chunk. " * 50))
+    await pipeline.ingest_file(md_file, col_name)
+
+    results = await pipeline.search_with_context("content chunk", col_name, context_window=1)
+
+    assert isinstance(results, list)
+    assert len(results) > 0
+    for item in results:
+        assert "result" in item
+        assert "context_before" in item
+        assert "context_after" in item

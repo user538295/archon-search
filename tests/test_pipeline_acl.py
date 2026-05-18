@@ -447,9 +447,9 @@ async def test_search_pipeline_search_acl_filter_applied(tmp_path):
         top_k_retrieve=5, top_k_return=3,
     )
 
-    results = await pipeline.search("query", "col", namespace="ns1")
+    result_obj = await pipeline.search("query", "col", namespace="ns1")
 
-    texts = [r.text for r in results]
+    texts = [r.text for r in result_obj.results]
     assert "allowed chunk" in texts, "ns1 chunk must be returned"
     assert "denied chunk" not in texts, "ns2 chunk must be excluded"
 
@@ -495,9 +495,9 @@ async def test_search_pipeline_search_default_namespace_denies_protected(tmp_pat
         top_k_retrieve=5, top_k_return=3,
     )
 
-    results = await pipeline.search("query", "col", namespace="")
+    result_obj = await pipeline.search("query", "col", namespace="")
 
-    texts = [r.text for r in results]
+    texts = [r.text for r in result_obj.results]
     assert "open content" in texts, "open chunk (acl=None) must be returned"
     assert "protected content" not in texts, "protected chunk must be denied when namespace=''"
 
@@ -597,15 +597,15 @@ async def test_e2e_ingest_and_search_acl_enforcement(tmp_path):
 
         # tenantA can see the chunk
         results_a = await pipeline.search("Confidential tenantA content", collection, namespace="tenantA")
-        assert len(results_a) > 0, "tenantA must see its own chunk"
+        assert len(results_a.results) > 0, "tenantA must see its own chunk"
 
         # tenantB cannot see it
         results_b = await pipeline.search("Confidential tenantA content", collection, namespace="tenantB")
-        assert len(results_b) == 0, "tenantB must not see tenantA chunk"
+        assert len(results_b.results) == 0, "tenantB must not see tenantA chunk"
 
         # empty namespace also cannot see it
         results_empty = await pipeline.search("Confidential tenantA content", collection, namespace="")
-        assert len(results_empty) == 0, "empty namespace must not see protected chunk"
+        assert len(results_empty.results) == 0, "empty namespace must not see protected chunk"
     finally:
         await _teardown(store)
 
