@@ -431,6 +431,7 @@ class SearchStore:
                 "custom_score": float(c.custom_score) if c.custom_score is not None else None,
                 "ingested_by": c.ingested_by or "archon-search-cli",
                 "updated_at": c.updated_at or c.indexed_at,
+                "acl": c.acl,
             }
             for c in chunks
         ]

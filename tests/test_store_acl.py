@@ -173,6 +173,68 @@ async def test_migrate_acl_skips_when_no_meta_table(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ingest_chunks_serializes_acl_field(tmp_path):
+    """ingest_chunks() with ChunkRecord(acl=['ns1']) → persisted to LanceDB; read-back returns acl==['ns1']."""
+    from archon_search.store import SearchStore
+    from archon_search._types import ChunkRecord
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection("acl_test", embedding_dim=4)
+        chunk = ChunkRecord(
+            doc_id="a" * 64,
+            chunk_id=("a" * 64) + "-000000",
+            text="hello world",
+            vector=[0.1, 0.2, 0.3, 0.4],
+            source_path="/tmp/test.md",
+            indexed_at="2024-01-01T00:00:00+00:00",
+            acl=["ns1"],
+        )
+        count = await store.ingest_chunks("acl_test", [chunk])
+        assert count == 1
+
+        db = store._require_connected()
+        table = await db.open_table("acl_test")
+        rows = await table.query().to_list()
+        assert len(rows) == 1
+        assert rows[0]["acl"] == ["ns1"], f"Expected acl==['ns1'], got {rows[0]['acl']}"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_serializes_deny_all_acl(tmp_path):
+    """ChunkRecord(acl=[]) persisted to LanceDB → read-back returns acl==[] (not None)."""
+    from archon_search.store import SearchStore
+    from archon_search._types import ChunkRecord
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection("deny_all_test", embedding_dim=4)
+        chunk = ChunkRecord(
+            doc_id="b" * 64,
+            chunk_id=("b" * 64) + "-000000",
+            text="top secret content",
+            vector=[0.1, 0.2, 0.3, 0.4],
+            source_path="/tmp/secret.md",
+            indexed_at="2024-01-01T00:00:00+00:00",
+            acl=[],  # deny-all
+        )
+        count = await store.ingest_chunks("deny_all_test", [chunk])
+        assert count == 1
+
+        db = store._require_connected()
+        table = await db.open_table("deny_all_test")
+        rows = await table.query().to_list()
+        assert len(rows) == 1
+        assert rows[0]["acl"] == [], f"Expected acl==[], got {rows[0]['acl']}"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_app_lifespan_calls_migrate_acl():
     """lifespan startup calls migrate_acl() after migrate_namespace()."""
     from pathlib import Path

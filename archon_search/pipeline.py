@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestResult, SearchResult
+from archon_search.acl import resolve_acl
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.collection_meta import CollectionMeta
 from archon_search.description_generator import _should_regenerate, generate_description
@@ -36,6 +37,56 @@ _BINARY_EXTENSIONS = frozenset(
         ".parquet", ".feather", ".wasm", ".dat", ".lance",
     }
 )
+
+
+# File extensions for which YAML front matter detection is safe
+# (text-based formats where `---\n...\n---` at the top is genuinely front matter).
+# Binary formats (PDF, DOCX, etc.) are excluded — their extracted text may begin
+# with `---` by coincidence and must not be parsed for front matter.
+_FRONT_MATTER_EXTENSIONS = frozenset({".md", ".txt", ".rst", ".html"})
+
+
+def _extract_front_matter(text: str) -> tuple[dict, str]:
+    """Detect and strip YAML front matter from the top of a text document.
+
+    Returns (front_matter_dict, body_text).  If no front matter is found, returns
+    ({}, original_text).  Only the opening `---\\n...\\n---` block is parsed.
+    Import of yaml is deferred to avoid adding a hard dependency.
+    """
+    if not text.startswith("---"):
+        return {}, text
+
+    # Find closing `---` delimiter (must be on its own line)
+    rest = text[3:]
+    # Accept both `---\n` and `---\r\n` line endings
+    if rest and rest[0] in ("\n", "\r"):
+        rest = rest.lstrip("\r\n")  # normalise
+    else:
+        # `---` not followed by newline → not a valid front matter block
+        return {}, text
+
+    # Re-scan for the closing delimiter from the start of the block
+    try:
+        end_idx = text.index("\n---", 3)
+    except ValueError:
+        return {}, text
+
+    raw_yaml = text[4:end_idx]  # content between the two `---` markers
+
+    try:
+        import yaml  # noqa: PLC0415
+
+        parsed = yaml.safe_load(raw_yaml)
+    except Exception:
+        return {}, text
+
+    if not isinstance(parsed, dict):
+        return {}, text
+
+    # Body is everything after the closing `---\n` (or `---` at EOF)
+    body_start = end_idx + 4  # skip `\n---`
+    body = text[body_start:].lstrip("\r\n")
+    return parsed, body
 
 
 def _compute_centroid(vectors: list[list[float]]) -> list[float]:
@@ -80,20 +131,36 @@ class SearchPipeline:
     ) -> IngestResult:
         doc_id = hashlib.sha256(str(path.resolve()).encode()).hexdigest()
 
+        # Skip .acl sidecar files — they are metadata, not indexable content
+        if path.suffix == ".acl" or path.name.endswith(".acl"):
+            return IngestResult(doc_id=doc_id, chunks_created=0, status="ok")
+
         # Parse
         try:
             markdown = await self._parser.parse(path)
         except ParseError as e:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="error", error=str(e))
 
+        # Extract front matter (text files only; binary files skipped to avoid false positives)
+        is_text_type = path.suffix.lower() in _FRONT_MATTER_EXTENSIONS
+        if is_text_type:
+            front_matter, markdown = _extract_front_matter(markdown)
+            _acl = front_matter.pop("_acl", None)
+        else:
+            _acl = None
+
+        # Resolve effective ACL for this document
+        resolved_acl = resolve_acl(path, _acl)
+
         # Chunk
         records = self._chunker.chunk(markdown, doc_id, str(path))
         if not records:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="ok")
 
-        # Assign sequential chunk IDs
+        # Assign sequential chunk IDs and propagate ACL
         for idx, record in enumerate(records):
             record.chunk_id = f"{doc_id}-{idx:06d}"
+            record.acl = resolved_acl
 
         # Collect chunk texts if requested
         if _chunk_collector is not None:
@@ -140,6 +207,9 @@ class SearchPipeline:
                 continue
             # Skip binary extensions
             if file_path.suffix.lower() in _BINARY_EXTENSIONS:
+                continue
+            # Skip .acl sidecar files — they are metadata, not indexable content
+            if file_path.suffix == ".acl" or file_path.name.endswith(".acl"):
                 continue
             files.append(file_path)
 
