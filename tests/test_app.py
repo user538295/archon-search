@@ -132,9 +132,13 @@ async def test_lifespan_calls_migrate_namespace(config: SearchConfig, job_store:
     async def fake_disconnect(self: SearchStore) -> None:  # type: ignore[override]
         call_order.append("disconnect")
 
+    async def fake_migrate_acl(self: SearchStore) -> None:  # type: ignore[override]
+        call_order.append("migrate_acl")
+
     with (
         patch.object(SearchStore, "connect", new=fake_connect),
         patch.object(SearchStore, "migrate_namespace", new=fake_migrate),
+        patch.object(SearchStore, "migrate_acl", new=fake_migrate_acl),
         patch.object(SearchStore, "disconnect", new=fake_disconnect),
     ):
         app = create_app(config, job_store)
@@ -189,6 +193,7 @@ def test_create_app_empty_namespaces_no_error(tmp_path: Path, job_store: JobStor
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store)
@@ -214,6 +219,7 @@ def test_health_endpoint_unauthenticated_200(tmp_path: Path, job_store: JobStore
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store)
