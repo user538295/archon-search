@@ -9,14 +9,22 @@ from typing import AsyncGenerator
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
 
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import load_or_generate_key
 from archon_search.progress import IndexingStateStore
-from archon_search.server.middleware_auth import APIKeyMiddleware
+from archon_search.server.middleware_auth import APIKeyMiddleware, _EXEMPT_PATHS
 from archon_search.store import SearchStore
+
+try:
+    from importlib.metadata import version as _pkg_version, PackageNotFoundError
+    _VERSION = _pkg_version("archon-search")
+except PackageNotFoundError:
+    _VERSION = "dev"
+
 from archon_search.server.routes_collections import router as collections_router
 from archon_search.server.routes_health import router as health_router
 from archon_search.server.routes_jobs import router as jobs_router
@@ -29,6 +37,38 @@ from archon_search.telemetry.pruner import Pruner
 from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger("archon-search")
+
+def _configure_openapi(app: FastAPI) -> None:
+    """Override app.openapi with a closure that adds BearerAuth security scheme
+    and per-path security annotations to all non-public endpoints."""
+
+    def custom_openapi() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title="archon-search",
+            version=_VERSION,
+            description="REST API for archon-search document search and collection management",
+            routes=app.routes,
+        )
+        schema.setdefault("components", {})
+        schema["components"].setdefault("securitySchemes", {})
+        schema["components"]["securitySchemes"]["BearerAuth"] = {
+            "type": "http",
+            "scheme": "bearer",
+        }
+        # _EXEMPT_PATHS: only /health is a real schema exemption (appears in paths);
+        # /docs, /openapi.json, /redoc are defensive — FastAPI never includes them in the schema.
+        for path, path_item in schema.get("paths", {}).items():
+            if path in _EXEMPT_PATHS:
+                continue
+            for _method, operation in path_item.items():
+                if isinstance(operation, dict):
+                    operation["security"] = [{"BearerAuth": []}]
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = custom_openapi  # type: ignore[method-assign]
 
 
 def create_app(
@@ -90,6 +130,7 @@ def create_app(
     app.include_router(route_router)
     app.include_router(search_router)
     app.include_router(telemetry_router)
+    _configure_openapi(app)
     return app
 
 
