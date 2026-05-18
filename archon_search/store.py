@@ -135,6 +135,7 @@ class SearchStore:
                 pa.field("custom_score", pa.float32()),  # nullable
                 pa.field("ingested_by", pa.utf8()),
                 pa.field("updated_at", pa.utf8()),
+                pa.field("acl", pa.list_(pa.utf8()), nullable=True),
             ]
         )
 
