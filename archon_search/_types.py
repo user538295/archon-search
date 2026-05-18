@@ -18,6 +18,7 @@ class ChunkRecord:
     custom_score: float | None = None
     ingested_by: str = "archon-search-cli"
     updated_at: str = ""
+    acl: list[str] | None = None
 
 
 @dataclass
@@ -27,6 +28,7 @@ class SearchResult:
     text: str
     score: float
     source_path: str
+    acl: list[str] | None = None
 
 
 @dataclass
