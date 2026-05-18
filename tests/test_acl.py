@@ -4,7 +4,12 @@ import logging
 
 import pytest
 
-from archon_search.acl import is_acl_namespace_valid, parse_acl_value
+from archon_search.acl import (
+    is_acl_namespace_valid,
+    parse_acl_value,
+    read_acl_sidecar,
+    resolve_acl,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -151,3 +156,159 @@ def test_parse_acl_value_deny_all_mixed_with_invalid_fails_open(
         result = parse_acl_value("deny-all,!!!bad!!!", "doc.md")
     assert result is None
     assert caplog.records
+
+
+# ---------------------------------------------------------------------------
+# read_acl_sidecar
+# ---------------------------------------------------------------------------
+
+
+def test_read_acl_sidecar_namespace_list(tmp_path: pytest.TempPathFactory) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("ns1\nns2\n")
+    assert read_acl_sidecar(doc) == ["ns1", "ns2"]
+
+
+def test_read_acl_sidecar_deny_all_sentinel(tmp_path: pytest.TempPathFactory) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("deny-all\n")
+    assert read_acl_sidecar(doc) == []
+
+
+def test_read_acl_sidecar_deny_all_case_insensitive(tmp_path: pytest.TempPathFactory) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("DENY-ALL\n")
+    assert read_acl_sidecar(doc) == []
+
+
+def test_read_acl_sidecar_empty_returns_none(tmp_path: pytest.TempPathFactory) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("   \n\n  \n")
+    assert read_acl_sidecar(doc) is None
+
+
+def test_read_acl_sidecar_absent_returns_none(tmp_path: pytest.TempPathFactory) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    assert read_acl_sidecar(doc) is None
+
+
+def test_read_acl_sidecar_size_limit(
+    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_bytes(b"ns1\n" * 20000)  # > 64 KB
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        result = read_acl_sidecar(doc)
+    assert result is None
+    assert caplog.records
+
+
+def test_read_acl_sidecar_bom_stripped(tmp_path: pytest.TempPathFactory) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_bytes(b"\xef\xbb\xbfns1\n")  # UTF-8 BOM + ns1
+    assert read_acl_sidecar(doc) == ["ns1"]
+
+
+def test_read_acl_sidecar_invalid_lines_dropped(
+    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("ns1\n!!!bad!!!\n")
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        result = read_acl_sidecar(doc)
+    assert result == ["ns1"]
+    assert caplog.records
+
+
+def test_read_acl_sidecar_symlink_returns_none(
+    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    real_file = tmp_path / "real.acl"
+    real_file.write_text("ns1\n")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.symlink_to(real_file)
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        result = read_acl_sidecar(doc)
+    assert result is None
+    assert caplog.records
+
+
+def test_read_acl_sidecar_deny_all_with_trailing_lines(
+    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("deny-all\nns1\nns2\n")
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        result = read_acl_sidecar(doc)
+    assert result == []
+    assert caplog.records
+
+
+def test_read_acl_sidecar_invalid_utf8_returns_none(
+    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_bytes(b"\xff\xfe invalid bytes")
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        result = read_acl_sidecar(doc)
+    assert result is None
+    assert caplog.records
+
+
+# ---------------------------------------------------------------------------
+# resolve_acl
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_acl_front_matter_takes_precedence(
+    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("ns2\n")
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        result = resolve_acl(doc, "ns1")
+    assert result == ["ns1"]
+    assert caplog.records  # warning about both existing
+
+
+def test_resolve_acl_sidecar_used_when_no_front_matter(tmp_path: pytest.TempPathFactory) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("ns2\n")
+    result = resolve_acl(doc, None)
+    assert result == ["ns2"]
+
+
+def test_resolve_acl_explicit_null_front_matter_falls_through_to_sidecar(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("ns3\n")
+    result = resolve_acl(doc, None)
+    assert result == ["ns3"]

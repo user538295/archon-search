@@ -2,9 +2,12 @@
 
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 from archon_search.constants import _NAMESPACE_RE
+
+_ACL_SIDECAR_MAX_BYTES = 65536
 
 logger = logging.getLogger("archon_search")
 
@@ -110,3 +113,95 @@ def parse_acl_value(raw: Any, doc_path: str) -> list[str] | None:
 
     # No valid names at all — fail-open
     return None
+
+
+def read_acl_sidecar(doc_path: Path) -> list[str] | None:
+    """Read ACL from a sidecar file (<doc_path>.acl).
+
+    Returns:
+        - None: no sidecar, empty sidecar, or unreadable (fail-open)
+        - []: deny-all sentinel found
+        - [str, ...]: list of valid namespace names
+    """
+    sidecar = doc_path.parent / (doc_path.name + ".acl")
+
+    if not sidecar.exists():
+        return None
+
+    if sidecar.is_symlink():
+        logger.warning("ACL sidecar %s is a symlink; ignoring", sidecar)
+        return None
+
+    raw_bytes = sidecar.read_bytes()
+    if len(raw_bytes) > _ACL_SIDECAR_MAX_BYTES:
+        logger.warning(
+            "ACL sidecar %s exceeds %d bytes; ignoring",
+            sidecar,
+            _ACL_SIDECAR_MAX_BYTES,
+        )
+        return None
+
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        logger.warning("ACL sidecar %s is not valid UTF-8; ignoring", sidecar)
+        return None
+
+    # Strip UTF-8 BOM if present
+    text = text.lstrip("﻿")
+
+    lines = [line.strip() for line in text.splitlines()]
+    non_empty = [line for line in lines if line]
+
+    if not non_empty:
+        return None
+
+    first = non_empty[0]
+    if first.upper() == "DENY-ALL":
+        if len(non_empty) > 1:
+            logger.warning(
+                "ACL sidecar %s has content after 'deny-all' sentinel; extra lines ignored",
+                sidecar,
+            )
+        return []
+
+    valid: list[str] = []
+    for line in non_empty:
+        if is_acl_namespace_valid(line):
+            valid.append(line)
+        else:
+            logger.warning(
+                "ACL sidecar %s: invalid namespace name %r (dropped)", sidecar, line
+            )
+
+    return valid if valid else None
+
+
+def resolve_acl(doc_path: Path, front_matter_acl: Any) -> list[str] | None:
+    """Resolve the effective ACL for a document.
+
+    Precedence: front-matter _acl key > sidecar file.
+
+    Args:
+        doc_path: path to the document.
+        front_matter_acl: value of the _acl key from front-matter, or None if
+            the key was absent.
+
+    Returns:
+        - None: fail-open (no ACL restriction)
+        - []: deny-all
+        - [str, ...]: allowed namespace names
+    """
+    sidecar = doc_path.parent / (doc_path.name + ".acl")
+
+    if front_matter_acl is not None:
+        if sidecar.exists():
+            logger.warning(
+                "Both front-matter _acl and sidecar %s exist for %s; "
+                "front-matter takes precedence",
+                sidecar,
+                doc_path,
+            )
+        return parse_acl_value(front_matter_acl, str(doc_path))
+
+    return read_acl_sidecar(doc_path)
