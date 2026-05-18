@@ -217,6 +217,71 @@ def test_indexing_state_schema_in_spec(app) -> None:  # type: ignore[no-untyped-
     assert props["collections"].get("type") == "object", "'collections' must be of type object"
 
 
+def test_collections_list_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
+    """GET /collections/ 200 response schema is an array of CollectionSummary-shaped objects."""
+    schema = app.openapi()
+    get_op = schema["paths"]["/collections/"]["get"]
+    resp_200 = get_op["responses"]["200"]
+    content = resp_200.get("content", {})
+    json_schema = content.get("application/json", {}).get("schema", {})
+    # Top-level schema must be an array
+    assert json_schema.get("type") == "array", "GET /collections/ must return an array"
+    # Items should reference CollectionSummary
+    items = json_schema.get("items", {})
+    ref = items.get("$ref", "")
+    assert ref, "Array items must reference a named schema ($ref)"
+    schema_name = ref.split("/")[-1]
+    model_schema = schema["components"]["schemas"][schema_name]
+    props = model_schema.get("properties", {})
+    for field in ("name", "path", "description", "doc_count", "chunk_count", "namespace", "status"):
+        assert field in props, f"CollectionSummary schema must have '{field}' property"
+
+
+def test_list_collections_returns_typed_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /collections/ returns JSON array where each item has all CollectionSummary fields."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
+
+    valid_key = "c" * 64
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", valid_key)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(tmp_path / "docs")]
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    full_app = create_app(cfg, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(
+        return_value=[CollectionMeta(name="docs", namespace="default")]
+    )
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    full_app.state.search_store = mock_store
+
+    mock_state_store = MagicMock()
+    mock_state_store.read.return_value = None
+    full_app.state.state_store = mock_state_store
+
+    client = TestClient(full_app, raise_server_exceptions=False)
+    response = client.get("/collections/", headers={"Authorization": f"Bearer {valid_key}"})
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert len(body) == 1
+    item = body[0]
+    for field in ("name", "path", "description", "doc_count", "chunk_count", "namespace", "status"):
+        assert field in item, f"Response item must have '{field}' field"
+    assert item["name"] == "docs"
+    assert item["namespace"] == "default"
+
+
 def test_indexing_state_empty_when_no_state_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

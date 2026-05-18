@@ -15,6 +15,7 @@ from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
+from archon_search.server.schemas import CollectionSummary, ErrorDetail
 from archon_search.sync import path_to_collection_name
 
 logger = logging.getLogger("archon-search")
@@ -70,8 +71,8 @@ def _maybe_save_config(config: SearchConfig, request: Request) -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/", response_model=None)
-async def list_collections(request: Request) -> JSONResponse:
+@router.get("/", response_model=list[CollectionSummary], responses={401: {"model": ErrorDetail}})
+async def list_collections(request: Request) -> list[CollectionSummary]:
     """List all known collections with basic metadata."""
     config: SearchConfig = request.app.state.config
     state_store = request.app.state.state_store
@@ -92,18 +93,17 @@ async def list_collections(request: Request) -> JSONResponse:
         else:
             continue
         status = _collection_status(config, state_store, name)
-        entry = {
-            "name": name,
-            "path": resolved,
-            "description": "",
-            "doc_count": 0,
-            "chunk_count": 0,
-            "namespace": namespace,
-            "status": status,
-        }
-        result.append(entry)
+        result.append(CollectionSummary(
+            name=name,
+            path=resolved,
+            description="",
+            doc_count=0,
+            chunk_count=0,
+            namespace=namespace,
+            status=status,
+        ))
 
-    return JSONResponse(content=result)
+    return result
 
 
 @router.post("/", status_code=202, response_model=None)
