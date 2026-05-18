@@ -259,14 +259,20 @@ async def get_collection_info(name: str, request: Request) -> JSONResponse:
     except Exception:  # noqa: BLE001
         pass
 
-    # Fetch real doc_count from search store; reuse already-fetched meta for centroid.
+    # Fetch real doc_count and ACL stats from search store; reuse already-fetched meta for centroid.
     doc_count = 0
     centroid_present = bool(meta is not None and meta.centroid)
+    acl_protected = 0
+    acl_open = 0
     if search_store is not None:
         try:
             doc_count = await search_store.count_documents(name)
         except Exception:  # noqa: BLE001
             doc_count = 0
+        try:
+            acl_protected, acl_open = await search_store.get_acl_stats(name)
+        except Exception:  # noqa: BLE001
+            acl_protected, acl_open = 0, 0
 
     data = {
         "name": name,
@@ -279,6 +285,8 @@ async def get_collection_info(name: str, request: Request) -> JSONResponse:
         "centroid_present": centroid_present,
         "last_indexed": last_indexed,
         "namespace": meta.namespace if meta is not None else DEFAULT_NAMESPACE,
+        "acl_protected_count": acl_protected,
+        "acl_open_count": acl_open,
     }
     return JSONResponse(content=data)
 
