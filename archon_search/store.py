@@ -648,6 +648,7 @@ class SearchStore:
                 custom_score=r.get("custom_score"),
                 ingested_by=r.get("ingested_by") or "archon-search-cli",
                 updated_at=r.get("updated_at") or r["indexed_at"],
+                acl=list(r.get("acl")) if isinstance(r.get("acl"), list) else None,
             )
             for r in rows
         ]

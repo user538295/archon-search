@@ -415,3 +415,113 @@ async def test_hybrid_search_row_missing_acl_column_defaults_none(tmp_path):
         assert results[0].acl is None, f"Expected acl=None for missing column, got {results[0].acl}"
     finally:
         await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Task 3.2: fetch_adjacent_chunks() returns acl field in ChunkRecord
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_adjacent_chunks_returns_acl_field(tmp_path):
+    """fetch_adjacent_chunks() maps acl from stored row into ChunkRecord.acl."""
+    from archon_search.store import SearchStore
+    from archon_search._types import ChunkRecord
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection("adj_acl_test", embedding_dim=4)
+        doc_id = "f" * 64
+        # Ingest three consecutive chunks; center is index 1
+        chunks = [
+            ChunkRecord(
+                doc_id=doc_id,
+                chunk_id=f"{doc_id}-{i:06d}",
+                text=f"chunk {i}",
+                vector=[0.1, 0.2, 0.3, 0.4],
+                source_path="/tmp/doc.md",
+                indexed_at="2024-01-01T00:00:00+00:00",
+                acl=["ns1"],
+            )
+            for i in range(3)
+        ]
+        await store.ingest_chunks("adj_acl_test", chunks)
+
+        adjacent = await store.fetch_adjacent_chunks(
+            "adj_acl_test", doc_id, center_idx=1, window=1
+        )
+
+        assert len(adjacent) == 2
+        for chunk in adjacent:
+            assert chunk.acl == ["ns1"], f"Expected acl==['ns1'], got {chunk.acl}"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_fetch_adjacent_chunks_missing_acl_defaults_none(tmp_path):
+    """fetch_adjacent_chunks() uses .get('acl') — missing acl column yields ChunkRecord.acl=None."""
+    import lancedb
+    import pyarrow as pa
+    from archon_search.store import SearchStore
+
+    db_path = tmp_path / "db"
+
+    # Create a table WITHOUT the acl column to simulate a pre-migration collection.
+    schema_without_acl = pa.schema(
+        [
+            pa.field("doc_id", pa.utf8()),
+            pa.field("chunk_id", pa.utf8()),
+            pa.field("text", pa.utf8()),
+            pa.field("vector", pa.list_(pa.float32(), 4)),
+            pa.field("source_path", pa.utf8()),
+            pa.field("indexed_at", pa.utf8()),
+            pa.field("file_type", pa.utf8()),
+            pa.field("language", pa.utf8()),
+            pa.field("metadata", pa.utf8()),
+            pa.field("custom_score", pa.float32()),
+            pa.field("ingested_by", pa.utf8()),
+            pa.field("updated_at", pa.utf8()),
+            # acl column intentionally omitted
+        ]
+    )
+
+    doc_id = "a" * 64
+    db_path.mkdir(parents=True, exist_ok=True)
+    raw_db = await lancedb.connect_async(str(db_path))
+    await raw_db.create_table(
+        "legacy_adj",
+        data=[
+            {
+                "doc_id": doc_id,
+                "chunk_id": f"{doc_id}-{i:06d}",
+                "text": f"legacy chunk {i}",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "source_path": "/tmp/legacy.md",
+                "indexed_at": "2024-01-01T00:00:00+00:00",
+                "file_type": "",
+                "language": "",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "archon-search-cli",
+                "updated_at": "2024-01-01T00:00:00+00:00",
+            }
+            for i in range(3)
+        ],
+        schema=schema_without_acl,
+    )
+    raw_db.close()
+
+    store = SearchStore(db_path)
+    await store.connect()
+    try:
+        adjacent = await store.fetch_adjacent_chunks(
+            "legacy_adj", doc_id, center_idx=1, window=1
+        )
+
+        assert len(adjacent) == 2
+        for chunk in adjacent:
+            assert chunk.acl is None, f"Expected acl=None for missing column, got {chunk.acl}"
+    finally:
+        await store.disconnect()
