@@ -56,6 +56,11 @@ class SearchResultSchema(BaseModel):
         )
 
 
+class SearchResponse(BaseModel):
+    results: list[SearchResultSchema]
+    acl_filtered: bool
+
+
 @router.post("/search", response_model=list[SearchResultSchema])
 async def search(body: SearchRequest, request: Request) -> list[SearchResultSchema] | JSONResponse:
     config = request.app.state.config
