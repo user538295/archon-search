@@ -61,13 +61,13 @@ def test_search_returns_results(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     data = response.json()
-    assert isinstance(data, list)
-    assert len(data) == 2
-    assert data[0]["doc_id"] == results[0].doc_id
-    assert data[0]["chunk_id"] == results[0].chunk_id
-    assert data[0]["text"] == results[0].text
-    assert data[0]["score"] == pytest.approx(results[0].score)
-    assert data[0]["source_path"] == results[0].source_path
+    assert "results" in data
+    assert len(data["results"]) == 2
+    assert data["results"][0]["doc_id"] == results[0].doc_id
+    assert data["results"][0]["chunk_id"] == results[0].chunk_id
+    assert data["results"][0]["text"] == results[0].text
+    assert data["results"][0]["score"] == pytest.approx(results[0].score)
+    assert data["results"][0]["source_path"] == results[0].source_path
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +177,8 @@ def test_search_store_exception_returns_empty(tmp_path: Path, caplog: pytest.Log
         response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 200
-    assert response.json() == []
+    data = response.json()
+    assert data["results"] == []
     assert any("search failed" in record.message for record in caplog.records)
 
 
@@ -235,7 +236,7 @@ def test_search_embedder_failure_returns_empty(tmp_path: Path) -> None:
     response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()["results"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +264,7 @@ def test_search_reranker_failure_returns_empty(tmp_path: Path) -> None:
         response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()["results"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +416,7 @@ async def test_search_end_to_end(tmp_path: Path) -> None:
 
     response = client.post("/search", json={"collection": "testcol", "query": "hello world"})
     assert response.status_code == 200
-    results = response.json()
+    data = response.json()
+    results = data["results"]
     assert len(results) >= 1
     assert results[0]["source_path"] == "/docs/hello.md"

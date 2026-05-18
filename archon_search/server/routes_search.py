@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
+from archon_search.acl import apply_acl_filter
 from archon_search.reranker import ModelReranker, Reranker
 from archon_search.store import SearchStore
 
@@ -61,8 +62,8 @@ class SearchResponse(BaseModel):
     acl_filtered: bool
 
 
-@router.post("/search", response_model=list[SearchResultSchema])
-async def search(body: SearchRequest, request: Request) -> list[SearchResultSchema] | JSONResponse:
+@router.post("/search", response_model=SearchResponse)
+async def search(body: SearchRequest, request: Request) -> SearchResponse | JSONResponse:
     config = request.app.state.config
     embedder = request.app.state.embedder
     store = request.app.state.search_store
@@ -78,14 +79,19 @@ async def search(body: SearchRequest, request: Request) -> list[SearchResultSche
         return JSONResponse({"detail": "collection not found"}, status_code=404)
 
     try:
+        caller_ns = getattr(request.state, "namespace", "")
         vector = await embedder.embed_one(body.query)
         candidates = await store.hybrid_search(
             body.collection, vector, body.query, top_k=body.top_k * 3
         )
+        candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, caller_ns)
         backend = ModelReranker(config.reranker_model, providers=config.providers or None)
         reranker = Reranker(backend)
         reranked = await reranker.rerank(body.query, candidates, top_k=body.top_k)
-        return [SearchResultSchema.from_result(r) for r in reranked]
+        return SearchResponse(
+            results=[SearchResultSchema.from_result(r) for r in reranked],
+            acl_filtered=acl_filtered,
+        )
     except Exception as exc:
         logger.warning("search failed for collection %r: %s", body.collection, exc, exc_info=True)
-        return []
+        return SearchResponse(results=[], acl_filtered=False)
