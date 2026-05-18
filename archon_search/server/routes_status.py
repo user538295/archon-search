@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 
 from archon_search.config import SearchConfig
 from archon_search.progress import compute_eta_seconds
+from archon_search.server.schemas import ErrorDetail, StatusCollectionEntry, StatusResponse
 from archon_search.sync import path_to_collection_name
 
 router = APIRouter()
@@ -18,20 +19,14 @@ except PackageNotFoundError:
     _VERSION = "dev"
 
 
-@router.get("/status")
-async def status(request: Request) -> dict:
+@router.get("/status", response_model=StatusResponse, responses={401: {"model": ErrorDetail}})
+async def status(request: Request) -> StatusResponse:
     """Return rich operator-facing status including service info and per-collection progress."""
     config: SearchConfig = request.app.state.config
     ns: str = request.state.namespace
 
     # Service / process fields
     pid = os.getpid()
-    result: dict = {
-        "running": True,
-        "pid": pid,
-        "version": _VERSION,
-        "collections": [],
-    }
 
     # Resolve which collection names belong to the caller's namespace
     search_store = request.app.state.search_store
@@ -63,24 +58,29 @@ async def status(request: Request) -> dict:
     # Filter to only names in the caller's namespace
     all_names &= ns_names
 
-    collection_entries = []
+    collection_entries: list[StatusCollectionEntry] = []
     for name in sorted(all_names):
         progress = collections_progress.get(name)
         watching = config.watch
-        entry: dict = {
-            "name": name,
-            "path": "",
-            "doc_count": 0,
-            "chunk_count": 0,
-            "status": progress["status"] if progress else "not_yet_indexed",
-            "watching": watching,
-            "eta_seconds": progress["eta_seconds"] if progress else None,
-            "processed_files": progress["processed_files"] if progress else 0,
-            "total_files": progress["total_files"] if progress else 0,
-            "error": progress.get("error") if progress else None,
-            "error_count": progress["error_count"] if progress else 0,
-        }
-        collection_entries.append(entry)
+        collection_entries.append(
+            StatusCollectionEntry(
+                name=name,
+                path="",  # path not yet populated from store
+                doc_count=0,
+                chunk_count=0,
+                status=progress["status"] if progress else "not_yet_indexed",
+                watching=watching,
+                eta_seconds=progress["eta_seconds"] if progress else None,
+                processed_files=progress["processed_files"] if progress else 0,
+                total_files=progress["total_files"] if progress else 0,
+                error=progress.get("error") if progress else None,
+                error_count=progress["error_count"] if progress else 0,
+            )
+        )
 
-    result["collections"] = collection_entries
-    return result
+    return StatusResponse(
+        running=True,
+        pid=pid,
+        version=_VERSION,
+        collections=collection_entries,
+    )

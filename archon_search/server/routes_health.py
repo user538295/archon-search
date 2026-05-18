@@ -5,6 +5,8 @@ from importlib.metadata import version, PackageNotFoundError
 
 from fastapi import APIRouter
 
+from archon_search.server.schemas import HealthResponse
+
 router = APIRouter()
 
 try:
@@ -13,6 +15,6 @@ except PackageNotFoundError:
     _VERSION = "dev"
 
 
-@router.get("/health")
-async def health() -> dict:
-    return {"status": "running", "version": _VERSION}
+@router.get("/health", response_model=HealthResponse)
+async def health() -> HealthResponse:
+    return HealthResponse(status="running", version=_VERSION)

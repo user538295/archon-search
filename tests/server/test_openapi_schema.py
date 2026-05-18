@@ -88,3 +88,112 @@ def test_cors_preflight_to_protected_endpoint_not_blocked(app) -> None:  # type:
     )
     assert response.status_code != 401
     assert response.headers.get("access-control-allow-origin") == "*"
+
+
+def test_health_response_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
+    """GET /health 200 response schema must have 'status' and 'version' string properties."""
+    schema = app.openapi()
+    get_op = schema["paths"]["/health"]["get"]
+    resp_200 = get_op["responses"]["200"]
+    # Resolve $ref if present
+    content = resp_200.get("content", {})
+    json_schema = content.get("application/json", {}).get("schema", {})
+    ref = json_schema.get("$ref", "")
+    if ref:
+        # e.g. "#/components/schemas/HealthResponse"
+        schema_name = ref.split("/")[-1]
+        model_schema = schema["components"]["schemas"][schema_name]
+    else:
+        model_schema = json_schema
+    props = model_schema.get("properties", {})
+    assert "status" in props, "HealthResponse must have 'status' property"
+    assert "version" in props, "HealthResponse must have 'version' property"
+    assert props["status"].get("type") == "string"
+    assert props["version"].get("type") == "string"
+
+
+def test_status_response_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
+    """GET /status 200 response schema must have running, pid, version, collections."""
+    schema = app.openapi()
+    get_op = schema["paths"]["/status"]["get"]
+    resp_200 = get_op["responses"]["200"]
+    content = resp_200.get("content", {})
+    json_schema = content.get("application/json", {}).get("schema", {})
+    ref = json_schema.get("$ref", "")
+    if ref:
+        schema_name = ref.split("/")[-1]
+        model_schema = schema["components"]["schemas"][schema_name]
+    else:
+        model_schema = json_schema
+    props = model_schema.get("properties", {})
+    assert "running" in props, "StatusResponse must have 'running' property"
+    assert "pid" in props, "StatusResponse must have 'pid' property"
+    assert "version" in props, "StatusResponse must have 'version' property"
+    assert "collections" in props, "StatusResponse must have 'collections' property"
+    assert props["collections"].get("type") == "array"
+
+
+def test_health_endpoint_returns_typed_response(app) -> None:  # type: ignore[no-untyped-def]
+    """GET /health returns JSON with 'status' and 'version' keys."""
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert "status" in body
+    assert "version" in body
+    assert isinstance(body["status"], str)
+    assert isinstance(body["version"], str)
+
+
+def test_status_endpoint_returns_typed_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /status with a valid auth token returns JSON with running, pid, version, collections."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.config import SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
+
+    valid_key = "a" * 64
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", valid_key)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    full_app = create_app(cfg, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    full_app.state.search_store = mock_store
+
+    client = TestClient(full_app, raise_server_exceptions=False)
+    response = client.get("/status", headers={"Authorization": f"Bearer {valid_key}"})
+    assert response.status_code == 200
+    body = response.json()
+    assert "running" in body
+    assert "pid" in body
+    assert "version" in body
+    assert "collections" in body
+    assert isinstance(body["collections"], list)
+
+
+def test_status_401_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
+    """GET /status OpenAPI spec has a 401 response entry with ErrorDetail-shaped schema."""
+    schema = app.openapi()
+    get_op = schema["paths"]["/status"]["get"]
+    assert "401" in get_op["responses"], "GET /status must declare a 401 response in the OpenAPI spec"
+    resp_401 = get_op["responses"]["401"]
+    content = resp_401.get("content", {})
+    json_schema = content.get("application/json", {}).get("schema", {})
+    ref = json_schema.get("$ref", "")
+    if ref:
+        schema_name = ref.split("/")[-1]
+        model_schema = schema["components"]["schemas"][schema_name]
+    else:
+        model_schema = json_schema
+    props = model_schema.get("properties", {})
+    assert "detail" in props, "401 response schema must have a 'detail' property"
+    assert props["detail"].get("type") == "string", "'detail' property must be of type string"
