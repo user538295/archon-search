@@ -47,6 +47,22 @@ def mini_app() -> FastAPI:
     async def status() -> dict:
         return {"status": "running"}
 
+    @app.get("/docs")
+    async def docs() -> dict:
+        return {"page": "docs"}
+
+    @app.get("/openapi.json")
+    async def openapi_json() -> dict:
+        return {}
+
+    @app.get("/redoc")
+    async def redoc() -> dict:
+        return {"page": "redoc"}
+
+    @app.get("/search")
+    async def search() -> dict:
+        return {"results": []}
+
     return app
 
 
@@ -90,9 +106,10 @@ class TestAPIKeyMiddlewareAuth:
         resp = client.get("/health")
         assert resp.status_code == 200
 
-    def test_post_health_requires_auth(self, client: TestClient) -> None:
+    def test_post_health_exempt(self, client: TestClient) -> None:
+        # All methods on exempt paths are allowed (no method restriction)
         resp = client.post("/health")
-        assert resp.status_code == 401
+        assert resp.status_code == 200
 
     def test_get_health_trailing_slash_not_exempt(self, client: TestClient) -> None:
         # /health/ is NOT the same as /health — must not pass auth for free
@@ -100,8 +117,54 @@ class TestAPIKeyMiddlewareAuth:
         # Must NOT be 200 (unauthenticated access must never succeed on /health/)
         assert resp.status_code != 200, f"GET /health/ returned 200 without auth — exempt path too broad"
 
-    def test_delete_health_requires_auth(self, client: TestClient) -> None:
+    def test_docs_trailing_slash_not_exempt(self, client: TestClient) -> None:
+        # /docs/ is NOT the same as /docs — must not pass auth for free
+        resp = client.get("/docs/", follow_redirects=False)
+        assert resp.status_code != 200, "GET /docs/ returned 200 without auth — exempt path too broad"
+
+    def test_openapi_json_trailing_slash_not_exempt(self, client: TestClient) -> None:
+        # /openapi.json/ is NOT the same as /openapi.json — must not pass auth for free
+        resp = client.get("/openapi.json/", follow_redirects=False)
+        assert resp.status_code != 200, "GET /openapi.json/ returned 200 without auth — exempt path too broad"
+
+    def test_redoc_trailing_slash_not_exempt(self, client: TestClient) -> None:
+        # /redoc/ is NOT the same as /redoc — must not pass auth for free
+        resp = client.get("/redoc/", follow_redirects=False)
+        assert resp.status_code != 200, "GET /redoc/ returned 200 without auth — exempt path too broad"
+
+    def test_delete_health_exempt(self, client: TestClient) -> None:
+        # All methods on exempt paths are allowed (no method restriction)
         resp = client.delete("/health")
+        assert resp.status_code == 200
+
+    def test_docs_path_exempt_without_token(self, client: TestClient) -> None:
+        resp = client.get("/docs")
+        assert resp.status_code == 200
+
+    def test_openapi_json_exempt_without_token(self, client: TestClient) -> None:
+        resp = client.get("/openapi.json")
+        assert resp.status_code == 200
+
+    def test_redoc_exempt_without_token(self, client: TestClient) -> None:
+        resp = client.get("/redoc")
+        assert resp.status_code == 200
+
+    def test_search_still_requires_token(self, client: TestClient) -> None:
+        resp = client.get("/search")
+        assert resp.status_code == 401
+
+    def test_options_on_exempt_path_allowed(self, client: TestClient) -> None:
+        resp = client.options("/health")
+        # 405 is acceptable: path is exempt from auth, but FastAPI may return 405
+        # if no OPTIONS handler is registered. What matters is it was NOT blocked by auth.
+        assert resp.status_code in {200, 204, 405}
+
+    def test_invalid_token_returns_401(self, client: TestClient) -> None:
+        resp = client.get("/status", headers={"Authorization": "Bearer wrong-key"})
+        assert resp.status_code == 401
+
+    def test_wrong_scheme_returns_401(self, client: TestClient) -> None:
+        resp = client.get("/status", headers={"Authorization": "Basic xxx"})
         assert resp.status_code == 401
 
     def test_compare_digest_used(self, mini_app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,6 +254,21 @@ class TestFullAppAuth:
     def test_health_exempt_in_full_app(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         client, _ = _make_full_client(tmp_path, monkeypatch)
         resp = client.get("/health")
+        assert resp.status_code == 200
+
+    def test_docs_exempt_in_full_app(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        client, _ = _make_full_client(tmp_path, monkeypatch)
+        resp = client.get("/docs")
+        assert resp.status_code == 200
+
+    def test_openapi_json_exempt_in_full_app(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        client, _ = _make_full_client(tmp_path, monkeypatch)
+        resp = client.get("/openapi.json")
+        assert resp.status_code == 200
+
+    def test_redoc_exempt_in_full_app(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        client, _ = _make_full_client(tmp_path, monkeypatch)
+        resp = client.get("/redoc")
         assert resp.status_code == 200
 
     @pytest.mark.skip(reason="Requires SearchApiKeyAuth from Task 4.1 (not yet implemented)")

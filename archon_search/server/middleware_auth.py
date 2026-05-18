@@ -13,8 +13,7 @@ from archon_search.constants import DEFAULT_NAMESPACE, _validate_namespace
 
 logger = logging.getLogger("archon-search")
 
-_EXEMPT_METHOD = "GET"
-_EXEMPT_PATH = "/health"
+_EXEMPT_PATHS: frozenset[str] = frozenset({"/health", "/docs", "/openapi.json", "/redoc"})
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
@@ -24,7 +23,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         self._namespaces = namespaces or {}
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        if request.method == _EXEMPT_METHOD and request.url.path == _EXEMPT_PATH:
+        if request.url.path in _EXEMPT_PATHS:
             return await call_next(request)
 
         auth_header = request.headers.get("Authorization", "")
