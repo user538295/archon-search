@@ -15,7 +15,7 @@ from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
-from archon_search.server.schemas import CollectionSummary, ErrorDetail
+from archon_search.server.schemas import CollectionDetail, CollectionSummary, ErrorDetail
 from archon_search.sync import path_to_collection_name
 
 logger = logging.getLogger("archon-search")
@@ -226,8 +226,8 @@ async def remove_collection(name: str, request: Request) -> JSONResponse:
     return JSONResponse(content={"name": name, "deleted": True})
 
 
-@router.get("/{name}", response_model=None)
-async def get_collection_info(name: str, request: Request) -> JSONResponse:
+@router.get("/{name}", response_model=CollectionDetail, responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}})
+async def get_collection_info(name: str, request: Request) -> CollectionDetail:
     """Return CollectionDetail for a single collection. 404 if not found."""
     config: SearchConfig = request.app.state.config
     state_store = request.app.state.state_store
@@ -288,7 +288,7 @@ async def get_collection_info(name: str, request: Request) -> JSONResponse:
         "acl_protected_count": acl_protected,
         "acl_open_count": acl_open,
     }
-    return JSONResponse(content=data)
+    return CollectionDetail(**data)
 
 
 @router.post("/{name}/reindex", status_code=202, response_model=None)

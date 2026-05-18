@@ -282,6 +282,25 @@ def test_list_collections_returns_typed_list(
     assert item["namespace"] == "default"
 
 
+def test_collection_detail_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
+    """GET /collections/{name} 200 response schema includes acl_protected_count and embedding_model."""
+    schema = app.openapi()
+    get_op = schema["paths"]["/collections/{name}"]["get"]
+    resp_200 = get_op["responses"]["200"]
+    content = resp_200.get("content", {})
+    json_schema = content.get("application/json", {}).get("schema", {})
+    ref = json_schema.get("$ref", "")
+    assert ref, "GET /collections/{name} 200 must reference a named schema ($ref)"
+    schema_name = ref.split("/")[-1]
+    model_schema = schema["components"]["schemas"][schema_name]
+    props = model_schema.get("properties", {})
+    assert "acl_protected_count" in props, "CollectionDetail schema must have 'acl_protected_count'"
+    assert "embedding_model" in props, "CollectionDetail schema must have 'embedding_model'"
+    # Also verify it inherits CollectionSummary fields
+    for field in ("name", "path", "description", "doc_count", "chunk_count", "namespace", "status"):
+        assert field in props, f"CollectionDetail schema must have '{field}' from CollectionSummary"
+
+
 def test_indexing_state_empty_when_no_state_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
