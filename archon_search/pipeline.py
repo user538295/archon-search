@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestResult, SearchResult
-from archon_search.acl import resolve_acl
+from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.collection_meta import CollectionMeta
 from archon_search.description_generator import _should_regenerate, generate_description
@@ -286,15 +286,18 @@ class SearchPipeline:
     # Search
     # ------------------------------------------------------------------
 
-    async def search(self, query: str, collection: str) -> list[SearchResult]:
+    async def search(
+        self, query: str, collection: str, namespace: str = DEFAULT_NAMESPACE
+    ) -> list[SearchResult]:
         vector = await self._embedder.embed_one(query)
         candidates = await self.store.hybrid_search(collection, vector, query, top_k=self._top_k_retrieve)
+        candidates, _ = apply_acl_filter(candidates, lambda r: r.acl, namespace)
         return await self._reranker.rerank(query, candidates, top_k=self._top_k_return)
 
     async def search_with_context(
-        self, query: str, collection: str, context_window: int = 1
+        self, query: str, collection: str, context_window: int = 1, namespace: str = DEFAULT_NAMESPACE
     ) -> list[dict[str, Any]]:
-        results = await self.search(query, collection)
+        results = await self.search(query, collection, namespace=namespace)
         output: list[dict[str, Any]] = []
 
         for result in results:
@@ -308,6 +311,7 @@ class SearchPipeline:
             neighbors = await self.store.fetch_adjacent_chunks(
                 collection, result.doc_id, center_idx, context_window
             )
+            neighbors, _ = apply_acl_filter(neighbors, lambda c: c.acl, namespace)
 
             context_before: list[ChunkRecord] = []
             context_after: list[ChunkRecord] = []

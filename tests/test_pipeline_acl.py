@@ -398,3 +398,276 @@ async def test_ingest_file_front_matter_block_stripped_from_chunk_text(tmp_path)
         assert "Actual content after front matter" in all_text, "real content must be in chunks"
     finally:
         await _teardown(store)
+
+
+# ---------------------------------------------------------------------------
+# Task 3.4b: ACL filter in SearchPipeline.search() and search_with_context()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_pipeline_search_acl_filter_applied(tmp_path):
+    """SearchPipeline.search() with namespace='ns1' excludes chunks with acl=['ns2']."""
+    from archon_search._types import ChunkRecord, SearchResult
+    from archon_search.pipeline import SearchPipeline
+
+    # Arrange — stub pipeline with controlled hybrid_search output
+    store = MagicMock()
+    embedder = MagicMock()
+    reranker = MagicMock()
+
+    async def _embed_one(text):
+        return [0.0, 0.0, 0.0, 0.0]
+
+    embedder.embed_one = _embed_one
+
+    now = "2024-01-01T00:00:00+00:00"
+    chunk_allowed = ChunkRecord(
+        doc_id="doc1", chunk_id="doc1-000000", text="allowed chunk",
+        vector=[0.0] * 4, source_path="/f.md", indexed_at=now, acl=["ns1"],
+    )
+    chunk_denied = ChunkRecord(
+        doc_id="doc2", chunk_id="doc2-000000", text="denied chunk",
+        vector=[0.0] * 4, source_path="/g.md", indexed_at=now, acl=["ns2"],
+    )
+
+    async def _hybrid_search(collection, vector, query, top_k):
+        return [chunk_allowed, chunk_denied]
+
+    store.hybrid_search = _hybrid_search
+
+    async def _rerank(query, candidates, top_k):
+        return [SearchResult(doc_id=c.doc_id, chunk_id=c.chunk_id, text=c.text, score=1.0, source_path=c.source_path, acl=c.acl) for c in candidates]
+
+    reranker.rerank = _rerank
+
+    pipeline = SearchPipeline(
+        store=store, embedder=embedder, reranker=reranker,
+        chunker=MagicMock(), parser=MagicMock(),
+        top_k_retrieve=5, top_k_return=3,
+    )
+
+    results = await pipeline.search("query", "col", namespace="ns1")
+
+    texts = [r.text for r in results]
+    assert "allowed chunk" in texts, "ns1 chunk must be returned"
+    assert "denied chunk" not in texts, "ns2 chunk must be excluded"
+
+
+@pytest.mark.asyncio
+async def test_search_pipeline_search_default_namespace_denies_protected(tmp_path):
+    """SearchPipeline.search() with namespace='' (empty) denies protected chunks."""
+    from archon_search._types import ChunkRecord, SearchResult
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    embedder = MagicMock()
+    reranker = MagicMock()
+
+    async def _embed_one(text):
+        return [0.0] * 4
+
+    embedder.embed_one = _embed_one
+
+    now = "2024-01-01T00:00:00+00:00"
+    open_chunk = ChunkRecord(
+        doc_id="doc1", chunk_id="doc1-000000", text="open content",
+        vector=[0.0] * 4, source_path="/a.md", indexed_at=now, acl=None,
+    )
+    protected_chunk = ChunkRecord(
+        doc_id="doc2", chunk_id="doc2-000000", text="protected content",
+        vector=[0.0] * 4, source_path="/b.md", indexed_at=now, acl=["tenantX"],
+    )
+
+    async def _hybrid_search(collection, vector, query, top_k):
+        return [open_chunk, protected_chunk]
+
+    store.hybrid_search = _hybrid_search
+
+    async def _rerank(query, candidates, top_k):
+        return [SearchResult(doc_id=c.doc_id, chunk_id=c.chunk_id, text=c.text, score=1.0, source_path=c.source_path, acl=c.acl) for c in candidates]
+
+    reranker.rerank = _rerank
+
+    pipeline = SearchPipeline(
+        store=store, embedder=embedder, reranker=reranker,
+        chunker=MagicMock(), parser=MagicMock(),
+        top_k_retrieve=5, top_k_return=3,
+    )
+
+    results = await pipeline.search("query", "col", namespace="")
+
+    texts = [r.text for r in results]
+    assert "open content" in texts, "open chunk (acl=None) must be returned"
+    assert "protected content" not in texts, "protected chunk must be denied when namespace=''"
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_acl_filter_applied(tmp_path):
+    """search_with_context() with namespace='ns1' excludes restricted chunks and adjacent chunks."""
+    from archon_search._types import ChunkRecord, SearchResult
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    embedder = MagicMock()
+    reranker = MagicMock()
+
+    async def _embed_one(text):
+        return [0.0] * 4
+
+    embedder.embed_one = _embed_one
+
+    now = "2024-01-01T00:00:00+00:00"
+    allowed = ChunkRecord(
+        doc_id="doc1", chunk_id="doc1-000001", text="main chunk",
+        vector=[0.0] * 4, source_path="/a.md", indexed_at=now, acl=["ns1"],
+    )
+
+    async def _hybrid_search(collection, vector, query, top_k):
+        return [allowed]
+
+    store.hybrid_search = _hybrid_search
+
+    async def _rerank(query, candidates, top_k):
+        return [SearchResult(doc_id=c.doc_id, chunk_id=c.chunk_id, text=c.text, score=1.0, source_path=c.source_path, acl=c.acl) for c in candidates]
+
+    reranker.rerank = _rerank
+
+    # Adjacent chunk with different namespace
+    adj_denied = ChunkRecord(
+        doc_id="doc1", chunk_id="doc1-000000", text="adjacent denied",
+        vector=[0.0] * 4, source_path="/a.md", indexed_at=now, acl=["ns2"],
+    )
+    adj_allowed = ChunkRecord(
+        doc_id="doc1", chunk_id="doc1-000002", text="adjacent allowed",
+        vector=[0.0] * 4, source_path="/a.md", indexed_at=now, acl=["ns1"],
+    )
+
+    async def _fetch_adjacent(collection, doc_id, center_idx, window):
+        return [adj_denied, adj_allowed]
+
+    store.fetch_adjacent_chunks = _fetch_adjacent
+
+    pipeline = SearchPipeline(
+        store=store, embedder=embedder, reranker=reranker,
+        chunker=MagicMock(), parser=MagicMock(),
+        top_k_retrieve=5, top_k_return=3,
+    )
+
+    output = await pipeline.search_with_context("query", "col", namespace="ns1")
+
+    assert len(output) == 1
+    entry = output[0]
+    assert entry["result"].text == "main chunk"
+    all_adjacent = entry["context_before"] + entry["context_after"]
+    adjacent_texts = [c.text for c in all_adjacent]
+    assert "adjacent denied" not in adjacent_texts, "ACL-denied adjacent chunk must be excluded"
+    assert "adjacent allowed" in adjacent_texts, "ACL-allowed adjacent chunk must be included"
+
+
+@pytest.mark.asyncio
+async def test_e2e_ingest_and_search_acl_enforcement(tmp_path):
+    """E2E: ingest file with _acl: tenantA; search as tenantA gets the chunk; tenantB gets nothing."""
+    doc = tmp_path / "secret.md"
+    doc.write_text("---\n_acl: tenantA\n---\n\nConfidential tenantA content here.\n")
+
+    pipeline, store = _make_pipeline(tmp_path)
+    collection = "acl_e2e"
+    await _setup(pipeline, store, collection)
+
+    from archon_search._types import SearchResult
+    from archon_search.reranker import Reranker
+
+    # Stub reranker to pass all candidates through
+    async def _passthrough_rerank(query, candidates, top_k):
+        return [
+            SearchResult(
+                doc_id=c.doc_id, chunk_id=c.chunk_id, text=c.text,
+                score=1.0, source_path=c.source_path, acl=c.acl,
+            )
+            for c in candidates[:top_k]
+        ]
+
+    pipeline._reranker.rerank = _passthrough_rerank
+
+    try:
+        result = await pipeline.ingest_file(doc, collection)
+        assert result.status == "ok"
+        assert result.chunks_created > 0
+
+        # tenantA can see the chunk
+        results_a = await pipeline.search("Confidential tenantA content", collection, namespace="tenantA")
+        assert len(results_a) > 0, "tenantA must see its own chunk"
+
+        # tenantB cannot see it
+        results_b = await pipeline.search("Confidential tenantA content", collection, namespace="tenantB")
+        assert len(results_b) == 0, "tenantB must not see tenantA chunk"
+
+        # empty namespace also cannot see it
+        results_empty = await pipeline.search("Confidential tenantA content", collection, namespace="")
+        assert len(results_empty) == 0, "empty namespace must not see protected chunk"
+    finally:
+        await _teardown(store)
+
+
+@pytest.mark.asyncio
+async def test_search_context_expansion_acl_filtered(tmp_path):
+    """Adjacent chunks with ACL for different namespace are excluded from context expansion."""
+    from archon_search._types import ChunkRecord, SearchResult
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    embedder = MagicMock()
+    reranker = MagicMock()
+
+    async def _embed_one(text):
+        return [0.0] * 4
+
+    embedder.embed_one = _embed_one
+
+    now = "2024-01-01T00:00:00+00:00"
+    main_chunk = ChunkRecord(
+        doc_id="docX", chunk_id="docX-000002", text="center content",
+        vector=[0.0] * 4, source_path="/x.md", indexed_at=now, acl=None,
+    )
+
+    async def _hybrid_search(collection, vector, query, top_k):
+        return [main_chunk]
+
+    store.hybrid_search = _hybrid_search
+
+    async def _rerank(query, candidates, top_k):
+        return [SearchResult(doc_id=c.doc_id, chunk_id=c.chunk_id, text=c.text, score=1.0, source_path=c.source_path, acl=c.acl) for c in candidates]
+
+    reranker.rerank = _rerank
+
+    # Before chunk: restricted to different namespace
+    before_restricted = ChunkRecord(
+        doc_id="docX", chunk_id="docX-000001", text="before restricted",
+        vector=[0.0] * 4, source_path="/x.md", indexed_at=now, acl=["other_ns"],
+    )
+    # After chunk: open
+    after_open = ChunkRecord(
+        doc_id="docX", chunk_id="docX-000003", text="after open",
+        vector=[0.0] * 4, source_path="/x.md", indexed_at=now, acl=None,
+    )
+
+    async def _fetch_adjacent(collection, doc_id, center_idx, window):
+        return [before_restricted, after_open]
+
+    store.fetch_adjacent_chunks = _fetch_adjacent
+
+    pipeline = SearchPipeline(
+        store=store, embedder=embedder, reranker=reranker,
+        chunker=MagicMock(), parser=MagicMock(),
+        top_k_retrieve=5, top_k_return=3,
+    )
+
+    output = await pipeline.search_with_context("query", "col", namespace="ns1")
+
+    assert len(output) == 1
+    entry = output[0]
+    before_texts = [c.text for c in entry["context_before"]]
+    after_texts = [c.text for c in entry["context_after"]]
+    assert "before restricted" not in before_texts, "restricted before chunk must be excluded"
+    assert "after open" in after_texts, "open after chunk must be included"
