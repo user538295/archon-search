@@ -5,7 +5,7 @@ import asyncio
 import logging
 from typing import Any, Callable, Awaitable
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
@@ -105,19 +105,28 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse:
     return JobResponse(**job_to_dict(job))
 
 
-@router.get("/jobs/{job_id}")
-async def get_job(job_id: str, request: Request) -> JSONResponse:
+@router.get("/jobs/{job_id}", response_model=JobResponse, responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}})
+async def get_job(job_id: str, request: Request) -> JobResponse:
     store: JobStore = request.app.state.job_store
     job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.namespace != request.state.namespace:
         raise HTTPException(status_code=404, detail="Job not found")
-    return JSONResponse(content=job_to_dict(job))
+    return JobResponse(**job_to_dict(job))
 
 
-@router.delete("/jobs/{job_id}")
-async def delete_job(job_id: str, request: Request) -> JSONResponse:
+@router.delete(
+    "/jobs/{job_id}",
+    response_model=JobResponse,
+    responses={
+        200: {"model": JobResponse},
+        202: {"model": JobResponse},
+        401: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+    },
+)
+async def delete_job(job_id: str, request: Request, response: Response) -> JobResponse | JSONResponse:
     store: JobStore = request.app.state.job_store
     job = store.get(job_id)
     if job is None:
@@ -125,17 +134,21 @@ async def delete_job(job_id: str, request: Request) -> JSONResponse:
     if job.namespace != request.state.namespace:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status in _TERMINAL_STATUSES:
-        return JSONResponse(content=job_to_dict(job), status_code=200)
+        return JobResponse(**job_to_dict(job))
     if job.status in _ACTIVE_STATUSES:
         # Use transition() to avoid TOCTOU race: only updates if still active
         updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)
         if updated is None:
             # Race: job became terminal between get() and transition() — idempotent 200
             job = store.get(job_id)
-            return JSONResponse(content=job_to_dict(job), status_code=200)  # type: ignore[arg-type]
-        return JSONResponse(content=job_to_dict(updated), status_code=202)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Job not found")
+            return JobResponse(**job_to_dict(job))
+        response.status_code = 202
+        return JobResponse(**job_to_dict(updated))
     elif job.status == JobStatus.CANCELLING:
-        return JSONResponse(content=job_to_dict(job), status_code=202)
+        response.status_code = 202
+        return JobResponse(**job_to_dict(job))
     else:
         logger.error("DELETE /jobs/%s: unknown status %s", job_id, job.status)
         return JSONResponse(

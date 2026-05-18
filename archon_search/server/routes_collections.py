@@ -15,7 +15,7 @@ from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
-from archon_search.server.schemas import CollectionDetail, CollectionSummary, ErrorDetail, JobResponse
+from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse
 from archon_search.sync import path_to_collection_name
 
 logger = logging.getLogger("archon-search")
@@ -168,8 +168,8 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     return JobResponse(**job_to_dict(job))
 
 
-@router.delete("/{name}", response_model=None)
-async def remove_collection(name: str, request: Request) -> JSONResponse:
+@router.delete("/{name}", response_model=DeleteResponse, responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
+async def remove_collection(name: str, request: Request) -> DeleteResponse | JSONResponse:
     """Remove a collection: delete config entry and drop LanceDB data."""
     config: SearchConfig = request.app.state.config
     search_store = getattr(request.app.state, "search_store", None)
@@ -228,7 +228,7 @@ async def remove_collection(name: str, request: Request) -> JSONResponse:
             pass  # table doesn't exist — that's fine
         await search_store.delete_collection_meta(name, ns)
 
-    return JSONResponse(content={"name": name, "deleted": True})
+    return DeleteResponse(name=name, deleted=True)
 
 
 @router.get("/{name}", response_model=CollectionDetail, responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}})

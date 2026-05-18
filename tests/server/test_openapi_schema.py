@@ -383,3 +383,166 @@ def test_reindex_202_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def
     props = schema["components"]["schemas"][schema_name].get("properties", {})
     for field in ("job_id", "status", "created_at", "updated_at", "namespace"):
         assert field in props, f"JobResponse schema must have '{field}' property"
+
+
+# ---------------------------------------------------------------------------
+# Task 2.6 tests
+# ---------------------------------------------------------------------------
+
+
+def _resolve_schema(schema: dict, json_schema: dict) -> dict:
+    """Resolve $ref or return inline schema."""
+    ref = json_schema.get("$ref", "")
+    if ref:
+        schema_name = ref.split("/")[-1]
+        return schema["components"]["schemas"][schema_name]
+    return json_schema
+
+
+def test_delete_collection_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
+    """DELETE /collections/{name} 200 response schema has 'name' and 'deleted' fields."""
+    schema = app.openapi()
+    delete_op = schema["paths"]["/collections/{name}"]["delete"]
+    assert "200" in delete_op["responses"], "DELETE /collections/{name} must declare a 200 response"
+    resp_200 = delete_op["responses"]["200"]
+    content = resp_200.get("content", {})
+    json_schema = content.get("application/json", {}).get("schema", {})
+    model_schema = _resolve_schema(schema, json_schema)
+    props = model_schema.get("properties", {})
+    assert "name" in props, "DeleteResponse must have 'name' property"
+    assert "deleted" in props, "DeleteResponse must have 'deleted' property"
+
+
+def test_get_job_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
+    """GET /jobs/{job_id} 200 response schema matches JobResponse."""
+    schema = app.openapi()
+    get_op = schema["paths"]["/jobs/{job_id}"]["get"]
+    assert "200" in get_op["responses"], "GET /jobs/{job_id} must declare a 200 response"
+    resp_200 = get_op["responses"]["200"]
+    content = resp_200.get("content", {})
+    json_schema = content.get("application/json", {}).get("schema", {})
+    model_schema = _resolve_schema(schema, json_schema)
+    props = model_schema.get("properties", {})
+    for field in ("job_id", "status", "created_at", "updated_at", "namespace"):
+        assert field in props, f"JobResponse schema must have '{field}' property"
+
+
+def test_no_empty_schemas_remain(app) -> None:  # type: ignore[no-untyped-def]
+    """No 200 response schema across all paths/operations should be empty ({}) or missing."""
+    schema = app.openapi()
+    for path, path_item in schema["paths"].items():
+        for method, op in path_item.items():
+            if not isinstance(op, dict):
+                continue
+            resp_200 = op.get("responses", {}).get("200")
+            if resp_200 is None:
+                continue
+            content = resp_200.get("content", {})
+            json_schema = content.get("application/json", {}).get("schema", {})
+            assert json_schema, (
+                f"{method.upper()} {path} 200 response has empty or missing schema"
+            )
+
+
+def test_error_schemas_documented(app) -> None:  # type: ignore[no-untyped-def]
+    """Endpoints that can 404 must have a 404 response with ErrorDetail-shaped schema in the spec."""
+    schema = app.openapi()
+    for path, path_item in schema["paths"].items():
+        for method, op in path_item.items():
+            if not isinstance(op, dict):
+                continue
+            if "404" not in op.get("responses", {}):
+                continue
+            resp_404 = op["responses"]["404"]
+            content = resp_404.get("content", {})
+            json_schema = content.get("application/json", {}).get("schema", {})
+            model_schema = _resolve_schema(schema, json_schema)
+            props = model_schema.get("properties", {})
+            assert "detail" in props, (
+                f"{method.upper()} {path} 404 schema must have a 'detail' property"
+            )
+            assert props["detail"].get("type") == "string", (
+                f"{method.upper()} {path} 404 'detail' must be type string"
+            )
+
+
+def test_404_runtime_response_matches_error_detail(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """GET /collections/nonexistent returns HTTP 404 with body matching ErrorDetail shape."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.config import SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
+
+    valid_key = "d" * 64
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", valid_key)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    full_app = create_app(cfg, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    full_app.state.search_store = mock_store
+
+    mock_state_store = MagicMock()
+    mock_state_store.read.return_value = None
+    full_app.state.state_store = mock_state_store
+
+    client = TestClient(full_app, raise_server_exceptions=False)
+    response = client.get(
+        "/collections/nonexistent", headers={"Authorization": f"Bearer {valid_key}"}
+    )
+    assert response.status_code == 404
+    body = response.json()
+    assert "detail" in body, "404 response body must have 'detail' key"
+    assert isinstance(body["detail"], str), "'detail' must be a string"
+
+
+def test_delete_active_job_returns_202(
+    tmp_path: "Path", monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """DELETE /jobs/{job_id} for an in-progress job returns 202 with JobResponse body."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.config import SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
+
+    valid_key = "e" * 64
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", valid_key)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    full_app = create_app(cfg, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    full_app.state.search_store = mock_store
+
+    client = TestClient(full_app, raise_server_exceptions=False)
+    # Create a job and immediately try to delete it while still PENDING
+    post_resp = client.post(
+        "/ingest",
+        json={"collection": "testcol"},
+        headers={"Authorization": f"Bearer {valid_key}"},
+    )
+    assert post_resp.status_code == 202
+    job_id = post_resp.json()["job_id"]
+
+    del_resp = client.delete(
+        f"/jobs/{job_id}", headers={"Authorization": f"Bearer {valid_key}"}
+    )
+    # Must be 202 (cancelling active) or 200 (already terminal from fast stub)
+    assert del_resp.status_code in (200, 202)
+    body = del_resp.json()
+    for field in ("job_id", "status", "created_at", "updated_at", "namespace"):
+        assert field in body, f"DELETE job response must have '{field}' field"
