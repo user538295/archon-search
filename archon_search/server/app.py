@@ -44,6 +44,7 @@ def create_app(
         # Startup: connect search store
         await app.state.search_store.connect()
         await app.state.search_store.migrate_namespace()
+        await app.state.search_store.migrate_acl()
 
         # Startup: initialise telemetry if enabled
         if config.telemetry.enabled:

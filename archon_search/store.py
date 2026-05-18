@@ -318,6 +318,39 @@ class SearchStore:
                 return
             raise
 
+    async def migrate_acl(self) -> None:
+        """Idempotent: adds acl column (list<utf8>, nullable) to each chunk table that lacks it.
+
+        Scans _archon_collection_meta to enumerate all known collections, then
+        for each one opens the chunk table and adds the acl column if absent.
+        Safe to call multiple times (concurrent-startup RuntimeError is caught and logged).
+        """
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        meta_table = await db.open_table(_META_TABLE)
+        rows = await meta_table.query().to_list()
+        import pyarrow as pa  # noqa: PLC0415
+
+        collection_names = [r["name"] for r in rows]
+        acl_field = pa.field("acl", pa.list_(pa.utf8()), nullable=True)
+        for name in collection_names:
+            if name not in all_names:
+                continue
+            try:
+                table = await db.open_table(name)
+                schema_names = (await table.schema()).names
+                if "acl" in schema_names:
+                    continue
+                await table.add_columns(acl_field)
+                logger.info("acl migration: added acl column to chunk table %r", name)
+            except RuntimeError as exc:
+                if "already exists" in str(exc).lower():
+                    logger.warning("Concurrent acl migration for %r: column already added — %s", name, exc)
+                else:
+                    logger.warning("acl migration: skipping %r due to RuntimeError — %s", name, exc)
+
     async def update_collection_meta(self, meta: "CollectionMeta") -> None:
         _validate_namespace(meta.namespace)
         self._validate_collection(meta.name)
