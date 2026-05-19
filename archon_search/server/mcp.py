@@ -5,7 +5,7 @@ import logging
 from dataclasses import asdict
 from pathlib import Path
 from time import monotonic
-from typing import Any
+from typing import Any, TypedDict
 
 from fastmcp import Context, FastMCP
 from starlette.requests import Request
@@ -17,6 +17,11 @@ from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger("archon.search")
+
+
+class McpErrorResponse(TypedDict):
+    error: str
+    code: str
 
 
 def create_app(
@@ -63,7 +68,7 @@ def create_app(
                 except Exception:
                     logger.warning("telemetry: search error entry enqueue failed", exc_info=True)
             logger.exception("search failed")
-            return [{"error": str(exc)}]
+            return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.tool()
     async def search_with_context(
@@ -111,7 +116,7 @@ def create_app(
                 except Exception:
                     logger.warning("telemetry: search_with_context error entry enqueue failed", exc_info=True)
             logger.exception("search_with_context failed")
-            return [{"error": str(exc)}]
+            return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.tool()
     async def ingest_file(
@@ -126,7 +131,7 @@ def create_app(
             return asdict(result)
         except Exception as exc:
             logger.exception("ingest_file failed")
-            return {"error": str(exc)}
+            return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.tool()
     async def ingest_directory(
@@ -150,7 +155,7 @@ def create_app(
             return [asdict(r) for r in results]
         except Exception as exc:
             logger.exception("ingest_directory failed")
-            return [{"error": str(exc)}]
+            return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.tool()
     async def list_collections() -> list[dict[str, Any]]:
@@ -165,7 +170,7 @@ def create_app(
             return output
         except Exception as exc:
             logger.exception("list_collections failed")
-            return [{"error": str(exc)}]
+            return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.tool()
     async def get_collections_meta() -> list[dict[str, Any]]:
@@ -175,7 +180,7 @@ def create_app(
             return [asdict(r) for r in results]
         except Exception as exc:
             logger.exception("get_collections_meta failed")
-            return [{"error": str(exc)}]
+            return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.tool()
     async def get_collection_meta(name: str) -> dict[str, Any]:
@@ -183,11 +188,11 @@ def create_app(
         try:
             meta = await pipeline.get_collection_meta(name)
             if meta is None:
-                return {"error": f"Collection {name!r} not found"}
+                return McpErrorResponse(error=f"Collection {name!r} not found", code="not_found")
             return asdict(meta)
         except Exception as exc:
             logger.exception("get_collection_meta failed")
-            return {"error": str(exc)}
+            return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.tool()
     async def list_documents(
@@ -202,7 +207,7 @@ def create_app(
             return [asdict(r) for r in results]
         except Exception as exc:
             logger.exception("list_documents failed")
-            return [{"error": str(exc)}]
+            return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.tool()
     async def delete_document(
@@ -217,7 +222,7 @@ def create_app(
             return {"deleted": count}
         except Exception as exc:
             logger.exception("delete_document failed")
-            return {"error": str(exc)}
+            return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.custom_route("/health", methods=["GET"])
     async def health_check(request: Request) -> JSONResponse:
