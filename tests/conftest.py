@@ -32,6 +32,15 @@ os.environ.setdefault("RAYON_NUM_THREADS", "1")
 import numpy as np
 import pytest
 
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--update-openapi-snapshot",
+        action="store_true",
+        default=False,
+        help="Regenerate the OpenAPI spec snapshot baseline",
+    )
+
 # ---------------------------------------------------------------------------
 # Module-level: inject fake ML modules BEFORE anything else imports them.
 # ---------------------------------------------------------------------------
