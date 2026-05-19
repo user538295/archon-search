@@ -27,6 +27,17 @@ This invokes the entry point declared in `pyproject.toml` (`archon_search.cli.ma
 
 For end-user installation and operation in the Archon monorepo, see [`Documentation/UserManual/search_guide.md`](../../Documentation/UserManual/search_guide.md).
 
+## API
+
+The REST API surface is formally contracted via OpenAPI. Once the server is running:
+
+- `GET /docs` — interactive Swagger UI explorer
+- `GET /openapi.json` — machine-readable OpenAPI 3.x schema (authoritative contract for all endpoint shapes, request/response types, and error codes)
+
+The MCP control-plane tools (`search_status`, `search_start`, `search_stop`, `search_ingest`, `search_collection_list`, `search_collection_add`, `search_collection_remove`, `search_collection_info`, `search_collection_reindex`) are accessible via the MCP endpoint and follow the same auth requirements as the REST API.
+
+Breaking changes to either surface are recorded in [`BREAKING.md`](BREAKING.md).
+
 ## Privacy & Telemetry
 
 Query telemetry is **opt-in and disabled by default**. When enabled, every `search`, `search_with_context`, and `POST /route` call appends one JSONL line to a daily file under `~/.archon/search-logs/`. No data is transmitted externally; all files remain on the local machine.
