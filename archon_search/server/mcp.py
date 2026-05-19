@@ -8,11 +8,14 @@ from time import monotonic
 from typing import Any, TypedDict
 
 from fastmcp import Context, FastMCP
+from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from archon_search.key_manager import load_or_generate_key
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingState, IndexingStatus
+from archon_search.server.middleware_auth import APIKeyMiddleware
 from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
@@ -229,6 +232,24 @@ def create_app(
         return JSONResponse({"status": "ok"})
 
     return app
+
+
+def create_mcp_http_app(
+    pipeline: SearchPipeline,
+    default_collection: str,
+    writer: TelemetryWriter | None = None,
+) -> Starlette:
+    """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
+
+    The underlying FastMCP app is exposed via the streamable HTTP transport
+    (endpoint: /mcp).  APIKeyMiddleware is added so every request to /mcp
+    requires a valid Bearer token; /health remains exempt per _EXEMPT_PATHS.
+    """
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer)
+    starlette_app: Starlette = fastmcp_app.streamable_http_app()
+    api_key, _ = load_or_generate_key()
+    starlette_app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces={})
+    return starlette_app
 
 
 def _needs_install_trigger(
