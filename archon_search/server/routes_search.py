@@ -1,4 +1,4 @@
-"""POST /search endpoint — vector + FTS hybrid search (Task 2.1)."""
+"""POST /search endpoint — delegates to SearchPipeline (Task 3.4)."""
 from __future__ import annotations
 
 import logging
@@ -8,9 +8,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
-from archon_search.acl import apply_acl_filter
-from archon_search.reranker import ModelReranker, Reranker
-from archon_search.store import SearchStore
 
 logger = logging.getLogger("archon.search")
 
@@ -64,13 +61,11 @@ class SearchResponse(BaseModel):
 
 @router.post("/search", response_model=SearchResponse)
 async def search(body: SearchRequest, request: Request) -> SearchResponse | JSONResponse:
-    config = request.app.state.config
-    embedder = request.app.state.embedder
-    store = request.app.state.search_store
+    pipeline = request.app.state.pipeline
     ns = request.state.namespace
 
     try:
-        meta = await store.get_collection_meta(body.collection, namespace=ns)
+        meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
     except Exception as exc:
         logger.error("search: meta lookup failed for collection %r: %s", body.collection, exc, exc_info=True)
         return JSONResponse({"detail": "service unavailable"}, status_code=503)
@@ -79,18 +74,10 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         return JSONResponse({"detail": "collection not found"}, status_code=404)
 
     try:
-        caller_ns = getattr(request.state, "namespace", "")
-        vector = await embedder.embed_one(body.query)
-        candidates = await store.hybrid_search(
-            body.collection, vector, body.query, top_k=body.top_k * 3
-        )
-        candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, caller_ns)
-        backend = ModelReranker(config.reranker_model, providers=config.providers or None)
-        reranker = Reranker(backend)
-        reranked = await reranker.rerank(body.query, candidates, top_k=body.top_k)
+        result = await pipeline.search(body.query, body.collection, namespace=ns)
         return SearchResponse(
-            results=[SearchResultSchema.from_result(r) for r in reranked],
-            acl_filtered=acl_filtered,
+            results=[SearchResultSchema.from_result(r) for r in result.results],
+            acl_filtered=result.acl_filtered,
         )
     except Exception as exc:
         logger.warning("search failed for collection %r: %s", body.collection, exc, exc_info=True)

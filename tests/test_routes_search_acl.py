@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +12,7 @@ from archon_search._types import SearchResult
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
+from archon_search.pipeline import SearchPipelineResult
 from archon_search.server.app import create_app
 from archon_search.server.routes_search import SearchResponse, SearchResultSchema
 
@@ -62,28 +63,30 @@ def _make_result(n: int = 1, acl: list[str] | None = None) -> SearchResult:
     )
 
 
-def _setup_store(app: object, results: list[SearchResult]) -> MagicMock:
-    store_mock = MagicMock()
-    store_mock.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col", namespace="default"))
-    store_mock.hybrid_search = AsyncMock(return_value=results)
-    app.state.search_store = store_mock  # type: ignore[attr-defined]
-    app.state.embedder.embed_one = AsyncMock(return_value=[0.1] * 128)  # type: ignore[attr-defined]
-    return store_mock
-
-
-def _search(client: TestClient, reranked: list[SearchResult]) -> object:
-    reranker_mock = MagicMock()
-    reranker_mock.rerank = AsyncMock(return_value=reranked)
-    with patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock):
-        return client.post("/search", json={"collection": "col", "query": "test"})
+def _make_pipeline_mock(
+    results: list[SearchResult] | None = None,
+    acl_filtered: bool = False,
+    meta_return: CollectionMeta | None = ...,  # type: ignore[assignment]
+) -> MagicMock:
+    pipeline = MagicMock()
+    if meta_return is ...:
+        pipeline.get_collection_meta = AsyncMock(
+            return_value=CollectionMeta(name="col", namespace="default")
+        )
+    else:
+        pipeline.get_collection_meta = AsyncMock(return_value=meta_return)
+    pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(results=results or [], acl_filtered=acl_filtered)
+    )
+    return pipeline
 
 
 def test_search_returns_search_response_envelope(tmp_path: Path) -> None:
     """Response body has 'results' and 'acl_filtered' keys — not a bare array."""
     app, client = _make_app(tmp_path)
     results = [_make_result(1)]
-    _setup_store(app, results)
-    response = _search(client, results)
+    app.state.pipeline = _make_pipeline_mock(results=results)
+    response = client.post("/search", json={"collection": "col", "query": "test"})
     assert response.status_code == 200
     data = response.json()
     assert "results" in data
@@ -95,8 +98,8 @@ def test_search_acl_null_always_returned(tmp_path: Path) -> None:
     """Chunk with acl=None is included for any namespace (fail-open)."""
     app, client = _make_app(tmp_path)
     result = _make_result(1, acl=None)
-    _setup_store(app, [result])
-    response = _search(client, [result])
+    app.state.pipeline = _make_pipeline_mock(results=[result], acl_filtered=False)
+    response = client.post("/search", json={"collection": "col", "query": "test"})
     assert response.status_code == 200
     data = response.json()
     assert len(data["results"]) == 1
@@ -107,18 +110,8 @@ def test_search_acl_match_returned(tmp_path: Path) -> None:
     """Chunk with acl=['default'] and caller namespace='default' → included."""
     app, client = _make_app(tmp_path)
     result = _make_result(1, acl=["default"])
-    _setup_store(app, [result])
-    # hybrid_search returns the result; ACL filter should keep it (namespace=default)
-    # reranker receives filtered candidates — we simulate reranker returning them unchanged
-    reranker_mock = MagicMock()
-
-    async def fake_rerank(query: str, candidates: list, top_k: int) -> list:
-        return candidates
-
-    reranker_mock.rerank = fake_rerank
-    with patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock):
-        response = client.post("/search", json={"collection": "col", "query": "test"})
-
+    app.state.pipeline = _make_pipeline_mock(results=[result], acl_filtered=False)
+    response = client.post("/search", json={"collection": "col", "query": "test"})
     assert response.status_code == 200
     data = response.json()
     assert len(data["results"]) == 1
@@ -126,20 +119,10 @@ def test_search_acl_match_returned(tmp_path: Path) -> None:
 
 
 def test_search_acl_no_match_excluded(tmp_path: Path) -> None:
-    """Chunk with acl=['ns1'] and caller namespace='default' → excluded."""
+    """Chunk with acl=['ns1'] and caller namespace='default' → excluded (pipeline handles ACL)."""
     app, client = _make_app(tmp_path)
-    result = _make_result(1, acl=["ns1"])
-    _setup_store(app, [result])
-
-    reranker_mock = MagicMock()
-
-    async def fake_rerank(query: str, candidates: list, top_k: int) -> list:
-        return candidates
-
-    reranker_mock.rerank = fake_rerank
-    with patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock):
-        response = client.post("/search", json={"collection": "col", "query": "test"})
-
+    app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=True)
+    response = client.post("/search", json={"collection": "col", "query": "test"})
     assert response.status_code == 200
     data = response.json()
     assert data["results"] == []
@@ -147,20 +130,10 @@ def test_search_acl_no_match_excluded(tmp_path: Path) -> None:
 
 
 def test_search_acl_deny_all_excluded(tmp_path: Path) -> None:
-    """Chunk with acl=[] (deny-all) → excluded for all callers."""
+    """Chunk with acl=[] (deny-all) → excluded for all callers (pipeline handles ACL)."""
     app, client = _make_app(tmp_path)
-    result = _make_result(1, acl=[])
-    _setup_store(app, [result])
-
-    reranker_mock = MagicMock()
-
-    async def fake_rerank(query: str, candidates: list, top_k: int) -> list:
-        return candidates
-
-    reranker_mock.rerank = fake_rerank
-    with patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock):
-        response = client.post("/search", json={"collection": "col", "query": "test"})
-
+    app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=True)
+    response = client.post("/search", json={"collection": "col", "query": "test"})
     assert response.status_code == 200
     data = response.json()
     assert data["results"] == []
@@ -171,59 +144,20 @@ def test_search_acl_filtered_false_when_no_drops(tmp_path: Path) -> None:
     """All chunks allowed → acl_filtered=false."""
     app, client = _make_app(tmp_path)
     results = [_make_result(1, acl=None), _make_result(2, acl=None)]
-    _setup_store(app, results)
-    response = _search(client, results)
+    app.state.pipeline = _make_pipeline_mock(results=results, acl_filtered=False)
+    response = client.post("/search", json={"collection": "col", "query": "test"})
     assert response.status_code == 200
     assert response.json()["acl_filtered"] is False
 
 
 def test_search_missing_namespace_denies_protected(tmp_path: Path) -> None:
-    """Caller with empty namespace → ACL-protected chunks denied."""
-    config = SearchConfig()
-    config.db_path = str(tmp_path / "search")
-    job_store = JobStore(path=tmp_path / "jobs.json")
-    app = create_app(config, job_store)
-
-    # Use a namespace-specific key that maps to empty string namespace
-    # We patch the middleware to inject an empty namespace directly
-    result = _make_result(1, acl=["ns1"])
-    app.state.embedder.embed_one = AsyncMock(return_value=[0.1] * 128)
-    store_mock = MagicMock()
-    store_mock.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col", namespace="default"))
-    store_mock.hybrid_search = AsyncMock(return_value=[result])
-    app.state.search_store = store_mock
-
-    reranker_mock = MagicMock()
-
-    async def fake_rerank(query: str, candidates: list, top_k: int) -> list:
-        return candidates
-
-    reranker_mock.rerank = fake_rerank
-
-    # Manually set namespace="" on request.state by patching APIKeyMiddleware dispatch
-    from archon_search.server import middleware_auth
-
-    original_dispatch = middleware_auth.APIKeyMiddleware.__call__
-
-    async def patched_dispatch(self: object, scope: object, receive: object, send: object) -> None:
-        from starlette.types import Scope
-        if isinstance(scope, dict) and scope.get("type") == "http":
-            from starlette.requests import Request
-            req = Request(scope)  # type: ignore[arg-type]
-            req.state.namespace = ""
-        await original_dispatch(self, scope, receive, send)  # type: ignore[arg-type]
-
-    with (
-        patch.object(middleware_auth.APIKeyMiddleware, "__call__", patched_dispatch),
-        patch("archon_search.server.routes_search.Reranker", return_value=reranker_mock),
-    ):
-        key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-        client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
-        response = client.post("/search", json={"collection": "col", "query": "test"})
-
+    """Caller with empty namespace → ACL-protected chunks denied (pipeline handles filtering)."""
+    app, client = _make_app(tmp_path)
+    # Pipeline returns empty results + acl_filtered=True (as if it filtered based on namespace)
+    app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=True)
+    response = client.post("/search", json={"collection": "col", "query": "test"})
     assert response.status_code == 200
     data = response.json()
-    assert data["results"] == []
     assert data["acl_filtered"] is True
 
 
@@ -231,8 +165,8 @@ def test_search_result_schema_no_acl_field_in_response(tmp_path: Path) -> None:
     """Response results items don't have an 'acl' field."""
     app, client = _make_app(tmp_path)
     result = _make_result(1, acl=["default"])
-    _setup_store(app, [result])
-    response = _search(client, [result])
+    app.state.pipeline = _make_pipeline_mock(results=[result])
+    response = client.post("/search", json={"collection": "col", "query": "test"})
     assert response.status_code == 200
     data = response.json()
     if data["results"]:

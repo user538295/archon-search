@@ -35,6 +35,8 @@ class SearchConfig:
     chunk_size: int = 512
     auto_reindex_on_chunk_size_change: bool = True
     providers: list[str] = field(default_factory=list)
+    top_k_retrieve: int = 15
+    top_k_return: int = 5
     # [routing]
     routing_shortlist_size: int = 8
     routing_confidence_threshold: float = 0.30
@@ -144,6 +146,16 @@ def load_config(path: Path | None = None) -> SearchConfig:
         )
     if "providers" in database:
         config.providers = list(database["providers"])
+    if "top_k_retrieve" in database:
+        top_k_retrieve = _coerce_int(database["top_k_retrieve"], "top_k_retrieve")
+        if top_k_retrieve <= 0:
+            raise ConfigError(f"top_k_retrieve must be > 0, got {top_k_retrieve}")
+        config.top_k_retrieve = top_k_retrieve
+    if "top_k_return" in database:
+        top_k_return = _coerce_int(database["top_k_return"], "top_k_return")
+        if top_k_return <= 0:
+            raise ConfigError(f"top_k_return must be > 0, got {top_k_return}")
+        config.top_k_return = top_k_return
 
     routing = doc.get("routing", {})
     if "routing_shortlist_size" in routing:

@@ -137,6 +137,23 @@ def test_load_config_providers_default_is_empty_list() -> None:
     assert config.providers == []
 
 
+def test_load_config_top_k_from_database_section(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        "[database]\ntop_k_retrieve = 20\ntop_k_return = 8\n",
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.top_k_retrieve == 20
+    assert config.top_k_return == 8
+
+
+def test_load_config_top_k_defaults() -> None:
+    config = SearchConfig()
+    assert config.top_k_retrieve == 15
+    assert config.top_k_return == 5
+
+
 # ---------------------------------------------------------------------------
 # save_config tests
 # ---------------------------------------------------------------------------

@@ -12,11 +12,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
+from archon_search.chunker import DocumentChunker
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import load_or_generate_key
+from archon_search.parser import DocumentParser
+from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingStateStore
+from archon_search.reranker import ModelReranker, Reranker
 from archon_search.server.middleware_auth import APIKeyMiddleware, _EXEMPT_PATHS
 from archon_search.store import SearchStore
 
@@ -124,6 +128,15 @@ def create_app(
     app.state.state_store = IndexingStateStore(config.db_path)
     app.state.search_store = SearchStore(config.db_path)
     app.state.embedder = Embedder(ModelEmbedder(config.embedding_model, providers=config.providers or None))
+    app.state.pipeline = SearchPipeline(
+        store=app.state.search_store,
+        embedder=app.state.embedder,
+        reranker=Reranker(ModelReranker(config.reranker_model, providers=config.providers or None)),
+        chunker=DocumentChunker(config.chunk_size),
+        parser=DocumentParser(),
+        top_k_retrieve=config.top_k_retrieve,
+        top_k_return=config.top_k_return,
+    )
     app.include_router(collections_router)
     app.include_router(health_router)
     app.include_router(jobs_router)
