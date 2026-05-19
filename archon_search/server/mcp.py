@@ -36,7 +36,7 @@ def create_app(
     async def search(
         query: str,
         collection: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search."""
         start = monotonic()
         try:
@@ -53,7 +53,7 @@ def create_app(
                     )
                 except Exception:
                     logger.warning("telemetry: search entry enqueue failed", exc_info=True)
-            return [asdict(r) for r in result_obj.results]
+            return {"results": [asdict(r) for r in result_obj.results], "acl_filtered": result_obj.acl_filtered}
         except Exception as exc:
             if writer is not None:
                 try:

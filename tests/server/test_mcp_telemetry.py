@@ -169,8 +169,9 @@ async def test_search_tool_does_not_log_when_writer_none() -> None:
         # Should not raise
         output = await search_fn(query="anything", collection=None)
 
-    assert isinstance(output, list)
-    assert len(output) == 1
+    assert isinstance(output, dict)
+    assert "results" in output
+    assert len(output["results"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +273,70 @@ async def test_search_with_context_tool_query_text_never_in_factory_args() -> No
 
     for value in recorded_kwargs.values():
         assert sentinel not in str(value), f"Sentinel found in factory kwarg value: {value!r}"
+
+
+# ---------------------------------------------------------------------------
+# Task 4.2: search tool response shape tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_returns_results_and_acl_filtered() -> None:
+    """search tool returns dict with 'results' list and 'acl_filtered' bool."""
+    results = [
+        SearchResult(doc_id="doc1", chunk_id="c1", text="a", score=0.9, source_path="/a"),
+    ]
+    pipeline = _make_pipeline(results=results, raises=None)
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        search_fn = app.tools["search"]  # type: ignore[attr-defined]
+        output = await search_fn(query="hello", collection=None)
+
+    assert isinstance(output, dict)
+    assert "results" in output
+    assert "acl_filtered" in output
+    assert isinstance(output["results"], list)
+    assert isinstance(output["acl_filtered"], bool)
+    assert len(output["results"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_acl_filtered_propagated() -> None:
+    """When pipeline returns acl_filtered=True, MCP response has acl_filtered: true."""
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(results=[], acl_filtered=True)
+    )
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        search_fn = app.tools["search"]  # type: ignore[attr-defined]
+        output = await search_fn(query="secret", collection=None)
+
+    assert output["acl_filtered"] is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_error_returns_dict_not_list() -> None:
+    """Error response from search tool is a dict, not a list."""
+    pipeline = _make_pipeline(raises=RuntimeError("something went wrong"))
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        search_fn = app.tools["search"]  # type: ignore[attr-defined]
+        output = await search_fn(query="fail", collection=None)
+
+    assert isinstance(output, dict)
+    assert not isinstance(output, list)
+    assert "error" in output
+    assert output.get("code") == "internal_error"
 
 
 @pytest.mark.asyncio
