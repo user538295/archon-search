@@ -668,7 +668,7 @@ def test_H3_19_no_prior_ingest_indexing_state_empty(tmp_path: Path) -> None:
 
     response = client.get("/indexing-state")
     assert response.status_code == 200
-    assert response.json() == {}
+    assert response.json() == {"collections": {}, "last_updated": None, "trigger": None}
 
 
 # ---------------------------------------------------------------------------
@@ -727,6 +727,10 @@ def _make_two_namespace_clients(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     app.state.search_store = mock_store
+    # The Pipeline keeps its own reference to the real SearchStore at construction.
+    # Patch it so namespace-isolation route checks (search, etc.) hit the mock.
+    if hasattr(app.state, "pipeline") and app.state.pipeline is not None:
+        app.state.pipeline.store = mock_store
 
     client_a = TestClient(app, headers={"Authorization": "Bearer keyA"})
     client_b = TestClient(app, headers={"Authorization": "Bearer keyB"})

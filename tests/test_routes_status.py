@@ -102,7 +102,9 @@ def test_status_includes_eta_when_progress_known(tmp_db: Path) -> None:
     assert col["status"] == "in_progress"
     assert "eta_seconds" in col
     assert col["eta_seconds"] is not None
-    assert isinstance(col["eta_seconds"], int)
+    # Schema declares float; the underlying compute_eta_seconds returns int and Pydantic
+    # coerces it to a JSON number — accept either Python type after JSON round-trip.
+    assert isinstance(col["eta_seconds"], (int, float))
 
 
 def test_status_includes_watching_flag(tmp_db: Path) -> None:

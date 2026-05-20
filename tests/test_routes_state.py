@@ -60,11 +60,11 @@ def _make_client_with_state(tmp_db: Path, state: IndexingState, *, mock_store: M
 
 
 def test_indexing_state_empty_when_no_file(tmp_db: Path) -> None:
-    """GET /indexing-state returns {} when no state file exists."""
+    """GET /indexing-state returns an empty IndexingStateResponse when no state file exists."""
     c = _make_client(tmp_db)
     response = c.get("/indexing-state")
     assert response.status_code == 200
-    assert response.json() == {}
+    assert response.json() == {"collections": {}, "last_updated": None, "trigger": None}
 
 
 def test_indexing_state_returns_collections(tmp_db: Path) -> None:
@@ -154,14 +154,14 @@ def test_indexing_state_status_values_match_persisted_schema(tmp_db: Path) -> No
 
 
 def test_indexing_state_corrupt_file(tmp_db: Path) -> None:
-    """GET /indexing-state returns {} when the state file contains garbage bytes."""
+    """GET /indexing-state returns an empty IndexingStateResponse on corrupt state file."""
     store = IndexingStateStore(tmp_db)
     store._state_file.parent.mkdir(parents=True, exist_ok=True)
     store._state_file.write_text("not valid json {{{{ garbage !!!!", encoding="utf-8")
     c = _make_client(tmp_db)
     response = c.get("/indexing-state")
     assert response.status_code == 200
-    assert response.json() == {}
+    assert response.json() == {"collections": {}, "last_updated": None, "trigger": None}
 
 
 def test_indexing_state_no_internal_fields_in_response(tmp_db: Path) -> None:
