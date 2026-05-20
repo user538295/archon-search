@@ -11,7 +11,7 @@ class ChunkRecord:
     vector: list[float]
     source_path: str
     indexed_at: str
-    # Extended metadata fields (FEAT-038 Task 6.1)
+    # Extended metadata fields
     file_type: str = ""
     language: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)

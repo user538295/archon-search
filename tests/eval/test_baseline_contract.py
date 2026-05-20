@@ -1,5 +1,4 @@
-"""Baseline contract tests — FEAT-039 Task 4.3.
-
+"""Baseline contract tests
 Verifies that committed thresholds, baseline metadata, and the rendered baseline
 report stay in sync with eval-determinism-defining inputs.
 """

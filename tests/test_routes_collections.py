@@ -1,4 +1,4 @@
-"""Tests for GET/POST/DELETE /collections/* endpoints (Task 5.7)."""
+"""Tests for GET/POST/DELETE /collections/* endpoints ."""
 from __future__ import annotations
 
 import os
@@ -355,7 +355,7 @@ def test_reindex_unknown_collection_returns_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /collections/{name} — real doc_count and centroid_present (Task 3.1)
+# GET /collections/{name} — real doc_count and centroid_present 
 # ---------------------------------------------------------------------------
 
 
@@ -472,7 +472,7 @@ def test_collection_info_centroid_present_false(
 
 
 # ---------------------------------------------------------------------------
-# GET /collections/ namespace filter (Task 4.1 — FEAT-043)
+# GET /collections/ namespace filter 
 # ---------------------------------------------------------------------------
 
 
@@ -594,7 +594,7 @@ def test_list_collections_single_key_backward_compat(tmp_path: Path, tmp_store: 
 
 
 # ---------------------------------------------------------------------------
-# namespace field in GET /collections/ (Task 4.1 — FEAT-042)
+# namespace field in GET /collections/ 
 # ---------------------------------------------------------------------------
 
 
@@ -631,7 +631,7 @@ def test_routes_list_collections_namespace(tmp_path: Path, tmp_store: JobStore) 
 
 
 # ---------------------------------------------------------------------------
-# namespace field in GET /collections/{name} (Task 4.2 — FEAT-042)
+# namespace field in GET /collections/{name} 
 # ---------------------------------------------------------------------------
 
 
@@ -667,7 +667,7 @@ def test_routes_get_collection_namespace(tmp_path: Path, tmp_store: JobStore) ->
 
 
 # ---------------------------------------------------------------------------
-# POST /collections/ — namespace enforcement (Task 4.2 — FEAT-043)
+# POST /collections/ — namespace enforcement 
 # ---------------------------------------------------------------------------
 
 
@@ -842,7 +842,7 @@ def test_add_collection_job_has_correct_namespace(
 
 
 # ---------------------------------------------------------------------------
-# DELETE /collections/{name} — namespace enforcement (Task 4.3 — FEAT-043)
+# DELETE /collections/{name} — namespace enforcement 
 # ---------------------------------------------------------------------------
 
 
@@ -966,7 +966,7 @@ def test_remove_collection_success_drops_table_and_meta(
 
 
 # ---------------------------------------------------------------------------
-# GET /collections/{name} — namespace enforcement (Task 4.4 — FEAT-043)
+# GET /collections/{name} — namespace enforcement 
 # ---------------------------------------------------------------------------
 
 
@@ -1054,7 +1054,7 @@ def test_get_collection_info_centroid_from_namespace_meta(
 
     name = path_to_collection_name(str(src))
     # meta has a centroid set — a bare get_collection_meta(name) (no namespace)
-    # would return None after Task 1.3 (defaults to DEFAULT_NAMESPACE), so
+    # would return None after (defaults to DEFAULT_NAMESPACE), so
     # centroid_present would be False if the handler did a second bare lookup.
     meta = CollectionMeta(name=name, namespace=caller_ns, centroid=[0.1, 0.2, 0.3])
 
@@ -1080,7 +1080,7 @@ def test_get_collection_info_centroid_from_namespace_meta(
 
 
 # ---------------------------------------------------------------------------
-# POST /collections/{name}/reindex — namespace enforcement (Task 4.5 — FEAT-043)
+# POST /collections/{name}/reindex — namespace enforcement 
 # ---------------------------------------------------------------------------
 
 

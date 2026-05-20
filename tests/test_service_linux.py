@@ -1,4 +1,4 @@
-"""Tests for Task 3.3 — SystemdSearchService (Linux)."""
+"""Tests for — SystemdSearchService (Linux)."""
 from __future__ import annotations
 
 import subprocess
@@ -397,7 +397,7 @@ def test_unregister_does_not_raise_when_systemctl_missing() -> None:
         svc.unregister()  # must not raise (best-effort contract)
 
 
-# ── Task 1.7 — path migration ──────────────────────────────────────────────────
+# ── — path migration ──────────────────────────────────────────────────
 
 def test_service_name_unchanged() -> None:
     """Service name archon-search must remain unchanged."""

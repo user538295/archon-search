@@ -1,4 +1,4 @@
-"""SearchStore — LanceDB-backed vector + FTS store for Archon RAG (FEAT-019)."""
+"""SearchStore — LanceDB-backed vector + FTS store."""
 
 from __future__ import annotations
 
@@ -128,7 +128,7 @@ class SearchStore:
                 pa.field("vector", pa.list_(pa.float32(), embedding_dim)),
                 pa.field("source_path", pa.utf8()),
                 pa.field("indexed_at", pa.utf8()),
-                # Extended metadata fields (FEAT-038 Task 6.1)
+                # Extended metadata fields
                 pa.field("file_type", pa.utf8()),
                 pa.field("language", pa.utf8()),  # nullable via None → ""
                 pa.field("metadata", pa.utf8()),   # JSON string
@@ -233,7 +233,7 @@ class SearchStore:
         return result
 
     # ------------------------------------------------------------------
-    # Collection metadata (FEAT-022)
+    # Collection metadata
     # ------------------------------------------------------------------
 
     @staticmethod

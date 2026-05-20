@@ -1,4 +1,4 @@
-"""Tests for APIKeyMiddleware on the FastMCP HTTP transport (FEAT-045 Task 4.3)."""
+"""Tests for APIKeyMiddleware on the FastMCP HTTP transport ."""
 from __future__ import annotations
 
 import sys

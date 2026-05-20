@@ -15,14 +15,14 @@ _HEALTH_TIMEOUT = 60
 
 
 def _legacy_service_path() -> Path:
-    """Return the path to the legacy Archon-managed search service file."""
+    """Return the path to a legacy externally-managed search service file."""
     if sys.platform == "darwin":
         return Path.home() / "Library" / "LaunchAgents" / "com.archon.search.plist"
     return Path.home() / ".config" / "systemd" / "user" / "archon-search.service"
 
 
 def _remove_legacy_service(legacy_path: Path) -> None:
-    """Unload and remove a legacy Archon-managed service definition."""
+    """Unload and remove a legacy externally-managed service definition."""
     import subprocess
     try:
         if sys.platform == "darwin":

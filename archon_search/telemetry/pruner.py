@@ -1,4 +1,4 @@
-"""Telemetry log pruner — filename-based daily retention (FEAT-039b, Task 2.3/2.4)."""
+"""Telemetry log pruner — filename-based daily retention."""
 
 from __future__ import annotations
 

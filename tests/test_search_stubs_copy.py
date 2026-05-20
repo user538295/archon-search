@@ -11,9 +11,9 @@ import pytest
 PACKAGE_TESTS_DIR = Path(__file__).parent
 STUBS_FILE = PACKAGE_TESTS_DIR / "_search_stubs.py"
 
-# Monorepo-only path: in the monorepo, this points at tests/_search_stubs.py at
+# Standalone-package note: in the source repo, this points at tests/_search_stubs.py at
 # the repo root. In the standalone archon-search repo (post-extraction) there
-# is no parent monorepo, so the "root" stubs file doesn't exist — tests that
+# is no parent project, so the "root" stubs file doesn't exist — tests that
 # compare against it skip cleanly.
 ROOT_TESTS_DIR = Path(__file__).parents[3] / "tests"
 ROOT_STUBS_FILE = ROOT_TESTS_DIR / "_search_stubs.py"

@@ -129,13 +129,13 @@ def test_reranker_backend_protocol() -> None:
 
 
 # ===========================================================================
-# FEAT-038 Task 12.6 — P14.5–P14.7: Reranker edge cases
+# Reranker edge cases
 # ===========================================================================
 
 
 @pytest.mark.asyncio
 async def test_P14_5_reranker_top_k_greater_than_candidates_returns_all() -> None:
-    """P14.5 — top_k > len(candidates): returns all candidates (no IndexError)."""
+    """ top_k > len(candidates): returns all candidates (no IndexError)."""
     backend = _MockRerankerBackend(scores=[0.9, 0.3])
     reranker = Reranker(backend)
     candidates = _make_candidates(2)
@@ -146,7 +146,7 @@ async def test_P14_5_reranker_top_k_greater_than_candidates_returns_all() -> Non
 
 @pytest.mark.asyncio
 async def test_P14_6_reranker_stable_order_on_equal_scores() -> None:
-    """P14.6 — all candidates have equal scores: order is stable (sorted is stable in Python)."""
+    """ all candidates have equal scores: order is stable (sorted is stable in Python)."""
     backend = _MockRerankerBackend(scores=[0.5])
     reranker = Reranker(backend)
     candidates = _make_candidates(4)
@@ -159,7 +159,7 @@ async def test_P14_6_reranker_stable_order_on_equal_scores() -> None:
 
 @pytest.mark.asyncio
 async def test_P14_7_reranker_score_count_mismatch_raises_valueerror() -> None:
-    """P14.7 — backend returns different number of scores than candidates → ValueError."""
+    """ backend returns different number of scores than candidates → ValueError."""
     class _BadCountBackend:
         def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
             # Returns one score regardless of how many pairs
@@ -220,7 +220,7 @@ def test_model_reranker_init_called_once_under_concurrent_predict() -> None:
 
 
 # ===========================================================================
-# FEAT-039 Task 2.3 — Reranker trace preservation
+# Reranker trace preservation
 # ===========================================================================
 
 

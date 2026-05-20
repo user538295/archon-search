@@ -1,4 +1,4 @@
-"""Tests for archon_search.description_generator — TDD for Task 2.2."""
+"""Tests for archon_search.description_generator — TDD for ."""
 from __future__ import annotations
 
 import os

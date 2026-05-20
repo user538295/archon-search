@@ -1,4 +1,4 @@
-"""Tests for GET /health endpoint (Task 5.3)."""
+"""Tests for GET /health endpoint ."""
 from __future__ import annotations
 
 from pathlib import Path

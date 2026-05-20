@@ -1,4 +1,4 @@
-"""Tests for GET /indexing-state endpoint (Task 5.4)."""
+"""Tests for GET /indexing-state endpoint ."""
 from __future__ import annotations
 
 import os

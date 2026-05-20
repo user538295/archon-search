@@ -1,4 +1,4 @@
-"""Tests for eval fixture dataclasses (Task 1.1 — FEAT-039)."""
+"""Tests for eval fixture dataclasses ."""
 from __future__ import annotations
 
 import json

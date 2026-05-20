@@ -1,5 +1,5 @@
-"""Import boundary lint: no file in archon_search/ may import from `archon.`
-(the main Archon daemon package). Only `archon_search.` imports are allowed.
+"""Import boundary lint: no file in archon_search/ may import from the `archon.`
+namespace. Only `archon_search.` imports are allowed — the package is standalone.
 """
 
 import ast
@@ -33,7 +33,7 @@ def _collect_violations(path: Path) -> list[str]:
 
 
 def test_no_archon_imports_in_archon_search() -> None:
-    """archon_search/ must not import from the archon. namespace (daemon package)."""
+    """archon_search/ must not import from the archon. namespace."""
     py_files = sorted(ARCHON_SEARCH_PKG.rglob("*.py"))
     assert py_files, "No .py files found — check ARCHON_SEARCH_PKG path"
 
@@ -42,6 +42,6 @@ def test_no_archon_imports_in_archon_search() -> None:
         all_violations.extend(_collect_violations(py_file))
 
     assert not all_violations, (
-        "archon_search/ must not import from archon. (daemon package) — "
+        "archon_search/ must not import from the archon. namespace — "
         f"found {len(all_violations)} violation(s):\n" + "\n".join(all_violations)
     )

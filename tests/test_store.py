@@ -495,7 +495,7 @@ async def test_store_hybrid_search_rrf_ranking_correct(
 
 
 # ---------------------------------------------------------------------------
-# Edge-case tests (C1-I-7)
+# Edge-case tests 
 # ---------------------------------------------------------------------------
 
 
@@ -541,7 +541,7 @@ async def test_store_list_documents_limit_capped_at_1000(
 
 
 # ---------------------------------------------------------------------------
-# drop_collection tests (Task 1.2)
+# drop_collection tests 
 # ---------------------------------------------------------------------------
 
 
@@ -601,7 +601,7 @@ async def test_drop_collection_integration(connected_store: SearchStore, col_nam
 
 
 # ---------------------------------------------------------------------------
-# rename_collection tests (Task 1.2 — used by migration in Task 1.3)
+# rename_collection tests ( — used by migration in )
 # ---------------------------------------------------------------------------
 
 
@@ -747,7 +747,7 @@ def test_fts_exception_filter_reraises_non_fts_errors() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CollectionMeta namespace field tests (Task 1.1 — FEAT-042)
+# CollectionMeta namespace field tests 
 # ---------------------------------------------------------------------------
 
 
@@ -774,7 +774,7 @@ def test_collection_meta_namespace_equals_constant() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CollectionInfo namespace field tests (Task 1.2 — FEAT-042)
+# CollectionInfo namespace field tests 
 # ---------------------------------------------------------------------------
 
 
@@ -801,7 +801,7 @@ def test_collection_info_namespace_equals_constant() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Store schema namespace tests (Task 2.1 — FEAT-042)
+# Store schema namespace tests 
 # ---------------------------------------------------------------------------
 
 
@@ -866,7 +866,7 @@ def test_row_to_meta_null_namespace_defaults() -> None:
 
 
 # ---------------------------------------------------------------------------
-# list_collections namespace tests (Task 2.4 — FEAT-042)
+# list_collections namespace tests 
 # ---------------------------------------------------------------------------
 
 
@@ -880,7 +880,7 @@ async def test_list_collections_includes_namespace(connected_store: SearchStore)
 
 
 # ---------------------------------------------------------------------------
-# update_collection_meta namespace tests (Task 2.3 — FEAT-042)
+# update_collection_meta namespace tests 
 # ---------------------------------------------------------------------------
 
 
@@ -931,7 +931,7 @@ async def test_get_all_collections_meta_returns_namespace(connected_store: Searc
 
 
 # ---------------------------------------------------------------------------
-# migrate_namespace tests (Task 3.1 — FEAT-042)
+# migrate_namespace tests 
 # ---------------------------------------------------------------------------
 
 
@@ -1129,7 +1129,7 @@ async def test_migrate_namespace_concurrent_race(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CollectionMeta tests (Task 1.1 — FEAT-022)
+# CollectionMeta tests 
 # ---------------------------------------------------------------------------
 
 
@@ -1345,7 +1345,7 @@ async def test_list_collections_excludes_archon_prefix(
 
 
 # ---------------------------------------------------------------------------
-# delete_by_source_path tests (Task 4.3 — FEAT-027-P4)
+# delete_by_source_path tests (-P4)
 # ---------------------------------------------------------------------------
 
 
@@ -1408,7 +1408,7 @@ async def test_delete_by_source_path_returns_count(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tilde expansion tests (FIX-033 Task 1.2)
+# Tilde expansion tests 
 # ---------------------------------------------------------------------------
 
 
@@ -1431,12 +1431,12 @@ def test_search_store_init_expands_tilde_path_object() -> None:
 
 
 # ===========================================================================
-# FEAT-038 Task 12.6 — P14.8–P14.16: Store error paths
+# Store error paths
 # ===========================================================================
 
 
 def test_P14_8_store_invalid_collection_name_space_raises(tmp_path: Path) -> None:
-    """P14.8 — Collection name with space raises ValueError."""
+    """ Collection name with space raises ValueError."""
     import asyncio
 
     store = SearchStore(tmp_path / "db")
@@ -1449,7 +1449,7 @@ def test_P14_8_store_invalid_collection_name_space_raises(tmp_path: Path) -> Non
 
 
 def test_P14_9_store_invalid_collection_name_slash_raises(tmp_path: Path) -> None:
-    """P14.9 — Collection name with slash raises ValueError (path traversal attempt)."""
+    """ Collection name with slash raises ValueError (path traversal attempt)."""
     import asyncio
 
     store = SearchStore(tmp_path / "db")
@@ -1462,7 +1462,7 @@ def test_P14_9_store_invalid_collection_name_slash_raises(tmp_path: Path) -> Non
 
 
 def test_P14_10_store_invalid_collection_name_empty_raises(tmp_path: Path) -> None:
-    """P14.10 — Empty collection name raises ValueError."""
+    """ Empty collection name raises ValueError."""
     import asyncio
 
     store = SearchStore(tmp_path / "db")
@@ -1478,7 +1478,7 @@ def test_P14_10_store_invalid_collection_name_empty_raises(tmp_path: Path) -> No
 async def test_P14_11_store_rebuild_fts_on_empty_collection_does_not_raise(
     connected_store: SearchStore, col_name: str
 ) -> None:
-    """P14.11 — rebuild_fts_index on a collection with no rows should not raise."""
+    """ rebuild_fts_index on a collection with no rows should not raise."""
     await connected_store.ensure_collection(col_name, _DIM)
     # No documents ingested — table exists but is empty
     # Should not raise (may be a no-op or succeed silently)
@@ -1492,7 +1492,7 @@ async def test_P14_11_store_rebuild_fts_on_empty_collection_does_not_raise(
 async def test_P14_12_store_hybrid_search_top_k_zero_returns_empty(
     connected_store: SearchStore, col_name: str
 ) -> None:
-    """P14.12 — hybrid_search with top_k=0 returns empty list (not an error)."""
+    """ hybrid_search with top_k=0 returns empty list (not an error)."""
     await _ingest_doc(connected_store, col_name)
     results = await connected_store.hybrid_search(col_name, [0.0] * _DIM, "any", top_k=0)
     assert results == []
@@ -1502,7 +1502,7 @@ async def test_P14_12_store_hybrid_search_top_k_zero_returns_empty(
 async def test_P14_13_store_list_documents_limit_zero_returns_empty(
     connected_store: SearchStore, col_name: str
 ) -> None:
-    """P14.13 — list_documents with limit=0 returns [] (no rows fetched)."""
+    """ list_documents with limit=0 returns [] (no rows fetched)."""
     doc_id = _doc_id()
     chunks = [_chunk(doc_id, 0)]
     await connected_store.ensure_collection(col_name, _DIM)
@@ -1517,7 +1517,7 @@ async def test_P14_13_store_list_documents_limit_zero_returns_empty(
 async def test_P14_14_store_fetch_adjacent_nonexistent_doc_id_returns_empty(
     connected_store: SearchStore, col_name: str
 ) -> None:
-    """P14.14 — fetch_adjacent_chunks for a doc_id not in the collection returns []."""
+    """ fetch_adjacent_chunks for a doc_id not in the collection returns []."""
     await connected_store.ensure_collection(col_name, _DIM)
     nonexistent_id = _doc_id()
     result = await connected_store.fetch_adjacent_chunks(col_name, nonexistent_id, 0, 1)
@@ -1525,7 +1525,7 @@ async def test_P14_14_store_fetch_adjacent_nonexistent_doc_id_returns_empty(
 
 
 def test_P14_15_store_list_collections_exception_on_one_table_skips_it(tmp_path: Path) -> None:
-    """P14.15 — list_collections skips a table that raises an exception during inspection."""
+    """ list_collections skips a table that raises an exception during inspection."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
@@ -1562,7 +1562,7 @@ def test_P14_15_store_list_collections_exception_on_one_table_skips_it(tmp_path:
 
 
 def test_P14_16_store_row_to_meta_malformed_centroid_json_returns_none(tmp_path: Path) -> None:
-    """P14.16 — _row_to_meta with malformed centroid_json sets centroid=None (no crash)."""
+    """ _row_to_meta with malformed centroid_json sets centroid=None (no crash)."""
     store = SearchStore(tmp_path / "db")
     row = {
         "name": "test-col",
@@ -1582,7 +1582,7 @@ def test_P14_16_store_row_to_meta_malformed_centroid_json_returns_none(tmp_path:
 
 
 def test_P14_17_store_fetch_adjacent_invalid_hex_doc_id_raises(tmp_path: Path) -> None:
-    """P14.17 (store-specific) — fetch_adjacent_chunks with invalid hex doc_id raises ValueError."""
+    """ (store-specific) — fetch_adjacent_chunks with invalid hex doc_id raises ValueError."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
@@ -1617,7 +1617,7 @@ async def test_search_store_connect_does_not_create_tilde_dir_in_cwd(
 
 
 # ===========================================================================
-# FEAT-039 Task 2.2 — Hybrid-search trace provenance
+# Hybrid-search trace provenance
 # ===========================================================================
 
 
@@ -1948,7 +1948,7 @@ def test_mcp_search_response_schema_matches_public_contract_without_eval_provena
         source_path="/tmp/doc.md",
     )
     payload = asdict(result)
-    # Public contract fields (acl added in FEAT-044 Task 1.2 as internal metadata)
+    # Public contract fields (acl added in as internal metadata)
     assert set(payload.keys()) == {"doc_id", "chunk_id", "text", "score", "source_path", "acl"}
     # No eval provenance keys
     for forbidden in ("vector_score", "fts_score", "vector_rank", "fts_rank", "score_breakdown"):
@@ -1990,7 +1990,7 @@ def test_eval_trace_helpers_are_not_public_package_exports() -> None:
 
 
 # ---------------------------------------------------------------------------
-# get_collection_meta namespace filter tests (Task 1.3 — FEAT-042)
+# get_collection_meta namespace filter tests 
 # ---------------------------------------------------------------------------
 
 
@@ -2083,7 +2083,7 @@ async def test_get_collection_meta_invalid_namespace_raises(connected_store: Sea
 
 
 # ---------------------------------------------------------------------------
-# delete_collection_meta tests (Task 1.4 — FEAT-043)
+# delete_collection_meta tests 
 # ---------------------------------------------------------------------------
 
 
@@ -2146,7 +2146,7 @@ async def test_delete_collection_meta_validates_name(connected_store: SearchStor
 
 
 # ---------------------------------------------------------------------------
-# update_collection_meta namespace validation tests (Task 1.5 — FEAT-043)
+# update_collection_meta namespace validation tests 
 # ---------------------------------------------------------------------------
 
 
@@ -2270,7 +2270,7 @@ async def test_update_collection_meta_legacy_null_namespace_treated_as_default(
 
 
 # ---------------------------------------------------------------------------
-# list_collections namespace tests (Task 1.6 — FEAT-043)
+# list_collections namespace tests 
 # ---------------------------------------------------------------------------
 
 

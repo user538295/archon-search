@@ -1,4 +1,4 @@
-"""Tests for archon_search.platform.types and archon_search.platform.runtime — Task 2.3."""
+"""Tests for archon_search.platform.types and archon_search.platform.runtime."""
 from __future__ import annotations
 
 import subprocess

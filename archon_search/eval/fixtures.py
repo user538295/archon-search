@@ -1,4 +1,4 @@
-"""Eval fixture dataclasses and loader for FEAT-039.
+"""Eval fixture dataclasses and loader.
 
 No runtime search dependencies (no LanceDB imports).
 """

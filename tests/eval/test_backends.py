@@ -1,4 +1,4 @@
-"""Tests for EvalEmbedderBackend and EvalRerankerBackend — FEAT-039 Task 2.5."""
+"""Tests for EvalEmbedderBackend and EvalRerankerBackend"""
 from __future__ import annotations
 
 import inspect

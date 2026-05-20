@@ -1,4 +1,4 @@
-"""Suite 3 — archon-search /route endpoint e2e tests (Task 6.1: H3.1–H3.5, E3.1–E3.5b, H3.6b; Task 6.2: H3.6–H3.11, E3.5–E3.7; Task 6.1-ns: two-namespace isolation)."""
+"""Suite 3 — archon-search /route endpoint e2e tests, including two-namespace isolation."""
 from __future__ import annotations
 
 import asyncio
@@ -76,7 +76,7 @@ def _patch_router(
 
 
 # ---------------------------------------------------------------------------
-# H3.1 — /route returns pre_context with collection metadata
+# /route returns pre_context with collection metadata
 # ---------------------------------------------------------------------------
 def test_H3_1_route_returns_pre_context_with_metadata(tmp_path: Path) -> None:
     expected = "<search_collections>\n- col1: description\n</search_collections>"
@@ -97,7 +97,7 @@ def test_H3_1_route_returns_pre_context_with_metadata(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.2 — pinned_collections configured → pinned_names always returned
+# pinned_collections configured → pinned_names always returned
 # ---------------------------------------------------------------------------
 def test_H3_2_pinned_collections_always_in_pinned_names(tmp_path: Path) -> None:
     config = SearchConfig()
@@ -114,7 +114,7 @@ def test_H3_2_pinned_collections_always_in_pinned_names(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.3 — slots=2 → shortlist_size=2 passed to router
+# slots=2 → shortlist_size=2 passed to router
 # ---------------------------------------------------------------------------
 def test_H3_3_slots_sets_shortlist_size(tmp_path: Path) -> None:
     captured: dict = {}
@@ -131,7 +131,7 @@ def test_H3_3_slots_sets_shortlist_size(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.4 — Unicode query → 200, valid response
+# Unicode query → 200, valid response
 # ---------------------------------------------------------------------------
 def test_H3_4_unicode_query_returns_200(tmp_path: Path) -> None:
     router_mock = _patch_router(pre_context=None, routable_names=[], decomposer_invoked=False)
@@ -146,7 +146,7 @@ def test_H3_4_unicode_query_returns_200(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.5 — 10k character query → 200
+# 10k character query → 200
 # ---------------------------------------------------------------------------
 def test_H3_5_long_query_returns_200(tmp_path: Path) -> None:
     long_query = "a" * 10_000
@@ -159,7 +159,7 @@ def test_H3_5_long_query_returns_200(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E3.1 — POST /route {} (missing query field) → 422
+# POST /route {} (missing query field) → 422
 # ---------------------------------------------------------------------------
 def test_E3_1_missing_query_returns_422(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
@@ -168,7 +168,7 @@ def test_E3_1_missing_query_returns_422(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E3.2 — {"query": null} → 422
+# {"query": null} → 422
 # ---------------------------------------------------------------------------
 def test_E3_2_null_query_returns_422(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
@@ -177,7 +177,7 @@ def test_E3_2_null_query_returns_422(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E3.3 — slots=-1 → 400
+# slots=-1 → 400
 # ---------------------------------------------------------------------------
 def test_E3_3_negative_slots_returns_400(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
@@ -186,7 +186,7 @@ def test_E3_3_negative_slots_returns_400(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E3.4 — slots=0 → 400
+# slots=0 → 400
 # ---------------------------------------------------------------------------
 def test_E3_4_zero_slots_returns_400(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
@@ -195,7 +195,7 @@ def test_E3_4_zero_slots_returns_400(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E3.5b — asyncio.TimeoutError raised in wait_for → 504 "routing timed out"
+# asyncio.TimeoutError raised in wait_for → 504 "routing timed out"
 # ---------------------------------------------------------------------------
 async def _wait_for_that_raises(coro: object, timeout: float) -> None:
     """Consume the coroutine argument then raise TimeoutError (no leaked coroutines)."""
@@ -224,7 +224,7 @@ def test_E3_5b_timeout_returns_504(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.6b — confidence threshold too high → 200, pre_context=None, routable_names=[]
+# confidence threshold too high → 200, pre_context=None, routable_names=[]
 # ---------------------------------------------------------------------------
 def test_H3_6b_all_collections_below_confidence_threshold(tmp_path: Path) -> None:
     # Router returns None/[] when confidence gate eliminates all collections
@@ -247,7 +247,7 @@ def test_H3_6b_all_collections_below_confidence_threshold(tmp_path: Path) -> Non
 
 
 # ===========================================================================
-# Suite 3 — /ingest + /jobs lifecycle (Task 6.2: H3.6–H3.11, E3.5–E3.7)
+# Suite 3 — /ingest + /jobs lifecycle
 # ===========================================================================
 
 
@@ -267,7 +267,7 @@ def _make_ingest_client(
 
 
 # ---------------------------------------------------------------------------
-# H3.6 — ingest job transitions PENDING → DONE (real background task)
+# ingest job transitions PENDING → DONE (real background task)
 # ---------------------------------------------------------------------------
 def test_H3_6_ingest_job_transitions_pending_to_done(tmp_path: Path) -> None:
     client, app = _make_ingest_client(tmp_path)
@@ -294,7 +294,7 @@ def test_H3_6_ingest_job_transitions_pending_to_done(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.7 — failing pipeline → FAILED status, error non-empty
+# failing pipeline → FAILED status, error non-empty
 # ---------------------------------------------------------------------------
 def test_H3_7_ingest_job_failure_sets_failed_status(tmp_path: Path) -> None:
     async def failing_pipeline(job_id: str, store: object, body: object, **kwargs: object) -> None:
@@ -321,7 +321,7 @@ def test_H3_7_ingest_job_failure_sets_failed_status(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.8 — cancel while RUNNING → CANCELLING (event-based synchronization)
+# cancel while RUNNING → CANCELLING (event-based synchronization)
 # ---------------------------------------------------------------------------
 @pytest.mark.anyio
 async def test_H3_8_ingest_cancel_while_running_transitions_to_cancelling(
@@ -368,7 +368,7 @@ async def test_H3_8_ingest_cancel_while_running_transitions_to_cancelling(
 
 
 # ---------------------------------------------------------------------------
-# H3.9 — cancel DONE job → 200, job unchanged
+# cancel DONE job → 200, job unchanged
 # ---------------------------------------------------------------------------
 def test_H3_9_cancel_done_job_returns_200_unchanged(tmp_path: Path) -> None:
     client, app = _make_ingest_client(tmp_path)
@@ -383,7 +383,7 @@ def test_H3_9_cancel_done_job_returns_200_unchanged(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.10 — two concurrent POST /ingest → two distinct job IDs
+# two concurrent POST /ingest → two distinct job IDs
 # ---------------------------------------------------------------------------
 def test_H3_10_two_concurrent_ingest_creates_distinct_job_ids(tmp_path: Path) -> None:
     client, _ = _make_ingest_client(tmp_path)
@@ -400,7 +400,7 @@ def test_H3_10_two_concurrent_ingest_creates_distinct_job_ids(tmp_path: Path) ->
 
 
 # ---------------------------------------------------------------------------
-# H3.11 — X-Ingested-By header unconditionally replaces body ingested_by
+# X-Ingested-By header unconditionally replaces body ingested_by
 # ---------------------------------------------------------------------------
 def test_H3_11_x_ingested_by_header_replaces_body_value(tmp_path: Path) -> None:
     captured: dict = {}
@@ -430,7 +430,7 @@ def test_H3_11_x_ingested_by_header_replaces_body_value(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E3.5 — POST /ingest missing collection field → 422
+# POST /ingest missing collection field → 422
 # ---------------------------------------------------------------------------
 def test_E3_5_ingest_missing_collection_returns_422(tmp_path: Path) -> None:
     client, _ = _make_ingest_client(tmp_path)
@@ -439,7 +439,7 @@ def test_E3_5_ingest_missing_collection_returns_422(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E3.6 — GET /jobs/<unknown-uuid> → 404
+# GET /jobs/<unknown-uuid> → 404
 # ---------------------------------------------------------------------------
 def test_E3_6_get_unknown_job_returns_404(tmp_path: Path) -> None:
     client, _ = _make_ingest_client(tmp_path)
@@ -448,7 +448,7 @@ def test_E3_6_get_unknown_job_returns_404(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E3.7 — cancel CANCELLING job twice → both 202
+# cancel CANCELLING job twice → both 202
 # ---------------------------------------------------------------------------
 def test_E3_7_cancel_cancelling_twice_both_return_202(tmp_path: Path) -> None:
     client, app = _make_ingest_client(tmp_path)
@@ -463,12 +463,12 @@ def test_E3_7_cancel_cancelling_twice_both_return_202(tmp_path: Path) -> None:
 
 
 # ===========================================================================
-# Suite 3 — /collections lifecycle (Task 6.3: H3.12–H3.15, E3.8–E3.10)
+# Suite 3 — /collections lifecycle
 # ===========================================================================
 
 
 # ---------------------------------------------------------------------------
-# H3.12 — POST /collections with config_path set → TOML file updated after add
+# POST /collections with config_path set → TOML file updated after add
 # ---------------------------------------------------------------------------
 def test_H3_12_add_collection_updates_toml(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
@@ -485,7 +485,7 @@ def test_H3_12_add_collection_updates_toml(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.13 — DELETE /collections/{name} → TOML file updated after remove
+# DELETE /collections/{name} → TOML file updated after remove
 # ---------------------------------------------------------------------------
 def test_H3_13_remove_collection_updates_toml(tmp_path: Path) -> None:
     col_path = str(tmp_path / "my-docs")
@@ -505,7 +505,7 @@ def test_H3_13_remove_collection_updates_toml(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.14 — path /home/user/my-docs → name my_docs
+# path /home/user/my-docs → name my_docs
 # ---------------------------------------------------------------------------
 def test_H3_14_path_to_name_conversion(tmp_path: Path) -> None:
     col_path = "/home/user/my-docs"
@@ -520,7 +520,7 @@ def test_H3_14_path_to_name_conversion(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.15 — one regular + one pinned collection → both appear in GET /collections
+# one regular + one pinned collection → both appear in GET /collections
 # ---------------------------------------------------------------------------
 def test_H3_15_regular_and_pinned_both_in_list(tmp_path: Path) -> None:
     regular_path = str(tmp_path / "regular-docs")
@@ -538,7 +538,7 @@ def test_H3_15_regular_and_pinned_both_in_list(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E3.8 — path="~/docs" → resolved to absolute (no tilde in stored path)
+# path="~/docs" → resolved to absolute (no tilde in stored path)
 # ---------------------------------------------------------------------------
 def test_E3_8_tilde_path_resolved_to_absolute(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
@@ -556,7 +556,7 @@ def test_E3_8_tilde_path_resolved_to_absolute(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E3.9 — pinned but not in collections → 409
+# pinned but not in collections → 409
 # ---------------------------------------------------------------------------
 def test_E3_9_pinned_only_collection_delete_returns_409(tmp_path: Path) -> None:
     pinned_path = str(tmp_path / "pinned-only")
@@ -571,7 +571,7 @@ def test_E3_9_pinned_only_collection_delete_returns_409(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E3.10 — delete then delete again → 404 on second
+# delete then delete again → 404 on second
 # ---------------------------------------------------------------------------
 def test_E3_10_double_delete_returns_404_on_second(tmp_path: Path) -> None:
     col_path = str(tmp_path / "my-docs")
@@ -588,7 +588,7 @@ def test_E3_10_double_delete_returns_404_on_second(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.16 — /status returns collections in alphabetical order
+# /status returns collections in alphabetical order
 # ---------------------------------------------------------------------------
 def test_H3_16_status_collections_alphabetical(tmp_path: Path) -> None:
     config = SearchConfig()
@@ -602,7 +602,7 @@ def test_H3_16_status_collections_alphabetical(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.17 — fresh collection with no prior ingest → status "not_yet_indexed"
+# fresh collection with no prior ingest → status "not_yet_indexed"
 # ---------------------------------------------------------------------------
 def test_H3_17_fresh_collection_status_not_yet_indexed(tmp_path: Path) -> None:
     config = SearchConfig()
@@ -618,7 +618,7 @@ def test_H3_17_fresh_collection_status_not_yet_indexed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.18 — /indexing-state fields filtered to expected set
+# /indexing-state fields filtered to expected set
 # ---------------------------------------------------------------------------
 def test_H3_18_indexing_state_fields_filtered(tmp_path: Path) -> None:
     from archon_search.constants import DEFAULT_NAMESPACE
@@ -661,7 +661,7 @@ def test_H3_18_indexing_state_fields_filtered(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.19 — no prior ingest → /indexing-state returns {}
+# no prior ingest → /indexing-state returns {}
 # ---------------------------------------------------------------------------
 def test_H3_19_no_prior_ingest_indexing_state_empty(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
@@ -672,7 +672,7 @@ def test_H3_19_no_prior_ingest_indexing_state_empty(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H3.20 — /status pid matches os.getpid()
+# /status pid matches os.getpid
 # ---------------------------------------------------------------------------
 def test_H3_20_status_pid_matches_current_process(tmp_path: Path) -> None:
     import os
@@ -685,7 +685,7 @@ def test_H3_20_status_pid_matches_current_process(tmp_path: Path) -> None:
 
 
 # ===========================================================================
-# Suite — two-namespace isolation integration tests (Task 6.1-ns)
+# Suite — two-namespace isolation integration tests (-ns)
 # ===========================================================================
 
 

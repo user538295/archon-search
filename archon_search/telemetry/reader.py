@@ -1,4 +1,4 @@
-"""TelemetryReader — file discovery and entry parsing (FEAT-039c Task 2.1)."""
+"""TelemetryReader — file discovery and entry parsing."""
 
 from __future__ import annotations
 

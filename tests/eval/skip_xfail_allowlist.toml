@@ -15,7 +15,7 @@
 #
 # [[entries]]
 # nodeid = "tests/eval/test_eval_suite.py::test_example"
-# issue = "https://github.com/user538295/archon-assistant/issues/0"
+# issue = "https://github.com/user538295/archon-search/issues/0"
 # reviewer = "user538295"
 # reason = "Flaky on macOS runners — see issue for details."
 # expiry = "2026-12-31"

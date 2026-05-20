@@ -1,4 +1,4 @@
-"""TelemetryWriter — async-safe JSONL writer for FEAT-039b Task 2.1.
+"""TelemetryWriter — async-safe JSONL writer.
 
 Provides a bounded-queue producer/consumer pair: hot-path callers invoke the
 synchronous `enqueue()`, and a single background drain task serializes entries

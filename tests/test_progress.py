@@ -885,9 +885,9 @@ class TestSetTrigger:
 
 
 class TestIndexingStateStoreEdgeCases:
-    """Edge-case tests J13.12–J13.19 for IndexingStateStore and compute_eta_seconds."""
+    """Edge-case tests for IndexingStateStore and compute_eta_seconds."""
 
-    # J13.12: PermissionError reading state file → returns None, logs warning
+    # PermissionError reading state file → returns None, logs warning
     def test_read_permission_error_returns_none_and_logs_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -900,7 +900,7 @@ class TestIndexingStateStoreEdgeCases:
         assert result is None
         assert any(r.levelno == logging.WARNING and r.name == "archon" for r in caplog.records)
 
-    # J13.13: state path is a directory → returns None, no crash
+    # state path is a directory → returns None, no crash
     def test_read_state_path_is_directory_returns_none(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)
         # Make the state file path be a directory instead of a file
@@ -908,7 +908,7 @@ class TestIndexingStateStoreEdgeCases:
         result = store.read()
         assert result is None
 
-    # J13.14: os.replace() raises → .tmp unlinked; original exception re-raised
+    # os.replace raises → .tmp unlinked; original exception re-raised
     def test_write_os_replace_raises_unlinks_tmp_and_reraises(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)
         state = IndexingState()
@@ -920,7 +920,7 @@ class TestIndexingStateStoreEdgeCases:
         # .tmp file must have been cleaned up
         assert not tmp_file.exists()
 
-    # J13.15: state absent → remove_collection() doesn't crash, doesn't write
+    # state absent → remove_collection doesn't crash, doesn't write
     def test_remove_collection_state_absent_does_not_write(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)
         # No state file exists
@@ -929,7 +929,7 @@ class TestIndexingStateStoreEdgeCases:
         # Still no state file — nothing was written
         assert not store._state_file.exists()
 
-    # J13.16: update collection A → collection B unchanged
+    # update collection A → collection B unchanged
     def test_update_collection_a_leaves_collection_b_unchanged(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)
         cp_a = CollectionProgress(status=IndexingStatus.PENDING, total_files=3)
@@ -947,7 +947,7 @@ class TestIndexingStateStoreEdgeCases:
         assert result.collections["col_b"].total_files == 7
         assert result.collections["col_b"].processed_files == 7
 
-    # J13.17: processed_files > 0, elapsed=0 → returns None, no ZeroDivisionError
+    # processed_files > 0, elapsed=0 → returns None, no ZeroDivisionError
     def test_compute_eta_elapsed_zero_returns_none(self) -> None:
         from archon_search.progress import compute_eta_seconds
         from datetime import datetime, timezone
@@ -962,7 +962,7 @@ class TestIndexingStateStoreEdgeCases:
         result = compute_eta_seconds(cp, now=now)
         assert result is None
 
-    # J13.18: started_at with UTC+05:00 → ETA computed without crash
+    # started_at with UTC+05:00 → ETA computed without crash
     def test_compute_eta_utc_plus_offset_no_crash(self) -> None:
         from archon_search.progress import compute_eta_seconds
         from datetime import datetime, timezone, timedelta
@@ -979,7 +979,7 @@ class TestIndexingStateStoreEdgeCases:
         result = compute_eta_seconds(cp, now=now)
         assert result == 400
 
-    # J13.19: file_mtimes: {"file.md": true} → boolean fails isinstance check; file_mtimes == {}
+    # file_mtimes: {"file.md": true} → boolean fails isinstance check; file_mtimes == {}
     def test_read_file_mtimes_boolean_value_falls_back_to_empty(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)
         raw_state = {

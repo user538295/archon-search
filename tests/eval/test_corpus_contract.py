@@ -1,7 +1,7 @@
-"""Task 1.3 — contract tests for the committed synthetic eval corpus.
+""" contract tests for the committed synthetic eval corpus.
 
 These tests verify that the data files under tests/eval/ satisfy the
-FEAT-039 corpus requirements before any live search infrastructure is needed.
+ corpus requirements before any live search infrastructure is needed.
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def test_eval_corpus_document_count_range() -> None:
     count = len(corpus.documents)
     assert 50 <= count <= 100, (
         f"Expected 50–100 documents, got {count}. "
-        "Add or remove documents to satisfy the FEAT-039 corpus size requirement."
+        "Add or remove documents to satisfy the corpus size requirement."
     )
 
 
@@ -49,7 +49,7 @@ def test_eval_corpus_query_count_range() -> None:
     count = len(corpus.queries)
     assert 25 <= count <= 30, (
         f"Expected 25–30 queries, got {count}. "
-        "Add or remove queries to satisfy the FEAT-039 benchmark size requirement."
+        "Add or remove queries to satisfy the benchmark size requirement."
     )
 
 

@@ -1,4 +1,4 @@
-"""Tests for TelemetryWriter — enqueue + drain loop (FEAT-039b Task 2.1)."""
+"""Tests for TelemetryWriter — enqueue + drain loop ."""
 
 from __future__ import annotations
 
@@ -314,7 +314,7 @@ async def test_writer_drain_is_idempotent(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 2.2 — oversized-entry truncation
+# oversized-entry truncation
 # ---------------------------------------------------------------------------
 
 

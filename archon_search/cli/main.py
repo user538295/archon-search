@@ -20,7 +20,7 @@ except PackageNotFoundError:
 @click.group()
 @click.version_option(_VERSION, prog_name="archon-search")
 def main() -> None:
-    """archon-search — standalone search server for Archon."""
+    """archon-search — standalone RAG search server."""
 
 
 main.add_command(start)

@@ -1,4 +1,4 @@
-"""Tests for ACL stats in GET /collections/{name} (Task 4.2 — FEAT-044)."""
+"""Tests for ACL stats in GET /collections/{name} ."""
 from __future__ import annotations
 
 import os

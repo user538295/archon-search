@@ -1,4 +1,4 @@
-"""Tests for telemetry lifespan registration in create_app() — FEAT-039b Task 3.1."""
+"""Tests for telemetry lifespan registration in create_app"""
 from __future__ import annotations
 
 import asyncio

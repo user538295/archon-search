@@ -1,4 +1,4 @@
-"""packages/archon-search/tests/test_pipeline.py — TDD tests for SearchPipeline (FEAT-019 Task 4.1)."""
+"""packages/archon-search/tests/test_pipeline.py — TDD tests for SearchPipeline ."""
 from __future__ import annotations
 
 import re
@@ -626,7 +626,7 @@ async def test_pipeline_ingest_image_empty_ocr_produces_no_chunk(connected_store
 
 
 # ---------------------------------------------------------------------------
-# FEAT-022 Task 1.2 — Centroid computation in ingest_directory
+# Centroid computation in ingest_directory
 # ---------------------------------------------------------------------------
 
 
@@ -736,7 +736,7 @@ async def test_ingest_centroid_averages_heterogeneous_embeddings(connected_store
 
 
 # ---------------------------------------------------------------------------
-# FEAT-022 Task 1.3 — Description generation integration with ingest_directory
+# Description generation integration with ingest_directory
 # ---------------------------------------------------------------------------
 
 
@@ -932,7 +932,7 @@ async def test_create_pipeline_does_not_auto_connect():
 
 
 # ---------------------------------------------------------------------------
-# FEAT-021 Task 2.2 — history_collection parameter removed
+# history_collection parameter removed
 # ---------------------------------------------------------------------------
 
 
@@ -1048,7 +1048,7 @@ def test_create_pipeline_uses_expanded_db_path() -> None:
 
 
 # ===========================================================================
-# Task 3.2 — exclude_paths and on_file_complete tests
+# exclude_paths and on_file_complete tests
 # ===========================================================================
 
 
@@ -1199,13 +1199,13 @@ async def test_ingest_directory_exclude_and_on_file_complete_combined(connected_
 
 
 # ===========================================================================
-# FEAT-038 Task 4.1 — P14.17–P14.20: error-path and resilience tests
+# error-path and resilience tests
 # ===========================================================================
 
 
 @pytest.mark.asyncio
 async def test_pipeline_ingest_file_embedder_exception_propagates(connected_store, col_name, tmp_path):
-    """P14.17 — embedder.embed() raises during ingest_file() → exception propagates to caller."""
+    """ embedder.embed raises during ingest_file → exception propagates to caller."""
     pipeline = make_pipeline(connected_store)
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Hello\n\nContent to embed.\n" * 5)
@@ -1224,7 +1224,7 @@ async def test_pipeline_ingest_file_embedder_exception_propagates(connected_stor
 
 @pytest.mark.asyncio
 async def test_pipeline_ingest_directory_partial_file_failure_continues(connected_store, col_name, tmp_path):
-    """P14.18 — one file parse-fails → others indexed, progress_cb called for every file including failed one."""
+    """ one file parse-fails → others indexed, progress_cb called for every file including failed one."""
     from archon_search.parser import ParseError
 
     pipeline = make_pipeline(connected_store)
@@ -1260,7 +1260,7 @@ async def test_pipeline_ingest_directory_partial_file_failure_continues(connecte
 
 @pytest.mark.asyncio
 async def test_pipeline_search_embedder_exception_propagates(connected_store, col_name, tmp_path):
-    """P14.19 — embedder.embed_one() raises during search() → exception propagates to caller."""
+    """ embedder.embed_one raises during search → exception propagates to caller."""
     pipeline = make_pipeline(connected_store)
 
     class ExplodingBackend:
@@ -1277,7 +1277,7 @@ async def test_pipeline_search_embedder_exception_propagates(connected_store, co
 
 @pytest.mark.asyncio
 async def test_pipeline_search_with_context_fetch_exception_propagates(tmp_path):
-    """P14.20 — fetch_adjacent_chunks() raises → exception propagates to caller (current production behavior).
+    """ fetch_adjacent_chunks raises → exception propagates to caller (current production behavior).
 
     Spec intent was: fetch_adjacent_chunks failure → logs, continues, returns result with empty context.
     Production code at pipeline.py:~235 has no try/except around fetch_adjacent_chunks(), so the
@@ -1322,18 +1322,18 @@ async def test_pipeline_search_with_context_fetch_exception_propagates(tmp_path)
 
 
 # ===========================================================================
-# FEAT-038 Task 10.4 — P14.23–P14.24: SQL injection regression guards
+# SQL injection regression guards
 # ===========================================================================
 
 
 # ===========================================================================
-# FEAT-038 Task 12.6 — P14.21–P14.22: Pipeline zero-files ingest, chunk_size=1
+# Pipeline zero-files ingest, chunk_size=1
 # ===========================================================================
 
 
 @pytest.mark.asyncio
 async def test_P14_21_pipeline_ingest_directory_zero_markdown_files(connected_store, col_name, tmp_path):
-    """P14.21 — ingest_directory on a dir with zero accepted files returns [] and does not crash."""
+    """ ingest_directory on a dir with zero accepted files returns [] and does not crash."""
     pipeline = make_pipeline(connected_store)
     # Only binary files present — all should be filtered out
     (tmp_path / "image.gif").write_bytes(b"GIF89a" + b"\x00" * 50)
@@ -1346,7 +1346,7 @@ async def test_P14_21_pipeline_ingest_directory_zero_markdown_files(connected_st
 
 @pytest.mark.asyncio
 async def test_P14_22_pipeline_ingest_file_chunk_size_1(connected_store, col_name, tmp_path):
-    """P14.22 — chunk_size=1 (minimal) produces one chunk per token without crashing."""
+    """ chunk_size=1 (minimal) produces one chunk per token without crashing."""
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
@@ -1372,7 +1372,7 @@ async def test_P14_22_pipeline_ingest_file_chunk_size_1(connected_store, col_nam
 
 
 def test_p14_23_add_collection_sql_injection_rejected_by_validate_collection() -> None:
-    """P14.23 — collection name containing apostrophe raises ValueError from _validate_collection.
+    """ collection name containing apostrophe raises ValueError from _validate_collection.
 
     Ensures no SQL injection is possible via collection names: any name that does not
     match ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$ is rejected before reaching the database.
@@ -1385,7 +1385,7 @@ def test_p14_23_add_collection_sql_injection_rejected_by_validate_collection() -
 
 @pytest.mark.asyncio
 async def test_p14_24_delete_document_sql_injection_rejected_by_doc_id_re(connected_store, col_name, tmp_path) -> None:
-    """P14.24 — doc_id containing SQL injection payload raises ValueError before SQL construction.
+    """ doc_id containing SQL injection payload raises ValueError before SQL construction.
 
     _DOC_ID_RE requires exactly 64 hex chars; any deviation (including injection strings)
     is rejected with ValueError before any SQL is built or executed.
@@ -1394,7 +1394,7 @@ async def test_p14_24_delete_document_sql_injection_rejected_by_doc_id_re(connec
     and the doc_id validation in the store layer is reached.
     """
     pipeline = make_pipeline(connected_store)
-    (tmp_path / "doc.md").write_text("# P14.24 test\n\nContent.\n" * 5)
+    (tmp_path / "doc.md").write_text("# test\n\nContent.\n" * 5)
     await pipeline.ingest_directory(tmp_path, col_name)
 
     with pytest.raises(ValueError, match="Invalid doc_id"):
@@ -1402,7 +1402,7 @@ async def test_p14_24_delete_document_sql_injection_rejected_by_doc_id_re(connec
 
 
 # ===========================================================================
-# FEAT-039 Task 2.4 — Eval trace execution path
+# Eval trace execution path
 # ===========================================================================
 
 
@@ -1680,7 +1680,7 @@ async def test_eval_trace_does_not_change_public_search_response(connected_store
 
 
 # ===========================================================================
-# FEAT-043 Task 3.5 — namespace propagation through SearchPipeline
+# namespace propagation through SearchPipeline
 # ===========================================================================
 
 
@@ -1833,7 +1833,7 @@ async def test_get_collection_meta_namespace_param() -> None:
 
 
 # ===========================================================================
-# FEAT-045 Task 3.1 — SearchPipelineResult return type for search()
+# SearchPipelineResult return type for search
 # ===========================================================================
 
 
@@ -1968,7 +1968,7 @@ async def test_search_with_context_still_works_after_type_change(connected_store
 
 
 # ===========================================================================
-# FEAT-045 Task 3.2 — namespace guard for get_all_collections_meta, list_documents, delete_document
+# namespace guard for get_all_collections_meta, list_documents, delete_document
 # ===========================================================================
 
 

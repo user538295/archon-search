@@ -1,4 +1,4 @@
-"""Tests for POST /ingest, GET /jobs/{id}, DELETE /jobs/{id} (Task 5.6)."""
+"""Tests for POST /ingest, GET /jobs/{id}, DELETE /jobs/{id} ."""
 from __future__ import annotations
 
 import asyncio
@@ -183,8 +183,7 @@ async def test_ingest_background_task_completes(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# job_to_dict — Task 3.2
-# ---------------------------------------------------------------------------
+# job_to_dict# ---------------------------------------------------------------------------
 
 
 def test_job_to_dict_includes_namespace() -> None:
@@ -215,7 +214,7 @@ def test_job_to_dict_default_namespace() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 3.4 — _default_ingest_task namespace parameter
+# _default_ingest_task namespace parameter
 # ---------------------------------------------------------------------------
 
 
@@ -234,7 +233,7 @@ async def test_default_ingest_task_takes_namespace_param(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
-# Task 3.5 — _run_pipeline and _default_ingest_task namespace forwarding
+# _run_pipeline and _default_ingest_task namespace forwarding
 # ---------------------------------------------------------------------------
 
 
@@ -273,7 +272,7 @@ async def test_default_ingest_task_forwards_namespace_to_run_pipeline(tmp_path: 
 
 
 # ---------------------------------------------------------------------------
-# Task 5.2 — Namespace isolation for GET/DELETE /jobs/{job_id}
+# Namespace isolation for GET/DELETE /jobs/{job_id}
 # ---------------------------------------------------------------------------
 
 
@@ -340,7 +339,7 @@ def test_delete_job_same_namespace_proceeds(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 5.3 — POST /ingest namespace propagation
+# POST /ingest namespace propagation
 # ---------------------------------------------------------------------------
 
 

@@ -853,7 +853,7 @@ class TestManifestRemoveEntry:
 
 
 # ---------------------------------------------------------------------------
-# TestSyncProgress — FEAT-027 Task 1.4: sync() progress state integration
+# TestSyncProgress — : sync progress state integration
 # ---------------------------------------------------------------------------
 
 class TestSyncProgress:
@@ -1886,7 +1886,7 @@ class TestSyncPinnedOrder:
 
 
 # ---------------------------------------------------------------------------
-# Task 3.3 — Resumable indexing tests
+# Resumable indexing tests
 # ---------------------------------------------------------------------------
 
 
@@ -2632,7 +2632,7 @@ class TestSyncResumable:
 
 
 # ---------------------------------------------------------------------------
-# Task 4.4 — _iter_eligible_files and _reset_stale Phase 4 field preservation
+# _iter_eligible_files and _reset_stale Phase 4 field preservation
 # ---------------------------------------------------------------------------
 
 
@@ -2735,8 +2735,7 @@ class TestResetStalePreservesPhase4Fields:
 
 
 # ---------------------------------------------------------------------------
-# TestTask45 — FEAT-027-P4 Task 4.5
-# ---------------------------------------------------------------------------
+# TestTask45# ---------------------------------------------------------------------------
 
 
 class TestTask45:
@@ -3174,7 +3173,7 @@ def _make_done_state(tmp_path, collection_name, file_mtimes, embedding_model="mo
 
 
 class TestTask46:
-    """Tests for Task 4.6: _apply_collection_changes, _ingest_collection file_mtimes, and sync() Step 7."""
+    """Tests for : _apply_collection_changes, _ingest_collection file_mtimes, and sync Step 7."""
 
     # ------------------------------------------------------------------
     # Test 1: sync detects new files in existing DONE collection
@@ -4332,7 +4331,7 @@ class TestTask46:
         pipeline2.ingest_file.assert_not_called()
 
 # ---------------------------------------------------------------------------
-# TestSyncCollectionMethod — FEAT-027 Phase 8 Task 8.4: watch-triggered sync
+# TestSyncCollectionMethod — : watch-triggered sync
 # ---------------------------------------------------------------------------
 
 

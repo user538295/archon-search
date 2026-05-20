@@ -1,4 +1,4 @@
-"""Tests for telemetry emission in the MCP search tools — FEAT-039b Tasks 3.2 & 3.3."""
+"""Tests for telemetry emission in the MCP search tools"""
 from __future__ import annotations
 
 import sys
@@ -175,7 +175,7 @@ async def test_search_tool_does_not_log_when_writer_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# search_with_context tool tests (Task 3.3)
+# search_with_context tool tests 
 # ---------------------------------------------------------------------------
 
 
@@ -276,7 +276,7 @@ async def test_search_with_context_tool_query_text_never_in_factory_args() -> No
 
 
 # ---------------------------------------------------------------------------
-# Task 4.2: search tool response shape tests
+# search tool response shape tests
 # ---------------------------------------------------------------------------
 
 

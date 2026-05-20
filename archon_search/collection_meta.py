@@ -1,4 +1,4 @@
-"""CollectionMeta dataclass for FEAT-022 RAG routing."""
+"""CollectionMeta dataclass for RAG routing."""
 from __future__ import annotations
 
 import dataclasses

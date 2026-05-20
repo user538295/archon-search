@@ -1,4 +1,4 @@
-"""MultiCollectionRouter — centroid pre-ranking for RAG collection selection (FEAT-022)."""
+"""MultiCollectionRouter — centroid pre-ranking for RAG collection selection."""
 from __future__ import annotations
 
 import json

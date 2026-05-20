@@ -1,4 +1,4 @@
-"""Tests for JobStore — TDD for Task 5.1 (FEAT-038)."""
+"""Tests for JobStore — TDD for ."""
 from __future__ import annotations
 
 import json
@@ -160,11 +160,11 @@ def test_jobs_file_default_path() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Gap tests J13.1–J13.11 (Task 10.2, FEAT-038)
+# Gap tests 
 # ---------------------------------------------------------------------------
 
 
-# J13.1 — new store, no file → _load() returns False, _jobs empty
+# new store, no file → _load returns False, _jobs empty
 def test_load_no_file_returns_false_and_empty(tmp_path: Path) -> None:
     jobs_path = tmp_path / "nonexistent.json"
     assert not jobs_path.exists()
@@ -172,7 +172,7 @@ def test_load_no_file_returns_false_and_empty(tmp_path: Path) -> None:
     assert s.list() == []
 
 
-# J13.2 — corrupt JSON → empty store, error logged
+# corrupt JSON → empty store, error logged
 def test_corrupt_json_logs_error(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     jobs_path = tmp_path / "jobs.json"
     jobs_path.write_text("{corrupt{{{")
@@ -187,7 +187,7 @@ def test_corrupt_json_logs_error(tmp_path: Path, caplog: pytest.LogCaptureFixtur
     )
 
 
-# J13.3 — valid JSON list but item missing required key → empty store
+# valid JSON list but item missing required key → empty store
 def test_missing_required_key_resets_store(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
     # "status" key present, but "job_id" is missing — IngestJob(**item) will raise TypeError
@@ -197,7 +197,7 @@ def test_missing_required_key_resets_store(tmp_path: Path) -> None:
     assert s.list() == []
 
 
-# J13.4 — valid JSON but root is dict, not list → empty store
+# valid JSON but root is dict, not list → empty store
 def test_wrong_root_type_resets_store(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
     jobs_path.write_text(json.dumps({"job_id": "abc", "status": "DONE"}))
@@ -205,7 +205,7 @@ def test_wrong_root_type_resets_store(tmp_path: Path) -> None:
     assert s.list() == []
 
 
-# J13.5 — RUNNING job that already has error="prior" → error becomes "process_restart"
+# RUNNING job that already has error="prior" → error becomes "process_restart"
 def test_crash_recovery_preserves_process_restart_over_prior_error(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
     now = datetime.now(timezone.utc).isoformat()
@@ -227,7 +227,7 @@ def test_crash_recovery_preserves_process_restart_over_prior_error(tmp_path: Pat
     assert jobs[0].error == "process_restart"
 
 
-# J13.6 — updated_at exactly 7 days + 1 second ago → evicted
+# updated_at exactly 7 days + 1 second ago → evicted
 def test_eviction_boundary_one_second_over(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
     old_time = (datetime.now(timezone.utc) - timedelta(days=7, seconds=1)).isoformat()
@@ -248,7 +248,7 @@ def test_eviction_boundary_one_second_over(tmp_path: Path) -> None:
     assert s.list() == []
 
 
-# J13.7 — updated_at exactly 7 days ago → NOT evicted (strict < cutoff, equality is kept)
+# updated_at exactly 7 days ago → NOT evicted (strict < cutoff, equality is kept)
 def test_eviction_boundary_exactly_seven_days(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
     # Production uses strict < cutoff (cutoff = now - 7 days).
@@ -272,7 +272,7 @@ def test_eviction_boundary_exactly_seven_days(tmp_path: Path) -> None:
     assert s.get(recent_id) is not None
 
 
-# J13.8 — updated_at is not a valid ISO date → no crash, handled gracefully
+# updated_at is not a valid ISO date → no crash, handled gracefully
 def test_invalid_date_no_crash(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
     now = datetime.now(timezone.utc).isoformat()
@@ -293,7 +293,7 @@ def test_invalid_date_no_crash(tmp_path: Path) -> None:
     _ = s.list()
 
 
-# J13.9 — job is DONE, transition(from_statuses={RUNNING}) → returns None, unchanged
+# job is DONE, transition(from_statuses={RUNNING}) → returns None, unchanged
 def test_transition_wrong_source_status_returns_none(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
     s = JobStore(path=jobs_path)
@@ -305,7 +305,7 @@ def test_transition_wrong_source_status_returns_none(tmp_path: Path) -> None:
     assert s.get(job.job_id).status == JobStatus.DONE  # type: ignore[union-attr]
 
 
-# J13.10 — sequential double-transition: second PENDING→RUNNING returns None
+# sequential double-transition: second PENDING→RUNNING returns None
 def test_double_transition_second_rejected(tmp_path: Path) -> None:
     jobs_path = tmp_path / "jobs.json"
     s = JobStore(path=jobs_path)
@@ -322,7 +322,7 @@ def test_double_transition_second_rejected(tmp_path: Path) -> None:
     assert s.get(job.job_id).status == JobStatus.RUNNING  # type: ignore[union-attr]
 
 
-# J13.11 — rename() failure leaves .tmp on disk
+# rename failure leaves .tmp on disk
 def test_write_atomic_failure_leaves_tmp_file(tmp_path: Path) -> None:
     """Verify that after a rename() failure during _write_atomic the .tmp file is on disk.
 
@@ -346,7 +346,7 @@ def test_write_atomic_failure_leaves_tmp_file(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 3.3 (FEAT-043) — JobStore.create(namespace=...) parameter
+# JobStore.create(namespace=...) parameter
 # ---------------------------------------------------------------------------
 
 

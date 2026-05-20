@@ -1,4 +1,4 @@
-"""Tests for POST /route endpoint (Task 5.5)."""
+"""Tests for POST /route endpoint ."""
 from __future__ import annotations
 
 import os
@@ -315,7 +315,7 @@ def test_slots_negative_returns_400(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # 13. Namespace filter — only pinned collections belonging to caller's namespace
-#     are included in routing candidates (Task 5.4 — FEAT-043)
+# are included in routing candidates 
 # ---------------------------------------------------------------------------
 
 

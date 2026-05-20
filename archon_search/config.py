@@ -211,7 +211,7 @@ def load_config(path: Path | None = None) -> SearchConfig:
             telemetry_cfg["export_enabled"], "[telemetry].export_enabled"
         )
         if export_enabled:
-            _logger.warning("telemetry: export_enabled is reserved for FEAT-039d and will be ignored")
+            _logger.warning("telemetry: export_enabled is reserved for a future release and will be ignored")
             telemetry.export_enabled = False
         else:
             telemetry.export_enabled = export_enabled

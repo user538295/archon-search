@@ -1,5 +1,4 @@
-"""End-to-end telemetry tests — FEAT-039b Task 3.5.
-
+"""End-to-end telemetry tests
 Exercises every entry variant so the union of observed JSONL keys equals
 DOCUMENTED_SCHEMA_FIELDS, and asserts the privacy sentinel never leaks into
 log files or logger message strings.

@@ -1,4 +1,4 @@
-"""Integration tests for ACL propagation in SearchPipeline.ingest_file() (FEAT-044 Task 2.4)."""
+"""Integration tests for ACL propagation in SearchPipeline.ingest_file ."""
 from __future__ import annotations
 
 import hashlib
@@ -401,7 +401,7 @@ async def test_ingest_file_front_matter_block_stripped_from_chunk_text(tmp_path)
 
 
 # ---------------------------------------------------------------------------
-# Task 3.4b: ACL filter in SearchPipeline.search() and search_with_context()
+# ACL filter in SearchPipeline.search and search_with_context
 # ---------------------------------------------------------------------------
 
 

@@ -1,7 +1,7 @@
 [project]
 name = "archon-search"
 dynamic = ["version"]
-description = "Standalone Search server for Archon"
+description = "Standalone hybrid retrieval + routing server: LanceDB, fastembed, cross-encoder reranker, FastAPI"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
@@ -62,7 +62,7 @@ addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=ter
 markers = [
     "benchmark: latency benchmark — requires a running archon-search server; skipped automatically when server is unreachable",
     "integration: integration tests requiring live infrastructure",
-    "eval: deterministic full-corpus FEAT-039 evaluation slice; excluded from default runs",
+    "eval: deterministic full-corpus evaluation slice; excluded from default runs (gated via tests/eval/thresholds.toml)",
     "live: tests that require live network or external services; excluded from default runs",
 ]
 

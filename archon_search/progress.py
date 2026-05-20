@@ -1,4 +1,4 @@
-"""CollectionProgress and IndexingState dataclasses for RAG background indexing (FEAT-027)."""
+"""CollectionProgress and IndexingState dataclasses for RAG background indexing."""
 from __future__ import annotations
 
 import enum

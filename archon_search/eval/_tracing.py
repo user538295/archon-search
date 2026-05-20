@@ -1,4 +1,4 @@
-"""Eval-only trace collector for the search pipeline (FEAT-039 Task 2.4).
+"""Eval-only trace collector for the search pipeline.
 
 This module provides ``collect_search_trace``, which runs the production search
 path with trace helpers attached so that pre-rerank and post-rerank candidates

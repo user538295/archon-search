@@ -1,4 +1,4 @@
-"""Tests for key_manager.py — key loading and auto-generation (Task 1.1)."""
+"""Tests for key_manager.py — key loading and auto-generation ."""
 from __future__ import annotations
 
 import os
@@ -296,7 +296,7 @@ class TestAutoGenerate:
 
 
 # ---------------------------------------------------------------------------
-# Task 1.7 — path migration tests
+# path migration tests
 # ---------------------------------------------------------------------------
 
 

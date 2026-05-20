@@ -1,32 +1,53 @@
-# archon-search.toml — Search server configuration
-# Copy to ~/.archon-search/archon-search.toml and edit as needed.
+# archon-search.toml — configuration for the archon-search server
+#
+# Default location: ~/.archon-search/archon-search.toml
+# Override the path with the ARCHON_SEARCH_CONFIG environment variable
+# (absolute or tilde-prefixed).
+#
 # All values shown are the defaults; omit any section or key to use its default.
 #
-# To use a different config path, set the ARCHON_SEARCH_CONFIG environment
-# variable to an absolute or tilde-prefixed path; it overrides the default.
+# Authentication:
+#   The API key for the HTTP server is read from ~/.archon-search/.search.env
+#   (file mode 600 on POSIX). Override the file location with
+#   ARCHON_SEARCH_KEY_FILE, or supply the key directly via the
+#   ARCHON_SEARCH_API_KEY environment variable (takes precedence over the file).
 
 [server]
+# Bind address and port for the HTTP API.
 host = "127.0.0.1"
 port = 8765
 
 [database]
+# On-disk location for the vector store and metadata.
 db_path = "~/.archon-search/search"
+# Sentence-transformers embedding model used for indexing and queries.
 embedding_model = "BAAI/bge-small-en-v1.5"
+# Cross-encoder used to rerank candidate results before returning them.
 reranker_model = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+# Target chunk size (tokens) when splitting documents during ingestion.
 chunk_size = 512
+# If chunk_size changes, automatically reindex affected collections on startup.
 auto_reindex_on_chunk_size_change = true
-# providers = []                     # CPU (default)
+# ONNX Runtime execution providers for the embedding/reranker models.
+# providers = []                               # CPU (default)
 # providers = ["CUDAExecutionProvider"]        # NVIDIA GPU
 # providers = ["CoreMLExecutionProvider"]      # Apple Silicon
 
 [routing]
+# Number of collections considered by the router before parallel search.
 routing_shortlist_size = 8
+# Minimum router confidence required to dispatch a query to a collection.
 routing_confidence_threshold = 0.30
+# Maximum number of collections searched concurrently per query.
 max_parallel_collections = 3
 
 [collections]
+# Collections that are always included in every search, regardless of routing.
 pinned_collections = []
+# Static list of collection definitions (name + source path). Leave empty to
+# manage collections via the HTTP API.
 collections = []
+# Watch source directories and reindex on change.
 watch = false
 
 [logging]
@@ -34,11 +55,14 @@ level = "INFO"
 log_file = "~/.archon-search/logs/archon-search.log"
 
 [telemetry]
-# Opt-in query telemetry. Disabled by default.
-# When enabled, each search/route call appends one JSONL line to a daily
-# file under log_dir. No raw query text is ever recorded.
-# See packages/archon-search/README.md for the full privacy contract.
+# Opt-in local query telemetry. Disabled by default.
+#
+# When enabled, each /search and /route call appends one JSON line to a daily
+# file under log_dir. Only structural metadata is recorded (collection names,
+# latency, result counts, etc.) — raw query text is never written to disk.
+# Old files are pruned after retention_days.
 enabled = false
 retention_days = 30
 log_dir = "~/.archon-search/search-logs"
-# export_enabled = false   # reserved for FEAT-039c; setting true raises ConfigError
+# export_enabled = false   # reserved for a future remote-export feature;
+                           # setting it to true currently raises ConfigError.

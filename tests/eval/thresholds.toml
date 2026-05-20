@@ -1,4 +1,4 @@
-# Eval quality floors for FEAT-039 Search Offline Evaluation Harness.
+# Eval quality floors for the offline evaluation harness.
 #
 # Floors derived directly from the measured baseline committed in
 # tests/eval/baselines/baseline.md (calibration run on the committed corpus

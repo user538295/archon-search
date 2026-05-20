@@ -1,4 +1,4 @@
-"""Tests verifying that archon/search/ modules are importable from archon_search (Task 2.1)."""
+"""Tests verifying that archon/search/ modules are importable from archon_search ."""
 from __future__ import annotations
 
 import importlib
@@ -52,14 +52,14 @@ _ARCHON_SEARCH_SRC = Path(__file__).parent.parent / "archon_search"
 
 
 def test_notification_monitor_deleted() -> None:
-    """Task 2.4: notification_monitor.py must be deleted from archon_search/ (had archon.config import)."""
+    """notification_monitor.py must be deleted from archon_search/ (had archon.config import)."""
     assert not (_ARCHON_SEARCH_SRC / "notification_monitor.py").exists(), (
-        "notification_monitor.py still exists in archon_search/ — delete it (Task 2.4)"
+        "notification_monitor.py still exists in archon_search/ — delete it "
     )
 
 
 def test_install_py_has_no_archon_imports() -> None:
-    """Task 2.3: install.py must have zero archon.* imports after platform extraction."""
+    """install.py must have zero archon.* imports after platform extraction."""
     source = (_ARCHON_SEARCH_SRC / "install.py").read_text(encoding="utf-8")
     lines = [ln for ln in source.splitlines() if "from archon." in ln or "import archon." in ln]
     assert not lines, f"install.py still has archon.* imports: {lines}"

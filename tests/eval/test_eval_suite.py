@@ -1,8 +1,7 @@
-"""End-to-end report-only eval smoke tests — FEAT-039 Task 4.2.
-
+"""End-to-end report-only eval smoke tests
 These tests exercise the full eval pipeline against the committed corpus and
 runtime config in calibration (report-only) mode. They never call
-``assert_thresholds`` — that is the job of Task 4.3 gated tests.
+``assert_thresholds`` — that is the job of gated tests.
 
 The ``eval`` marker excludes these from the default pytest run; invoke them
 with ``-m eval`` (or ``pytest tests/eval/``).
@@ -114,7 +113,7 @@ async def test_eval_suite_is_deterministic_except_latency() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 4.4 — gated eval smoke tests
+# gated eval smoke tests
 # ---------------------------------------------------------------------------
 
 

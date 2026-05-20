@@ -1,4 +1,4 @@
-"""Tests for TelemetryEntry factory classmethods (Task 1.4)."""
+"""Tests for TelemetryEntry factory classmethods ."""
 
 from __future__ import annotations
 

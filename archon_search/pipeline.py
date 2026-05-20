@@ -1,4 +1,4 @@
-"""SearchPipeline — orchestrates ingest, search, and context retrieval (FEAT-019 Task 4.1)."""
+"""SearchPipeline — orchestrates ingest, search, and context retrieval."""
 from __future__ import annotations
 
 import hashlib

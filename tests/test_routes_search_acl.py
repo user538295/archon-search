@@ -1,4 +1,4 @@
-"""Tests for SearchResponse schema and ACL field isolation (Task 3.3 + 3.4)."""
+"""Tests for SearchResponse schema and ACL field isolation ."""
 from __future__ import annotations
 
 import os
@@ -18,7 +18,7 @@ from archon_search.server.routes_search import SearchResponse, SearchResultSchem
 
 
 # ---------------------------------------------------------------------------
-# Task 3.3 — schema unit tests
+# schema unit tests
 # ---------------------------------------------------------------------------
 
 
@@ -38,7 +38,7 @@ def test_search_response_is_never_bare_array() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 3.4 — integration tests: ACL filter + SearchResponse envelope
+# integration tests: ACL filter + SearchResponse envelope
 # ---------------------------------------------------------------------------
 
 

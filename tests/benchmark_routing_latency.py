@@ -5,7 +5,7 @@ Run manually (requires a running archon-search server):
     uv run pytest tests/benchmark_routing_latency.py -v -s
 
 Targets: p50 ≤ 30ms, p95 ≤ 150ms over localhost.
-If p95 > 150ms, consider co-located embedder mode (Archon embeds locally and passes
+If p95 > 150ms, consider co-located embedder mode (the host application embeds locally and passes
 the vector to POST /route) and record the decision in Documentation/ADRs/.
 """
 from __future__ import annotations
@@ -108,7 +108,7 @@ def test_routing_latency_harness_runs() -> None:
 
     Record p50/p95 results in the PR description or Documentation/ADRs/ before merge.
     If p95 > 150ms, record co-located embedder decision in Key Decisions section of
-    Documentation/Backlog/FEAT-038-search-product-separation.md.
+    Documentation/Backlog/.md.
     """
     if not _is_server_running():
         pytest.skip(
@@ -132,7 +132,7 @@ def test_routing_latency_harness_runs() -> None:
         if http_p95 > 150:
             print(
                 "\n⚠  p95 > 150 ms threshold exceeded.\n"
-                "   Consider co-located embedder mode: Archon embeds the query locally\n"
+                " Consider co-located embedder mode: the host application embeds the query locally\n"
                 "   and passes the vector directly to POST /route, avoiding the\n"
                 "   embedding round-trip inside the server.\n"
                 "   Record this decision in Documentation/ADRs/."

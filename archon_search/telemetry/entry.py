@@ -1,7 +1,7 @@
-"""Telemetry entry model — privacy-safe Pydantic schema for FEAT-039b.
+"""Telemetry entry model — privacy-safe Pydantic schema.
 
 The model enforces the structural privacy guarantee: it has no field that can
-carry raw query text. Factories (Task 1.4) further constrain construction to
+carry raw query text. Factories further constrain construction to
 keyword-only safe arguments.
 """
 

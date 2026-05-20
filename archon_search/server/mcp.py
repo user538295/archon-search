@@ -1,4 +1,4 @@
-"""FastMCP HTTP server for Archon RAG (FEAT-019 Task 5.1)."""
+"""FastMCP HTTP server for RAG search."""
 from __future__ import annotations
 
 import logging

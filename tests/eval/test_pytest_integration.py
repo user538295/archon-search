@@ -1,4 +1,4 @@
-"""Tests for FEAT-039 Task 4.1 — pytest marker wiring & eval conftest.
+"""Tests for — pytest marker wiring & eval conftest.
 
 These tests inspect ``packages/archon-search/pyproject.toml`` and the
 ``tests/eval/`` directory to assert that the eval pytest slice is correctly
@@ -124,7 +124,7 @@ def test_eval_conftest_provides_corpus_and_lancedb_fixtures() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Marker discipline — Task 4.1 says no full-corpus markers added here
+# Marker discipline — says no full-corpus markers added here
 # ---------------------------------------------------------------------------
 
 

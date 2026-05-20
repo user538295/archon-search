@@ -600,7 +600,7 @@ class TestWatcherManager:
         loop.close()
 
     def test_new_manager_watching_names_empty(self):
-        """J13.22: new WatcherManager() → watching_names() is empty."""
+        """new WatcherManager → watching_names is empty."""
         async def _on_change(col): pass
         loop = asyncio.new_event_loop()
         from archon_search.watcher import WatcherManager
@@ -609,7 +609,7 @@ class TestWatcherManager:
         loop.close()
 
     def test_same_path_two_different_names_two_watchers(self, tmp_path: Path):
-        """J13.23: add same path with two different names → two watchers."""
+        """add same path with two different names → two watchers."""
         async def _on_change(col): pass
         loop = asyncio.new_event_loop()
 
@@ -682,7 +682,7 @@ class TestWatcherManager:
 
 
     def test_schedule_called_with_recursive_true(self, tmp_path: Path):
-        """J13.24: observer.schedule(handler, path, recursive=True) → recursive=True verified."""
+        """observer.schedule(handler, path, recursive=True) → recursive=True verified."""
         cb, _ = _make_async_callback()
         loop = asyncio.new_event_loop()
 
@@ -699,7 +699,7 @@ class TestWatcherManager:
         loop.close()
 
     def test_schedule_raises_oserror_logged_warning(self, tmp_path: Path, caplog):
-        """J13.20: observer.schedule() raises OSError → logged WARNING, no crash."""
+        """observer.schedule raises OSError → logged WARNING, no crash."""
         cb, _ = _make_async_callback()
         loop = asyncio.new_event_loop()
 
@@ -717,7 +717,7 @@ class TestWatcherManager:
         loop.close()
 
     def test_join_raises_oserror_logged_warning(self, tmp_path: Path, caplog):
-        """J13.21: observer.join() raises OSError → logged WARNING, no propagation."""
+        """observer.join raises OSError → logged WARNING, no propagation."""
         cb, _ = _make_async_callback()
         loop = asyncio.new_event_loop()
 

@@ -1,4 +1,4 @@
-"""Tests for FastAPI app factory (Task 5.2)."""
+"""Tests for FastAPI app factory ."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -45,7 +45,7 @@ def test_app_title_is_archon_search(config: SearchConfig, job_store: JobStore) -
 
 
 # ---------------------------------------------------------------------------
-# C1-III-3: server startup collection derivation (FEAT-038 Task 11.2)
+# server startup collection derivation 
 # ---------------------------------------------------------------------------
 
 
@@ -77,7 +77,7 @@ def test_server_collection_derivation_uses_last_path_component() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 3.4: telemetry router registration (FEAT-039c)
+# telemetry router registration 
 # ---------------------------------------------------------------------------
 
 
@@ -111,7 +111,7 @@ def test_telemetry_entries_route_registered(telemetry_config: SearchConfig, job_
 
 
 # ---------------------------------------------------------------------------
-# migrate_namespace lifespan wiring (Task 3.2 — FEAT-042)
+# migrate_namespace lifespan wiring 
 # ---------------------------------------------------------------------------
 
 
@@ -153,7 +153,7 @@ async def test_lifespan_calls_migrate_namespace(config: SearchConfig, job_store:
 
 
 # ---------------------------------------------------------------------------
-# Task 2.2 — create_app() passes namespaces to middleware (FEAT-043)
+# create_app passes namespaces to middleware 
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""Ranking metric functions for the archon-search eval harness — FEAT-039 Task 3.1.
+"""Ranking metric functions for the archon-search eval harness.
 
 Metrics are document-level: chunk results are deduplicated by doc_id before scoring.
 When multiple chunks from the same document appear, the first-ranked chunk sets the

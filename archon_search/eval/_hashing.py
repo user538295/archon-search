@@ -1,11 +1,11 @@
-"""Hashing helpers for FEAT-039 eval baseline staleness gates.
+"""Hashing helpers for eval baseline staleness gates.
 
 `compute_eval_hash` hashes every eval-determinism-defining input: the JSONL
 manifests under *corpus_root*, every file under ``corpus_root/corpus``, the
 optional ``routing/collections.jsonl``, and ``archon_search/eval/backends.py``.
 ``metrics.py`` and ``runner.py`` are intentionally excluded — algorithm changes
 there require a manual baseline refresh and are caught by unit tests, not
-staleness gates (see FEAT-039 Task 4.3 spec).
+staleness gates.
 """
 from __future__ import annotations
 

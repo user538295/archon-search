@@ -1,4 +1,4 @@
-"""Tests for ACL column in LanceDB chunk table schema (FEAT-044 Task 1.3 & 1.4)."""
+"""Tests for ACL column in LanceDB chunk table schema ."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ async def test_new_collection_has_acl_column(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 1.4: migrate_acl() tests
+# migrate_acl tests
 # ---------------------------------------------------------------------------
 
 
@@ -274,7 +274,7 @@ async def test_app_lifespan_calls_migrate_acl():
 
 
 # ---------------------------------------------------------------------------
-# Task 3.1: hybrid_search() returns acl field in SearchResult
+# hybrid_search returns acl field in SearchResult
 # ---------------------------------------------------------------------------
 
 
@@ -418,7 +418,7 @@ async def test_hybrid_search_row_missing_acl_column_defaults_none(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 3.2: fetch_adjacent_chunks() returns acl field in ChunkRecord
+# fetch_adjacent_chunks returns acl field in ChunkRecord
 # ---------------------------------------------------------------------------
 
 
@@ -528,7 +528,7 @@ async def test_fetch_adjacent_chunks_missing_acl_defaults_none(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 4.1: get_acl_stats() tests
+# get_acl_stats tests
 # ---------------------------------------------------------------------------
 
 

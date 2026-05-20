@@ -1,4 +1,4 @@
-"""Tests for POST /search endpoint (Task 2.1 + Task 3.4)."""
+"""Tests for POST /search endpoint ( + )."""
 from __future__ import annotations
 
 import logging
@@ -28,7 +28,7 @@ def _make_app(tmp_path: Path) -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# create_app() pipeline wiring tests (Task 3.3 / 3.4)
+# create_app pipeline wiring tests ( / 3.4)
 # ---------------------------------------------------------------------------
 
 
@@ -84,7 +84,7 @@ def _make_search_result(n: int = 1) -> SearchResult:
 
 
 # ---------------------------------------------------------------------------
-# Task 3.4 — pipeline delegation tests
+# pipeline delegation tests
 # ---------------------------------------------------------------------------
 
 
@@ -329,7 +329,7 @@ def test_search_reranker_failure_returns_empty(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 9. Route delegates to pipeline, not inline store/reranker logic (Task 3.4)
+# 9. Route delegates to pipeline, not inline store/reranker logic 
 # ---------------------------------------------------------------------------
 
 
@@ -363,7 +363,7 @@ def test_search_same_namespace_proceeds(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 11. Cross-namespace — returns 404 (Task 5.1)
+# 11. Cross-namespace — returns 404 
 # ---------------------------------------------------------------------------
 
 
@@ -379,7 +379,7 @@ def test_search_cross_namespace_404(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 12. Store exception on meta lookup — returns 503 (Task 5.1)
+# 12. Store exception on meta lookup — returns 503 
 # ---------------------------------------------------------------------------
 
 

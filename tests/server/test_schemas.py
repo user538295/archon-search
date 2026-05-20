@@ -1,4 +1,4 @@
-"""Tests for shared REST response Pydantic schemas (FEAT-045 Task 1.4)."""
+"""Tests for shared REST response Pydantic schemas ."""
 from __future__ import annotations
 
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict

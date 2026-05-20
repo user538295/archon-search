@@ -1,4 +1,4 @@
-"""Tests for Task 1.1: package scaffold verification."""
+"""Tests for : package scaffold verification."""
 
 from pathlib import Path
 

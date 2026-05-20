@@ -1,4 +1,4 @@
-"""Tests for APIKeyMiddleware and startup wire-up (Task 1.2)."""
+"""Tests for APIKeyMiddleware and startup wire-up ."""
 from __future__ import annotations
 
 import logging
@@ -271,14 +271,13 @@ class TestFullAppAuth:
         resp = client.get("/redoc")
         assert resp.status_code == 200
 
-    @pytest.mark.skip(reason="Requires SearchApiKeyAuth from Task 4.1 (not yet implemented)")
+    @pytest.mark.skip(reason="Requires SearchApiKeyAuth from (not yet implemented)")
     def test_key_roundtrip_generate_then_auth(  # noqa: ANN201
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Integration: generate key via key_manager, use SearchApiKeyAuth to request a protected endpoint."""
         import archon_search.key_manager as km
-        from archon_search.ai.search_client import SearchApiKeyAuth  # noqa: F401 — Task 4.1
-
+        from archon_search.ai.search_client import SearchApiKeyAuth # noqa: F401
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         monkeypatch.setattr(km, "KEY_FILE", tmp_path / ".search.env")
         key, _ = km.load_or_generate_key()
@@ -301,7 +300,7 @@ class TestFullAppAuth:
 
 
 # ---------------------------------------------------------------------------
-# Task 2.1 — Multi-key namespace resolution tests
+# Multi-key namespace resolution tests
 # ---------------------------------------------------------------------------
 
 KEY_A = "a" * 64

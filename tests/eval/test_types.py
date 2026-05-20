@@ -1,4 +1,4 @@
-"""Tests for eval/types.py and _diagnostics.py — Task 2.1."""
+"""Tests for eval/types.py and _diagnostics.py."""
 from __future__ import annotations
 
 import sys

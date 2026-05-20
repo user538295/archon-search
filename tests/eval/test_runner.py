@@ -1,4 +1,4 @@
-"""Tests for EvalThresholds dataclasses and load_thresholds() — FEAT-039 Task 1.4."""
+"""Tests for EvalThresholds dataclasses and load_thresholds"""
 from __future__ import annotations
 
 import json
@@ -123,8 +123,7 @@ def test_load_thresholds_rejects_wrong_type_for_routing_floor(tmp_path: Path) ->
 
 
 # ---------------------------------------------------------------------------
-# EvalRuntimeConfig / load_runtime_config tests — Task 1.5
-# ---------------------------------------------------------------------------
+# EvalRuntimeConfig / load_runtime_config tests# ---------------------------------------------------------------------------
 
 _VALID_RUNTIME_TOML = """
 [search]
@@ -272,8 +271,7 @@ contract_enabled = false
 
 
 # ---------------------------------------------------------------------------
-# run_eval_suite / load_baseline tests — Task 3.3
-# ---------------------------------------------------------------------------
+# run_eval_suite / load_baseline tests# ---------------------------------------------------------------------------
 
 from dataclasses import asdict
 
@@ -965,7 +963,7 @@ async def test_eval_runner_retrieval_queries_with_routing_contribute_to_routing_
 
 
 # ---------------------------------------------------------------------------
-# Task 3.4 — assert_thresholds + render_report tests
+# assert_thresholds + render_report tests
 # ---------------------------------------------------------------------------
 
 from archon_search.eval.types import EvalMetrics

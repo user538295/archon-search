@@ -5,7 +5,7 @@ Run from the package root:
     cd packages/archon-search
     uv run python tests/eval/baselines/regenerate.py
 
-This is a maintenance utility, not part of the pytest run (per FEAT-039 spec).
+This is a maintenance utility, not part of the pytest run (per spec).
 """
 from __future__ import annotations
 

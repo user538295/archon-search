@@ -1,4 +1,4 @@
-"""Tests for Pruner — Task 2.3 (prune_once) and Task 2.4 (start/_run)."""
+"""Tests for Pruner — (prune_once) and (start/_run)."""
 
 from __future__ import annotations
 

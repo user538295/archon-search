@@ -1,4 +1,4 @@
-"""Tests for archon_search.config (Task 1.3 — Standalone config loader)."""
+"""Tests for archon_search.config ( — Standalone config loader)."""
 
 from pathlib import Path
 
@@ -428,7 +428,7 @@ def test_search_config_default_namespaces_empty() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ARCHON_SEARCH_CONFIG env var override tests (Task 1.6)
+# ARCHON_SEARCH_CONFIG env var override tests 
 # ---------------------------------------------------------------------------
 
 

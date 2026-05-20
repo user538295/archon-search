@@ -126,7 +126,7 @@ async def test_embedder_embed_empty_list_leaves_dim_unset() -> None:
 
 
 # ===========================================================================
-# FEAT-038 Task 12.6 — P14.1–P14.4: Embedder error paths
+# Embedder error paths
 # ===========================================================================
 
 
@@ -151,7 +151,7 @@ class _EmptyResultBackend:
 
 @pytest.mark.asyncio
 async def test_P14_1_embedder_wrong_count_dim_set_from_truncated_result() -> None:
-    """P14.1 — backend returns fewer vectors than texts: embedding_dim is set from the first truncated result.
+    """ backend returns fewer vectors than texts: embedding_dim is set from the first truncated result.
 
     The Embedder sets _embedding_dim only when result is non-empty, so if the
     backend silently returns fewer vectors than texts (but not empty), the
@@ -170,7 +170,7 @@ async def test_P14_1_embedder_wrong_count_dim_set_from_truncated_result() -> Non
 
 @pytest.mark.asyncio
 async def test_P14_2_embedder_empty_result_dim_not_initialized() -> None:
-    """P14.2 — backend returns [] for non-empty texts: embedding_dim stays unset."""
+    """ backend returns [] for non-empty texts: embedding_dim stays unset."""
     backend = _EmptyResultBackend()
     embedder = Embedder(backend)
     result = await embedder.embed(["hello", "world"])
@@ -181,7 +181,7 @@ async def test_P14_2_embedder_empty_result_dim_not_initialized() -> None:
 
 @pytest.mark.asyncio
 async def test_P14_3_embedder_whitespace_only_text_still_embeds() -> None:
-    """P14.3 — whitespace-only text is passed through to backend without error."""
+    """ whitespace-only text is passed through to backend without error."""
     backend = _MockBackend(dim=4)
     embedder = Embedder(backend)
     result = await embedder.embed(["   ", "\t\n", ""])
@@ -192,7 +192,7 @@ async def test_P14_3_embedder_whitespace_only_text_still_embeds() -> None:
 
 @pytest.mark.asyncio
 async def test_P14_4_embedder_backend_exception_propagates() -> None:
-    """P14.4 — backend.encode() raises → exception propagates from embed()."""
+    """ backend.encode raises → exception propagates from embed."""
     class _ExplodingBackend:
         model_name: str = "exploding"
 

@@ -1,4 +1,4 @@
-"""Tests for SearchInstaller.configure_providers() — Task 2.3 Fix 3."""
+"""Tests for SearchInstaller.configure_providers — Fix 3."""
 from __future__ import annotations
 
 from pathlib import Path

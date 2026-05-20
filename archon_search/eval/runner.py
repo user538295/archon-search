@@ -1,4 +1,4 @@
-"""Eval runner types and config loaders — FEAT-039.
+"""Eval runner types and config loaders.
 
 Provides threshold and runtime config dataclasses with their loaders, plus
 the trace-executing eval suite runner (Task 3.3).
@@ -518,7 +518,7 @@ async def run_eval_suite(
 ) -> EvalReport:
     """Execute the trace-enabled eval suite over the corpus.
 
-    See FEAT-039 Task 3.3 for the full specification.
+    See the eval harness specification for full details.
     """
     from archon_search.eval.metrics import (
         compute_latency_percentiles,
@@ -1011,7 +1011,7 @@ async def _execute_retrieval_query(
     pre_mapped = [_map_result(r, path_to_fixture, corpus_root) for r in pre_raw]
     post_mapped = [_map_result(r, path_to_fixture, corpus_root) for r in post_raw]
 
-    # Deterministic tie-breaking on equal scores (FEAT-039 spec): primary key
+    # Deterministic tie-breaking on equal scores: primary key
     # is the ranking score (descending); ties break by doc_id then chunk_id
     # (ascending). Pre-rerank uses rrf_score; post-rerank uses reranker_score
     # when available, falling back to rrf_score. LanceDB tie ordering can
@@ -1043,7 +1043,7 @@ async def _execute_retrieval_query(
         )
 
     # Routing accuracy is computed across ALL non-bypassed queries regardless of
-    # metric_scope (per FEAT-039 spec). For retrieval queries with routing enabled,
+    # metric_scope. For retrieval queries with routing enabled,
     # run the router and record whether its shortlist includes the gold collection.
     router_correct: bool | None = None
     if runtime_cfg.routing_contract_enabled and not query.routing_bypass:

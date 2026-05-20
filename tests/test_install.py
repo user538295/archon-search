@@ -1,4 +1,4 @@
-"""Tests for SearchInstaller (Task 7.1) — TDD first (RED phase)."""
+"""Tests for SearchInstaller — TDD first (RED phase)."""
 from __future__ import annotations
 
 import asyncio
@@ -1366,7 +1366,7 @@ class TestRunServiceReadiness:
 
 
 # ---------------------------------------------------------------------------
-# run() — validation-first flow (Task 3.2)
+# run — validation-first flow 
 # ---------------------------------------------------------------------------
 
 
@@ -1745,8 +1745,7 @@ class TestRunNonBlocking:
 
 
 # ---------------------------------------------------------------------------
-# Console integration — Task 3.1
-# ---------------------------------------------------------------------------
+# Console integration# ---------------------------------------------------------------------------
 
 
 class TestConsoleIntegration:

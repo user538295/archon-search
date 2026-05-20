@@ -1,4 +1,4 @@
-"""Tests for structured MCP error responses — FEAT-045 Task 4.1."""
+"""Tests for structured MCP error responses"""
 from __future__ import annotations
 
 import sys
@@ -58,7 +58,7 @@ def _make_app(pipeline: MagicMock) -> _FakeApp:
 
 
 # ---------------------------------------------------------------------------
-# Tests — Task 4.1: structured MCP error responses
+# Tests — : structured MCP error responses
 # ---------------------------------------------------------------------------
 
 

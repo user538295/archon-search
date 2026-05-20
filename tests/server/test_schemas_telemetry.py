@@ -1,4 +1,4 @@
-"""Tests for telemetry response Pydantic schemas (FEAT-039c Task 3.1)."""
+"""Tests for telemetry response Pydantic schemas ."""
 from __future__ import annotations
 
 import pytest

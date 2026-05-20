@@ -1,4 +1,4 @@
-"""Tests for TelemetryEntry Pydantic model + schema constant (Task 1.3)."""
+"""Tests for TelemetryEntry Pydantic model + schema constant ."""
 
 from __future__ import annotations
 

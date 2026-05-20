@@ -1,4 +1,4 @@
-"""Pydantic response models for telemetry API endpoints (FEAT-039c Task 3.1).
+"""Pydantic response models for telemetry API endpoints.
 
 Pure data models — no business logic.
 """

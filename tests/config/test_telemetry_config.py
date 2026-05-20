@@ -1,4 +1,4 @@
-"""Tests for TelemetryConfig integration in SearchConfig (FEAT-039c Task 1.1)."""
+"""Tests for TelemetryConfig integration in SearchConfig ."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def test_telemetry_config_rejects_empty_log_dir(tmp_path: Path) -> None:
 
 
 def test_telemetry_config_export_enabled_true_no_error(tmp_path: Path) -> None:
-    """export_enabled = true no longer raises ConfigError (changed in FEAT-039c Task 1.1)."""
+    """export_enabled = true no longer raises ConfigError (changed in )."""
     path = _write(tmp_path, "[telemetry]\nexport_enabled = true\n")
     cfg = load_config(path)  # must not raise
     assert cfg.telemetry.export_enabled is False
@@ -99,7 +99,7 @@ def test_export_enabled_true_logs_warning(
     records = [
         r for r in caplog.records if r.name == "archon.search" and r.levelname == "WARNING"
     ]
-    assert any("reserved for FEAT-039d" in r.getMessage() for r in records), [
+    assert any("reserved for " in r.getMessage() for r in records), [
         r.getMessage() for r in records
     ]
 

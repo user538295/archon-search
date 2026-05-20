@@ -1,15 +1,8 @@
 # archon-search eval harness
 
-This directory contains the FEAT-039 search evaluation harness: fixture
-corpus, baselines, thresholds, and pytest-driven eval tests. It exists
-to detect retrieval / routing / latency regressions on every change.
-
-> **Note**: `test_ci_contract.py` and `test_phase0_contract.py` were deleted
-> during the standalone repo extraction (FEAT-046). They verified compliance
-> with the Archon monorepo's CI infrastructure, release process, and the
-> `Documentation/Backlog` plan-codex layout — none of which exist in this
-> standalone repo. Standalone CI contract tests should be added as a
-> follow-up if/when they are needed.
+This directory contains the search evaluation harness: fixture corpus,
+baselines, thresholds, and pytest-driven eval tests. It exists to detect
+retrieval / routing / latency regressions on every change.
 
 ## Layout
 
@@ -106,7 +99,7 @@ never above. The relationship is:
 1. Run the report-only calibration to produce fresh measured metrics:
 
    ```
-   cd packages/archon-search && uv run pytest --no-cov -m eval -k "report_only" tests/eval/test_eval_suite.py -v
+   uv run pytest --no-cov -m eval -k "report_only" tests/eval/test_eval_suite.py -v
    ```
 
 2. Update `baselines/baseline.json` (and the human notes in
@@ -156,17 +149,17 @@ compared to live server latency.
 Report-only calibration (no gating, prints measured metrics):
 
 ```
-cd packages/archon-search && uv run pytest --no-cov -m eval -k "report_only" tests/eval/test_eval_suite.py -v
+uv run pytest --no-cov -m eval -k "report_only" tests/eval/test_eval_suite.py -v
 ```
 
 Gated eval (enforces `thresholds.toml`):
 
 ```
-cd packages/archon-search && uv run pytest --no-cov -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py -v
+uv run pytest --no-cov -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py -v
 ```
 
 Default unmarked eval units (contract / fixture / metric tests, fast):
 
 ```
-cd packages/archon-search && uv run pytest --no-cov tests/eval/ -q
+uv run pytest --no-cov tests/eval/ -q
 ```

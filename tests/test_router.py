@@ -1,4 +1,4 @@
-"""Tests for MultiCollectionRouter (FEAT-022 Task 2.1)."""
+"""Tests for MultiCollectionRouter ."""
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch

@@ -1,5 +1,4 @@
-"""Tests for ranking metric functions — FEAT-039 Task 3.1.
-
+"""Tests for ranking metric functions
 Tests cover:
 - compute_recall_at_k
 - compute_mrr
@@ -408,7 +407,7 @@ def test_deduplicate_to_doc_rankings_empty_list() -> None:
     assert deduplicate_to_doc_rankings([]) == []
 
 # ---------------------------------------------------------------------------
-# Fix 1 — C1-I-3: k <= 0 raises ValueError
+# Fix 1 — : k <= 0 raises ValueError
 # ---------------------------------------------------------------------------
 
 def test_recall_at_k_raises_for_non_positive_k() -> None:
@@ -598,7 +597,7 @@ def test_ndcg_all_zero_grades_returns_zero() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 3.2 — Routing, reranker-lift, and latency metrics
+# Routing, reranker-lift, and latency metrics
 # ---------------------------------------------------------------------------
 
 def _routing_trace(

@@ -1,4 +1,4 @@
-"""Deterministic eval-only embedder and reranker backends — FEAT-039 Task 2.5.
+"""Deterministic eval-only embedder and reranker backends.
 
 These backends are:
 - Deterministic: SHA-256-based hashing, no set() iteration, stable order.

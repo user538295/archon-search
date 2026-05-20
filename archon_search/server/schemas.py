@@ -1,4 +1,4 @@
-"""Shared Pydantic response models for archon-search REST API (FEAT-045 Task 1.4).
+"""Shared Pydantic response models for archon-search REST API.
 
 Pure data models — no business logic.
 """

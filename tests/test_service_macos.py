@@ -1,4 +1,4 @@
-"""Tests for Task 3.2 — LaunchdSearchService (macOS)."""
+"""Tests for — LaunchdSearchService (macOS)."""
 from __future__ import annotations
 
 import subprocess
@@ -402,7 +402,7 @@ def test_restart_calls_stop_then_start() -> None:
     assert calls == ["stop", "start"]
 
 
-# ── Task 1.7 — path migration ──────────────────────────────────────────────────
+# ── — path migration ──────────────────────────────────────────────────
 
 def test_service_label_unchanged() -> None:
     """Service label com.archon.search must remain unchanged."""

@@ -1,4 +1,4 @@
-"""Tests for extended chunk metadata schema (FEAT-038 Task 6.1)."""
+"""Tests for extended chunk metadata schema ."""
 from __future__ import annotations
 
 import re

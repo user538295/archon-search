@@ -1,4 +1,4 @@
-"""Eval sub-package for FEAT-039 evaluation harness."""
+"""Eval sub-package — evaluation harness."""
 from archon_search.eval.fixtures import (
     EvalCorpus,
     EvalDocument,

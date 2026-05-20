@@ -1,4 +1,4 @@
-"""Tests for GET /telemetry/stats route handler — FEAT-039c Task 3.2."""
+"""Tests for GET /telemetry/stats route handler"""
 from __future__ import annotations
 
 import asyncio

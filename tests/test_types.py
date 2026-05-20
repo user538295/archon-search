@@ -1,4 +1,4 @@
-"""Tests for canonical domain types — Task 1.2."""
+"""Tests for canonical domain types."""
 import dataclasses
 import json
 from archon_search.types import (

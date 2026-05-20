@@ -1,4 +1,4 @@
-# Eval runtime config for FEAT-039 Search Offline Evaluation Harness.
+# Eval runtime config for the offline evaluation harness.
 # This file is committed alongside fixtures and thresholds.
 # Values here are eval-specific depth names; do not confuse with production top_k_return.
 
@@ -11,7 +11,7 @@ return_depth = 20
 metric_depth = 10
 
 [routing]
-# contract_enabled = true: routing is Search-owned via POST /route (confirmed by FEAT-038 Task 0.1).
+# contract_enabled = true: routing is owned by this server via POST /route.
 # Routing accuracy is computed as fraction of non-bypassed queries where the router's
 # candidate shortlist intersects the gold collection set derived from positive retrieval labels.
 contract_enabled = true

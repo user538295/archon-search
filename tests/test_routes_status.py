@@ -1,4 +1,4 @@
-"""Tests for GET /status endpoint (Task 5.3a)."""
+"""Tests for GET /status endpoint ."""
 from __future__ import annotations
 
 import os
@@ -222,7 +222,7 @@ def test_status_config_paths_converted_to_names(tmp_db: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 5.5 — GET /status namespace filter
+# GET /status namespace filter
 # ---------------------------------------------------------------------------
 
 

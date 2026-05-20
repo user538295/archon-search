@@ -1,8 +1,8 @@
-"""Pytest fixtures and CLI options for the FEAT-039 eval slice.
+"""Pytest fixtures and CLI options for the eval slice.
 
 This module:
 
-- Registers the ``--thresholds-path`` pytest CLI option used by Task 4.3+
+- Registers the ``--thresholds-path`` pytest CLI option used by +
   gated smoke tests.
 - Provides module-scoped fixtures for the eval corpus and a temporary
   LanceDB root.
@@ -35,7 +35,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default=None,
         help=(
-            "Path to thresholds.toml for gated FEAT-039 eval smoke tests. "
+            "Path to thresholds.toml for gated eval smoke tests. "
             "Must be passed explicitly by CI; not auto-discovered."
         ),
     )

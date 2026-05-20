@@ -1,4 +1,4 @@
-"""TDD tests for ACL field additions to ChunkRecord and SearchResult (Task 1.2)."""
+"""TDD tests for ACL field additions to ChunkRecord and SearchResult ."""
 
 from archon_search._types import ChunkRecord, SearchResult
 

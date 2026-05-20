@@ -1,4 +1,4 @@
-"""TDD tests for archon-search Task 4.4 CLI subcommands: install, uninstall, ingest, sync, collection, config."""
+"""TDD tests for archon-search CLI subcommands: install, uninstall, ingest, sync, collection, config."""
 from __future__ import annotations
 
 import sys

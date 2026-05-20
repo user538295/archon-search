@@ -1,4 +1,4 @@
-"""Tests for archon-search ingest CLI command — Task 1.7 path migration."""
+"""Tests for archon-search ingest CLI command — path migration."""
 from __future__ import annotations
 
 from pathlib import Path
