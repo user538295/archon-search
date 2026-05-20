@@ -6,7 +6,7 @@ The package provides a FastAPI-based REST/MCP control plane over a LanceDB vecto
 
 ## Authentication
 
-All endpoints except `GET /health` require a `Bearer` token via the `Authorization` header. On first start, the server auto-generates a key and writes it to `~/.archon/.search.env` (permissions 600). `SearchClient` picks this up automatically — no manual configuration needed for local use. To override (Docker/CI), set the `ARCHON_SEARCH_API_KEY` environment variable; it takes priority over the file.
+All endpoints except `GET /health` require a `Bearer` token via the `Authorization` header. On first start, the server auto-generates a key and writes it to `~/.archon-search/.search.env` (permissions 600). `SearchClient` picks this up automatically — no manual configuration needed for local use. To override (Docker/CI), set the `ARCHON_SEARCH_API_KEY` environment variable; it takes priority over the file. To point the server at a different key file, set `ARCHON_SEARCH_KEY_FILE`.
 
 ## Quick start
 
@@ -40,18 +40,18 @@ Breaking changes to either surface are recorded in [`BREAKING.md`](BREAKING.md).
 
 ## Privacy & Telemetry
 
-Query telemetry is **opt-in and disabled by default**. When enabled, every `search`, `search_with_context`, and `POST /route` call appends one JSONL line to a daily file under `~/.archon/search-logs/`. No data is transmitted externally; all files remain on the local machine.
+Query telemetry is **opt-in and disabled by default**. When enabled, every `search`, `search_with_context`, and `POST /route` call appends one JSONL line to a daily file under `~/.archon-search/search-logs/`. No data is transmitted externally; all files remain on the local machine.
 
 ### Enabling
 
-Telemetry is `enabled = false` by default. To opt in, set the flag in `~/.archon/archon-search.toml`:
+Telemetry is `enabled = false` by default. To opt in, set the flag in `~/.archon-search/archon-search.toml`:
 
 ```toml
-# ~/.archon/archon-search.toml
+# ~/.archon-search/archon-search.toml
 [telemetry]
 enabled = true
 retention_days = 30          # files older than this are deleted at startup and every 24 h
-log_dir = "~/.archon/search-logs"
+log_dir = "~/.archon-search/search-logs"
 ```
 
 ### What is logged

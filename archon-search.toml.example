@@ -1,13 +1,16 @@
 # archon-search.toml — Search server configuration
-# Copy to ~/.archon/archon-search.toml and edit as needed.
+# Copy to ~/.archon-search/archon-search.toml and edit as needed.
 # All values shown are the defaults; omit any section or key to use its default.
+#
+# To use a different config path, set the ARCHON_SEARCH_CONFIG environment
+# variable to an absolute or tilde-prefixed path; it overrides the default.
 
 [server]
 host = "127.0.0.1"
 port = 8765
 
 [database]
-db_path = "~/.archon/search"
+db_path = "~/.archon-search/search"
 embedding_model = "BAAI/bge-small-en-v1.5"
 reranker_model = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 chunk_size = 512
@@ -28,7 +31,7 @@ watch = false
 
 [logging]
 level = "INFO"
-log_file = "~/.archon/logs/archon-search.log"
+log_file = "~/.archon-search/logs/archon-search.log"
 
 [telemetry]
 # Opt-in query telemetry. Disabled by default.
@@ -37,5 +40,5 @@ log_file = "~/.archon/logs/archon-search.log"
 # See packages/archon-search/README.md for the full privacy contract.
 enabled = false
 retention_days = 30
-log_dir = "~/.archon/search-logs"
+log_dir = "~/.archon-search/search-logs"
 # export_enabled = false   # reserved for FEAT-039c; setting true raises ConfigError
