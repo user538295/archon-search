@@ -425,3 +425,35 @@ def test_search_config_default_namespaces_empty() -> None:
     """SearchConfig() with no args has namespaces == {}."""
     config = SearchConfig()
     assert config.namespaces == {}
+
+
+# ---------------------------------------------------------------------------
+# ARCHON_SEARCH_CONFIG env var override tests (Task 1.6)
+# ---------------------------------------------------------------------------
+
+
+def test_env_var_overrides_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ARCHON_SEARCH_CONFIG=/tmp/custom.toml → returns Path('/tmp/custom.toml')."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", "/tmp/custom.toml")
+    assert get_default_config_path() == Path("/tmp/custom.toml")
+
+
+def test_env_var_expands_tilde(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ARCHON_SEARCH_CONFIG=~/.custom/archon-search.toml → absolute path under home."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", "~/.custom/archon-search.toml")
+    result = get_default_config_path()
+    assert result.is_absolute()
+    assert str(result).startswith(str(Path.home()))
+
+
+def test_env_var_empty_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ARCHON_SEARCH_CONFIG="" → returns the ~/.archon-search/archon-search.toml default."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", "")
+    assert get_default_config_path() == Path.home() / ".archon-search" / "archon-search.toml"
+
+
+def test_env_var_relative_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ARCHON_SEARCH_CONFIG=relative/path.toml → resolved against cwd."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", "relative/path.toml")
+    result = get_default_config_path()
+    assert result == (Path.cwd() / "relative/path.toml").resolve()

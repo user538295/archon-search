@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -79,6 +80,14 @@ def save_config(config: SearchConfig, path: Path | str) -> None:
 
 
 def get_default_config_path() -> Path:
+    env_val = os.environ.get("ARCHON_SEARCH_CONFIG")
+    if env_val:
+        expanded = os.path.expanduser(env_val)
+        path = Path(expanded)
+        # Relative paths are resolved against cwd (not the home directory).
+        if not path.is_absolute():
+            path = (Path.cwd() / path).resolve()
+        return path
     return Path.home() / ".archon-search" / "archon-search.toml"
 
 
