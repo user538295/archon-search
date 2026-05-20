@@ -34,12 +34,19 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 source = "vcs"
-raw-options.version_scheme = "_version_scheme:calver_total_count"
-# Phase 1 only: the package lives under packages/archon-search/ in the monorepo,
-# but git tags live at the monorepo root. After Phase 2 extraction (the package
-# becomes the repo root) the `root = ".."` line MUST be removed.
-raw-options.root = ".."
+# `no-guess-dev` + `no-local-version` produce PyPI-compatible version strings:
+# on a tag (e.g. `26.5.0`) the version is exactly `26.5.0`; between tags it is
+# `26.5.0.post{N}` where N is the commit distance — no local "+gXXXXX" suffix
+# (PyPI rejects local version identifiers on upload).
+raw-options.version_scheme = "no-guess-dev"
+raw-options.local_scheme = "no-local-version"
 raw-options.fallback_version = "0.0.0+local"
+
+[tool.hatch.build.targets.wheel]
+# The project name uses a hyphen (PyPI convention) but the importable package
+# directory uses an underscore — tell hatchling explicitly so it does not try
+# to look for a directory named `archon-search`.
+packages = ["archon_search"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

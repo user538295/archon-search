@@ -1,2 +1,26 @@
 # Prompt hook logs
 prompts/
+
+# Python build/cache artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+build/
+*.egg-info/
+.tox/
+
+# Virtual environments
+.venv/
+venv/
+
+# OS junk
+.DS_Store
+
+# Editor caches
+.idea/
+.vscode/

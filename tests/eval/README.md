@@ -4,6 +4,13 @@ This directory contains the FEAT-039 search evaluation harness: fixture
 corpus, baselines, thresholds, and pytest-driven eval tests. It exists
 to detect retrieval / routing / latency regressions on every change.
 
+> **Note**: `test_ci_contract.py` and `test_phase0_contract.py` were deleted
+> during the standalone repo extraction (FEAT-046). They verified compliance
+> with the Archon monorepo's CI infrastructure, release process, and the
+> `Documentation/Backlog` plan-codex layout — none of which exist in this
+> standalone repo. Standalone CI contract tests should be added as a
+> follow-up if/when they are needed.
+
 ## Layout
 
 ```
