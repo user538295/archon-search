@@ -12,10 +12,6 @@ FORBIDDEN_PATTERNS = [
     "import archon.config",
 ]
 
-# Files that are known to still need migration in later tasks
-_PENDING_MIGRATION = {"pipeline.py", "mcp.py"}
-
-
 def _collect_py_files() -> list[Path]:
     return sorted(ARCHON_SEARCH_PKG.rglob("*.py"))
 
@@ -32,14 +28,12 @@ def _file_contains_forbidden_import(path: Path) -> list[str]:
 
 
 def test_no_archon_config_imports() -> None:
-    """No file in archon_search/ (outside pending migration list) may import from archon.config."""
+    """No file in archon_search/ may import from archon.config."""
     py_files = _collect_py_files()
     assert py_files, "No .py files found — check ARCHON_SEARCH_PKG path"
 
     violations: list[str] = []
     for py_file in py_files:
-        if py_file.name in _PENDING_MIGRATION:
-            continue
         violations.extend(_file_contains_forbidden_import(py_file))
 
     assert not violations, (
