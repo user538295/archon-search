@@ -47,10 +47,12 @@ jobs:
       - name: Run eval slice with thresholds, coverage append, runxfail
         run: uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append --runxfail -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/
 
-      - name: Combine coverage and enforce fail-under=85
-        run: |
-          uv run coverage combine
-          uv run coverage report --fail-under=85
+      - name: Enforce coverage fail-under=85
+        # The two pytest steps above both use --cov-append, which writes to a
+        # single .coverage file. There is no parallel-mode shard set to merge,
+        # so we skip `coverage combine` (it would error with "No data to
+        # combine") and report directly on the single file.
+        run: uv run coverage report --fail-under=85
 
   # ---------------------------------------------------------------------------
   # Job 2 — tag + build + publish to PyPI (OIDC, no stored secrets)
