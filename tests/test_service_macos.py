@@ -400,3 +400,47 @@ def test_restart_calls_stop_then_start() -> None:
     ):
         svc.restart()
     assert calls == ["stop", "start"]
+
+
+# ── Task 1.7 — path migration ──────────────────────────────────────────────────
+
+def test_service_label_unchanged() -> None:
+    """Service label com.archon.search must remain unchanged."""
+    from archon_search.platform.macos import _LABEL
+    assert _LABEL == "com.archon.search"
+
+
+def test_cwd_is_archon_search(tmp_path: Path) -> None:
+    """register() must use ~/.archon-search as WorkingDirectory."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    plist = tmp_path / "com.archon.search.plist"
+    with patch.object(type(svc), "_plist_path", property(lambda self: plist)):
+        svc.register()
+    content = plist.read_text()
+    expected_cwd = str(Path.home() / ".archon-search")
+    assert expected_cwd in content
+
+
+def test_config_path_is_archon_search(tmp_path: Path) -> None:
+    """register() must reference ~/.archon-search/archon-search.toml as config."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    plist = tmp_path / "com.archon.search.plist"
+    with patch.object(type(svc), "_plist_path", property(lambda self: plist)):
+        svc.register()
+    content = plist.read_text()
+    expected_config = str(Path.home() / ".archon-search" / "archon-search.toml")
+    assert expected_config in content
+
+
+def test_log_path_is_archon_search(tmp_path: Path) -> None:
+    """register() must route stdout/stderr logs to ~/.archon-search/logs/archon-search.log."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    plist = tmp_path / "com.archon.search.plist"
+    with patch.object(type(svc), "_plist_path", property(lambda self: plist)):
+        svc.register()
+    content = plist.read_text()
+    expected_log = str(Path.home() / ".archon-search" / "logs" / "archon-search.log")
+    assert expected_log in content

@@ -293,3 +293,56 @@ class TestAutoGenerate:
         ):
             with pytest.raises(RuntimeError, match="key generation failed"):
                 km._generate_and_write()
+
+
+# ---------------------------------------------------------------------------
+# Task 1.7 — path migration tests
+# ---------------------------------------------------------------------------
+
+
+class TestKeyFilePaths:
+    def test_key_file_default_path(self) -> None:
+        """KEY_FILE default must point to ~/.archon-search/.search.env."""
+        import importlib
+        import sys
+
+        saved = sys.modules.pop("archon_search.key_manager", None)
+        try:
+            import archon_search.key_manager as fresh_km
+            importlib.reload(fresh_km)
+            assert fresh_km.KEY_FILE == Path.home() / ".archon-search" / ".search.env"
+        finally:
+            if saved is not None:
+                sys.modules["archon_search.key_manager"] = saved
+
+    def test_key_file_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ARCHON_SEARCH_KEY_FILE env var overrides the default KEY_FILE path."""
+        import importlib
+        import sys
+
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "/tmp/test.env")
+        saved = sys.modules.pop("archon_search.key_manager", None)
+        try:
+            import archon_search.key_manager as fresh_km
+            importlib.reload(fresh_km)
+            assert fresh_km.KEY_FILE == Path("/tmp/test.env")
+        finally:
+            if saved is not None:
+                sys.modules["archon_search.key_manager"] = saved
+            monkeypatch.delenv("ARCHON_SEARCH_KEY_FILE", raising=False)
+
+    def test_key_file_empty_env_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty ARCHON_SEARCH_KEY_FILE must fall back to the default path, not Path('.')."""
+        import importlib
+        import sys
+
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "")
+        saved = sys.modules.pop("archon_search.key_manager", None)
+        try:
+            import archon_search.key_manager as fresh_km
+            importlib.reload(fresh_km)
+            assert fresh_km.KEY_FILE == Path.home() / ".archon-search" / ".search.env"
+        finally:
+            if saved is not None:
+                sys.modules["archon_search.key_manager"] = saved
+            monkeypatch.delenv("ARCHON_SEARCH_KEY_FILE", raising=False)

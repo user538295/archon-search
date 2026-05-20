@@ -17,7 +17,7 @@ from archon_search.pipeline import create_pipeline
 def ingest(ingest_path: Path | None, collection: str | None, config_path: Path | None) -> None:
     """Ingest documents from a directory into a collection."""
     if ingest_path is None:
-        ingest_path = Path.home() / ".archon" / "history" / "sessions"
+        ingest_path = Path.home() / ".archon-search" / "history" / "sessions"
         click.echo(f"No --path given, using default: {ingest_path}")
 
     try:

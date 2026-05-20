@@ -11,7 +11,12 @@ from pathlib import Path
 
 logger = logging.getLogger("archon-search")
 
-KEY_FILE: Path = Path("~/.archon/.search.env").expanduser()
+_key_file_env = os.environ.get("ARCHON_SEARCH_KEY_FILE") or ""
+KEY_FILE: Path = (
+    Path(_key_file_env).expanduser()
+    if _key_file_env
+    else Path.home() / ".archon-search" / ".search.env"
+)
 ENV_VAR: str = "ARCHON_SEARCH_API_KEY"
 
 _HEX_RE = re.compile(r"^[0-9a-f]+$")

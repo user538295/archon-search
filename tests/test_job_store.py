@@ -156,7 +156,7 @@ def test_list_returns_all_jobs(store: JobStore) -> None:
 
 
 def test_jobs_file_default_path() -> None:
-    assert JOBS_FILE == Path.home() / ".archon" / "archon-search-jobs.json"
+    assert JOBS_FILE == Path.home() / ".archon-search" / "archon-search-jobs.json"
 
 
 # ---------------------------------------------------------------------------

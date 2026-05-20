@@ -89,8 +89,8 @@ class SystemdSearchService(SearchServiceLifecycle):
         return pid if pid != 0 else None
 
     def register(self) -> None:
-        cwd = str(Path.home() / ".archon")
-        config_path = str(Path.home() / ".archon" / "archon-search.toml")
+        cwd = str(Path.home() / ".archon-search")
+        config_path = str(Path.home() / ".archon-search" / "archon-search.toml")
 
         content = _UNIT_TEMPLATE.format(
             python=sys.executable,

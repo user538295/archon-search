@@ -395,3 +395,41 @@ def test_unregister_does_not_raise_when_systemctl_missing() -> None:
     svc = SystemdSearchService()
     with patch.object(svc, "_run", side_effect=FileNotFoundError):
         svc.unregister()  # must not raise (best-effort contract)
+
+
+# ── Task 1.7 — path migration ──────────────────────────────────────────────────
+
+def test_service_name_unchanged() -> None:
+    """Service name archon-search must remain unchanged."""
+    from archon_search.platform.linux import _SERVICE_NAME
+    assert _SERVICE_NAME == "archon-search"
+
+
+def test_cwd_is_archon_search(tmp_path: Path) -> None:
+    """register() must use ~/.archon-search as WorkingDirectory."""
+    from archon_search.platform.linux import SystemdSearchService
+    svc = SystemdSearchService()
+    unit = tmp_path / "archon-search.service"
+    with (
+        patch.object(type(svc), "_unit_path", property(lambda self: unit)),
+        patch.object(svc, "_run", return_value=_ok()),
+    ):
+        svc.register()
+    content = unit.read_text()
+    expected_cwd = str(Path.home() / ".archon-search")
+    assert expected_cwd in content
+
+
+def test_config_path_is_archon_search(tmp_path: Path) -> None:
+    """register() must reference ~/.archon-search/archon-search.toml as config."""
+    from archon_search.platform.linux import SystemdSearchService
+    svc = SystemdSearchService()
+    unit = tmp_path / "archon-search.service"
+    with (
+        patch.object(type(svc), "_unit_path", property(lambda self: unit)),
+        patch.object(svc, "_run", return_value=_ok()),
+    ):
+        svc.register()
+    content = unit.read_text()
+    expected_config = str(Path.home() / ".archon-search" / "archon-search.toml")
+    assert expected_config in content

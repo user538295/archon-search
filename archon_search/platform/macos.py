@@ -68,9 +68,9 @@ class LaunchdSearchService(SearchServiceLifecycle):
             return False
 
     def register(self) -> None:
-        cwd = str(Path.home() / ".archon")
-        config_path = str(Path.home() / ".archon" / "archon-search.toml")
-        log_path = str(Path.home() / ".archon" / "logs" / "archon-search.log")
+        cwd = str(Path.home() / ".archon-search")
+        config_path = str(Path.home() / ".archon-search" / "archon-search.toml")
+        log_path = str(Path.home() / ".archon-search" / "logs" / "archon-search.log")
 
         content = _PLIST_TEMPLATE.format(
             label=_LABEL,

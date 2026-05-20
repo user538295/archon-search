@@ -148,7 +148,7 @@ class SearchInstaller:
         if target_provider is None or self.dry_run:
             return
 
-        config_path = Path(self.config_file) if self.config_file else Path.home() / ".archon" / "archon-search.toml"
+        config_path = Path(self.config_file) if self.config_file else Path.home() / ".archon-search" / "archon-search.toml"
         if not config_path.exists():
             logger.warning("Config file %s not found — skipping provider config", config_path)
             return

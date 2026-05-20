@@ -5,7 +5,7 @@ from pathlib import Path
 
 from archon_search.types import IngestJob, JobStatus
 
-JOBS_FILE: Path = Path.home() / ".archon" / "archon-search-jobs.json"
+JOBS_FILE: Path = Path.home() / ".archon-search" / "archon-search-jobs.json"
 
 
 def job_to_dict(job: IngestJob) -> dict:
