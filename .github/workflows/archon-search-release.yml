@@ -1,15 +1,19 @@
 name: archon-search release
 
-# Automated CalVer release: every push to main computes the next YY.M.<count>
-# tag, runs the eval gate, builds a wheel, and publishes to PyPI via OIDC.
+# Manual-only release. The workflow runs only on tag push (created by
+# `release.sh`) or on `workflow_dispatch:`. Plain pushes to `main` do not
+# trigger anything here — PR runs are handled by `archon-search-pr.yml`.
 #
-# Two-job design: the publish job has `needs: test`, so a failed eval gate
-# blocks publishing. `concurrency` serializes release runs so two simultaneous
-# pushes cannot race on tag creation.
+# Tag format: YY.M.<git-rev-list-count> (computed by release.sh).
+# Hatch-vcs reads the tag from the checkout and stamps the wheel filename
+# with it; the workflow refuses to publish if the wheel version drifts
+# from the tag name.
 
 on:
   push:
-    branches: [main]
+    tags:
+      - "*"
+  workflow_dispatch:
 
 concurrency:
   group: release
@@ -48,30 +52,42 @@ jobs:
         run: uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append --runxfail -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/
 
       - name: Enforce coverage fail-under=85
-        # The two pytest steps above both use --cov-append, which writes to a
-        # single .coverage file. There is no parallel-mode shard set to merge,
-        # so we skip `coverage combine` (it would error with "No data to
-        # combine") and report directly on the single file.
         run: uv run coverage report --fail-under=85
 
   # ---------------------------------------------------------------------------
-  # Job 2 — tag + build + publish to PyPI (OIDC, no stored secrets)
+  # Job 2 — build + publish to PyPI (OIDC, no stored secrets)
+  # The tag was created and pushed by release.sh before this workflow ran.
   # ---------------------------------------------------------------------------
   publish:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      # Required to push the new tag.
-      contents: write
       # Required to mint the OIDC token for PyPI's trusted publisher.
       id-token: write
     steps:
-      - name: Checkout
+      - name: Checkout (at the tag)
         uses: actions/checkout@v4
         with:
-          # Need full history for `git rev-list --count` and for hatch-vcs to
-          # resolve the version after we create the tag.
+          # Need full history so hatch-vcs / setuptools-scm can resolve the
+          # version from the tag we are currently on.
           fetch-depth: 0
+
+      - name: Resolve tag name
+        id: tag
+        run: |
+          # On `push: tags:` the ref is refs/tags/<tag>; on workflow_dispatch
+          # we expect to be invoked from a tag checkout too.
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ "$TAG" = "$GITHUB_REF" ]; then
+            # workflow_dispatch path — derive from describe
+            TAG=$(git describe --tags --exact-match 2>/dev/null || true)
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve a tag. Run release.sh and let it push a tag, or invoke this workflow against a tag ref."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing tag: $TAG"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -81,65 +97,27 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
-      - name: Compute CalVer tag
-        id: tag
-        run: |
-          TAG=$(python -c "import datetime; now=datetime.datetime.now(datetime.timezone.utc); print(f'{now.strftime(\"%y\")}.{now.month}.')" )$(git rev-list --count HEAD)
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Computed tag: $TAG"
-
-      - name: Skip if tag already exists
-        id: check
-        run: |
-          if git rev-parse -q --verify "refs/tags/${{ steps.tag.outputs.tag }}" >/dev/null; then
-            echo "Tag ${{ steps.tag.outputs.tag }} already exists — skipping release."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Configure git identity
-        if: steps.check.outputs.skip != 'true'
-        run: |
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-
-      - name: Create and push tag
-        if: steps.check.outputs.skip != 'true'
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          git tag "$TAG"
-          # GITHUB_TOKEN-pushed tags do not re-trigger `on: push` workflows,
-          # so there's no infinite loop.
-          git push origin "$TAG"
-
       - name: Install hatch
-        if: steps.check.outputs.skip != 'true'
         run: uv tool install hatch
 
       - name: Build wheel + sdist
-        if: steps.check.outputs.skip != 'true'
         run: |
           uv tool run hatch build --clean
           ls -la dist/
 
-      - name: Verify wheel version matches the freshly-created tag
-        if: steps.check.outputs.skip != 'true'
+      - name: Verify wheel version matches the pushed tag
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           WHEEL=$(ls dist/archon_search-*.whl)
-          # Wheel filename: archon_search-<version>-py3-none-any.whl
           WHEEL_VER=$(basename "$WHEEL" | sed -E 's/^archon_search-([^-]+)-.*/\1/')
           echo "wheel version: $WHEEL_VER"
-          echo "expected tag : $TAG"
+          echo "pushed tag   : $TAG"
           if [ "$WHEEL_VER" != "$TAG" ]; then
             echo "::error::Wheel version '$WHEEL_VER' does not match tag '$TAG' — refusing to publish."
             exit 1
           fi
 
       - name: Publish to PyPI (OIDC, no stored secrets)
-        if: steps.check.outputs.skip != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
