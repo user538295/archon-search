@@ -1,6 +1,6 @@
 [project]
 name = "archon-search"
-version = "26.4.0"
+dynamic = ["version"]
 description = "Standalone Search server for Archon"
 requires-python = ">=3.12"
 dependencies = [
@@ -29,8 +29,17 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options.version_scheme = "_version_scheme:calver_total_count"
+# Phase 1 only: the package lives under packages/archon-search/ in the monorepo,
+# but git tags live at the monorepo root. After Phase 2 extraction (the package
+# becomes the repo root) the `root = ".."` line MUST be removed.
+raw-options.root = ".."
+raw-options.fallback_version = "0.0.0+local"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

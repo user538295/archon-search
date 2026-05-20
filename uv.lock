@@ -70,7 +70,6 @@ wheels = [
 
 [[package]]
 name = "archon-search"
-version = "26.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "chonkie" },

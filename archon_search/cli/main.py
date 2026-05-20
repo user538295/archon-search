@@ -1,3 +1,5 @@
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
 import click
 
 from archon_search.cli.collection import collection
@@ -9,8 +11,14 @@ from archon_search.cli.status import status
 from archon_search.cli.stop import stop
 from archon_search.cli.sync import sync
 
+try:
+    _VERSION = _pkg_version("archon-search")
+except PackageNotFoundError:
+    _VERSION = "0.0.0+source"
+
 
 @click.group()
+@click.version_option(_VERSION, prog_name="archon-search")
 def main() -> None:
     """archon-search — standalone search server for Archon."""
 
