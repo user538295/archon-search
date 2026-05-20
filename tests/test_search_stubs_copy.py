@@ -6,9 +6,15 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 PACKAGE_TESTS_DIR = Path(__file__).parent
 STUBS_FILE = PACKAGE_TESTS_DIR / "_search_stubs.py"
 
+# Monorepo-only path: in the monorepo, this points at tests/_search_stubs.py at
+# the repo root. In the standalone archon-search repo (post-extraction) there
+# is no parent monorepo, so the "root" stubs file doesn't exist — tests that
+# compare against it skip cleanly.
 ROOT_TESTS_DIR = Path(__file__).parents[3] / "tests"
 ROOT_STUBS_FILE = ROOT_TESTS_DIR / "_search_stubs.py"
 
@@ -79,9 +85,10 @@ def test_search_stubs_importable_via_sys_path() -> None:
 
 def test_package_copy_content_identical_to_root() -> None:
     """Package copy must be content-identical to root original (ignoring root's top comment)."""
-    assert ROOT_STUBS_FILE.exists(), (
-        f"Root stubs file not found: {ROOT_STUBS_FILE}"
-    )
+    if not ROOT_STUBS_FILE.exists():
+        pytest.skip(
+            f"Monorepo root stubs file not present (standalone repo): {ROOT_STUBS_FILE}"
+        )
 
     root_lines = ROOT_STUBS_FILE.read_text(encoding="utf-8").splitlines(keepends=True)
     pkg_content = STUBS_FILE.read_text(encoding="utf-8")
@@ -99,7 +106,10 @@ def test_package_copy_content_identical_to_root() -> None:
 
 def test_root_stubs_starts_with_canonical_comment() -> None:
     """Root _search_stubs.py must start with the 'Canonical copy' redirect comment."""
-    assert ROOT_STUBS_FILE.exists(), f"Root stubs file not found: {ROOT_STUBS_FILE}"
+    if not ROOT_STUBS_FILE.exists():
+        pytest.skip(
+            f"Monorepo root stubs file not present (standalone repo): {ROOT_STUBS_FILE}"
+        )
     root_first_line = ROOT_STUBS_FILE.read_text(encoding="utf-8").splitlines()[0]
     assert root_first_line.startswith(_ROOT_COMMENT_PREFIX), (
         f"Root stubs file must start with '{_ROOT_COMMENT_PREFIX}', got: {root_first_line!r}"
