@@ -1,20 +1,25 @@
-name: archon-search release gate
+name: archon-search release
 
-# Release-aligned gate for the archon-search standalone repo. Runs the same
-# checks as the PR gate. This file will be replaced by the automated publish
-# workflow in Task 2.5 of FEAT-046 once PyPI OIDC is configured (Task 2.4).
+# Automated CalVer release: every push to main computes the next YY.M.<count>
+# tag, runs the eval gate, builds a wheel, and publishes to PyPI via OIDC.
 #
-# Until then, the file runs on tag pushes and manual dispatch so a release-cut
-# author can verify the eval gate is green before tagging.
+# Two-job design: the publish job has `needs: test`, so a failed eval gate
+# blocks publishing. `concurrency` serializes release runs so two simultaneous
+# pushes cannot race on tag creation.
 
 on:
   push:
-    tags:
-      - "*"
-  workflow_dispatch:
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  eval-gate:
+  # ---------------------------------------------------------------------------
+  # Job 1 — eval gate (must pass before publish runs)
+  # ---------------------------------------------------------------------------
+  test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -46,3 +51,77 @@ jobs:
         run: |
           uv run coverage combine
           uv run coverage report --fail-under=85
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — tag + build + publish to PyPI (OIDC, no stored secrets)
+  # ---------------------------------------------------------------------------
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to push the new tag.
+      contents: write
+      # Required to mint the OIDC token for PyPI's trusted publisher.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Need full history for `git rev-list --count` and for hatch-vcs to
+          # resolve the version after we create the tag.
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Compute CalVer tag
+        id: tag
+        run: |
+          TAG=$(python -c "import datetime; now=datetime.datetime.now(datetime.timezone.utc); print(f'{now.strftime(\"%y\")}.{now.month}.')" )$(git rev-list --count HEAD)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Computed tag: $TAG"
+
+      - name: Skip if tag already exists
+        id: check
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ steps.tag.outputs.tag }}" >/dev/null; then
+            echo "Tag ${{ steps.tag.outputs.tag }} already exists — skipping release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure git identity
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+      - name: Create and push tag
+        if: steps.check.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          git tag "$TAG"
+          # GITHUB_TOKEN-pushed tags do not re-trigger `on: push` workflows,
+          # so there's no infinite loop.
+          git push origin "$TAG"
+
+      - name: Install hatch
+        if: steps.check.outputs.skip != 'true'
+        run: uv tool install hatch
+
+      - name: Build wheel + sdist
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          uv tool run hatch build --clean
+          ls -la dist/
+
+      - name: Publish to PyPI (OIDC, no stored secrets)
+        if: steps.check.outputs.skip != 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
