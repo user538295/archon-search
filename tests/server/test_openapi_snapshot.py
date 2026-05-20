@@ -19,11 +19,20 @@ SNAPSHOT_PATH = Path(__file__).parent / "openapi_snapshot.json"
 UPDATE_FLAG = "--update-openapi-snapshot"
 
 
+def _strip_dynamic_fields(spec: dict) -> dict:  # type: ignore[type-arg]
+    """Remove fields that change per build (e.g., dynamic CalVer version) so the
+    snapshot stays stable across releases."""
+    info = spec.get("info")
+    if isinstance(info, dict):
+        info.pop("version", None)
+    return spec
+
+
 def test_openapi_spec_matches_snapshot(tmp_path: Path, pytestconfig: pytest.Config) -> None:
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
     app = create_app(cfg, JobStore(path=tmp_path / "jobs.json"))
-    spec = app.openapi()
+    spec = _strip_dynamic_fields(app.openapi())
 
     if pytestconfig.getoption(UPDATE_FLAG.lstrip("-").replace("-", "_"), default=False):
         SNAPSHOT_PATH.write_text(json.dumps(spec, indent=2, sort_keys=True))
@@ -35,7 +44,7 @@ def test_openapi_spec_matches_snapshot(tmp_path: Path, pytestconfig: pytest.Conf
             f"  uv run pytest tests/server/test_openapi_snapshot.py {UPDATE_FLAG}"
         )
 
-    baseline = json.loads(SNAPSHOT_PATH.read_text())
+    baseline = _strip_dynamic_fields(json.loads(SNAPSHOT_PATH.read_text()))
     assert spec == baseline, (
         f"OpenAPI spec changed. If intentional, regenerate with:\n"
         f"  uv run pytest tests/server/test_openapi_snapshot.py {UPDATE_FLAG}"
