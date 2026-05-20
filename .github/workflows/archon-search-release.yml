@@ -124,6 +124,22 @@ jobs:
           uv tool run hatch build --clean
           ls -la dist/
 
+      - name: Verify wheel version matches the freshly-created tag
+        if: steps.check.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          WHEEL=$(ls dist/archon_search-*.whl)
+          # Wheel filename: archon_search-<version>-py3-none-any.whl
+          WHEEL_VER=$(basename "$WHEEL" | sed -E 's/^archon_search-([^-]+)-.*/\1/')
+          echo "wheel version: $WHEEL_VER"
+          echo "expected tag : $TAG"
+          if [ "$WHEEL_VER" != "$TAG" ]; then
+            echo "::error::Wheel version '$WHEEL_VER' does not match tag '$TAG' — refusing to publish."
+            exit 1
+          fi
+
       - name: Publish to PyPI (OIDC, no stored secrets)
         if: steps.check.outputs.skip != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
