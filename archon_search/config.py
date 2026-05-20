@@ -20,7 +20,7 @@ class TelemetryConfig:
     enabled: bool = False
     retention_days: int = 30
     export_enabled: bool = False
-    log_dir: str = "~/.archon/search-logs"
+    log_dir: str = "~/.archon-search/search-logs"
 
 
 @dataclass
@@ -29,7 +29,7 @@ class SearchConfig:
     host: str = "127.0.0.1"
     port: int = 8765
     # [database]
-    db_path: str = "~/.archon/search"
+    db_path: str = "~/.archon-search/search"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     chunk_size: int = 512
@@ -47,7 +47,7 @@ class SearchConfig:
     watch: bool = False
     # [logging]
     level: str = "INFO"
-    log_file: str = "~/.archon/logs/archon-search.log"
+    log_file: str = "~/.archon-search/logs/archon-search.log"
     # [telemetry]
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     # [namespaces]
@@ -79,7 +79,7 @@ def save_config(config: SearchConfig, path: Path | str) -> None:
 
 
 def get_default_config_path() -> Path:
-    return Path.home() / ".archon" / "archon-search.toml"
+    return Path.home() / ".archon-search" / "archon-search.toml"
 
 
 def _coerce_int(value: object, field_name: str) -> int:

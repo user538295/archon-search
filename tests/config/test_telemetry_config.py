@@ -21,7 +21,7 @@ def test_telemetry_config_defaults() -> None:
     assert cfg.telemetry.enabled is False
     assert cfg.telemetry.retention_days == 30
     assert cfg.telemetry.export_enabled is False
-    assert cfg.telemetry.log_dir == "~/.archon/search-logs"
+    assert cfg.telemetry.log_dir == "~/.archon-search/search-logs"
 
 
 def test_telemetry_config_parses_toml(tmp_path: Path) -> None:
@@ -44,7 +44,7 @@ def test_telemetry_config_missing_section_uses_defaults(tmp_path: Path) -> None:
     assert cfg.telemetry.enabled is False
     assert cfg.telemetry.retention_days == 30
     assert cfg.telemetry.export_enabled is False
-    assert cfg.telemetry.log_dir == "~/.archon/search-logs"
+    assert cfg.telemetry.log_dir == "~/.archon-search/search-logs"
 
 
 def test_telemetry_config_rejects_retention_days_zero(tmp_path: Path) -> None:

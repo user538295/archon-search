@@ -85,7 +85,7 @@ def test_load_config_logging_section(tmp_path: Path) -> None:
 
 def test_get_default_config_path() -> None:
     path = get_default_config_path()
-    assert path == Path.home() / ".archon" / "archon-search.toml"
+    assert path == Path.home() / ".archon-search" / "archon-search.toml"
 
 
 def test_config_error_is_exception() -> None:
@@ -207,7 +207,7 @@ def test_c11_13_search_config_no_args_all_defaults_valid() -> None:
     config = SearchConfig()
     assert config.host == "127.0.0.1"
     assert config.port == 8765
-    assert config.db_path == "~/.archon/search"
+    assert config.db_path == "~/.archon-search/search"
     assert config.embedding_model == "BAAI/bge-small-en-v1.5"
     assert config.reranker_model == "cross-encoder/ms-marco-MiniLM-L-6-v2"
     assert config.chunk_size == 512
@@ -220,7 +220,7 @@ def test_c11_13_search_config_no_args_all_defaults_valid() -> None:
     assert config.collections == []
     assert config.watch is False
     assert config.level == "INFO"
-    assert config.log_file == "~/.archon/logs/archon-search.log"
+    assert config.log_file == "~/.archon-search/logs/archon-search.log"
     assert config.namespaces == {}
 
 
