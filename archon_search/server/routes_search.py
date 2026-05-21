@@ -42,6 +42,12 @@ class SearchResultSchema(BaseModel):
     text: str
     score: float
     source_path: str
+    file_type: str = ""
+    indexed_at: str = ""
+    updated_at: str = ""
+    ingested_by: str = "cli"
+    metadata: dict[str, str] = Field(default_factory=dict)
+    acl: list[str] | None = None
 
     @classmethod
     def from_result(cls, r: SearchResult) -> "SearchResultSchema":
@@ -51,6 +57,12 @@ class SearchResultSchema(BaseModel):
             text=r.text,
             score=r.score,
             source_path=r.source_path,
+            file_type=r.file_type,
+            indexed_at=r.indexed_at,
+            updated_at=r.updated_at,
+            ingested_by=r.ingested_by,
+            metadata=r.metadata,
+            acl=r.acl,
         )
 
 

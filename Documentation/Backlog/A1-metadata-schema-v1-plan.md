@@ -340,7 +340,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 - **Checkpoint**: `uv run pytest tests/test_search_result_shape.py -v`.
 
 #### Task 4.2 — Mirror new fields in `SearchResultSchema`, fix the `acl` drift, add field-parity snapshot
-- [ ] **File**: `archon_search/server/routes_search.py`
+- [x] **File**: `archon_search/server/routes_search.py`
 - **Depends on**: Task 4.1
 - **Description**:
   - Add to `SearchResultSchema` Pydantic model: `file_type: str = ""`, `indexed_at: str = ""`, `updated_at: str = ""`, `ingested_by: str = "cli"`, `metadata: dict[str, str] = Field(default_factory=dict)`, and **`acl: list[str] | None = None`** (closes the existing drift bug where `from_result()` silently dropped it).

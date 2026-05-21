@@ -27,10 +27,6 @@ def test_search_response_schema_fields() -> None:
     assert result == {"results": [], "acl_filtered": False}
 
 
-def test_search_result_schema_no_acl_field() -> None:
-    assert "acl" not in SearchResultSchema.model_fields
-
-
 def test_search_response_is_never_bare_array() -> None:
     keys = set(SearchResponse.model_fields.keys())
     assert "results" in keys
@@ -161,13 +157,13 @@ def test_search_missing_namespace_denies_protected(tmp_path: Path) -> None:
     assert data["acl_filtered"] is True
 
 
-def test_search_result_schema_no_acl_field_in_response(tmp_path: Path) -> None:
-    """Response results items don't have an 'acl' field."""
+def test_search_response_includes_acl_field(tmp_path: Path) -> None:
+    """After Task 4.2 acl drift fix: response result items DO have 'acl'."""
     app, client = _make_app(tmp_path)
     result = _make_result(1, acl=["default"])
     app.state.pipeline = _make_pipeline_mock(results=[result])
     response = client.post("/search", json={"collection": "col", "query": "test"})
     assert response.status_code == 200
     data = response.json()
-    if data["results"]:
-        assert "acl" not in data["results"][0]
+    assert data["results"], "expected at least one result"
+    assert data["results"][0]["acl"] == ["default"]
