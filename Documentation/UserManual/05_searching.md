@@ -1,0 +1,145 @@
+**Purpose**: Query the index over REST and MCP.
+**Audience**: End users / operators
+**Status**: Stable
+**Last reviewed**: 2026-05-20 / **Next review**: 2027-05-20
+
+# Searching
+
+## Principles
+
+1. **Hybrid search by default.** Every `/search` query runs dense vector + FTS retrieval, then a cross-encoder reranker. See `archon_search/pipeline.py:SearchPipeline.search`.
+2. **The collection is part of the request.** `POST /search` requires a `collection` field — the server does not auto-pick. Use `POST /route` to discover which collections to query.
+3. **Result count is server-configured.** Per-request `top_k` on `/search` is accepted but ignored at the route level; the pipeline uses `[database].top_k_return` (see [`/BREAKING.md`](../../BREAKING.md)).
+4. **REST and MCP are equivalent surfaces.** The MCP tools wrap the same pipeline calls; choose REST for HTTP clients, MCP for MCP-native clients.
+
+## REST `POST /search`
+
+Request body (`archon_search/server/routes_search.py:SearchRequest`):
+
+```json
+{
+  "collection": "docs",
+  "query": "how does the router work?",
+  "top_k": 5
+}
+```
+
+- `collection` — required, non-empty after strip.
+- `query` — required, non-empty after strip.
+- `top_k` — `1..100`, default `5`. **Accepted but ignored** at the route level; configure `[database].top_k_return` instead. Recorded in `BREAKING.md`.
+
+Response (`SearchResponse`):
+
+```json
+{
+  "results": [
+    {
+      "doc_id": "/path/to/file.md",
+      "chunk_id": "<uuid>",
+      "text": "…",
+      "score": 0.81,
+      "source_path": "/path/to/file.md"
+    }
+  ],
+  "acl_filtered": false
+}
+```
+
+Status codes:
+
+- `200` — success.
+- `404` — collection not found in the caller's namespace.
+- `503` — internal metadata lookup failed.
+- `200` with empty `results` — search executed but returned no hits (or pipeline raised internally; the route degrades to empty rather than 5xx).
+
+### `curl` example
+
+```bash
+source ~/.archon-search/.search.env
+
+curl -s -X POST http://127.0.0.1:8765/search \
+  -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"docs","query":"router centroid pre-ranking"}'
+```
+
+## REST `POST /route`
+
+Returns the collection-routing pre-context for a query — useful when you do not know which collection to hit.
+
+Request (`routes_route.py:RouteRequest`):
+
+```json
+{ "query": "how does the router work?", "slots": 8 }
+```
+
+- `query` — required, non-empty.
+- `slots` — optional. If set, must be `>= 1`; overrides `[routing].routing_shortlist_size`.
+
+Response (`RouteResponse`):
+
+```json
+{
+  "pre_context": "…",
+  "pinned_names": ["pinned1"],
+  "routable_names": ["docs","code"],
+  "decomposer_invoked": false
+}
+```
+
+Status codes:
+
+- `200` — success.
+- `400` — `query must not be empty` or `slots must be >= 1`.
+- `504` — routing timed out (30s hard ceiling).
+
+A typical workflow is: call `/route`, then call `/search` once per name in `pinned_names + routable_names`.
+
+## MCP tools
+
+`archon_search/server/mcp.py` registers nine tools, all auth-protected via the same Bearer middleware. The surface is intentionally narrower than REST — it covers search + ingestion + collection inspection, not async jobs or telemetry.
+
+| Tool | Inputs | Output |
+| --- | --- | --- |
+| `search` | `query`, `collection?` | `{"results":[…], "acl_filtered":bool}` (see `BREAKING.md` — was previously a bare list) |
+| `search_with_context` | `query`, `collection?`, `context_window=1` | `[{result, context_before, context_after}, …]` |
+| `ingest_file` | `path`, `collection?` | Per-file ingest result dict |
+| `ingest_directory` | `path`, `glob_pattern="**/*"`, `collection?` | List of ingest results; reports MCP progress |
+| `list_collections` | — | List of collection summaries (centroid omitted) |
+| `get_collections_meta` | — | Full `CollectionMeta` list (with centroid vectors) |
+| `get_collection_meta` | `name` | Full `CollectionMeta`, or `not_found` error dict |
+| `list_documents` | `collection?`, `limit=100` | List of document records |
+| `delete_document` | `doc_id`, `collection?` | `{"deleted": <chunk_count>}` |
+
+When `collection` is omitted, the server uses the `default_collection` injected at app construction.
+
+### MCP client pseudocode
+
+Most MCP clients (Claude Desktop, Cursor, custom SDK code) handle the streamable-HTTP handshake for you. Conceptually:
+
+```python
+# Pseudocode — see your MCP client's docs for the real API.
+import os
+from mcp_client import connect
+
+client = connect(
+    url="http://127.0.0.1:8765/mcp",
+    headers={"Authorization": f"Bearer {os.environ['ARCHON_SEARCH_API_KEY']}"},
+)
+
+response = client.call_tool("search", {
+    "query": "centroid pre-ranking",
+    "collection": "docs",
+})
+for hit in response["results"]:
+    print(hit["score"], hit["source_path"])
+```
+
+The MCP endpoint is `POST /mcp` (streamable HTTP transport, mounted by `mcp.create_mcp_http_app`). `/health` remains exempt from auth.
+
+## Related documents
+
+- [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) — full REST/MCP reference.
+- [`/BREAKING.md`](../../BREAKING.md) — `top_k` and MCP `search` shape history.
+- [`04_ingestion_and_collections.md`](./04_ingestion_and_collections.md) — populating the data you are about to search.
+- [`06_telemetry.md`](./06_telemetry.md) — what `/search` and `/route` log when telemetry is on.

@@ -24,3 +24,6 @@ venv/
 # Editor caches
 .idea/
 .vscode/
+
+# Obsidian vault config
+.obsidian/

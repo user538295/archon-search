@@ -1,0 +1,156 @@
+**Purpose**: Describe the operational surface of `archon-search` — what an operator can observe, how the service is installed and lifecycled, and the runbooks for the failure modes that actually occur.
+**Audience**: Operators running `archon-search` on a workstation or single server, and maintainers extending its observability surface.
+**Status**: Draft
+**Last reviewed**: 2026-05-20
+**Next review**: 2026-08-20
+
+# Operational Readiness, Monitoring, and Reliability
+
+`archon-search` is a single-process local daemon. There is no fleet, no orchestrator, and no upstream control plane — operational tooling reflects that. This document is the canonical reference for what the service exposes, how it is installed and supervised by the host OS, and what to check first when something is wrong. The component map is in `Architecture/100_system_architecture_overview.md`; failure-mode taxonomy lives in `Architecture/140_error_handling_strategy.md`; release lifecycle is in `Architecture/510_release_and_environment_strategy.md`.
+
+## Principles
+
+1. **No formal SLOs, SLIs, or SLAs.** `archon-search` is a local service. No availability or latency objective is declared or contractually promised. Latency p50/p95 are *captured* (telemetry, eval harness) as regression guards, not as production targets.
+2. **Observability is local-only.** Health, status, indexing state, and telemetry are all served from the same process to the same operator. Nothing is exported off-box. Telemetry is opt-in and disabled by default (`Architecture/000_introduction_and_guiding_principles.md`, principle 4).
+3. **OS-native supervision.** The service is registered as a `launchd` user agent (macOS) or `systemd --user` unit (Linux). The OS — not `archon-search` — is responsible for restart-on-crash and start-at-login.
+4. **One health endpoint is unauthenticated; everything else requires bearer auth.** `GET /health` exists so a supervisor or installer can probe the port without holding the API key.
+5. **State recovery via re-sync, not via clever rollback.** When indexes drift, the runbook is to re-run `archon-search sync` or `archon-search collection reindex`. There is no transactional repair path.
+
+## Reliability targets
+
+| Pillar | Status                                                                                                                                                  |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SLO    | **Not declared.** Single-tenant local service; no availability or latency objective.                                                                    |
+| SLI    | Latency p50/p95 captured by `telemetry/reader.py::compute_stats` and `tests/eval/`. Treat both as **regression guards**, not production indicators.     |
+| SLA    | **None.** No external promise of uptime or response time.                                                                                               |
+
+If a future deployment needs an SLO, declare it in this document and pick an SLI that is *already* being captured — do not introduce hidden objectives.
+
+## Observability surface
+
+```mermaid
+flowchart LR
+  op[Operator / Supervisor] -->|GET /health| H[routes_health.py<br/>unauth]
+  op -->|GET /status<br/>Bearer auth| S[routes_status.py]
+  op -->|GET /indexing-state<br/>Bearer auth| I[routes_state.py]
+  op -->|GET /telemetry/stats<br/>GET /telemetry/entries| T[routes_telemetry.py]
+  S --> SS[SearchStore + IndexingStateStore]
+  T --> TR[TelemetryReader<br/>~/.archon-search/search-logs/*.jsonl]
+  proc[archon-search process] --> LOG[~/.archon-search/logs/archon-search.log]
+```
+
+### HTTP endpoints
+
+| Endpoint                 | Auth        | Returns                                                                                                | Source                                  |
+| ------------------------ | ----------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------- |
+| `GET /health`            | None        | `{"status": "running", "version": "<vcs version>"}`. Liveness probe; no business state.                | `server/routes_health.py`               |
+| `GET /status`            | Bearer      | Top-level `running` (bool, always `true` when this handler responds), `pid`, `version`, and a per-collection list with `name`, `path`, `doc_count`, `chunk_count`, `status`, `watching`, `processed_files`, `total_files`, `eta_seconds`, `error`, `error_count`, filtered to the caller's namespace. `path`, `doc_count`, and `chunk_count` are currently always `""` / `0` placeholders. | `server/routes_status.py`               |
+| `GET /indexing-state`    | Bearer      | Machine-readable raw indexing state: per-collection `status`, file counters, timestamps, error, `error_count`. Empty object when no state file exists. | `server/routes_state.py`                |
+| `GET /telemetry/stats`   | Bearer      | Aggregate stats over `[since, until]`: `total_queries`, `success_rate`, p50/p95 `latency_ms`, `by_endpoint`, `by_collection`, `error_breakdown`, `skipped_lines`. `enabled: false` body when telemetry is off. | `server/routes_telemetry.py`            |
+| `GET /telemetry/entries` | Bearer      | Paginated raw entries with `collection`, `endpoint`, `status`, `error_kind` filters. Hard cap `limit ≤ 200`. | `server/routes_telemetry.py`            |
+
+`GET /health` and `GET /status` are intentionally separate. `health` is for supervisors that do not hold the API key. `status` is for an operator who does and wants per-collection progress.
+
+### Log file
+
+On macOS the server writes a single rolling log to `~/.archon-search/logs/archon-search.log`. Two independent code paths touch this path and they are **not kept in sync**:
+
+- `platform/macos.py::LaunchdSearchService.register` hard-codes `Path.home() / ".archon-search" / "logs" / "archon-search.log"` when formatting `_PLIST_TEMPLATE`'s `{log_path}` placeholder into `StandardOutPath` / `StandardErrorPath`. It does **not** read `cfg.log_file`.
+- `cli/install_cmd.py::install` ensures `Path(cfg.log_file).expanduser().parent` exists before service start, but never feeds `cfg.log_file` into the plist.
+
+Consequence: if an operator customizes `cfg.log_file`, the macOS plist will still point at the hard-coded default path. The `cfg.log_file`-driven directory creation only affects code paths that actually open `cfg.log_file` (e.g. an in-process logger).
+
+The Linux unit (`platform/linux.py::_UNIT_TEMPLATE`) delegates stdout/stderr to `journalctl --user -u archon-search`. There is no rotation policy in v1 — see `Architecture/140_error_handling_strategy.md` for the accepted-risk register.
+
+### Telemetry JSONL
+
+When `telemetry.enabled = true` in `~/.archon-search/archon-search.toml`:
+
+- `telemetry/writer.py` runs a single background drain task per process, fed by a bounded `asyncio.Queue` (default 1024). When the queue is full it drops the **oldest** entry, never the new one, and emits one rate-limited warning per minute. Drop atomicity is asserted in the module docstring: `enqueue()` is intentionally synchronous because the drop-and-replace sequence must not interleave with the drain loop.
+- One file per UTC day at `~/.archon-search/search-logs/YYYY-MM-DD.jsonl`. Each line is ≤ 8 KiB; oversize entries truncate `result_doc_ids` via binary search and set `truncated: true`.
+- `telemetry/reader.py` parses these files for the `/telemetry/*` endpoints. Malformed lines increment `skipped_lines` and are surfaced in the response, never silently swallowed.
+- `telemetry/pruner.py` deletes files where `file_date < today - retention_days` once every 24 hours. Today's file is never deleted regardless of retention.
+- **Structural invariant**: telemetry entries cannot carry the raw query string. The factory methods in `telemetry/entry.py` do not accept a `query` parameter. Do not add one.
+
+`export_enabled = true` is coerced to `false` with a warning at config load (v1); there is no remote sink.
+
+## Service install and lifecycle
+
+```mermaid
+flowchart TB
+  CLI[archon-search install] --> INST[cli/install_cmd.py::install]
+  INST --> CFG[Create ~/.archon-search/archon-search.toml<br/>if absent]
+  INST --> DIRS[mkdir db_path, logs/]
+  INST --> LEGACY[Detect + remove legacy<br/>service definition]
+  INST --> REG[service.register&#40;&#41;]
+  REG -->|macOS| L[LaunchAgents/com.archon.search.plist]
+  REG -->|Linux| U[~/.config/systemd/user/archon-search.service]
+  REG -->|Windows| X[NotImplementedError]
+  INST --> START[service.start&#40;&#41;]
+  INST --> WAIT[Poll GET /health up to 60s]
+```
+
+The active install path is `cli/install_cmd.py::install` (wired into `cli/main.py`). `archon_search/install.py::SearchInstaller` is **legacy / dead code** in the current CLI — its `write_service_file` / `load_service` / `unload_service` delegate to `platform/runtime.py::get_search_service`, which raises `NotImplementedError`. Do not assume any behavior described on `SearchInstaller` runs during `archon-search install`.
+
+The `SearchServiceLifecycle` ABC (`platform/service.py`) declares `start`, `stop`, `restart`, `status`, `register`, `unregister`. Concrete implementations:
+
+- **macOS (`platform/macos.py::LaunchdSearchService`)** — writes `~/Library/LaunchAgents/com.archon.search.plist`; `KeepAlive=true`, `ThrottleInterval=60`, wrapped in `/usr/sbin/taskpolicy -b` (background QoS). `start()` is a no-op if `launchctl list com.archon.search` already reports it loaded.
+- **Linux (`platform/linux.py::SystemdSearchService`)** — writes `~/.config/systemd/user/archon-search.service`; `Restart=always`, `RestartSec=5`, `Nice=10`, `CPUQuota=50%`. `register()` runs `daemon-reload`, `systemctl --user enable`, and `loginctl enable-linger $USER` so the service survives logout.
+- **Windows (`platform/windows.py::WindowsSearchService`)** — every lifecycle method raises `NotImplementedError("Windows service management not yet supported — run archon-search start manually")`. `status()` always reports `running=False`.
+
+GPU detection (`platform/runtime.py::SearchRuntime.detect_gpu_type`) is **not gated by OS**: it first invokes `nvidia-smi` on any platform, and returns `GpuType.CUDA` whenever `nvidia-smi` exits with rc=0. Only if `nvidia-smi` is missing or fails does it fall back to checking `platform.system() == "Darwin" and platform.machine() == "arm64"`, which returns `GpuType.METAL` (mapped to the ONNX provider name `CoreMLExecutionProvider` by `install.py::SearchInstaller.configure_providers`). Otherwise it returns `GpuType.NONE` and no provider is written.
+
+`SearchInstaller.configure_providers` writes the matching ONNX provider into `[database].providers`, but per the note above `SearchInstaller` is **not invoked by `archon-search install`** in the current wiring. In the live install path, no GPU detection runs and no provider is auto-configured — operators wanting GPU acceleration must edit `[database].providers` in `archon-search.toml` manually. #Unverified — whether this is intended (vs. a known gap pending re-wiring) is not documented in source.
+
+## Runbooks
+
+### Start, stop, status
+
+```bash
+archon-search install          # one-time: register service, start, wait for /health
+archon-search start            # subsequent starts via the OS supervisor
+archon-search stop
+archon-search status           # queries the OS supervisor (launchctl / systemctl) — does NOT call GET /status
+```
+
+`install --dry-run` prints the plan without touching the filesystem or the service manager.
+
+Note: `archon-search status` is purely a local OS-supervisor query — `cli/status.py::status` calls `_get_service().status()` (i.e. `launchctl list com.archon.search` on macOS, `systemctl is-active` on Linux) and prints `running (PID N, uptime Ns)` or `stopped`. It never makes an HTTP request, does not require the API key, and does not include per-collection progress. To see per-collection progress use `curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8765/status`.
+
+### Search returns nothing
+
+In order:
+
+1. `curl http://127.0.0.1:8765/health` — confirms the process is up. If this fails, check `~/.archon-search/logs/archon-search.log` (macOS) or `journalctl --user -u archon-search` (Linux).
+2. `curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8765/status` — inspect the per-collection block. A collection with `status: "not_yet_indexed"` or `processed_files < total_files` is still ingesting; consult `eta_seconds`. (The `archon-search status` CLI is OS-supervisor-only and does not show this.)
+3. `archon-search collection list` — confirm the expected collections actually exist in the caller's namespace. Routing only considers namespace-visible collections (`routes_status.py` filters by `request.state.namespace`).
+4. `GET /indexing-state` — machine-readable form of the same data; useful when `error_count > 0`.
+5. If indexes look stale, re-run `archon-search sync` or `archon-search collection reindex <name>`.
+
+### Service will not start
+
+- **macOS**: `launchctl load ~/Library/LaunchAgents/com.archon.search.plist` and inspect `~/.archon-search/logs/archon-search.log`. `LaunchdSearchService.start` raises `RuntimeError` containing `launchctl`'s stderr — read it.
+- **Linux**: `systemctl --user status archon-search` then `journalctl --user -u archon-search -e`. `SystemdSearchService.start` surfaces `systemctl`'s stderr in its `RuntimeError`.
+- **Port already in use**: `lsof -i :8765` (or the configured port). Stop the conflicting process; `install` warns but proceeds if `/health` is already answering.
+
+### Telemetry inconsistency
+
+- If `GET /telemetry/stats` shows `skipped_lines > 0`, one or more lines in the day's JSONL failed schema validation. `TelemetryReader.read_entries` logs `"telemetry: skipping malformed line in <path>"` at WARNING — the offending **filename** is logged but the line **content** is not. Open the file under `~/.archon-search/search-logs/` to diagnose.
+- If `GET /telemetry/stats` returns `{"enabled": false}` despite expecting it on, telemetry is disabled in config — `routes_telemetry.py` short-circuits before touching the log directory.
+- The pruner runs every 24 hours from process start. To force a prune, restart the service. Today's file is intentionally exempt from deletion.
+
+### API key rotation
+
+The key is auto-generated on first start at `~/.archon-search/.search.env` with mode `0600` (`key_manager.py`). To rotate:
+
+- **Overwrite the file**: edit `~/.archon-search/.search.env` (preserve `0600`) and restart the service.
+- **Override at runtime**: set `ARCHON_SEARCH_API_KEY=<new-key>` in the environment; this takes precedence over the file.
+- **Relocate the file**: set `ARCHON_SEARCH_KEY_FILE=<path>` and restart. The new path is read with the same `0600` expectation.
+
+There is no live-reload — every rotation requires a service restart. Clients holding the old key will receive `401` immediately after restart.
+
+## See also
+
+- `Architecture/100_system_architecture_overview.md` — component layout and request flow.
+- `Architecture/140_error_handling_strategy.md` — failure-mode taxonomy, including telemetry write failures and indexing errors surfaced via `error_count`.
+- `Architecture/510_release_and_environment_strategy.md` — versioning, release cuts, environment promotion (or its deliberate absence).
