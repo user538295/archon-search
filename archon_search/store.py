@@ -7,13 +7,27 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, _validate_namespace
+
+
+from dataclasses import dataclass, field
+from typing import Callable
+
+
+@dataclass
+class ReindexResult:
+    """Outcome of ``SearchStore.reindex_metadata``."""
+
+    processed: int = 0
+    updated: int = 0
+    skipped: int = 0
+    warnings: list[str] = field(default_factory=list)
 
 
 class StoreBusyError(Exception):
@@ -510,6 +524,112 @@ class SearchStore:
 
         table = await db.open_table(collection)
         await table.create_index("text", config=FTS(), replace=True)
+
+    # ------------------------------------------------------------------
+    # Reindex (metadata backfill for pre-A1 collections)
+    # ------------------------------------------------------------------
+
+    async def reindex_metadata(
+        self,
+        collection: str,
+        *,
+        dry_run: bool = False,
+        progress_cb: Callable[[int, int], None] | None = None,
+    ) -> ReindexResult:
+        """Refresh metadata fields on every row in *collection*.
+
+        - ``file_type`` re-derived from ``Path(source_path).suffix.lower().lstrip('.')``.
+        - ``updated_at`` set to the source file's mtime in UTC ISO 8601 if the
+          file still exists; otherwise preserved (with a warning).
+        - Legacy ``ingested_by == "archon-search-cli"`` is rewritten to
+          ``"reindex"``. Canonical members are preserved.
+
+        Reads RAW LanceDB rows — does NOT route through ``_normalize_ingested_by``
+        (Task 6.2 requirement), so legacy values are visible and rewriteable.
+
+        Holds the per-collection lock for the full duration (no timeout — the
+        reindex is the holder).
+        """
+        from archon_search.constants import LEGACY_INGESTED_BY  # noqa: PLC0415
+
+        self._validate_collection(collection)
+        db = self._require_connected()
+        result = ReindexResult()
+
+        lock = self._lock_for(collection)
+        await lock.acquire()
+        try:
+            table = await db.open_table(collection)
+            rows = await table.query().to_list()
+            total = len(rows)
+            updates: list[tuple[str, dict[str, str]]] = []
+
+            for row in rows:
+                result.processed += 1
+                source_path = row.get("source_path") or ""
+                stored_file_type = row.get("file_type") or ""
+                stored_updated_at = row.get("updated_at") or ""
+                stored_ingested_by = row.get("ingested_by") or ""
+
+                new_file_type = (
+                    Path(source_path).suffix.lower().lstrip(".") if source_path else ""
+                )
+
+                new_updated_at = stored_updated_at
+                if source_path:
+                    try:
+                        mtime = Path(source_path).stat().st_mtime
+                        new_updated_at = datetime.fromtimestamp(
+                            mtime, tz=timezone.utc
+                        ).isoformat()
+                    except OSError:
+                        result.warnings.append(f"missing-source: {source_path}")
+
+                if stored_ingested_by == LEGACY_INGESTED_BY:
+                    new_ingested_by = "reindex"
+                else:
+                    new_ingested_by = stored_ingested_by
+
+                differs = (
+                    new_file_type != stored_file_type
+                    or new_updated_at != stored_updated_at
+                    or new_ingested_by != stored_ingested_by
+                )
+                if not differs:
+                    continue
+
+                updates.append((
+                    row["chunk_id"],
+                    {
+                        "file_type": new_file_type,
+                        "updated_at": new_updated_at,
+                        "ingested_by": new_ingested_by,
+                    },
+                ))
+
+                if progress_cb is not None and result.processed % 200 == 0:
+                    progress_cb(result.processed, total)
+
+            if not dry_run:
+                for chunk_id, vals in updates:
+                    await table.update(
+                        where=f"chunk_id = '{chunk_id}'",
+                        updates=vals,
+                    )
+                    result.updated += 1
+                if updates:
+                    try:
+                        await self.rebuild_fts_index(collection)
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "rebuild_fts_index after reindex failed", exc_info=True
+                        )
+
+            if progress_cb is not None:
+                progress_cb(result.processed, total)
+        finally:
+            lock.release()
+        return result
 
     # ------------------------------------------------------------------
     # Search

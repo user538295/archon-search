@@ -93,7 +93,7 @@ async def test_hybrid_search_normalizes_legacy_ingested_by_to_cli(
     # LanceDB Python API supports SQL-style update for in-place writes.
     await table.update(
         where=f"chunk_id = '{chunk.chunk_id}'",
-        updates={"ingested_by": "'archon-search-cli'"},
+        updates={"ingested_by": "archon-search-cli"},
     )
     await connected_store.rebuild_fts_index(col_name)
 

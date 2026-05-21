@@ -451,7 +451,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 - **Checkpoint**: `uv run pytest tests/test_store_lock.py -v`.
 
 #### Task 6.2 — Implement `SearchStore.reindex_metadata`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 6.1, Task 4.3
 - **Description**:
   - New method: `async def reindex_metadata(self, collection: str, *, dry_run: bool = False, progress_cb: Callable[[int, int], None] | None = None) -> ReindexResult` where `ReindexResult = dataclass(processed: int, updated: int, skipped: int, warnings: list[str])`.
