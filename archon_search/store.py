@@ -132,7 +132,7 @@ class SearchStore:
                 pa.field("file_type", pa.utf8()),
                 pa.field("language", pa.utf8()),  # nullable via None → ""
                 pa.field("metadata", pa.utf8()),   # JSON string
-                pa.field("custom_score", pa.float32()),  # nullable
+                pa.field("custom_score", pa.float32(), nullable=True),
                 pa.field("ingested_by", pa.utf8()),
                 pa.field("updated_at", pa.utf8()),
                 pa.field("acl", pa.list_(pa.utf8()), nullable=True),

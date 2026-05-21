@@ -230,7 +230,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 > **Releasable**: when Task 2.1 lands; no data migration needed.
 
 #### Task 2.1 — Make `custom_score` schema nullability explicit + pin round-trip
-- [ ] **File**: `archon_search/store.py` (PyArrow schema definition for chunk table)
+- [x] **File**: `archon_search/store.py` (PyArrow schema definition for chunk table)
 - **Depends on**: nothing (PyArrow schema edit is independent of the type audit)
 - **Description**:
   - Locate the `pa.schema([...])` (or `pa.field(...)`) block defining the chunk table; on the `custom_score` field, add the explicit `nullable=True` keyword.
