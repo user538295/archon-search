@@ -540,7 +540,8 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 - **Checkpoint**: `uv run pytest tests/integration/test_watcher_replace.py -v -m integration`.
 
 #### Task 7.2 — Eval-harness fixture sweep
-- [ ] **File**: `tests/eval/test_metrics.py`, `tests/eval/test_types.py` (the two files referencing `SearchResult`, enumerated upfront via `grep -l SearchResult tests/eval/`). If a future eval file is added that constructs `SearchResult`, extend the sweep.
+- [x] **File**: `tests/eval/test_metrics.py`, `tests/eval/test_types.py` (the two files referencing `SearchResult`, enumerated upfront via `grep -l SearchResult tests/eval/`). If a future eval file is added that constructs `SearchResult`, extend the sweep.
+  - Audit result: both files reference ``EvalSearchResult`` from ``archon_search.eval.types`` — a separate dataclass from the production ``archon_search._types.SearchResult``. No production-type construction in ``tests/eval/``; no fixture changes required. Eval suite (``pytest -m eval``) passes 9/9 against unchanged thresholds.
 - **Depends on**: Task 4.3
 - **Description**:
   - Audit the two enumerated files (and any new arrivals) for fixtures or assertions that construct a `SearchResult` directly or assert on `asdict(SearchResult(...))`. Update to populate the new fields (use safe defaults: `file_type=""`, `updated_at=""`, `indexed_at=""`, `ingested_by="cli"`, `metadata={}`).
