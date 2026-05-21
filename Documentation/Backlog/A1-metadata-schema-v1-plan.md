@@ -305,7 +305,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 - **Checkpoint**: `uv run pytest tests/test_pipeline_metadata.py tests/test_routes_ingest_header.py tests/test_watcher_ingested_by.py -v`.
 
 #### Task 3.4 — Verify `SearchStore.ingest_chunks` writes the new fields as-is
-- [ ] **File**: `archon_search/store.py` (small audit + test; code changes only if a coercion is found)
+- [x] **File**: `archon_search/store.py` (small audit + test; code changes only if a coercion is found)
 - **Depends on**: Task 3.3
 - **Description**:
   - Audit `SearchStore.ingest_chunks`: confirm that `file_type`, `updated_at`, `ingested_by` flow from `ChunkRecord` into the LanceDB row dict without modification. The existing fallback `updated_at = updated_at or indexed_at` stays — that's the desired behavior for `stat()` failures.
