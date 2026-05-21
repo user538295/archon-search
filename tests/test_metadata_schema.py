@@ -230,16 +230,18 @@ async def test_file_type_stored(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ingested_by_stored(tmp_path):
-    """ingested_by='custom-tool' must round-trip correctly via fetch_adjacent_chunks."""
+    """A canonical ingested_by value must round-trip via fetch_adjacent_chunks.
+
+    After Task 3.1/4.3 unknown values are normalized to 'cli' at the read
+    boundary; this test now uses a canonical Literal member.
+    """
     doc_id = "e" * 64
-    chunk = _make_chunk(doc_id=doc_id, chunk_id=f"{doc_id}-000000", ingested_by="custom-tool")
+    chunk = _make_chunk(doc_id=doc_id, chunk_id=f"{doc_id}-000000", ingested_by="watcher")
     store, col = await _store_with_chunk(chunk, str(tmp_path))
     try:
-        # Use the production read path: fetch adjacent chunks around index 1
-        # so chunk at index 0 is returned (center=1, window=1 fetches idx 0 and 2)
         results = await store.fetch_adjacent_chunks(col, doc_id, center_idx=1, window=1)
         assert len(results) == 1, f"Expected 1 chunk, got {len(results)}"
-        assert results[0].ingested_by == "custom-tool"
+        assert results[0].ingested_by == "watcher"
     finally:
         await store.disconnect()
 

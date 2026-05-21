@@ -72,6 +72,23 @@ def parse_metadata(raw: str) -> dict[str, str]:
         return {}
 
 
+def _normalize_ingested_by(value: "str | None") -> str:
+    """Normalize a stored ``ingested_by`` value at the read boundary.
+
+    None / empty / legacy ``"archon-search-cli"`` → ``"cli"``.
+    Canonical members pass through. Unknown values DEBUG-logged and coerced
+    to ``"cli"`` defensively.
+    """
+    from archon_search.constants import INGESTED_BY_VALUES, LEGACY_INGESTED_BY  # noqa: PLC0415
+
+    if not value or value == LEGACY_INGESTED_BY:
+        return "cli"
+    if value in INGESTED_BY_VALUES:
+        return value
+    logger.debug("unexpected stored ingested_by %r; coerced to 'cli'", value)
+    return "cli"
+
+
 class SearchStore:
     """Async LanceDB store for chunked document embeddings."""
 
@@ -509,6 +526,7 @@ class SearchStore:
         for score, row in scored[:top_k]:
             raw_acl = row.get("acl")
             row_acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
+            indexed_at = row.get("indexed_at") or ""
             results.append(
                 SearchResult(
                     doc_id=row["doc_id"],
@@ -516,6 +534,11 @@ class SearchStore:
                     text=row["text"],
                     score=score,
                     source_path=row["source_path"],
+                    file_type=row.get("file_type") or "",
+                    indexed_at=indexed_at,
+                    updated_at=row.get("updated_at") or indexed_at,
+                    ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
+                    metadata=parse_metadata(row.get("metadata") or "{}"),
                     acl=row_acl,
                 )
             )
@@ -646,7 +669,7 @@ class SearchStore:
                 language=r.get("language") or None,
                 metadata=parse_metadata(r.get("metadata") or "{}"),
                 custom_score=r.get("custom_score"),
-                ingested_by=r.get("ingested_by") or "archon-search-cli",
+                ingested_by=_normalize_ingested_by(r.get("ingested_by")),
                 updated_at=r.get("updated_at") or r["indexed_at"],
                 acl=list(r.get("acl")) if isinstance(r.get("acl"), list) else None,
             )

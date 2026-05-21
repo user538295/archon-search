@@ -356,7 +356,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 - **Checkpoint**: `uv run pytest tests/server/test_search_result_schema.py -v && uv run pytest tests/ -k "search_result_schema_no_acl" || echo "old test correctly removed"`.
 
 #### Task 4.3 — Wire `parse_metadata()` into `SearchStore.hybrid_search`'s row-to-`SearchResult` mapping
-- [ ] **File**: `archon_search/store.py` (the `SearchResult(...)` construction inside `hybrid_search`)
+- [x] **File**: `archon_search/store.py` (the `SearchResult(...)` construction inside `hybrid_search`)
 - **Depends on**: Task 4.1, Task 3.4
 - **Description**:
   - At the `SearchResult(...)` construction site inside `hybrid_search`, populate the five new fields from the row dict: `file_type=r.get("file_type") or ""`, `indexed_at=r.get("indexed_at") or ""`, `updated_at=r.get("updated_at") or r.get("indexed_at") or ""` (preserves the fallback), `ingested_by=_normalize_ingested_by(r.get("ingested_by"))`, `metadata=parse_metadata(r.get("metadata") or "{}")`.
