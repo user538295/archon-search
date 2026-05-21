@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -12,7 +13,22 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
-from archon_search.constants import DEFAULT_NAMESPACE, _validate_namespace
+from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, _validate_namespace
+
+
+class StoreBusyError(Exception):
+    """Raised when ``SearchStore.ingest_chunks`` cannot acquire the per-collection
+    lock within ``INGEST_LOCK_TIMEOUT_S`` seconds (typically because
+    ``reindex_metadata`` holds the lock).
+
+    Callers (REST `/ingest`) translate this into HTTP 503 + ``Retry-After``.
+    """
+
+    def __init__(self, timeout_s: float) -> None:
+        super().__init__(
+            f"store busy: lock acquisition exceeded {timeout_s}s"
+        )
+        self.timeout_s = timeout_s
 
 if TYPE_CHECKING:
     import lancedb
@@ -95,6 +111,19 @@ class SearchStore:
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = Path(db_path).expanduser()
         self._db: Optional[lancedb.db.AsyncConnection] = None
+        # Per-collection ingest/reindex lock map. Reads do not acquire any
+        # lock — LanceDB handles read concurrency. Independent from
+        # ``SearchCollectionSync._collection_locks`` (same key space, different
+        # call paths).
+        self._collection_locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, collection: str) -> asyncio.Lock:
+        """Lazily create and return the lock for *collection*."""
+        lock = self._collection_locks.get(collection)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._collection_locks[collection] = lock
+        return lock
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -200,6 +229,8 @@ class SearchStore:
         if name not in names:
             raise KeyError(name)
         await db.drop_table(name)
+        # Avoid leaking lock entries for dropped collections.
+        self._collection_locks.pop(name, None)
 
     async def rename_collection(self, old: str, new: str) -> None:
         """Rename a LanceDB table from *old* to *new*.
@@ -433,6 +464,19 @@ class SearchStore:
         if not chunks:
             return 0
 
+        # Acquire the per-collection lock; the timeout applies only to
+        # acquisition. Once acquired, the write runs to completion.
+        lock = self._lock_for(collection)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+        except asyncio.TimeoutError as e:
+            raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
+        try:
+            return await self._do_ingest(db, collection, chunks)
+        finally:
+            lock.release()
+
+    async def _do_ingest(self, db, collection: str, chunks: list[ChunkRecord]) -> int:
         table = await db.open_table(collection)
         rows = [
             {

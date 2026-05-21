@@ -13,6 +13,11 @@ LEGACY_INGESTED_BY: Final[str] = "archon-search-cli"
 # is intentionally NOT included.
 INGESTED_BY_VALUES: Final[tuple[str, ...]] = ("cli", "http", "watcher", "reindex")
 
+# Per-collection ingest-lock acquisition timeout (Task 6.1). Hardcoded for v1;
+# the only externally-visible knob is the 503 ``Retry-After`` header derived
+# from this value (rounded up to integer seconds per RFC 7231).
+INGEST_LOCK_TIMEOUT_S: Final[float] = 30.0
+
 # Pinned dated version for internal fast-model tasks (description generation).
 DEFAULT_FAST_MODEL: str = "claude-haiku-4-5-20251001"
 

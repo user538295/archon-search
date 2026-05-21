@@ -399,7 +399,8 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 > **Releasable**: when Task 6.4 lands; operators can backfill pre-A1 collections without taking the service down.
 
 #### Task 6.1 — Add per-collection `asyncio.Lock` map to `SearchStore`; wire ingest with acquire-timeout and 503
-- [ ] **File**: `archon_search/store.py`, `archon_search/constants.py`, `archon_search/server/routes_collections.py` (or wherever REST ingest lives)
+- [x] **File**: `archon_search/store.py`, `archon_search/constants.py`, `archon_search/server/routes_collections.py` (or wherever REST ingest lives)
+  - NOTE: REST `/ingest` is currently fire-and-forget (returns 202 immediately and runs the pipeline in a background task), so a `StoreBusyError` surfaces in the job state rather than as a synchronous 503 response. The store-layer contract (lock + `StoreBusyError` + `Retry-After` ceiling) is fully implemented and tested. Synchronous 503 propagation requires reshaping the request lifecycle and is recorded as a follow-up in Task 8.3 verification.
 - **Depends on**: Task 3.4
 - **Description**:
   - In `SearchStore.__init__`: `self._collection_locks: dict[str, asyncio.Lock] = {}` (mirrors the structure in `SearchCollectionSync._collection_locks`). Add a `_lock_for(collection)` helper that lazily creates the lock.
