@@ -249,7 +249,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 > **Releasable**: when Task 3.4 lands; new ingests carry real metadata, but responses do not yet expose it (Phase 4 closes that loop). Internally observable via `_read_all_chunks`.
 
 #### Task 3.1 — Add `IngestedBy` Literal + `INGESTED_BY_VALUES` constant
-- [ ] **File**: `archon_search/_types.py`, `archon_search/constants.py`
+- [x] **File**: `archon_search/_types.py`, `archon_search/constants.py`
 - **Depends on**: nothing (independent type alias addition; Task 4.1 ordering chosen for review clarity)
 - **Description**:
   - In `_types.py`: define `IngestedBy = Literal["cli", "http", "watcher", "reindex"]` (**four** members; legacy is **not** in the Literal). Annotate `ChunkRecord.ingested_by: IngestedBy = "cli"`. Legacy `"archon-search-cli"` values stored in pre-A1 rows are normalized to `"cli"` at the read boundary in `store.hybrid_search` and `_read_all_chunks` (Task 4.3), and at the header-parse boundary (Task 3.3). Reindex (Task 6.2) still rewrites stored legacy values to `"reindex"`.

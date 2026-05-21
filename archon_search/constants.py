@@ -1,6 +1,17 @@
 """Standalone constants for archon-search — defined independently of archon.ai.constants."""
 
 import re
+from typing import Final
+
+# Pre-A1 sentinel for ``ingested_by``. Stored on legacy rows; normalized to
+# ``"cli"`` at read/header-parse boundaries (see _types.IngestedBy). Reindex
+# (Task 6.2) rewrites legacy stored values to ``"reindex"``.
+LEGACY_INGESTED_BY: Final[str] = "archon-search-cli"
+
+# Canonical ``ingested_by`` values (must mirror the ``IngestedBy`` Literal in
+# ``_types.py`` — drift is pinned by tests/test_types_ingested_by.py). Legacy
+# is intentionally NOT included.
+INGESTED_BY_VALUES: Final[tuple[str, ...]] = ("cli", "http", "watcher", "reindex")
 
 # Pinned dated version for internal fast-model tasks (description generation).
 DEFAULT_FAST_MODEL: str = "claude-haiku-4-5-20251001"
