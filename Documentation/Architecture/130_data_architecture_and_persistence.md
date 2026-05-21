@@ -61,6 +61,8 @@ LanceDB lives in `~/.archon-search/search/` (configurable via `[database].db_pat
 
 Metadata bounds enforced by `store.py::validate_metadata`: max 50 fields, key ≤ 256 chars, value ≤ 4096 chars.
 
+The per-field partition map (**system** / **filterable** / **ranking** / **audit**) for `ChunkRecord` lives in `archon_search/_types.py` as docstrings on the dataclass — see the source for the authoritative breakdown. The categories drive how A2 (filters) and future ranking/audit work each field; this doc does not duplicate the assignment.
+
 ### Collection-metadata schema (`SearchStore._meta_schema`)
 
 | Field | Type | Notes |

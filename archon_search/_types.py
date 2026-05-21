@@ -15,20 +15,49 @@ intentionally *not* a member of this Literal — see
 
 @dataclass
 class ChunkRecord:
+    """One LanceDB chunk row.
+
+    Field partitions (authoritative; the persistence doc points here):
+
+    - **system** — identity, content, position, embedding, lifecycle:
+      ``doc_id``, ``chunk_id``, ``text``, ``vector``, ``source_path``,
+      ``indexed_at``, ``acl``.
+    - **filterable** — A2 query-side filter dimensions:
+      ``file_type``, ``language``, ``updated_at``, ``metadata``.
+    - **ranking** — scoring inputs:
+      ``custom_score`` (reserved; A1 schema-only).
+    - **audit** — call-site identity for writes:
+      ``ingested_by``.
+    """
+
     doc_id: str
+    """system: stable hash of the source path (64 hex chars)."""
     chunk_id: str
+    """system: ``{doc_id}-{idx:06d}`` — order within the doc."""
     text: str
+    """system: the chunked text body itself."""
     vector: list[float]
+    """system: dense embedding (length = embedder.embedding_dim)."""
     source_path: str
+    """system: absolute path on disk; used by reindex to refresh metadata."""
     indexed_at: str
+    """system: ISO 8601 UTC timestamp set by the chunker at ingest time."""
     # Extended metadata fields
     file_type: str = ""
+    """filterable: source file extension (lowercased, no leading dot)."""
     language: str | None = None
+    """filterable: detected language (reserved; populated by C2)."""
     metadata: dict[str, str] = field(default_factory=dict)
+    """filterable: free-form key/value pairs from front matter (bounded)."""
     custom_score: float | None = None
+    """ranking: reserved scoring input; A1 keeps it nullable + schema-only."""
     ingested_by: IngestedBy = "cli"
+    """audit: which call site emitted this row (cli/http/watcher/reindex).
+    Legacy ``"archon-search-cli"`` is normalized at boundaries."""
     updated_at: str = ""
+    """filterable: file mtime (ISO 8601 UTC); falls back to indexed_at."""
     acl: list[str] | None = None
+    """system: namespace tokens that must intersect a caller's tokens."""
 
 
 @dataclass

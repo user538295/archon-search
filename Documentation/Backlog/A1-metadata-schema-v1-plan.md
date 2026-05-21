@@ -559,7 +559,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 > Phase 8 is split into three tasks (originally one) so each has a single concern: code-side docstrings (8.1), repository docs (8.2), final audit + acceptance verification (8.3).
 
 #### Task 8.1 — Partition-map docstrings on `ChunkRecord`; persistence-doc pointer
-- [ ] **File**: `archon_search/_types.py`, `Documentation/Architecture/130_data_architecture_and_persistence.md`
+- [x] **File**: `archon_search/_types.py`, `Documentation/Architecture/130_data_architecture_and_persistence.md`
 - **Depends on**: Task 4.3
 - **Description**:
   1. Add partition-map docstring blocks on every field of `ChunkRecord` in `archon_search/_types.py`. Format per field (one-line docstring above the field, or a single `"""..."""` block at the top of the dataclass enumerating each field's partition). The partitions are: **system** (`doc_id`, `chunk_id`, `text`, `vector`, `source_path`, `indexed_at`, `acl`), **filterable** (`file_type`, `language`, `updated_at`, `metadata`), **ranking** (`custom_score`), **audit** (`ingested_by`).
