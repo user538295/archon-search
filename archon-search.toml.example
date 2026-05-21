@@ -64,5 +64,8 @@ log_file = "~/.archon-search/logs/archon-search.log"
 enabled = false
 retention_days = 30
 log_dir = "~/.archon-search/search-logs"
-# export_enabled = false   # reserved for a future remote-export feature;
-                           # setting it to true currently raises ConfigError.
+# export_enabled = false   # reserved for a future remote-export feature; in v1
+                           # the config loader logs a warning and silently
+                           # coerces this to false. No external transmission
+                           # occurs. Tracked as TEL-1 in
+                           # Documentation/Architecture/530_technical_debt_refactoring_roadmap.md.

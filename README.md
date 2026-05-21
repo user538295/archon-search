@@ -80,17 +80,17 @@ Breaking changes to the REST or MCP surface are recorded in [`BREAKING.md`](BREA
 
 ## MCP tools
 
-The MCP control-plane tools share the REST API's auth layer:
+The MCP server registers 9 tools (see `archon_search/server/mcp.py`), sharing the REST API's auth layer:
 
-- `search_status`
-- `search_start`
-- `search_stop`
-- `search_ingest`
-- `search_collection_list`
-- `search_collection_add`
-- `search_collection_remove`
-- `search_collection_info`
-- `search_collection_reindex`
+- `search` — hybrid vector + FTS search; returns `{"results": [...], "acl_filtered": bool}`
+- `search_with_context` — same as `search` with adjacent-chunk context
+- `ingest_file` — index a single file into a collection
+- `ingest_directory` — recursively index a directory
+- `list_collections` — list collection names
+- `get_collections_meta` — metadata for all collections
+- `get_collection_meta` — metadata for one collection
+- `list_documents` — list documents in a collection
+- `delete_document` — remove a document by `doc_id`
 
 ## Telemetry (opt-in)
 
@@ -120,7 +120,7 @@ Each entry is a JSON object containing: `query_id` (random UUID), `timestamp` (U
 
 ### `export_enabled` is not available
 
-`[telemetry].export_enabled = true` is rejected at config load time — external transmission of telemetry is reserved for a future release and is not implemented in v1.
+`[telemetry].export_enabled = true` is reserved for a future release and is not implemented in v1. If set to `true`, the config loader logs a warning and silently coerces the value to `false` (see `archon_search/config.py`). No external transmission occurs in v1.
 
 ### Telemetry read-back API
 
