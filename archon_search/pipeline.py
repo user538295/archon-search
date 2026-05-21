@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestResult, SearchResult
+from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestedBy, IngestResult, SearchResult
 from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.collection_meta import CollectionMeta
@@ -136,6 +136,8 @@ class SearchPipeline:
         rebuild_fts: bool = True,
         _vector_collector: list[list[float]] | None = None,
         _chunk_collector: list[str] | None = None,
+        *,
+        ingested_by: IngestedBy = "cli",
     ) -> IngestResult:
         doc_id = hashlib.sha256(str(path.resolve()).encode()).hexdigest()
 
@@ -160,17 +162,22 @@ class SearchPipeline:
         # Resolve effective ACL for this document
         resolved_acl = resolve_acl(path, _acl)
 
-        # Chunk
-        # NOTE: Task 3.2 — placeholders; Task 3.3 will derive file_type from
-        # path.suffix, updated_at from path.stat().st_mtime, and ingested_by
-        # from the call site (cli/http/watcher/reindex).
+        # Derive metadata fields at the call site (Task 3.3).
+        file_type = path.suffix.lower().lstrip(".")
+        try:
+            mtime = path.stat().st_mtime
+            updated_at = datetime.fromtimestamp(mtime, tz=UTC).isoformat()
+        except OSError:
+            logger.debug("stat() failed for %s; updated_at will be empty", path)
+            updated_at = ""
+
         records = self._chunker.chunk(
             markdown,
             doc_id,
             str(path),
-            file_type="",
-            updated_at="",
-            ingested_by="cli",
+            file_type=file_type,
+            updated_at=updated_at,
+            ingested_by=ingested_by,
         )
         if not records:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="ok")
@@ -211,6 +218,8 @@ class SearchPipeline:
         exclude_paths: frozenset[str] | None = None,
         on_file_complete: Callable[[Path], None] | None = None,
         namespace: str = DEFAULT_NAMESPACE,
+        *,
+        ingested_by: IngestedBy = "cli",
     ) -> list[IngestResult]:
         # Collect and filter files
         files: list[Path] = []
@@ -251,6 +260,7 @@ class SearchPipeline:
                 rebuild_fts=False,
                 _vector_collector=all_vectors,
                 _chunk_collector=all_chunks,
+                ingested_by=ingested_by,
             )
             results.append(result)
             if on_file_complete is not None and result.status == "ok":

@@ -530,6 +530,7 @@ class SearchCollectionSync:
                     progress_cb=wrapped_cb,
                     exclude_paths=exclude_set,
                     on_file_complete=on_complete,
+                    ingested_by="watcher",
                 )
 
                 # Compute file_mtimes for all successfully ingested paths
@@ -651,7 +652,7 @@ class SearchCollectionSync:
 
                 # Changed files
                 for file in changed_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False)
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, ingested_by="watcher")
                     resolved_str = str(file.resolve())
                     if ingest_result.status == "ok":
                         try:
@@ -678,7 +679,7 @@ class SearchCollectionSync:
 
                 # New files
                 for file in new_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False)
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, ingested_by="watcher")
                     if ingest_result.status == "ok":
                         try:
                             file_mtimes[str(file.resolve())] = file.stat().st_mtime

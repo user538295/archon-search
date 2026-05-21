@@ -278,7 +278,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 - **Checkpoint**: `uv run pytest tests/test_chunker.py -v`.
 
 #### Task 3.3 — Update all chunker call sites (`pipeline`, `sync`, `watcher`, CLI ingest, REST ingest, jobs)
-- [ ] **File**: `archon_search/pipeline.py`, `archon_search/sync.py`, `archon_search/watcher.py`, `archon_search/cli/ingest.py` (or equivalent), `archon_search/server/routes_collections.py` (or wherever the REST `/ingest` handler builds chunks), `archon_search/jobs/` (the async ingest job runner)
+- [x] **File**: `archon_search/pipeline.py`, `archon_search/sync.py`, `archon_search/watcher.py`, `archon_search/cli/ingest.py` (or equivalent), `archon_search/server/routes_collections.py` (or wherever the REST `/ingest` handler builds chunks), `archon_search/jobs/` (the async ingest job runner)
 - **Depends on**: Task 3.2
 - **Description**:
   - Derive `file_type` from `Path(source_path).suffix.lower().lstrip(".")` at the call site (or thread it from `DocumentParser.parse()` output if the parser already exposes it).

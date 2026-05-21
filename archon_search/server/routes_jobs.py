@@ -12,6 +12,7 @@ from pydantic import BaseModel, field_validator
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
+from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.schemas import ErrorDetail, JobResponse
 
 logger = logging.getLogger("archon-search")
@@ -28,7 +29,7 @@ class IngestRequest(BaseModel):
     collection: str
     path: str | None = None
     documents: list[dict[str, Any]] | None = None
-    ingested_by: str = "archon-search-cli"
+    ingested_by: str = "http"
 
     @field_validator("collection")
     @classmethod
@@ -94,9 +95,8 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse:
     pipeline_fn: Callable[..., Awaitable[None]] | None = getattr(
         request.app.state, "ingest_pipeline", None
     )
-    # Populate ingested_by from HTTP header if present
-    ingested_by = request.headers.get("X-Ingested-By", "archon-search-cli")
-    body.ingested_by = ingested_by
+    # Populate ingested_by from HTTP header (normalized at boundary).
+    body.ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     ns = request.state.namespace
     job = store.create(namespace=ns)
     task = asyncio.create_task(_default_ingest_task(job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn))

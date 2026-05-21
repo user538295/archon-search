@@ -14,6 +14,7 @@ from archon_search.config import SearchConfig, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
+from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse
 from archon_search.sync import path_to_collection_name
@@ -154,7 +155,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
             logger.exception("Failed to rollback config after stub meta write failure")
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
-    ingested_by = request.headers.get("X-Ingested-By", "archon-search-cli")
+    ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     job = store.create(namespace=ns)
     ingest_body = IngestRequest(
         collection=collection_name, path=resolved, ingested_by=ingested_by
@@ -314,7 +315,7 @@ async def reindex_collection(name: str, request: Request) -> JobResponse:
 
     resolved = path_to_name[name]
 
-    ingested_by = request.headers.get("X-Ingested-By", "archon-search-cli")
+    ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     job = store.create(namespace=ns)
     ingest_body = IngestRequest(collection=name, path=resolved, ingested_by=ingested_by)
     task = asyncio.create_task(_default_ingest_task(job.job_id, store, ingest_body, namespace=ns))

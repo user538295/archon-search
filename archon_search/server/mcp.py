@@ -129,7 +129,7 @@ def create_app(
         """Ingest a single file into the RAG store."""
         try:
             result = await pipeline.ingest_file(
-                Path(path), collection or default_collection
+                Path(path), collection or default_collection, ingested_by="http",
             )
             return asdict(result)
         except Exception as exc:
@@ -154,6 +154,7 @@ def create_app(
                 collection or default_collection,
                 glob_pattern=glob_pattern,
                 progress_cb=progress_cb,
+                ingested_by="http",
             )
             return [asdict(r) for r in results]
         except Exception as exc:
