@@ -193,6 +193,59 @@ def info(collection_name: str, config_path: Path | None) -> None:
         raise SystemExit(1)
 
 
+@collection.command("reindex-metadata")
+@click.argument("collection_name")
+@click.option("--dry-run", is_flag=True, default=False, help="Report counts without writing")
+@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
+def reindex_metadata_cmd(collection_name: str, dry_run: bool, config_path: Path | None) -> None:
+    """Backfill metadata fields (file_type, updated_at, ingested_by) on an existing collection.
+
+    Reads each row, refreshes file_type from source_path extension and
+    updated_at from mtime, and rewrites legacy ``"archon-search-cli"`` ->
+    ``"reindex"``. Holds a per-collection lock for the duration; ingest into
+    the same collection is blocked until reindex finishes.
+    """
+    try:
+        cfg = load_config(config_path)
+    except Exception as exc:
+        click.echo(f"Error loading config: {exc}", err=True)
+        raise SystemExit(1)
+
+    async def _run() -> None:
+        pipeline = create_pipeline(cfg)
+        try:
+            await pipeline.store.connect()
+
+            def _on_progress(processed: int, total: int) -> None:
+                click.echo(f"reindex-metadata: {collection_name} - {processed}/{total}")
+
+            result = await pipeline.store.reindex_metadata(
+                collection_name,
+                dry_run=dry_run,
+                progress_cb=_on_progress,
+            )
+            click.echo(
+                f"reindex-metadata: {collection_name} - done. "
+                f"processed={result.processed}, updated={result.updated}, "
+                f"warnings={len(result.warnings)}"
+            )
+            if result.warnings:
+                click.echo("warnings:")
+                for w in result.warnings:
+                    click.echo(f"  - {w}")
+        finally:
+            try:
+                await pipeline.store.disconnect()
+            except Exception:
+                pass
+
+    try:
+        asyncio.run(_run())
+    except Exception as exc:
+        click.echo(f"Error: {exc}", err=True)
+        raise SystemExit(1)
+
+
 @collection.command("reindex")
 @click.argument("collection_name")
 @click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")

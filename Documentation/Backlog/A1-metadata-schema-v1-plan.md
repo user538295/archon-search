@@ -487,7 +487,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 - **Checkpoint**: `uv run pytest tests/test_store_reindex_metadata.py -v -m "integration or not integration"`.
 
 #### Task 6.3 — `archon-search collection reindex-metadata <name>` CLI subcommand
-- [ ] **File**: `archon_search/cli/` (whichever module owns the `collection` group; likely `archon_search/cli/main.py` or `archon_search/cli/collection.py`)
+- [x] **File**: `archon_search/cli/` (whichever module owns the `collection` group; likely `archon_search/cli/main.py` or `archon_search/cli/collection.py`)
 - **Depends on**: Task 6.2
 - **Description**:
   - Add Click subcommand: `archon-search collection reindex-metadata <name> [--dry-run]`.
