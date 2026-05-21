@@ -213,7 +213,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 > **Releasable**: when Task 1.1 lands; no behavior change. Phase 1 was originally framed as "consolidation" but verification against source shows `types.py` and `_types.py` hold **distinct** types, not duplicates — there is nothing structural to merge. The task is reduced to an import-path audit that records the canonical home for each public name; actual relocation is deferred (and may not be needed at all).
 
 #### Task 1.1 — Audit `types.py` vs `_types.py` external imports
-- [ ] **File**: N/A (audit task; output is a one-paragraph note appended to this plan)
+- [x] **File**: N/A (audit task; output is a one-paragraph note appended to this plan)
 - **Depends on**: nothing
 - **Description**:
   - Verified upfront against source: `types.py` declares `JobStatus`, `IngestJob`, `ReindexJob`, `DeleteJob`, `Query`, `RouteResponse`, `Collection`, `CollectionDetail`, `Chunk`. `_types.py` declares `ChunkRecord`, `SearchResult`, `DocumentInfo`, `CollectionInfo`, `IngestResult`. No name collision; no `ChunkRecord` duplication.
@@ -617,3 +617,22 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 1. **`CollectionMeta.schema_version`**: deferred from A1 entirely. A follow-up brief will resolve (a) whether to add the field, (b) defaulted-required vs strict-required strictness, and (c) the migration path for the ~94 existing call sites.
 2. **`BREAKING.md` exhaustiveness**: the brief leans toward exhaustive (every MCP tool gaining keys). Task 8.2 implements exhaustive — enumerate `search`, `search_with_context`, `list_documents`. Tighten if reviewers prefer the short form.
 3. **`ingested_by` sub-source for HTTP** (e.g., `http:<api-key-id>`): out of scope for A1. Revisit if audit needs grow (separate brief).
+
+---
+
+## Appendix A — Task 1.1 import-path audit (2026-05-21)
+
+`grep -rn "from archon_search.types\|from archon_search._types" archon_search tests Documentation | wc -l` → **78** lines (77 source imports + 1 in this plan's checkpoint command itself).
+
+**`archon_search.types`** — 3 import sites, all narrow to job/REST types:
+- `archon_search/jobs/model.py` → `IngestJob, JobStatus`
+- `tests/test_routes_jobs.py` → `IngestJob`
+- `tests/test_types.py` → multi-name import (`JobStatus, IngestJob, ReindexJob, DeleteJob, Query, RouteResponse, Collection, CollectionDetail, Chunk`)
+
+**`archon_search._types`** — ~74 import sites across `archon_search/` (store, reranker, chunker, pipeline, server/routes_search) and `tests/`, all referencing `ChunkRecord`, `SearchResult`, `DocumentInfo`, `CollectionInfo`, `IngestResult`.
+
+**Canonical homes** (no relocation needed; A1 keeps these stable):
+- `ChunkRecord`, `SearchResult`, `DocumentInfo`, `CollectionInfo`, `IngestResult` → `archon_search._types`
+- `JobStatus`, `IngestJob`, `ReindexJob`, `DeleteJob`, `Query`, `RouteResponse`, `Collection`, `CollectionDetail`, `Chunk` → `archon_search.types`
+
+**No name collision** between the two modules. **No `ChunkRecord` duplication.** The only overlap is `types.py:Chunk` having a `file_type: str` required positional arg vs `_types.py:ChunkRecord.file_type = ""` — different dataclasses with overlapping field names, not duplicates. `types.py:Chunk` appears unused outside `tests/test_types.py`; surfaced here per the plan's instruction, but **not removed in A1**. No code changes follow from this audit.
