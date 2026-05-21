@@ -262,7 +262,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 - **Checkpoint**: `uv run pytest tests/test_types_ingested_by.py -v`.
 
 #### Task 3.2 — Extend `DocumentChunker.chunk()` signature
-- [ ] **File**: `archon_search/chunker.py`
+- [x] **File**: `archon_search/chunker.py`
 - **Depends on**: Task 3.1
 - **Description**:
   - Change signature to `def chunk(self, text: str, doc_id: str, source_path: str, *, file_type: str, updated_at: str, ingested_by: IngestedBy) -> list[ChunkRecord]`. All three new parameters are **keyword-only and required** (no defaults — forces every call site to make a deliberate choice).

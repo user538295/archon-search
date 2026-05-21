@@ -161,7 +161,17 @@ class SearchPipeline:
         resolved_acl = resolve_acl(path, _acl)
 
         # Chunk
-        records = self._chunker.chunk(markdown, doc_id, str(path))
+        # NOTE: Task 3.2 — placeholders; Task 3.3 will derive file_type from
+        # path.suffix, updated_at from path.stat().st_mtime, and ingested_by
+        # from the call site (cli/http/watcher/reindex).
+        records = self._chunker.chunk(
+            markdown,
+            doc_id,
+            str(path),
+            file_type="",
+            updated_at="",
+            ingested_by="cli",
+        )
         if not records:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="ok")
 
