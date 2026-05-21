@@ -525,7 +525,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 > **Note**: the originally-planned `CollectionMeta.schema_version` task is **dropped from A1** (the brief explicitly defers it as an open question). A follow-up brief will resolve strictness and implementation. The ~94 `CollectionMeta(...)` call sites are unchanged in A1.
 
 #### Task 7.1 — Watcher delete-then-re-ingest integration pin
-- [ ] **File**: `tests/integration/test_watcher_replace.py`
+- [x] **File**: `tests/integration/test_watcher_replace.py`
 - **Depends on**: Task 3.3, Task 4.3
 - **Description**:
   - Integration test pinning the brief's edge case: watcher re-ingest on a changed file must delete old chunks and emit new ones with the new `updated_at` and `file_type`, with no stale duplicates.
