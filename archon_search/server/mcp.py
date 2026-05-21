@@ -27,6 +27,15 @@ class McpErrorResponse(TypedDict):
     code: str
 
 
+def _chunk_to_context_dict(chunk: Any) -> dict[str, Any]:
+    """Serialize a ChunkRecord for MCP ``search_with_context`` payloads, dropping
+    the ``vector`` field — raw embeddings should not leak over MCP and add no
+    value to context-window consumers."""
+    d = asdict(chunk)
+    d.pop("vector", None)
+    return d
+
+
 def create_app(
     pipeline: SearchPipeline,
     default_collection: str,
@@ -100,8 +109,8 @@ def create_app(
             return [
                 {
                     "result": asdict(r["result"]),
-                    "context_before": [asdict(c) for c in r["context_before"]],
-                    "context_after": [asdict(c) for c in r["context_after"]],
+                    "context_before": [_chunk_to_context_dict(c) for c in r["context_before"]],
+                    "context_after": [_chunk_to_context_dict(c) for c in r["context_after"]],
                 }
                 for r in results
             ]

@@ -380,7 +380,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 > **Releasable**: when Task 5.1 lands; MCP `search_with_context` no longer leaks raw embeddings; payload size shrinks by `~dim * 4` bytes per neighbor.
 
 #### Task 5.1 — Strip `vector` from `context_before` / `context_after` chunks
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 4.3
 - **Description**:
   - Locate the `search_with_context` MCP tool handler. Where it returns `asdict(chunk)` (or equivalent) for each neighbor in `context_before` / `context_after`, replace with a helper `_chunk_to_context_dict(chunk: ChunkRecord) -> dict` that runs `asdict(chunk)` then pops `"vector"`.
