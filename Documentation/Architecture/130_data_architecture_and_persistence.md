@@ -55,7 +55,7 @@ LanceDB lives in `~/.archon-search/search/` (configurable via `[database].db_pat
 | `language` | `utf8` | empty string when unknown |
 | `metadata` | `utf8` | JSON-encoded `dict[str,str]`; size-bounded (see `validate_metadata`) |
 | `custom_score` | `float32` | nullable |
-| `ingested_by` | `utf8` | defaults to `archon-search-cli` |
+| `ingested_by` | `utf8` | call-site identity: one of `cli` / `http` / `watcher` / `reindex` (defined by `_types.IngestedBy`; legacy `archon-search-cli` is normalized at boundaries) |
 | `updated_at` | `utf8` | ISO 8601 |
 | `acl` | `list<utf8>` (nullable) | `None`=open, `[]`=deny-all, `[ns…]`=allowed namespaces |
 
