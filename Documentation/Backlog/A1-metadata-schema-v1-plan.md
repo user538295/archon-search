@@ -326,7 +326,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 > **Releasable**: when Task 4.3 lands; REST `/search` and MCP `search` both expose the new fields. This is the user-facing milestone of A1.
 
 #### Task 4.1 — Grow `SearchResult` dataclass
-- [ ] **File**: `archon_search/_types.py`
+- [x] **File**: `archon_search/_types.py`
 - **Depends on**: Task 3.1
 - **Description**:
   - Add to `SearchResult` (after `source_path`, before `acl`): `file_type: str = ""`, `indexed_at: str = ""`, `updated_at: str = ""`, `ingested_by: IngestedBy = "cli"`, `metadata: dict[str, str] = field(default_factory=dict)`. Keep existing `acl: list[str] | None = None` as the last field.

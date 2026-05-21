@@ -38,6 +38,11 @@ class SearchResult:
     text: str
     score: float
     source_path: str
+    file_type: str = ""
+    indexed_at: str = ""
+    updated_at: str = ""
+    ingested_by: IngestedBy = "cli"
+    metadata: dict[str, str] = field(default_factory=dict)
     acl: list[str] | None = None
 
 
