@@ -504,7 +504,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 - **Checkpoint**: `uv run pytest tests/cli/test_reindex_metadata_cli.py -v`.
 
 #### Task 6.4 — Pre-A1 fixture collection integration test (end-to-end backfill)
-- [ ] **File**: `tests/integration/test_reindex_backfill_e2e.py`
+- [x] **File**: `tests/integration/test_reindex_backfill_e2e.py`
 - **Depends on**: Task 6.3
 - **Description**:
   - Build a pytest fixture that creates a LanceDB collection with chunks shaped like pre-A1 data: `file_type=""`, `updated_at=""`, `ingested_by="archon-search-cli"`, populated `source_path` pointing at real temp files. **Note**: this is a Python-constructed fixture (the pre-A1 code path no longer exists in the current branch), so it cannot reproduce every storage-layer quirk of historical writes (e.g., NULL vs empty-string nullability, exact LanceDB row-format details from older versions). Coverage for those quirks lives in Task 3.4's integration tests, which exercise the real write path.
