@@ -47,9 +47,9 @@ Pure foundation-first sequencing pushes user-visible value too far out and lets 
 Goal: make the existing pipeline safe to extend, and ship two cheap features that operators and end users notice immediately.
 
 - [ ] **A1. Metadata schema v1 (item 3, minimum slice)** — add typed per-chunk and per-document metadata fields to the LanceDB schema, with system / filterable / ranking / audit partitions documented. Scope is intentionally narrow: only the fields needed for `A2` and item 13. Surfaced in search responses.
-- [ ] **A2. Metadata filters at search (item 7, minimum slice)** — source-path prefix/glob, `indexed-after`/`indexed-before`, file-type, language. Exposed on REST `/search`, MCP `search`, and the explain output (A3). Bounds-validated; uses the LanceDB `where()` API (no f-string SQL).
-- [ ] **A3. Explain / debug endpoint (item 12)** — `/explain` (REST) + MCP tool returning vector rank, FTS rank, fused score, reranker score, matched filters, routing path, expansion-feature usage. Cheap to ship and unlocks every later ranking change.
-- [ ] **A4. Hardening: search-failure semantics (`CON-5`)** — `/search` must propagate a 5xx with the standard error envelope on pipeline failure, not 200-with-empty-results. Add a regression test that injects a store failure.
+- [ ] **A2. Metadata filters at search (item 7, minimum slice)** — source-path prefix/glob, `indexed-after`/`indexed-before`, file-type. Exposed on REST `/search`, MCP `search`, and the explain output (A4). Bounds-validated; uses the LanceDB `where()` API (no f-string SQL). A1 ships filterable fields populated; A2 only adds query-side wiring. **Language filtering deferred to C2** (real language detection) — A1's `language` field stays storage-only and is not exposed as a filter dimension here.
+- [ ] **A3. Hardening: search-failure semantics (`CON-5`)** — `/search` must propagate a 5xx with the standard error envelope on pipeline failure, not 200-with-empty-results. Add a regression test that injects a store failure.
+- [ ] **A4. Explain / debug endpoint (item 12)** — `/explain` (REST) + MCP tool returning vector rank, FTS rank, fused score, reranker score, matched filters, routing path, expansion-feature usage. Cheap to ship and unlocks every later ranking change.
 - [ ] **A5. Hardening: input safety on ingest paths (`VAL-1`, `RP-5`)** — reject `..`-containing or symlink-escape paths in `/collections` and `/jobs/ingest`; replace all f-string `where()` builders in `store.py` with parameterised LanceDB calls.
 - [ ] **A6. Hardening: state-store + router cache locks (`CON-2`, `CON-3`)** — `asyncio.Lock` around `IndexingStateStore` mutations; router cache invalidates on ingest/reindex/description-regen. One PR, both bugs.
 - [ ] **A7. Hardening: stop writing without fsync (`PROG-1`, `TEL-2`, `SYN-1`)** — `IndexingStateStore`, telemetry writer, and sync manifest all `flush + fsync` before `os.replace`. Cheap durability win.
@@ -60,7 +60,7 @@ Goal: stand up the measurement surface before adding ranking features, and ship 
 
 - [ ] **B1. Observability and stage-level latency (item 24)** — per-stage timings (parse, embed, route, vector, FTS, fuse, rerank, end-to-end); correlation IDs from middleware → pipeline → telemetry (`ARCH-3`). Emitted as structured logs and surfaced on `/explain`.
 - [ ] **B2. Deeper health and readiness (item 22)** — distinguish `live` vs. `ready`; cover storage connectivity, model warm-status, index build state, watcher state, queue depth. Operators need this before scaling load.
-- [ ] **B3. Server-side multi-collection search primitive (item 8)** — embed the query once; one merge + rerank pass across collections. Co-designed with `/explain` (A3) so the routing path is debuggable.
+- [ ] **B3. Server-side multi-collection search primitive (item 8)** — embed the query once; one merge + rerank pass across collections. Co-designed with `/explain` (A4) so the routing path is debuggable.
 - [ ] **B4. Stronger collection routing (item 9)** — summary-embedding + description + centroid hybrid alternatives; centroid stays the baseline. Gated by the eval harness.
 - [ ] **B5. Hardening: incremental centroid update (`CON-4`, item 17)** — maintain `(sum, count)` on collection metadata; full recompute only on reindex. Eliminates an O(chunks) cost from every ingest.
 - [ ] **B6. Hardening: production-model eval lane (`EVL-1`, item 4 follow-up)** — `live`-marker job on tag pushes that runs the eval harness against the real embedder/reranker (not the deterministic stubs). Gated by `tests/eval/thresholds.toml`.
@@ -100,7 +100,7 @@ Goal: make adoption easy, and broaden the surface beyond power users.
 - [ ] **E3. TypeScript SDK (item 28b)** — generated from OpenAPI.
 - [ ] **E4. Per-collection access-control policies (item 30)** — builds on item 5 and D7.
 - [ ] **E5. Connector and federation architecture (item 15)** — pluggable source connectors with sync checkpoints, ACL propagation, source-specific change detection.
-- [ ] **E6. Admin / debug UI (item 29)** — only after A3 and B1 stabilise.
+- [ ] **E6. Admin / debug UI (item 29)** — only after A4 and B1 stabilise.
 
 ## Phase F — Advanced positioning (do not displace earlier work)
 
@@ -149,8 +149,8 @@ quadrantChart
     quadrant-4 Quick wins
     "A1 Metadata schema v1": [0.5, 0.85]
     "A2 Metadata filters": [0.35, 0.8]
-    "A3 Explain endpoint": [0.3, 0.8]
-    "A4 Search-failure semantics": [0.15, 0.6]
+    "A3 Search-failure semantics": [0.15, 0.6]
+    "A4 Explain endpoint": [0.3, 0.8]
     "A5 Path safety + SQL builders": [0.25, 0.75]
     "A6 State/router locks": [0.2, 0.65]
     "A7 fsync writes": [0.15, 0.55]
@@ -190,7 +190,7 @@ quadrantChart
     "F6 Pluggable backends": [0.9, 0.35]
 ```
 
-**Quick wins** (low effort, high impact — Phase A and early B): A2 filters, A3 explain, A5 path/SQL safety, A6 locks, A7 fsync, B2 health, B5 incremental centroid.
+**Quick wins** (low effort, high impact — Phase A and early B): A2 filters, A4 explain, A5 path/SQL safety, A6 locks, A7 fsync, B2 health, B5 incremental centroid.
 **Plan deliberately** (high effort, high impact): A1 metadata schema, B1 tracing, B3 server multi-collection, B6 prod-model eval lane, C1 per-collection model, C3 chunk enrichment, C6 incremental FTS.
 **Defer until triggered** (high effort, currently low impact): E6 admin UI, F3 GraphRAG, F4 multimodal, F5 horizontal scale, F6 pluggable backends.
 
@@ -201,8 +201,8 @@ If only one ordering is used for planning, use this — each phase is a coherent
 **Phase A — Trust the core**
 1. ⬜ A1. Metadata schema v1 (item 3 minimum slice).
 2. ⬜ A2. Metadata filters at search (item 7).
-3. ⬜ A3. Explain / debug endpoint (item 12).
-4. ⬜ A4. Search-failure semantics (`CON-5`).
+3. ⬜ A3. Search-failure semantics (`CON-5`).
+4. ⬜ A4. Explain / debug endpoint (item 12).
 5. ⬜ A5. Ingest path safety + parameterised store queries (`VAL-1`, `RP-5`).
 6. ⬜ A6. State-store and router cache locks (`CON-2`, `CON-3`).
 7. ⬜ A7. fsync on durable writes (`PROG-1`, `TEL-2`, `SYN-1`).
@@ -266,7 +266,7 @@ The biggest mistakes this ordering protects against:
 
 - Shipping HyDE / RAG Fusion (C4/C5) before observability (B1) and the production-model eval lane (B6) — you will not know whether they helped.
 - Building filters (A2) without a metadata schema (A1) — they will be re-built within one release.
-- Letting hardening (A4–A7, B5, C6, C7, D7, D8) accumulate behind features — the production incident curve is exponential.
+- Letting hardening (A3–A7, B5, C6, C7, D7, D8) accumulate behind features — the production incident curve is exponential.
 
 ## Related documents
 

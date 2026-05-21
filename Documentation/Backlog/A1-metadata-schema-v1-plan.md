@@ -569,7 +569,7 @@ The `Retry-After` value is `str(math.ceil(timeout_s))` — non-integer timeouts 
 - **Checkpoint**: visual inspection; grep `_types.py` for the partition labels.
 
 #### Task 8.2 — `BREAKING.md` entry, roadmap amendment
-- [ ] **File**: `BREAKING.md`, `Documentation/Backlog/03_world_class_roadmap.md`
+- [x] **File**: `BREAKING.md`, `Documentation/Backlog/03_world_class_roadmap.md`
 - **Depends on**: Task 8.1
 - **Description**:
   1. Add a `BREAKING.md` entry under a new section heading for the A1 release. Distinguish:

@@ -8,6 +8,36 @@
 
 ## Changelog
 
+### [next release] — A1 metadata schema v1
+
+**Surface**: MCP (breaking for strict-validating clients), REST (additive, non-breaking for tolerant JSON consumers).
+
+**MCP — truly breaking**:
+- `search` tool: response result items gain `file_type`, `indexed_at`, `updated_at`, `ingested_by`, `metadata`, `acl`.
+- `search_with_context` tool: result items gain the same six keys; `context_before` / `context_after` items gain `file_type`, `updated_at`, `ingested_by`, `metadata`, and **no longer include `vector`** (raw embeddings were never useful at the MCP boundary and inflated payload size by `~dim*4` bytes per neighbor).
+- `list_documents`: items gain the same six keys when sourced from rows that carry them.
+
+A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic models.
+
+**REST — additive (non-breaking)**:
+- `/search` and `/search/context` result items gain the same six keys. Tolerant JSON consumers see new fields appear; strict-schema consumers (e.g., generated clients pinned to the older OpenAPI snapshot) must regenerate.
+
+**New 503 contract on `/ingest`**:
+- During an active reindex of the same collection, the store may raise `StoreBusyError` after a 30s lock-acquisition timeout. The lifecycle wrapper surfaces this in job state today (REST 202 + background task model); a synchronous 503 + `Retry-After: 30` response is a follow-up tied to a request-lifecycle refactor.
+
+**`X-Ingested-By` header normalization**:
+- Missing/empty → `"http"`.
+- Canonical values (`cli`, `http`, `watcher`, `reindex`) pass through.
+- Legacy `"archon-search-cli"` is normalized to `"cli"` at the boundary — clients that pass legacy and inspect the stored value will now see `"cli"`.
+- Unknown values are coerced to `"http"` with a WARNING log (value truncated to 32 chars).
+
+**Migration**:
+- MCP consumers: regenerate types or relax strict-mode validation; the new keys are additive on every response item, never replace existing ones.
+- REST consumers using tolerant JSON parsing: nothing to do. Strict-typed clients: regenerate from the updated OpenAPI.
+- Existing collections: pre-A1 rows continue to read as-is via the read-boundary normalizer (`ingested_by` legacy → `"cli"`, empty `file_type` → `""`, `updated_at` falls back to `indexed_at`). To populate real values on pre-A1 rows, run `archon-search collection reindex-metadata <name>` (offline-friendly, blocks only `/ingest` to the same collection).
+
+**Announced in**: this release. No prior deprecation — the impacted MCP shape was never documented as stable.
+
 ### [next release] — MCP `search` tool response shape
 
 **Surface**: MCP (`mcp.py` `search` tool)
