@@ -41,7 +41,7 @@ def create_app(
     default_collection: str,
     writer: TelemetryWriter | None = None,
 ) -> FastMCP:
-    """Create a FastMCP app with 9 RAG tools registered."""
+    """Create a FastMCP app with 10 RAG tools registered."""
     app = FastMCP("archon-search")
 
     @app.tool()
@@ -235,6 +235,117 @@ def create_app(
             return {"deleted": count}
         except Exception as exc:
             logger.exception("delete_document failed")
+            return McpErrorResponse(error=str(exc), code="internal_error")
+
+    @app.tool()
+    async def explain(
+        query: str,
+        collection: str | None = None,
+        top_k: int = 5,
+        rerank: bool = True,
+    ) -> dict[str, Any]:
+        """Return ranked search results with full score provenance for debugging."""
+        from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
+        from archon_search.router import MultiCollectionRouter  # noqa: PLC0415
+        from archon_search.server.routes_explain import (  # noqa: PLC0415
+            ExplainResponse,
+            RoutingCandidate,
+            RoutingExplain,
+        )
+
+        start = monotonic()
+        if not query or not query.strip():
+            return McpErrorResponse(error="query must not be empty", code="validation_error")
+
+        try:
+            if collection is not None:
+                # Pinned path
+                meta = await pipeline.get_collection_meta(collection)
+                if meta is None:
+                    return McpErrorResponse(
+                        error=f"Collection {collection!r} not found", code="not_found"
+                    )
+                pipeline_result = await pipeline.explain(
+                    query, collection, top_k=top_k, rerank=rerank
+                )
+                routing_block = None
+                chosen_collection = collection
+            else:
+                # Collectionless path
+                all_meta: list[CollectionMeta] = await pipeline.get_all_collections_meta()
+                if not all_meta:
+                    return McpErrorResponse(
+                        error="No collections found", code="not_found"
+                    )
+                query_vector = await pipeline._embedder.embed_one(query)
+                inline_router = MultiCollectionRouter(
+                    search_url="",
+                    embedder=pipeline._embedder,
+                    shortlist_size=len(all_meta),
+                    confidence_threshold=0.0,
+                    embedding_model=pipeline._embedder.model_name,
+                )
+                scored_pairs = inline_router.rank_with_scores(query_vector, all_meta)
+                if not scored_pairs:
+                    return McpErrorResponse(
+                        error="No collections found", code="not_found"
+                    )
+                chosen_meta, chosen_score = scored_pairs[0]
+                chosen_collection = chosen_meta.name
+                routing_candidates = [
+                    RoutingCandidate(collection=m.name, centroid_score=score)
+                    for m, score in scored_pairs
+                ]
+                routing_block = RoutingExplain(
+                    invoked=True,
+                    chosen_collection=chosen_collection,
+                    confidence_threshold=0.0,
+                    chosen_below_threshold=False,
+                    candidates=routing_candidates,
+                )
+                pipeline_result = await pipeline.explain(
+                    query,
+                    chosen_collection,
+                    top_k=top_k,
+                    rerank=rerank,
+                    query_vector=query_vector,
+                )
+
+            response = ExplainResponse.from_pipeline_result(
+                pipeline_result=pipeline_result,
+                collection=chosen_collection,
+                rerank=rerank,
+                routing=routing_block,
+            )
+
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_explain_result(
+                            collection=chosen_collection,
+                            result_count=len(response.results),
+                            latency_ms=(monotonic() - start) * 1000.0,
+                        )
+                    )
+                except Exception:
+                    logger.warning("telemetry: explain entry enqueue failed", exc_info=True)
+
+            return response.model_dump(mode="json", exclude_none=False)
+
+        except Exception as exc:
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_error(
+                            endpoint="explain",
+                            status="internal_error",
+                            error_kind="other",
+                            latency_ms=(monotonic() - start) * 1000.0,
+                        )
+                    )
+                except Exception:
+                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+            logger.exception("explain failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.custom_route("/health", methods=["GET"])

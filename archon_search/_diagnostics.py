@@ -6,7 +6,11 @@ the eval sub-package.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from archon_search._types import IngestedBy
 
 
 @dataclass
@@ -63,3 +67,11 @@ class ScoredSearchCandidate:
     source_path: str
     score_breakdown: SearchScoreBreakdown
     collection: str
+    acl: list[str] | None = None
+    # A1/A2 metadata fields
+    file_type: str = ""
+    indexed_at: str = ""
+    updated_at: str = ""
+    ingested_by: "IngestedBy" = "cli"
+    language: str | None = None
+    metadata: dict = field(default_factory=dict)

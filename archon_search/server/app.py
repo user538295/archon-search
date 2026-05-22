@@ -31,6 +31,7 @@ except PackageNotFoundError:
     _VERSION = "dev"
 
 from archon_search.server.routes_collections import router as collections_router
+from archon_search.server.routes_explain import router as explain_router
 from archon_search.server.routes_health import router as health_router
 from archon_search.server.routes_jobs import router as jobs_router
 from archon_search.server.routes_route import router as route_router
@@ -138,6 +139,7 @@ def create_app(
         top_k_return=config.top_k_return,
     )
     app.include_router(collections_router)
+    app.include_router(explain_router)
     app.include_router(health_router)
     app.include_router(jobs_router)
     app.include_router(status_router)

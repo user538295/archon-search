@@ -873,6 +873,22 @@ class SearchStore:
         rows = await table.query().select(["doc_id"]).to_list()
         return len({r["doc_id"] for r in rows})
 
+    async def hybrid_search_with_trace(
+        self,
+        collection: str,
+        query_vector: list[float],
+        query_text: str,
+        candidate_depth: int,
+    ) -> "list[ScoredSearchCandidate]":
+        """Thin instance-method delegate to ``_hybrid_search_with_trace``.
+
+        Enables pipeline code (and tests) to call the trace search through the
+        store instance rather than importing the module-level function directly.
+        """
+        return await _hybrid_search_with_trace(
+            self, collection, query_vector, query_text, candidate_depth
+        )
+
     async def get_acl_stats(self, collection: str) -> tuple[int, int]:
         """Return (acl_protected_count, acl_open_count) for all chunks in a collection.
 
@@ -1003,6 +1019,8 @@ async def _hybrid_search_with_trace(
         if in_fts:
             rrf += _rrf_score(fts_rank[chunk_id])
 
+        raw_acl = row.get("acl")
+        row_acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
         candidates.append(
             ScoredSearchCandidate(
                 doc_id=row["doc_id"],
@@ -1020,6 +1038,13 @@ async def _hybrid_search_with_trace(
                     reranker_score=None,
                 ),
                 collection=collection,
+                acl=row_acl,
+                file_type=row.get("file_type") or "",
+                indexed_at=row.get("indexed_at") or "",
+                updated_at=row.get("updated_at") or row.get("indexed_at") or "",
+                ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
+                language=row.get("language") or None,
+                metadata=parse_metadata(row.get("metadata") or "{}"),
             )
         )
 

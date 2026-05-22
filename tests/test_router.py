@@ -323,3 +323,121 @@ async def test_tier3_confidence_gate_failure_returns_none() -> None:
     assert result is None
     assert router._decomposer_was_invoked is False
     assert router._last_routable_names == []
+
+
+# ---------------------------------------------------------------------------
+# rank_with_scores() tests (Task 2.2)
+# ---------------------------------------------------------------------------
+
+
+def test_rank_with_scores_returns_all_collections() -> None:
+    router = _router(shortlist_size=2, confidence_threshold=0.9)
+    collections = [
+        _meta("col-a", centroid=[1.0, 0.0]),
+        _meta("col-b", centroid=[0.0, 1.0]),
+        _meta("col-c", centroid=[0.7, 0.7]),
+    ]
+    # rank() would cap at shortlist_size=2; rank_with_scores must return all 3
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    assert len(result) == 3
+
+
+def test_rank_with_scores_bypasses_confidence_gate() -> None:
+    router = _router(shortlist_size=5, confidence_threshold=0.99)
+    collections = [
+        _meta("col-a", centroid=[0.7, 0.7]),  # sim ≈ 0.707 < 0.99
+        _meta("col-b", centroid=[0.6, 0.8]),
+    ]
+    # rank() would return [] due to gate; rank_with_scores must still return entries
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    assert len(result) == 2
+    assert all(score is not None for _, score in result)
+
+
+def test_rank_with_scores_handles_mismatched_model() -> None:
+    router = _router(shortlist_size=5, confidence_threshold=0.0, embedding_model="model-a")
+    collections = [
+        _meta("col-good", centroid=[1.0, 0.0], embedding_model="model-a"),
+        _meta("col-wrong", centroid=[1.0, 0.0], embedding_model="model-b"),
+    ]
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    assert len(result) == 2
+    # col-good scored; col-wrong unscored (None)
+    names = [m.name for m, _ in result]
+    scores = [s for _, s in result]
+    assert names[0] == "col-good"
+    assert scores[0] is not None
+    assert names[1] == "col-wrong"
+    assert scores[1] is None
+
+
+def test_rank_with_scores_handles_none_centroid() -> None:
+    router = _router(shortlist_size=5, confidence_threshold=0.0)
+    collections = [
+        _meta("col-a", centroid=[1.0, 0.0]),
+        _meta("no-centroid", centroid=None),
+    ]
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    assert len(result) == 2
+    assert result[0][0].name == "col-a"
+    assert result[0][1] is not None
+    assert result[1][0].name == "no-centroid"
+    assert result[1][1] is None
+
+
+def test_rank_with_scores_alphabetical_tie_break() -> None:
+    """When two collections have identical scores, alphabetical ordering applies."""
+    router = _router(shortlist_size=5, confidence_threshold=0.0)
+    # Identical centroids → identical cosine similarity
+    collections = [
+        _meta("col-z", centroid=[1.0, 0.0]),
+        _meta("col-a", centroid=[1.0, 0.0]),
+        _meta("col-m", centroid=[1.0, 0.0]),
+    ]
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    names = [m.name for m, _ in result]
+    assert names == ["col-a", "col-m", "col-z"]
+
+
+def test_rank_with_scores_does_not_truncate_to_shortlist() -> None:
+    router = _router(shortlist_size=1, confidence_threshold=0.0)
+    collections = [
+        _meta("col-a", centroid=[1.0, 0.0]),
+        _meta("col-b", centroid=[0.0, 1.0]),
+        _meta("col-c", centroid=[0.5, 0.5]),
+    ]
+    # rank() would cap at 1; rank_with_scores must return all 3
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    assert len(result) == 3
+
+
+def test_rank_uses_alpha_tie_break() -> None:
+    """rank() must also use alphabetical tie-break (inherited from _score_collections)."""
+    router = _router(shortlist_size=10, confidence_threshold=0.0)
+    collections = [
+        _meta("col-z", centroid=[1.0, 0.0]),
+        _meta("col-a", centroid=[1.0, 0.0]),
+    ]
+    result = router.rank([1.0, 0.0], collections)
+    assert result[0].name == "col-a"
+    assert result[1].name == "col-z"
+
+
+def test_rank_preserves_confidence_gate_after_refactor() -> None:
+    router = _router(shortlist_size=5, confidence_threshold=0.9)
+    collections = [
+        _meta("col-a", centroid=[0.7, 0.7]),  # sim ≈ 0.707 < 0.9
+    ]
+    result = router.rank([1.0, 0.0], collections)
+    assert result == []
+
+
+def test_rank_preserves_shortlist_truncation_after_refactor() -> None:
+    router = _router(shortlist_size=2, confidence_threshold=0.0)
+    collections = [
+        _meta("col-a", centroid=[1.0, 0.0]),
+        _meta("col-b", centroid=[0.9, 0.1]),
+        _meta("col-c", centroid=[0.8, 0.2]),
+    ]
+    result = router.rank([1.0, 0.0], collections)
+    assert len(result) == 2

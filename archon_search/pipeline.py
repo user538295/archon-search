@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestedBy, IngestResult, SearchResult
 from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.constants import DEFAULT_NAMESPACE
@@ -29,6 +30,15 @@ logger = logging.getLogger("archon")
 @dataclass
 class SearchPipelineResult:
     results: list[SearchResult]
+    acl_filtered: bool
+
+
+@dataclass
+class ExplainPipelineResult:
+    """Result of SearchPipeline.explain — top results plus near-miss pool."""
+
+    top_results: list[ScoredSearchCandidate]
+    near_misses: list[ScoredSearchCandidate]
     acl_filtered: bool
 
 
@@ -322,6 +332,66 @@ class SearchPipeline:
         candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, namespace)
         results = await self._reranker.rerank(query, candidates, top_k=self._top_k_return)
         return SearchPipelineResult(results=results, acl_filtered=acl_filtered)
+
+    async def explain(
+        self,
+        query: str,
+        collection: str,
+        *,
+        top_k: int = 5,
+        rerank: bool = True,
+        namespace: str = DEFAULT_NAMESPACE,
+        query_vector: list[float] | None = None,
+    ) -> ExplainPipelineResult:
+        """Run explain-mode retrieval: returns top_results + near_misses with score provenance.
+
+        Args:
+            query: The search query text.
+            collection: Collection to search.
+            top_k: Number of top results to return (default 5).
+            rerank: Whether to apply the cross-encoder reranker (default True).
+            namespace: ACL namespace for filtering (default DEFAULT_NAMESPACE).
+            query_vector: Pre-computed embedding vector; skips embed_one if provided.
+
+        Returns:
+            ExplainPipelineResult with top_results ([:top_k]) and near_misses ([top_k:top_k+20]).
+        """
+        vector = query_vector if query_vector is not None else await self._embedder.embed_one(query)
+        candidate_depth = max(self._top_k_retrieve * 3, 20)
+        candidates = await self.store.hybrid_search_with_trace(
+            collection, vector, query, candidate_depth
+        )
+
+        # ACL filter
+        candidates, acl_filtered = apply_acl_filter(
+            candidates, lambda c: c.acl, namespace
+        )
+
+        # Rerank or sort by RRF
+        if rerank:
+            candidates = await self._reranker._rerank_with_trace(
+                query, candidates, top_k=len(candidates)
+            )
+            sort_key = lambda c: (  # noqa: E731
+                -(c.score_breakdown.reranker_score or 0.0),
+                c.doc_id,
+                c.chunk_id,
+            )
+        else:
+            sort_key = lambda c: (  # noqa: E731
+                -c.score_breakdown.rrf_score,
+                c.doc_id,
+                c.chunk_id,
+            )
+
+        sorted_list = sorted(candidates, key=sort_key)
+        top_results = sorted_list[:top_k]
+        near_misses = sorted_list[top_k: top_k + 20]
+        return ExplainPipelineResult(
+            top_results=top_results,
+            near_misses=near_misses,
+            acl_filtered=acl_filtered,
+        )
 
     async def search_with_context(
         self, query: str, collection: str, context_window: int = 1, namespace: str = DEFAULT_NAMESPACE
