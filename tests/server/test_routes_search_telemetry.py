@@ -204,7 +204,12 @@ def test_telemetry_enqueue_failure_does_not_break_route(
             response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 500
-    assert any("telemetry enqueue failed" in r.message for r in caplog.records)
+    assert any(
+        "telemetry enqueue failed" in r.message
+        and r.levelno == logging.WARNING
+        and r.name == "archon.search"
+        for r in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------
