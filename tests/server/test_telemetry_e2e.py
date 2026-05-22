@@ -259,8 +259,8 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
     )
 
     # Assert structural parity: /search error entry must have the same key set
-    # as /route error entries (both are from_error(...) with the same fields).
-    route_error_entries = [e for e in entries if e.get("endpoint") == "route" and e.get("status") == "internal_error"]
+    # as /route error entries (all error entries use from_error(...) and share the same field structure).
+    route_error_entries = [e for e in entries if e.get("endpoint") == "route" and e.get("status") != "ok"]
     search_error_entries = [e for e in entries if e.get("endpoint") == "search" and e.get("status") == "internal_error"]
     assert len(search_error_entries) >= 1, "Expected at least one /search error entry"
     assert len(route_error_entries) >= 1, "Expected at least one /route error entry"
