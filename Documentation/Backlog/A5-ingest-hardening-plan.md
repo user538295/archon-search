@@ -38,7 +38,8 @@ After both PRs ship:
 - A pytest-level CI guard (`tests/test_no_fstring_sql.py`) that fails if `archon_search/store.py` contains any of `\.where\(\s*f["']`, `\.delete\(\s*f["']`, `\.count_rows\(\s*f["']`.
 - Inline regex-gate comments at each remediated site.
 - `BREAKING.md` Changelog entry under `### [next release]` noting MCP behaviour change.
-- Amendment to `Documentation/Backlog/03_world_class_roadmap.md` A5 entry: drop forward IDs `VAL-1` / `RP-5`, check A5a / A5b boxes.
+- Amendment to `Documentation/Backlog/03_world_class_roadmap.md` A5 entry: drop forward IDs `VAL-1` / `RP-5`, check A5a / A5b / A5c boxes.
+- **A5c — Synchronous `StoreBusyError` propagation on `POST /ingest`**: close the A1 deferral so that an ingest submitted while a reindex holds the per-collection lock returns HTTP 503 with `Retry-After: 30` and `{"error": "store_busy", ...}` directly, rather than 202 followed by a failed-job lookup. A5 is the natural home — A5a already touches the same handler for path validation.
 
 ### Out of Scope
 - **Symlink-escape detection on ingest paths.** Deferred to the future `allowed_dirs` feature; A5a explicitly narrows the roadmap's "symlink-escape" wording.
@@ -162,6 +163,45 @@ Each remediated site gets an inline comment: `# <value> validated upstream by <r
 ### CI guard
 
 **New test file** `tests/test_no_fstring_sql.py`. Reads `archon_search/store.py` as text, asserts none of the three regex patterns match. Runs in the default-tier pytest invocation.
+
+### A5c — Sync `StoreBusyError` propagation on `POST /ingest`
+
+**Problem**: A1 introduced `SearchStore.ingest_chunks` with a 30s per-collection lock acquisition timeout that raises `StoreBusyError` when a reindex holds the lock. The store-layer contract is fully tested. But `POST /ingest` is fire-and-forget (returns 202 immediately, then runs the pipeline in a background asyncio task), so `StoreBusyError` surfaces in *job state* (`GET /jobs/{id}` → `FAILED`) rather than as a synchronous response — the plan's acceptance criterion ("503 with `Retry-After: 30`") is not met from the HTTP surface.
+
+**Design**: pre-acquire the per-collection lock **inside the request handler** with the existing 30s timeout. On timeout, return HTTP 503 with `Retry-After: 30` and `{"error": "store_busy", ...}`. On success, hand the held lock to the background task via a small wrapper that releases it when the task completes. Avoid the TOCTOU window of release-then-reacquire (otherwise a reindex slipping in between hands the client a misleading 202).
+
+```python
+# routes_jobs.py (sketch)
+search_store = getattr(request.app.state, "search_store", None)
+collection = body.collection
+if search_store is not None:
+    lock = search_store._lock_for(collection)
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            {"error": "store_busy", "detail": "reindex in progress; retry after Retry-After seconds"},
+            status_code=503,
+            headers={"Retry-After": str(math.ceil(INGEST_LOCK_TIMEOUT_S))},
+        )
+    held_lock = lock
+else:
+    held_lock = None
+
+# wrap background task to release the lock when done
+task = asyncio.create_task(_default_ingest_task_with_lock(
+    job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn, held_lock=held_lock,
+))
+```
+
+`SearchStore.ingest_chunks` must learn to **skip lock acquisition if the caller already holds it**. Simplest signal: a new `_locked_by_caller: bool = False` keyword (private, single-underscore — not part of the public API). The background-task wrapper passes `_locked_by_caller=True`; all other callers (CLI, sync, watcher, eval) keep the existing self-locking behavior.
+
+**Out of scope for A5c**:
+- `POST /collections` (which also schedules an ingest job): same fix applies, mirror the change. Listed in the task breakdown.
+- The MCP `ingest_*` tools: those call `pipeline.ingest_file` directly (no async-job wrapper), so the existing store-level `StoreBusyError` already surfaces synchronously to the MCP client. Verify via test; no code change expected.
+- Configurable timeout. Out of scope — A1's `INGEST_LOCK_TIMEOUT_S=30.0` is still hardcoded.
+
+**Known limitation**: If the background task is cancelled (e.g. `DELETE /jobs/{id}` while pending), the wrapper must still release the lock. Use a `try/finally` on the wrapper, not `async with`.
 
 ---
 
@@ -411,6 +451,50 @@ Each remediated site gets an inline comment: `# <value> validated upstream by <r
 
 ---
 
+### Phase 2c — A5c Sync `StoreBusyError` propagation on `POST /ingest`
+> **Releasable**: when Task 2c.3 lands. Independent of A5a / A5b — can ship as its own PR or fold into A5b's PR. Closes the A1 deferral so the plan's "503 + Retry-After: 30" acceptance criterion is met from the HTTP response surface.
+
+#### Task 2c.1 — `SearchStore.ingest_chunks` accepts `_locked_by_caller`
+- [ ] **File**: `archon_search/store.py`, `tests/test_store_lock.py`
+- **Depends on**: nothing (independent of A5a / A5b).
+- **Description**:
+  - Add private keyword-only parameter `_locked_by_caller: bool = False` to `ingest_chunks`.
+  - When `True`, skip the `_lock_for(collection)` acquire/release dance entirely (the caller is responsible for the lock lifecycle). The validation, table.add, and return semantics are unchanged.
+  - Document in a one-line comment that this is for the REST `/ingest` handler's pre-acquire path; no public API change.
+- **Tests (TDD)** — `tests/test_store_lock.py`:
+  - `test_ingest_chunks_skips_lock_when_locked_by_caller` — pre-acquire the lock via `_lock_for`, then call `ingest_chunks(..., _locked_by_caller=True)`; assert no `StoreBusyError` and the row lands.
+  - `test_ingest_chunks_default_still_acquires` — pre-acquire the lock, call without the flag, assert `StoreBusyError` (existing behavior).
+- **Checkpoint**: `uv run pytest tests/test_store_lock.py -v`.
+
+#### Task 2c.2 — Pre-acquire lock in `POST /ingest` and `POST /collections`
+- [ ] **File**: `archon_search/server/routes_jobs.py`, `archon_search/server/routes_collections.py`, `archon_search/server/_ingest_lock.py` (new helper module).
+- **Depends on**: Task 2c.1.
+- **Description**:
+  - New helper `acquire_collection_lock_or_503(store, collection_name) -> asyncio.Lock | JSONResponse | None`:
+    - Returns the acquired lock on success.
+    - Returns a 503 `JSONResponse` (with `Retry-After: str(math.ceil(INGEST_LOCK_TIMEOUT_S))` and body `{"error": "store_busy", "detail": "reindex in progress; retry after Retry-After seconds"}`) on timeout.
+    - Returns `None` when `store` is unavailable (test/stub paths) — handler treats as best-effort and proceeds.
+  - `POST /ingest` (`routes_jobs.ingest`): call the helper; if it returns a `JSONResponse`, return it directly; if a lock, pass it to a new `_default_ingest_task_with_lock` wrapper that releases the lock in a `try/finally` around the existing task body. Pass `_locked_by_caller=True` down to `ingest_chunks` via a small pipeline-fn signature update (or via `body` for the stub pipeline). For the in-tree default pipeline, the wrapper must propagate the flag so the background task does not redundantly try to re-acquire.
+  - `POST /collections.add_collection`: mirror the same pre-acquire (new collection name is derived deterministically from path — call `path_to_collection_name` first, then acquire that name's lock).
+- **Tests (TDD)** — `tests/test_routes_ingest_503.py`:
+  - `test_post_ingest_returns_503_when_lock_held` — patch `_lock_for(...)` to return a pre-acquired lock, POST `/ingest`, assert 503 + `Retry-After: 30` + JSON body matches contract.
+  - `test_post_ingest_succeeds_when_lock_free` — happy path, asserts 202 and that the background task ran without re-acquiring.
+  - `test_post_collections_returns_503_when_lock_held` — same for the `/collections` endpoint.
+  - `test_post_ingest_releases_lock_after_background_task` — after a successful 202, assert the lock is released (subsequent ingest into same collection succeeds immediately).
+  - `test_post_ingest_releases_lock_on_task_cancellation` — cancel the background task mid-run via `DELETE /jobs/{id}`, assert the lock is released.
+- **Checkpoint**: `uv run pytest tests/test_routes_ingest_503.py -v`.
+
+#### Task 2c.3 — MCP path verification + docs
+- [ ] **File**: `tests/server/test_mcp_ingest_503.py` (new), `BREAKING.md`, A1 plan acceptance note.
+- **Depends on**: Task 2c.2.
+- **Description**:
+  - Verify MCP `ingest_file` / `ingest_directory` surface `StoreBusyError` as `McpErrorResponse(code="store_busy")` synchronously (no code change expected — they call `pipeline.ingest_file` directly, which calls `ingest_chunks`; the existing `except Exception` in mcp.py wraps it into the error envelope). Add an explicit test that pre-acquires the per-collection lock and asserts the MCP tool returns the error envelope rather than a success dict.
+  - **`BREAKING.md`**: add a paragraph under the existing A1 entry noting that the synchronous 503 surface is now in place (folded into A5). Reference A5's release.
+  - **A1 plan** (`Documentation/Backlog/A1-metadata-schema-v1-plan.md`): in Task 8.3's acceptance criteria, flip the deferred "POST /ingest returns 503" item from ⚠️ to ✅ with a backreference to A5c.
+- **Checkpoint**: `uv run pytest tests/server/test_mcp_ingest_503.py -v`, then full suite.
+
+---
+
 ### Phase 3 — Verification & documentation
 > **Releasable**: when Task 3.3 completes. (C1-I-DA2-8) Phase 3 ships either as a third small PR (docs sweep) after both feature PRs merge, OR is folded into whichever feature PR ships second — at the author's discretion. Either way, neither feature PR's correctness depends on Phase 3.
 >
@@ -426,12 +510,12 @@ Each remediated site gets an inline comment: `# <value> validated upstream by <r
 - **Tests (TDD)**: N/A — documentation task.
 - **Checkpoint**: doc references `_path_safety.py` and `_where_eq` / `_where_in` (or native binds if Task 2.1 chose that path).
 
-#### Task 3.2 — Roadmap consolidation (VAL-1 / RP-5 cleanup + A5a / A5b checkmarks)
+#### Task 3.2 — Roadmap consolidation (VAL-1 / RP-5 cleanup + A5a / A5b / A5c checkmarks)
 - [ ] **File**: `Documentation/Backlog/03_world_class_roadmap.md`
-- **Depends on**: Task 1.7, Task 2.4
-- **Description (C1-I-DA2-4)**: This is the **sole** task that edits the roadmap. Tasks 1.7 and 2.4 explicitly do NOT touch the roadmap, eliminating merge-conflict risk when the two feature PRs land independently.
+- **Depends on**: Task 1.7, Task 2.4, Task 2c.3
+- **Description (C1-I-DA2-4)**: This is the **sole** task that edits the roadmap. Tasks 1.7, 2.4, 2c.3 explicitly do NOT touch the roadmap, eliminating merge-conflict risk when the feature PRs land independently.
   - Remove or strike-through both `VAL-1` and `RP-5` forward IDs from the A5 line.
-  - Check the A5a and A5b boxes (if the roadmap uses sub-checkboxes) or add sub-bullets `- [x] A5a (PR #<n>)` / `- [x] A5b (PR #<n>)`.
+  - Check the A5a, A5b, and A5c boxes (if the roadmap uses sub-checkboxes) or add sub-bullets `- [x] A5a (PR #<n>)` / `- [x] A5b (PR #<n>)` / `- [x] A5c (PR #<n>)`.
   - If the brief was added as a Backlog reference, leave the link.
 - **Releasable**: roadmap is internally consistent — no orphaned forward IDs.
 - **Tests (TDD)**: N/A — documentation task.
@@ -463,7 +547,8 @@ Each remediated site gets an inline comment: `# <value> validated upstream by <r
   - The upstream regex gates `_COLLECTION_RE`, `_validate_namespace` / `_NAMESPACE_RE`, `_DOC_ID_RE` are unchanged.
   - `tests/test_no_fstring_sql.py::test_guard_detects_injected_violation` passes — the guard regex is not a no-op.
   - `BREAKING.md` contains a `### [next release]` Changelog entry describing the MCP behaviour change.
-  - `Documentation/Backlog/03_world_class_roadmap.md` no longer references `VAL-1` or `RP-5`; A5 (or its A5a/A5b sub-items) is checked.
+  - `Documentation/Backlog/03_world_class_roadmap.md` no longer references `VAL-1` or `RP-5`; A5 (or its A5a/A5b/A5c sub-items) is checked.
+  - **A5c**: `POST /ingest` and `POST /collections` return HTTP 503 with `Retry-After: 30` and `{"error": "store_busy", ...}` when the target collection's per-collection lock is held by an active reindex; ingest into a *different* collection succeeds normally. The MCP `ingest_*` tools surface `StoreBusyError` synchronously as `McpErrorResponse(code="store_busy")`. A1 plan Task 8.3's acceptance item for this is now ✅ (backreference to A5c).
   - `Documentation/Architecture/150_security_and_privacy_architecture.md` reflects the new validation layer and the CI guard.
   - Full default-tier `uv run pytest` exits 0 with coverage ≥ 85%.
   - No MCP tool return annotation was tightened as part of this work (cleanup is deliberately deferred).
