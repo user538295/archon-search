@@ -62,7 +62,7 @@ Verified from `archon_search/server/routes_*.py`:
 | Slots out of range (explicit handler check) | `400` | `routes_route.py:79` | `slot_out_of_range` |
 | Bad request body — Pydantic body validation | `422` | FastAPI default | none (exception fires before the handler body; telemetry is **not** recorded) |
 | Bad request body — `routes_route` explicit 400 | `400` | `routes_route.py:76, 79` | `validation_error` (via `_redact_validation`, mapped to `empty_query` / `slot_out_of_range` / `validation_error`) |
-| Collection not found | `404` | `routes_search.py:74` (returns `JSONResponse` directly), `routes_collections.py:180, 186, 243, 251, 309, 313` | n/a (not logged) |
+| Collection not found | `404` | `routes_search.py:92-93` (returns `JSONResponse` directly), `routes_collections.py:180, 186, 243, 251, 309, 313` | n/a (not logged) |
 | Job not found | `404` | `routes_jobs.py:113, 115, 133, 135, 145` | n/a |
 | Collection name conflict | `409` | `routes_collections.py:130, 136, 148, 200` | n/a |
 | `pipeline.get_collection_meta(...)` raises any exception (meta-lookup failure — `/search` only; `/route` calls `get_all_collections_meta`, not `get_collection_meta`, and its failure path falls through to the generic 500 re-raise) | `503` | `routes_search.py:86-90` (catches `Exception`, returns `JSONResponse({"detail": "service unavailable"}, status_code=503)`) | none — the meta-lookup exception handler (`routes_search.py:86-90`) does not enqueue telemetry; `TelemetryEntry.from_error` is imported and called on the pipeline-failure and timeout paths |
