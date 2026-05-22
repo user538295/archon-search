@@ -1,15 +1,19 @@
 """POST /search endpoint — delegates to SearchPipeline (Task 3.4)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from time import monotonic
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
 from archon_search.telemetry.entry import TelemetryEntry
+
+# TODO: make configurable via config.py (see /route for parity)
+_SEARCH_TIMEOUT_SECONDS = 30.0
 
 logger = logging.getLogger("archon.search")
 
@@ -89,11 +93,34 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         return JSONResponse({"detail": "collection not found"}, status_code=404)
 
     try:
-        result = await pipeline.search(body.query, body.collection, namespace=ns)
+        result = await asyncio.wait_for(
+            pipeline.search(body.query, body.collection, namespace=ns),
+            timeout=_SEARCH_TIMEOUT_SECONDS,
+        )
         return SearchResponse(
             results=[SearchResultSchema.from_result(r) for r in result.results],
             acl_filtered=result.acl_filtered,
         )
+    except asyncio.TimeoutError:
+        writer = getattr(request.app.state, "telemetry_writer", None)
+        if writer is not None:
+            try:
+                writer.enqueue(
+                    TelemetryEntry.from_error(
+                        endpoint="search",
+                        status="timeout",
+                        error_kind="timeout",
+                        latency_ms=(monotonic() - start) * 1000.0,
+                    )
+                )
+            except Exception as tel_exc:
+                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+        logger.error(
+            "search pipeline timed out",
+            extra={"event_type": "search_timeout"},
+            exc_info=True,
+        )
+        raise HTTPException(status_code=504, detail="Search timed out")
     except Exception as exc:
         writer = getattr(request.app.state, "telemetry_writer", None)
         if writer is not None:

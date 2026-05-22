@@ -350,3 +350,53 @@ def test_writer_none_pipeline_failure_does_not_crash() -> None:
         response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# Test 11: pipeline timeout returns 504 and enqueues telemetry
+# ---------------------------------------------------------------------------
+
+
+def test_search_pipeline_timeout_returns_504_and_enqueues_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import asyncio
+    import archon_search.server.routes_search as routes_search_module
+
+    monkeypatch.setattr(routes_search_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
+
+    writer_mock = _make_mock_writer()
+    pipeline_mock = MagicMock()
+    pipeline_mock.get_collection_meta = AsyncMock(
+        return_value=CollectionMeta(name="col", namespace="default")
+    )
+
+    async def _slow_search(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    pipeline_mock.search = _slow_search
+
+    app = _make_test_app(writer=writer_mock, pipeline_mock=pipeline_mock)
+
+    with caplog.at_level(logging.ERROR, logger="archon.search"):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post("/search", json={"collection": "col", "query": "test"})
+
+    assert response.status_code == 504
+    assert writer_mock.enqueue.call_count == 1
+    entry = writer_mock.enqueue.call_args.args[0]
+    assert entry.endpoint == "search"
+    assert entry.status == "timeout"
+    assert entry.error_kind == "timeout"
+    assert entry.latency_ms > 0
+
+    error_records = [
+        r
+        for r in caplog.records
+        if r.name == "archon.search"
+        and r.levelno == logging.ERROR
+        and hasattr(r, "event_type")
+    ]
+    assert len(error_records) == 1
+    assert error_records[0].event_type == "search_timeout"
