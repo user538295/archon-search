@@ -14,7 +14,7 @@ This page is a client-side companion to `Documentation/Architecture/140_error_ha
 1. **Status code first, message second.** REST clients should branch on HTTP status, not on `detail` text. `detail` strings are stable enough for humans but not part of the typed contract.
 2. **`401` has no body.** Auth failures return `401` with `WWW-Authenticate: Bearer` and an empty body — same response for missing header, wrong scheme, and unknown token. Don't try to parse JSON from a 401.
 3. **`404` covers cross-namespace.** A resource that exists in another namespace looks like "not found" to your token — by design (`150_security_and_privacy_architecture.md`).
-4. **`/search` may lie about success.** A pipeline failure currently returns `200` with `results: []` and `acl_filtered: false` (debt `CON-5` #Unverified; planned fix is roadmap item A4 in `Documentation/Backlog/03_world_class_roadmap.md` #Unverified). Build dashboards that alarm on a sustained empty-results window.
+4. **`/search` may lie about success.** A pipeline failure currently returns `200` with `results: []` and `acl_filtered: false` (debt `CON-5` #Unverified; planned fix is roadmap item A3 in `Documentation/Backlog/03_world_class_roadmap.md` #Unverified). Build dashboards that alarm on a sustained empty-results window.
 5. **MCP errors are payloads, not protocol errors.** Treat `{"error", "code"}` as a sentinel value and branch on `code`.
 
 ## REST status codes (client view)
@@ -124,6 +124,6 @@ Telemetry records error classes (`ErrorKind ∈ {empty_query, slot_out_of_range,
 
 - [`../Architecture/140_error_handling_strategy.md`](../Architecture/140_error_handling_strategy.md) — server-side status code matrix with line citations.
 - [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) — `CON-5` (search-failure semantics) and `API-4` (MCP schemas).
-- [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) — A4 (fix `CON-5`), C7 (fix `API-4`).
+- [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) — A3 (fix `CON-5`), C7 (fix `API-4`).
 - [`02_authentication.md`](./02_authentication.md) — `401` causes.
 - [`../../BREAKING.md`](../../BREAKING.md) — contract changes.

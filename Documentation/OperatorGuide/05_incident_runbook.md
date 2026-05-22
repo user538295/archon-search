@@ -108,7 +108,7 @@ This is the documented failure-downgrade behaviour: when the pipeline raises, `r
 6. Re-run with a known-good query. Persistent emptiness with no log signal indicates either an empty collection or a model-load issue.
 7. If the cause is router staleness after a recent reindex (`CON-2`), restart the service to repopulate `MultiCollectionRouter._cached_metadata` (`router.py:50, :69-70, :124`). This is a private one-shot in-process cache with no public bust API; restart is the only supported recovery. #Unverified (operator-symptom mapping to router staleness is inferential; cache mechanics are verified in source).
 
-Roadmap fix `A4` (propagate 5xx on pipeline failure) will eliminate this class of silent failure.
+Roadmap fix `A3` (propagate 5xx on pipeline failure) will eliminate this class of silent failure.
 
 ### Telemetry log explosion
 

@@ -67,7 +67,7 @@ These are starting thresholds for a single-host deployment. Tune to local noise;
 
 - Compare `/telemetry/stats` `success_rate` and result-count distributions over time.
 - Spot-check known-good queries from a synthetic monitor.
-- Track `CON-5` in `Architecture/530_technical_debt_refactoring_roadmap.md` and `A4` in `Backlog/03_world_class_roadmap.md` — both target this. #Unverified (roadmap/tech-debt IDs not re-verified in this pass)
+- Track `CON-5` in `Architecture/530_technical_debt_refactoring_roadmap.md` and `A3` in `Backlog/03_world_class_roadmap.md` — both target this. #Unverified (roadmap/tech-debt IDs not re-verified in this pass)
 
 ## Scraping recipes
 
