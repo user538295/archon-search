@@ -21,8 +21,8 @@ Doc is largely accurate. Symptom-to-fix mappings, file paths, line references (`
 4. **"File permissions must be `600`." (line 44) overstates the requirement.**
    Permissions do not have to be `600` for the key to load. `_load_from_file` (lines 53-59) attempts to tighten them with `_chmod_600`, but if that fails the `try`/`except OSError` swallows the error and reading continues. The doc's "the load is skipped" if chmod fails is wrong — chmod failure does *not* abort the load. The load only aborts if the subsequent `read_text` itself raises `OSError` (lines 61-64).
 
-5. **Symptom: empty results — claim 5 about pipeline degradation (line 55) is slightly off on log message.**
-   The doc cites "a `search failed for collection …` warning with traceback". `routes_search.py:83` does log exactly `"search failed for collection %r: %s"` at `warning` level with `exc_info=True`. This claim is accurate — *withdraw* (moved to Verified).
+5. **Symptom: empty results — claim 5 about pipeline degradation (line 55): reviewed against pre-A3 code.**
+   Pre-A3: the doc cited "a `search failed for collection …` warning with traceback" — this matched `routes_search.py:83` logging at `warning` level. Post-A3 (CON-5 resolved): the pipeline exception path now logs at ERROR level with `event_type="search_pipeline_failure"`, and returns HTTP 500 (not empty results). The doc's item 5 was updated to reflect the A3 behavior; review verified the pre-A3 log message only.
 
 6. **Symptom: reindex stuck — `archon-search collection reindex <name>` (line 64).**
    Verified the subcommand exists (`cli/collection.py:196`) but the doc says it "clears the state and rebuilds from scratch". The reindex command does clear state (cli/collection.py:224 comment confirms), so this is accurate — *withdraw* (moved to Verified).
@@ -54,7 +54,7 @@ Doc is largely accurate. Symptom-to-fix mappings, file paths, line references (`
 - `GET /jobs/{job_id}` exists for REST-triggered reindex (referenced in `routes_jobs.py`, not opened here but confirmed elsewhere in repo per CLAUDE.md).
 - `POST /search` returns 404 on missing/cross-namespace collection (`routes_search.py:73-74`); meta is fetched filtered by namespace (line 68), so cross-namespace access is collapsed to 404. Doc's nuance about "404 not empty results" for cross-namespace is correct.
 - `GET /collections/` filters by caller namespace silently (`routes_collections.py:75-90`).
-- `POST /search` returns `{"results": [], "acl_filtered": false}` on internal exception with warning log `search failed for collection %r` (`routes_search.py:82-84`).
+- `POST /search` previously returned `{"results": [], "acl_filtered": false}` on internal exception with warning log `search failed for collection %r` (`routes_search.py:82-84`) — this was verified against pre-A3 code. Post-A3 (CON-5 resolved): pipeline exceptions bare-re-raise as HTTP 500; a `search_pipeline_failure` event is logged at ERROR with `exc_info=True`. The warning-level log and silent-empty path no longer exist.
 - `routes_search.py:71` is the 503 return. Correct line number.
 - `/route` has a 30-second `asyncio.wait_for` and raises HTTP 504 on timeout (`routes_route.py:94-101, 122-135`). Line refs match.
 - `install_cmd._HEALTH_TIMEOUT = 60` polls `GET /health` until ready (`install_cmd.py:14, 49-61`); on timeout prints `Warning: service did not become ready within 60s` and exits 1 (lines 117-118).
