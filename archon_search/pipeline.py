@@ -373,7 +373,7 @@ class SearchPipeline:
                 query, candidates, top_k=len(candidates)
             )
             sort_key = lambda c: (  # noqa: E731
-                -(c.score_breakdown.reranker_score or 0.0),
+                -(c.score_breakdown.reranker_score if c.score_breakdown.reranker_score is not None else float("-inf")),
                 c.doc_id,
                 c.chunk_id,
             )

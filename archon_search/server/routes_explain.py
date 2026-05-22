@@ -287,7 +287,7 @@ async def explain(
             return JSONResponse({"detail": "service unavailable"}, status_code=503)
 
         if not all_meta:
-            return JSONResponse({"detail": "no collections found"}, status_code=404)
+            return JSONResponse({"detail": "no collections available"}, status_code=404)
 
         # Embed query once for both routing and search
         try:
@@ -300,14 +300,17 @@ async def explain(
         inline_router = MultiCollectionRouter(
             search_url="",
             embedder=pipeline._embedder,
-            shortlist_size=getattr(config, "router_shortlist_size", len(all_meta)),
-            confidence_threshold=getattr(config, "router_confidence_threshold", 0.0),
+            shortlist_size=config.routing_shortlist_size,
+            confidence_threshold=config.routing_confidence_threshold,
             embedding_model=pipeline._embedder.model_name,
         )
         scored_pairs = inline_router.rank_with_scores(query_vector, all_meta)
 
+        # ACL filter: only keep collections the caller's namespace is allowed to access
+        scored_pairs = [(m, s) for m, s in scored_pairs if m.namespace == ns]
+
         if not scored_pairs:
-            return JSONResponse({"detail": "no collections found"}, status_code=404)
+            return JSONResponse({"detail": "no collections available"}, status_code=404)
 
         routing_candidates = [
             RoutingCandidate(collection=m.name, centroid_score=score)
@@ -315,15 +318,13 @@ async def explain(
         ]
 
         # Determine chosen collection (first after building scored list)
-        # Filter by namespace
         chosen_meta, chosen_score = scored_pairs[0]
         chosen_collection = chosen_meta.name
 
         # Confidence gate
-        scored_only = [(m, s) for m, s in scored_pairs if s is not None]
-        confidence_threshold = getattr(config, "router_confidence_threshold", 0.0)
+        confidence_threshold = config.routing_confidence_threshold
         chosen_below_threshold = bool(
-            scored_only and chosen_score is not None and chosen_score < confidence_threshold
+            chosen_score is not None and chosen_score < confidence_threshold
         )
 
         routing = RoutingExplain(
