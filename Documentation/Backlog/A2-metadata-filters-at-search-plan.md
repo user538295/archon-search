@@ -281,7 +281,7 @@ class FilterFlags(BaseModel):
   - Checkpoint: `uv run pytest tests/test_search_filters.py -x`
 
 #### Task 2.2 — Datetime normalization helper
-- [ ] **File**: `archon_search/_types.py`
+- [x] **File**: `archon_search/_types.py`
 - **Depends on**: nothing (independent from 2.1)
 - **Description**:
   - `normalize_iso_utc(dt: datetime | str) -> str` returns `YYYY-MM-DDTHH:MM:SS.ffffffZ` (6-digit microseconds, always `Z`).

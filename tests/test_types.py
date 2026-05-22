@@ -1,7 +1,9 @@
 """Tests for canonical domain types."""
 import dataclasses
 import json
-from archon_search._types import SearchResult, IngestedBy
+import pytest
+from datetime import datetime, timezone, timedelta
+from archon_search._types import SearchResult, IngestedBy, normalize_iso_utc
 from archon_search.types import (
     JobStatus,
     IngestJob,
@@ -222,3 +224,73 @@ def test_all_types_json_serializable():
     for obj in instances:
         d = dataclasses.asdict(obj)
         json.dumps(d)  # must not raise
+
+
+def test_normalize_iso_utc_naive_datetime():
+    dt = datetime(2026, 5, 21, 10, 0, 0, 123456)
+    result = normalize_iso_utc(dt)
+    assert result == "2026-05-21T10:00:00.123456Z"
+
+
+def test_normalize_iso_utc_aware_datetime():
+    # UTC+2 offset; 12:00 local = 10:00 UTC
+    tz_plus2 = timezone(timedelta(hours=2))
+    dt = datetime(2026, 5, 21, 12, 0, 0, 0, tzinfo=tz_plus2)
+    result = normalize_iso_utc(dt)
+    assert result == "2026-05-21T10:00:00.000000Z"
+
+
+def test_normalize_iso_utc_string_round_trip():
+    fixed = "2026-05-21T10:00:00.123456Z"
+    assert normalize_iso_utc(fixed) == fixed
+
+
+def test_normalize_iso_utc_variable_precision_string():
+    # No microseconds
+    assert normalize_iso_utc("2026-05-21T10:00:00Z") == "2026-05-21T10:00:00.000000Z"
+    # With microseconds
+    assert normalize_iso_utc("2026-05-21T10:00:00.123456Z") == "2026-05-21T10:00:00.123456Z"
+
+
+def test_normalize_iso_utc_plus_zero_offset_string():
+    result = normalize_iso_utc("2026-05-21T10:00:00+00:00")
+    assert result == "2026-05-21T10:00:00.000000Z"
+
+
+def test_lexicographic_order_preserved():
+    earlier = normalize_iso_utc(datetime(2026, 1, 1, 0, 0, 0))
+    later = normalize_iso_utc(datetime(2026, 6, 1, 0, 0, 0))
+    assert earlier < later
+
+
+def test_normalize_iso_utc_non_utc_offset_string():
+    # "+05:30" offset: 15:30 local = 10:00 UTC
+    result = normalize_iso_utc("2026-05-21T15:30:00+05:30")
+    assert result == "2026-05-21T10:00:00.000000Z"
+
+
+def test_normalize_iso_utc_zero_microseconds():
+    dt = datetime(2026, 1, 1, 0, 0, 0)  # zero microseconds
+    assert normalize_iso_utc(dt) == "2026-01-01T00:00:00.000000Z"
+
+
+def test_normalize_iso_utc_max_microseconds():
+    dt = datetime(2026, 1, 1, 23, 59, 59, 999999)
+    assert normalize_iso_utc(dt) == "2026-01-01T23:59:59.999999Z"
+
+
+def test_lexicographic_order_preserved_time_difference():
+    earlier = normalize_iso_utc(datetime(2026, 5, 21, 9, 59, 59, 999999))
+    later = normalize_iso_utc(datetime(2026, 5, 21, 10, 0, 0, 0))
+    assert earlier < later
+
+
+def test_normalize_iso_utc_three_digit_millis():
+    # 3-digit millis become 6-digit microseconds
+    result = normalize_iso_utc("2026-05-21T10:00:00.123Z")
+    assert result == "2026-05-21T10:00:00.123000Z"
+
+
+def test_normalize_iso_utc_invalid_string_raises():
+    with pytest.raises(ValueError):
+        normalize_iso_utc("not-a-date")

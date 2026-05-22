@@ -1,7 +1,29 @@
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Literal
 
 from archon_search.constants import DEFAULT_NAMESPACE
+
+
+def normalize_iso_utc(dt: datetime | str) -> str:
+    """Return a fixed-width ISO-8601 UTC string: ``YYYY-MM-DDTHH:MM:SS.ffffffZ``.
+
+    Accepts:
+    - ``datetime``: naive → treated as UTC; aware → converted to UTC.
+    - ``str``: ISO-8601 forms accepted by ``datetime.fromisoformat``, including
+      ``Z`` suffix, ``+00:00`` offset, or variable-precision microseconds.
+    """
+    if isinstance(dt, str):
+        # Normalize 'Z' suffix to '+00:00' for consistent fromisoformat parsing.
+        normalised = (dt.removesuffix("Z") + "+00:00") if dt.endswith("Z") else dt
+        dt = datetime.fromisoformat(normalised)
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 IngestedBy = Literal["cli", "http", "watcher", "reindex"]
 """Canonical call-site identity for ingest writes.
