@@ -102,7 +102,7 @@ If `/status` shows collections in `failed` or stale `indexing` states, run `arch
 
 - `/health` returns 200.
 - `/status` lists the expected collections with `status: up_to_date` or `not_yet_indexed`.
-- A known-good search returns non-empty results (`/search` returns empty silently on pipeline failure — see `CON-5`).
+- A known-good search returns non-empty results (pipeline failures now surface as HTTP 500/504, not silent empty results — `CON-5` resolved in A3).
 - `[telemetry].enabled = true` deployments: `GET /telemetry/stats` returns numbers, not `{"enabled": false}`.
 
 ## Disaster scenarios

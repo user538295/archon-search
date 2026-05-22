@@ -31,7 +31,7 @@ The doc is largely accurate against `release.sh`, `pyproject.toml`, `archon_sear
 - `/health` and `/status` both return `version` — confirmed in `routes_health.py:20` and `routes_status.py:84`, both reading `version("archon-search")` from `importlib.metadata`.
 - `GET /health` is unauthenticated, `/status` requires Bearer — consistent with `CLAUDE.md`'s "All endpoints except `GET /health` require a `Bearer` token."
 - `[next release]` BREAKING.md entry shapes — confirmed in `BREAKING.md`. Both entries (MCP `search` shape; REST `/search` per-request `top_k` ignored) exist verbatim.
-- `routes_search.py` swallows pipeline failures into empty results (CON-5) — confirmed lines 82–84 (`except Exception ... return SearchResponse(results=[], acl_filtered=False)`).
+- `routes_search.py` previously swallowed pipeline failures into empty results (CON-5) — this behavior was resolved in A3. The route now bare-re-raises pipeline exceptions (HTTP 500) and raises `HTTPException(status_code=504)` on timeout. This claim was verified against the pre-A3 code; it no longer holds post-A3.
 - `SearchRequest.top_k` exists but is unused — confirmed: `routes_search.py:20` defines `top_k: int = Field(default=5, ...)`, but `pipeline.search(body.query, body.collection, namespace=ns)` on line 77 does not pass it; pipeline uses `self._top_k_return` from config (`pipeline.py:303`, `pipeline.py:439`).
 - Config loader silently ignores unknown keys — confirmed: `config.py` has no `extra="forbid"` or unknown-key validation; each section reads keys via `if "x" in section` guards.
 - `[database].top_k_return` is the live key — confirmed `config.py:162–167`, `archon-search.toml.example:20`.

@@ -47,9 +47,9 @@ Verified ground-truth claims include the auth middleware behavior, the `ErrorKin
    **Severity**: Minor.
 
 8. **Quoted** (Principles §2): "Route handlers translate them to HTTP status codes — exceptions never leak as raw 500s when a typed mapping exists."
-   **Ground truth**: Largely true, but `routes_search.py:82-84` does the *opposite* of what the principle suggests for the post-meta `pipeline.search(...)` call: it swallows every exception and returns an empty `SearchResponse` (HTTP 200), not a typed status. That is an undocumented behavior worth noting; it isn't a "raw 500" but it isn't a "typed mapping" either.
-   **Ref**: `archon_search/server/routes_search.py:76-84`.
-   **Severity**: Moderate (silent failure masking is at odds with the stated principle).
+   **Ground truth**: True as of A3 (CON-5). Pre-A3, `routes_search.py:82-84` swallowed every pipeline exception and returned HTTP 200 with empty `SearchResponse` — the opposite of what the principle requires. That exception path was fixed in A3: `routes_search.py` now bare-re-raises pipeline exceptions (HTTP 500 via FastAPI default) and raises `HTTPException(status_code=504, detail="Search timed out")` on timeout. The doc's stated principle now accurately reflects the shipped behavior.
+   **Ref**: `archon_search/server/routes_search.py` (post-A3); `BREAKING.md` `[next release]` — `POST /search` pipeline-exception behavior.
+   **Severity**: Resolved — this was an inaccuracy in the reviewed doc, corrected in A3.
 
 9. **Quoted**: "TOML parse failure (`Failed to parse {path}: ...`) … Wrong type (`Expected integer/float/boolean for '{field}'`)".
    **Ground truth**: The actual messages are per-type, not slash-joined: `Expected integer for '{field}', got {type}`, `Expected float for '{field}', got {type}`, `Expected boolean for '{field}', got {type}` (config.py:98, 105, 110). Minor presentational issue — readers might grep for the exact slashed form and miss the real messages.

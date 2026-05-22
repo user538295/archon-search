@@ -50,7 +50,9 @@ Status codes:
 - `200` — success.
 - `404` — collection not found in the caller's namespace.
 - `503` — internal metadata lookup failed.
-- `200` with empty `results` — search executed but returned no hits (or pipeline raised internally; the route degrades to empty rather than 5xx).
+- `200` with empty `results` — search executed successfully but found no matching documents.
+- `500` — pipeline stage exception (embedder, store, or reranker raised).
+- `504` — pipeline call timed out (~30 s).
 
 ### `curl` example
 

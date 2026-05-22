@@ -11,7 +11,7 @@ This page mirrors `03_rest_client_python.md` for TypeScript. Types are hand-writ
 
 1. **Hand-roll the auth.** There is no SDK. Build a thin client that owns the base URL and the bearer header.
 2. **Types track the Pydantic models.** Keep one file (e.g. `archonTypes.ts`) and update it when `schemas.py` changes. Cross-reference `BREAKING.md`.
-3. **Don't trust `/search` to fail loudly on pipeline errors.** Pipeline execution errors return HTTP 200 with `results=[]` today (`routes_search.py` `search()` exception handler — debt `CON-5` / roadmap A3 #Unverified). Note that not *all* failure modes collapse to 200: a missing collection returns 404 and a meta-store lookup failure returns 503. If "no hits" is operationally significant for you, alarm on a sustained empty-results window in addition to 4xx/5xx.
+3. **`/search` fails loudly on pipeline errors.** Pipeline stage exceptions (embedder, store, reranker) return HTTP 500; a hung pipeline returns HTTP 504 (`CON-5` resolved in A3). A missing collection returns 404 and a meta-store lookup failure returns 503. HTTP 200 with `results: []` means the pipeline ran successfully but found no matching documents — it is not an error signal.
 
 ## Types
 

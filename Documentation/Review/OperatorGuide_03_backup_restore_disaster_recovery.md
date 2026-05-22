@@ -41,7 +41,7 @@ The document is largely accurate. Path claims, owner-module attributions, line n
 
 - Roadmap item IDs (`D1`, `D2`, `D5`, `PLT-1`, `CON-3`, `CON-4`, `CON-5`) — not checked against `Documentation/Backlog/03_world_class_roadmap.md` / `Architecture/530_technical_debt_refactoring_roadmap.md` per the "never trust Documentation/ files" rule. These are doc-to-doc references and cannot be validated from source.
 - "LanceDB column files are append-mostly" / "v1 archive format not stable across LanceDB versions" — properties of the upstream library, not verifiable from this repo's code.
-- "`/search` returns empty silently on pipeline failure (CON-5)" — not verified against `routes_search.py` / `pipeline.py` for this review; cross-doc reference only.
+- "`/search` returns empty silently on pipeline failure (CON-5)" — this was the pre-A3 behavior; CON-5 was resolved in A3. Post-A3 pipeline failures return HTTP 500/504, not silent empty results. This line was a cross-doc reference that is now outdated.
 - "`archon-search install` re-detects GPU at install time" — `platform/runtime.py` exposes detection; whether `cli/install_cmd.py` actually invokes it at install time was not confirmed in this pass.
 - "Telemetry JSONL is independently self-pruning; you do not need to back it up" — true given the pruner, but "no audit requirement" is an operator-policy claim, not a code claim.
 - The exact name `archon-search install` as a subcommand and its CLI behaviour — `cli/install_cmd.py` exists per CLAUDE.md, but the specific verbs (`start`, `stop`, `status`, `sync`) used in the procedures were not exhaustively re-verified here.

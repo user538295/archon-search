@@ -54,7 +54,7 @@ In order of likelihood:
 2. **Collection not yet indexed.** Hit `GET /status` or `GET /indexing-state`. If the collection's status is not `done`, indexing is still running (or failed). Look at `processed_files / total_files` and `error_count`.
 3. **Collection lives in a different namespace.** `POST /search` returns `404` (not empty results) for cross-namespace access — but `GET /collections/` filters silently, so a missing collection there points at namespace mismatch.
 4. **Routing thresholds too strict.** If you reach `/search` via a route call, `[routing].routing_confidence_threshold` may be filtering all candidates. The default is `0.30` (valid range `[0.0, 1.0]`); lowering it temporarily (e.g. `0.10`) is a common diagnostic, though the exact value to try is operational judgement. #Unverified
-5. **Pipeline raised internally.** `POST /search` degrades to `{"results": [], "acl_filtered": false}` on internal exceptions rather than 5xx; the log will contain a `search failed for collection …` warning with traceback.
+5. **Pipeline raised internally.** `POST /search` returns HTTP 500 on pipeline stage exceptions (embedder, store, reranker); the log will contain the traceback. A 504 means the pipeline timed out (~30 s). HTTP 200 with `results: []` means the pipeline completed successfully but found no matching documents — it is not a failure signal.
 
 ## Symptom: reindex stuck
 
