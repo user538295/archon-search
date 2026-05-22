@@ -1,6 +1,7 @@
 """Tests for canonical domain types."""
 import dataclasses
 import json
+from archon_search._types import SearchResult, IngestedBy
 from archon_search.types import (
     JobStatus,
     IngestJob,
@@ -181,6 +182,28 @@ def test_ingest_job_splat_pre_5c_dict():
     item = {"job_id": "x", "status": JobStatus.PENDING, "created_at": "t", "updated_at": "t"}
     job = IngestJob(**item)
     assert job.namespace == DEFAULT_NAMESPACE
+
+
+def test_search_result_language_defaults_to_none():
+    result = SearchResult(
+        doc_id="abc", chunk_id="abc-000000", text="hello", score=0.9, source_path="/tmp/file.txt"
+    )
+    assert result.language is None
+
+
+def test_search_result_language_carried_when_set():
+    result = SearchResult(
+        doc_id="abc", chunk_id="abc-000000", text="hello", score=0.9, source_path="/tmp/file.txt",
+        language="en",
+    )
+    assert result.language == "en"
+
+
+def test_search_result_ingested_by_remains_ingested_by_literal():
+    import typing
+    hints = typing.get_type_hints(SearchResult)
+    # ingested_by must be typed as IngestedBy (the Literal) — not plain str
+    assert hints["ingested_by"] == IngestedBy
 
 
 def test_all_types_json_serializable():

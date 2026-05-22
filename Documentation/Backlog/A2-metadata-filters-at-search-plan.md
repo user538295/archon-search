@@ -200,7 +200,7 @@ class FilterFlags(BaseModel):
 > **Internal milestone**: A1 already widened `SearchResult` with `file_type, indexed_at, updated_at, ingested_by: IngestedBy, metadata`. Phase 1 of A2 adds ONLY the `language` field and wires it through the store row projection, REST schema, and MCP tool schema. Tasks are grouped here for clean commit boundaries, not for staged release.
 
 #### Task 1.1 — Add `language` to `SearchResult` dataclass
-- [ ] **File**: `archon_search/_types.py`
+- [x] **File**: `archon_search/_types.py`
 - **Depends on**: nothing (A1 has already shipped the other metadata fields)
 - **Description**:
   - Add a single field to `SearchResult` (A1's fields stay as A1 declared them — do NOT re-declare):

@@ -68,6 +68,7 @@ class SearchResult:
     score: float
     source_path: str
     file_type: str = ""
+    language: str | None = None  # A2 addition (extractor lands in C2)
     indexed_at: str = ""
     updated_at: str = ""
     ingested_by: IngestedBy = "cli"
