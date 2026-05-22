@@ -94,14 +94,15 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 
 ### Search returns HTTP 500/504 (pipeline failure — `CON-5` resolved in A3)
 
-**Symptoms**: `POST /search` returns HTTP 500 or HTTP 504 instead of expected results; or `/telemetry/entries` shows entries with `endpoint="search"` and `status="internal_error"` or `status="timeout"`.
+**Symptoms**: `POST /search` returns HTTP 500, HTTP 503, or HTTP 504 instead of expected results; or `/telemetry/entries` shows entries with `endpoint="search"` and `status="internal_error"` or `status="timeout"`. Note: HTTP 503 from the meta-lookup branch produces no telemetry entry and no `event_type` log field — check the raw server log for the `"search: meta lookup failed"` ERROR message instead.
 
 **Diagnosis**:
 
 - HTTP 500 indicates a pipeline stage failed (embedder, store query, or reranker). Look in server logs for a record at ERROR level with `event_type="search_pipeline_failure"` from logger `archon.search`. This record will contain the exception class name and full traceback.
 - HTTP 504 indicates the pipeline call timed out (>30 s). Look for a record at ERROR level with `event_type="search_timeout"` from logger `archon.search`.
 - The telemetry endpoint `/telemetry/entries` will show entries with `endpoint="search"`, `status="internal_error"` (for pipeline exceptions) or `status="timeout"` (for timeouts).
-- HTTP 200 with `results: []` means the pipeline succeeded but found no matching documents — this is NOT a failure signal anymore.
+- HTTP 503 from the meta-lookup branch (`"search: meta lookup failed"` in the log) means collection metadata was unavailable. No telemetry entry is emitted; triage as a store connectivity issue (see "LanceDB lock contention" above).
+- HTTP 200 with `results: []` means the pipeline succeeded but found no matching documents — it is not a failure signal.
 
 **Action**:
 
