@@ -38,6 +38,15 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 
 **Announced in**: this release. No prior deprecation — the impacted MCP shape was never documented as stable.
 
+### [next release] — `POST /search` pipeline-exception behavior (CON-5 / A3)
+
+**`POST /search` pipeline-exception behavior** (`routes_search.py`, CON-5 / A3):
+- Pipeline stage exceptions (embedder, store, reranker) now return **HTTP 500** with `{"detail": "Internal Server Error"}` instead of HTTP 200 with `{results: [], acl_filtered: false}`.
+- A hung pipeline call now returns **HTTP 504** with `{"detail": "Search timed out"}` after ~30 s (matching the `/route` timeout contract).
+- Migration: callers that treated an empty-results 200 as a pipeline-error signal must now handle HTTP 5xx. Callers that already treat 5xx as errors are unaffected.
+- The `503` meta-lookup path (`get_collection_meta` raises) is unchanged.
+- MCP `search` / `search_with_context` tools are unchanged.
+
 ### [next release] — MCP `search` tool response shape
 
 **Surface**: MCP (`mcp.py` `search` tool)

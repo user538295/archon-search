@@ -50,7 +50,7 @@ The machine-readable contract is `GET /openapi.json`. Tables below trace every e
 | --- | --- | --- | --- | --- |
 | POST | `/search` | Hybrid vector + FTS search over one collection, rerank, ACL filter. | `SearchRequest` (`routes_search.py`) — `{collection, query, top_k}`. **`top_k` is ignored** at runtime (see BREAKING.md); pipeline uses `config.top_k_return`. The field is still validated (`ge=1, le=100`), so `top_k=0` or `top_k>100` returns `422`. `collection` and `query` are stripped and must be non-empty. | `SearchResponse` — `{results: [SearchResultSchema{doc_id, chunk_id, text, score, source_path}], acl_filtered: bool}` |
 
-Returns `404` when the collection is not visible to the caller's namespace; `503` when meta lookup fails. Pipeline `search()` exceptions are caught and returned as `200` with `{results: [], acl_filtered: false}` (i.e. errors after the meta check do not surface to the client).
+Returns `404` when the collection is not visible to the caller's namespace; `503` when meta lookup fails. Pipeline stage exceptions (embedder, store, reranker) return `500` with `{"detail": "Internal Server Error"}`; a hung pipeline call returns `504` with `{"detail": "Search timed out"}` after ~30 s. `200` with `results: []` means the pipeline ran successfully but found no matching documents.
 
 ### `routes_route.py`
 
