@@ -87,7 +87,7 @@ Production-grade operations documentation for SREs and sysadmins running `archon
 | [`OperatorGuide/02_monitoring_and_alerts.md`](../OperatorGuide/02_monitoring_and_alerts.md) | `/health`, `/status`, `/indexing-state`, `/telemetry/*` — what each reports, gaps, suggested alert rules. |
 | [`OperatorGuide/03_backup_restore_disaster_recovery.md`](../OperatorGuide/03_backup_restore_disaster_recovery.md) | Backing up `~/.archon-search/`, restore steps, disaster scenarios, no-export-API gap. |
 | [`OperatorGuide/04_capacity_and_performance.md`](../OperatorGuide/04_capacity_and_performance.md) | Single-process limits, ingest cost surfaces (`CON-4`, `C6`), router-cache caveats (`CON-2`), sizing heuristics. |
-| [`OperatorGuide/05_incident_runbook.md`](../OperatorGuide/05_incident_runbook.md) | Triage for stuck jobs, watcher churn, key loss, LanceDB locks, silent empty search (`CON-5`), telemetry log explosion. |
+| [`OperatorGuide/05_incident_runbook.md`](../OperatorGuide/05_incident_runbook.md) | Triage for stuck jobs, watcher churn, key loss, LanceDB locks, search pipeline failures / timeouts (`CON-5` resolved in A3), telemetry log explosion. |
 | [`OperatorGuide/06_upgrading.md`](../OperatorGuide/06_upgrading.md) | Reading CalVer + `BREAKING.md`, pre-upgrade backup, upgrade and rollback procedure; links to `MigrationGuide/` for detail. |
 
 ## Architecture Decision Records (ADRs)
