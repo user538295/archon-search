@@ -465,7 +465,7 @@
             "title": "Documents"
           },
           "ingested_by": {
-            "default": "archon-search-cli",
+            "default": "http",
             "title": "Ingested By",
             "type": "string"
           },
@@ -687,6 +687,20 @@
       },
       "SearchResultSchema": {
         "properties": {
+          "acl": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acl"
+          },
           "chunk_id": {
             "title": "Chunk Id",
             "type": "string"
@@ -694,6 +708,28 @@
           "doc_id": {
             "title": "Doc Id",
             "type": "string"
+          },
+          "file_type": {
+            "default": "",
+            "title": "File Type",
+            "type": "string"
+          },
+          "indexed_at": {
+            "default": "",
+            "title": "Indexed At",
+            "type": "string"
+          },
+          "ingested_by": {
+            "default": "cli",
+            "title": "Ingested By",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Metadata",
+            "type": "object"
           },
           "score": {
             "title": "Score",
@@ -705,6 +741,11 @@
           },
           "text": {
             "title": "Text",
+            "type": "string"
+          },
+          "updated_at": {
+            "default": "",
+            "title": "Updated At",
             "type": "string"
           }
         },
@@ -965,8 +1006,7 @@
   },
   "info": {
     "description": "REST API for archon-search document search and collection management",
-    "title": "archon-search",
-    "version": "26.4.0"
+    "title": "archon-search"
   },
   "openapi": "3.1.0",
   "paths": {

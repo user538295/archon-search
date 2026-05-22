@@ -45,7 +45,16 @@ def _make_pipeline(tmp_path: Path):
     from datetime import datetime, timezone
 
     class _StubChunker:
-        def chunk(self, text: str, doc_id: str, source_path: str) -> list[ChunkRecord]:
+        def chunk(
+            self,
+            text: str,
+            doc_id: str,
+            source_path: str,
+            *,
+            file_type: str = "",
+            updated_at: str = "",
+            ingested_by: str = "cli",
+        ) -> list[ChunkRecord]:
             now = datetime.now(timezone.utc).isoformat()
             # One chunk per 200 chars (or one chunk if text is shorter)
             parts = [text[i:i + 200] for i in range(0, len(text), 200)] if text else []
@@ -57,6 +66,9 @@ def _make_pipeline(tmp_path: Path):
                     vector=[],
                     source_path=source_path,
                     indexed_at=now,
+                    file_type=file_type,
+                    updated_at=updated_at,
+                    ingested_by=ingested_by,  # type: ignore[arg-type]
                 )
                 for part in parts
             ]

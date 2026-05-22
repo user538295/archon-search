@@ -1949,7 +1949,13 @@ def test_mcp_search_response_schema_matches_public_contract_without_eval_provena
     )
     payload = asdict(result)
     # Public contract fields (acl added in as internal metadata)
-    assert set(payload.keys()) == {"doc_id", "chunk_id", "text", "score", "source_path", "acl"}
+    # Post-A1 public contract: SearchResult gained file_type, indexed_at,
+    # updated_at, ingested_by, metadata in addition to the previous fields.
+    assert set(payload.keys()) == {
+        "doc_id", "chunk_id", "text", "score", "source_path",
+        "file_type", "indexed_at", "updated_at", "ingested_by", "metadata",
+        "acl",
+    }
     # No eval provenance keys
     for forbidden in ("vector_score", "fts_score", "vector_rank", "fts_rank", "score_breakdown"):
         assert forbidden not in payload, f"Eval-only field {forbidden!r} leaked into public payload"
@@ -1972,7 +1978,13 @@ def test_mcp_search_with_context_response_schema_matches_public_contract_without
     ]
     payloads = [asdict(r) for r in results]
     for payload in payloads:
-        assert set(payload.keys()) == {"doc_id", "chunk_id", "text", "score", "source_path", "acl"}
+        # Post-A1 public contract: SearchResult gained file_type, indexed_at,
+        # updated_at, ingested_by, metadata in addition to the previous fields.
+        assert set(payload.keys()) == {
+            "doc_id", "chunk_id", "text", "score", "source_path",
+            "file_type", "indexed_at", "updated_at", "ingested_by", "metadata",
+            "acl",
+        }
         for forbidden in ("vector_score", "fts_score", "vector_rank", "fts_rank", "score_breakdown"):
             assert forbidden not in payload
 

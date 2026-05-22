@@ -16,12 +16,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Stub fastmcp so mcp.py can be imported without the real package.
+# Resolve fastmcp: prefer the real mcp.server.fastmcp, fall back to a
+# minimal stub. Avoid clobbering an existing entry — test_mcp_auth.py
+# relies on the real implementation being installed.
 if "fastmcp" not in sys.modules:
-    _fastmcp = types.ModuleType("fastmcp")
-    _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-    _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules["fastmcp"] = _fastmcp
+    try:
+        import mcp.server.fastmcp as _real_fastmcp  # type: ignore[import-not-found]
+        sys.modules["fastmcp"] = _real_fastmcp  # type: ignore[assignment]
+    except ImportError:
+        _fastmcp = types.ModuleType("fastmcp")
+        _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
+        _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
+        sys.modules["fastmcp"] = _fastmcp
 
 from archon_search._types import SearchResult
 from archon_search.pipeline import SearchPipelineResult

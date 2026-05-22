@@ -410,10 +410,14 @@ def test_H3_11_x_ingested_by_header_replaces_body_value(tmp_path: Path) -> None:
 
     client, _ = _make_ingest_client(tmp_path, pipeline_fn=capturing_pipeline)
 
+    # Use a canonical IngestedBy value in the header — after A1, unknown
+    # values are normalized to "http" at the boundary, so the test must
+    # use a value that survives normalization to verify the header took
+    # precedence over the body.
     response = client.post(
         "/ingest",
-        json={"collection": "docs", "ingested_by": "body-value"},
-        headers={"X-Ingested-By": "header-value"},
+        json={"collection": "docs", "ingested_by": "cli"},
+        headers={"X-Ingested-By": "watcher"},
     )
     assert response.status_code == 202
 
@@ -426,7 +430,7 @@ def test_H3_11_x_ingested_by_header_replaces_body_value(tmp_path: Path) -> None:
         import time
         time.sleep(0.05)
 
-    assert captured.get("ingested_by") == "header-value"
+    assert captured.get("ingested_by") == "watcher"
 
 
 # ---------------------------------------------------------------------------
