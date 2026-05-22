@@ -19,6 +19,7 @@ class EndpointKind(StrEnum):
     search = "search"
     search_with_context = "search_with_context"
     route = "route"
+    explain = "explain"
 
 
 class Status(StrEnum):
@@ -122,6 +123,24 @@ class TelemetryEntry(BaseModel):
             status="ok",
             collections=collections,
             decomposer_invoked=decomposer_invoked,
+        )
+
+    @classmethod
+    def from_explain_result(
+        cls,
+        *,
+        collection: str,
+        result_count: int,
+        latency_ms: float,
+    ) -> "TelemetryEntry":
+        return cls(
+            query_id=cls._new_query_id(),
+            timestamp=cls._now_iso(),
+            endpoint="explain",
+            latency_ms=latency_ms,
+            status="ok",
+            collection=collection,
+            result_count=result_count,
         )
 
     @classmethod
