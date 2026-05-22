@@ -8,9 +8,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from archon_search.telemetry.entry import TelemetryEntry
-
 from archon_search._types import SearchResult
+from archon_search.telemetry.entry import TelemetryEntry
 
 logger = logging.getLogger("archon.search")
 
