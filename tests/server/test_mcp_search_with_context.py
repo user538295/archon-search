@@ -71,7 +71,7 @@ def _neighbor(idx: int) -> ChunkRecord:
     )
 
 
-def _result(idx: int) -> SearchResult:
+def _result(idx: int, language: str | None = None) -> SearchResult:
     doc_id = "d" * 64
     return SearchResult(
         doc_id=doc_id,
@@ -81,10 +81,12 @@ def _result(idx: int) -> SearchResult:
         source_path="/tmp/x.md",
         file_type="md",
         ingested_by="cli",
+        language=language,
+        metadata={"res": "val"},
     )
 
 
-async def _call_search_with_context(results_list):
+async def _call_search_with_context(results_list, include_metadata: bool = False):
     pipeline = MagicMock()
     pipeline.search_with_context = AsyncMock(return_value=results_list)
 
@@ -93,7 +95,7 @@ async def _call_search_with_context(results_list):
 
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
         fn = app.tools["search_with_context"]
-        return await fn(query="hello", collection=None, context_window=1)
+        return await fn(query="hello", collection=None, context_window=1, include_metadata=include_metadata)
 
 
 @pytest.mark.asyncio
@@ -105,7 +107,7 @@ async def test_search_with_context_strips_vector_from_neighbors() -> None:
             "context_after": [_neighbor(2)],
         }
     ]
-    payload = await _call_search_with_context(pipeline_result)
+    payload = await _call_search_with_context(pipeline_result, include_metadata=True)
     assert payload, "expected at least one result"
     entry = payload[0]
     for neighbor in entry["context_before"] + entry["context_after"]:
@@ -121,7 +123,7 @@ async def test_search_with_context_preserves_other_chunk_fields_in_neighbors() -
             "context_after": [_neighbor(2)],
         }
     ]
-    payload = await _call_search_with_context(pipeline_result)
+    payload = await _call_search_with_context(pipeline_result, include_metadata=True)
     entry = payload[0]
     expected_keys = {
         "text",
@@ -132,7 +134,87 @@ async def test_search_with_context_preserves_other_chunk_fields_in_neighbors() -
         "updated_at",
         "ingested_by",
         "metadata",
+        "indexed_at",
+        "language",
+        "custom_score",
+        "acl",
     }
     for neighbor in entry["context_before"] + entry["context_after"]:
         missing = expected_keys - set(neighbor.keys())
         assert not missing, f"neighbor missing keys {missing}: {neighbor!r}"
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_strips_metadata_from_context_chunks_when_include_metadata_false() -> None:
+    """Context chunks must have metadata set to empty dict when include_metadata=False."""
+    pipeline_result = [
+        {
+            "result": _result(1),
+            "context_before": [_neighbor(0)],
+            "context_after": [_neighbor(2)],
+        }
+    ]
+    payload = await _call_search_with_context(pipeline_result, include_metadata=False)
+    assert payload, "expected at least one result"
+    entry = payload[0]
+    for neighbor in entry["context_before"] + entry["context_after"]:
+        assert neighbor["metadata"] == {}, f"metadata not suppressed in neighbor: {neighbor!r}"
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_preserves_metadata_in_context_chunks_when_include_metadata_true() -> None:
+    """Context chunks must retain actual metadata when include_metadata=True."""
+    pipeline_result = [
+        {
+            "result": _result(1),
+            "context_before": [_neighbor(0)],
+            "context_after": [_neighbor(2)],
+        }
+    ]
+    payload = await _call_search_with_context(pipeline_result, include_metadata=True)
+    assert payload, "expected at least one result"
+    entry = payload[0]
+    for neighbor in entry["context_before"] + entry["context_after"]:
+        assert neighbor["metadata"] == {"k": "v"}, f"metadata unexpectedly absent/modified in neighbor: {neighbor!r}"
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_propagates_language_in_result() -> None:
+    """The ``language`` field of the matched result must appear in ``entry["result"]``."""
+    pipeline_result = [
+        {
+            "result": _result(1, language="en"),
+            "context_before": [],
+            "context_after": [],
+        }
+    ]
+    payload = await _call_search_with_context(pipeline_result, include_metadata=False)
+    assert payload, "expected at least one result"
+    entry = payload[0]
+    assert entry["result"]["language"] == "en", (
+        f"language not propagated in result: {entry['result']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_result_metadata_suppressed_and_preserved() -> None:
+    """``entry["result"]["metadata"]`` must be ``{}`` when include_metadata=False and
+    the actual metadata when include_metadata=True."""
+    pipeline_result = [
+        {
+            "result": _result(1),
+            "context_before": [],
+            "context_after": [],
+        }
+    ]
+    # include_metadata=False → metadata must be empty dict
+    payload_false = await _call_search_with_context(pipeline_result, include_metadata=False)
+    assert payload_false[0]["result"]["metadata"] == {}, (
+        f"metadata not suppressed: {payload_false[0]['result']['metadata']!r}"
+    )
+
+    # include_metadata=True → metadata must be preserved
+    payload_true = await _call_search_with_context(pipeline_result, include_metadata=True)
+    assert payload_true[0]["result"]["metadata"] == {"res": "val"}, (
+        f"metadata not preserved: {payload_true[0]['result']['metadata']!r}"
+    )

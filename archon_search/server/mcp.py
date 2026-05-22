@@ -27,12 +27,15 @@ class McpErrorResponse(TypedDict):
     code: str
 
 
-def _chunk_to_context_dict(chunk: Any) -> dict[str, Any]:
+def _chunk_to_context_dict(chunk: Any, *, include_metadata: bool = True) -> dict[str, Any]:
     """Serialize a ChunkRecord for MCP ``search_with_context`` payloads, dropping
     the ``vector`` field — raw embeddings should not leak over MCP and add no
-    value to context-window consumers."""
+    value to context-window consumers.  When ``include_metadata`` is False the
+    ``metadata`` key is set to an empty dict (consistent with the REST surface)."""
     d = asdict(chunk)
     d.pop("vector", None)
+    if not include_metadata:
+        d["metadata"] = {}
     return d
 
 
@@ -48,6 +51,7 @@ def create_app(
     async def search(
         query: str,
         collection: str | None = None,
+        include_metadata: bool = False,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search."""
         start = monotonic()
@@ -65,7 +69,15 @@ def create_app(
                     )
                 except Exception:
                     logger.warning("telemetry: search entry enqueue failed", exc_info=True)
-            return {"results": [asdict(r) for r in result_obj.results], "acl_filtered": result_obj.acl_filtered}
+            results = []
+            for r in result_obj.results:
+                d = asdict(r)
+                d.pop("vector", None)
+                if not include_metadata:
+                    # empty dict not key-absent, consistent with REST surface
+                    d["metadata"] = {}
+                results.append(d)
+            return {"results": results, "acl_filtered": result_obj.acl_filtered}
         except Exception as exc:
             if writer is not None:
                 try:
@@ -87,6 +99,7 @@ def create_app(
         query: str,
         collection: str | None = None,
         context_window: int = 1,
+        include_metadata: bool = False,
     ) -> list[dict[str, Any]]:
         """Search and return surrounding chunks for richer context."""
         start = monotonic()
@@ -106,14 +119,20 @@ def create_app(
                     )
                 except Exception:
                     logger.warning("telemetry: search_with_context entry enqueue failed", exc_info=True)
-            return [
-                {
-                    "result": asdict(r["result"]),
-                    "context_before": [_chunk_to_context_dict(c) for c in r["context_before"]],
-                    "context_after": [_chunk_to_context_dict(c) for c in r["context_after"]],
-                }
-                for r in results
-            ]
+            output = []
+            for r in results:
+                result_dict = asdict(r["result"])
+                if not include_metadata:
+                    # empty dict not key-absent, consistent with REST surface
+                    result_dict["metadata"] = {}
+                output.append(
+                    {
+                        "result": result_dict,
+                        "context_before": [_chunk_to_context_dict(c, include_metadata=include_metadata) for c in r["context_before"]],
+                        "context_after": [_chunk_to_context_dict(c, include_metadata=include_metadata) for c in r["context_after"]],
+                    }
+                )
+            return output
         except Exception as exc:
             if writer is not None:
                 try:

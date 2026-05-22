@@ -230,7 +230,7 @@ class FilterFlags(BaseModel):
   - Checkpoint: `uv run pytest tests/test_store.py -k hybrid_search -x`
 
 #### Task 1.3 — Extend `SearchResultSchema` + MCP tool-schema export with `language`
-- [ ] **File**: `archon_search/server/schemas.py`, `archon_search/server/routes_search.py`, `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/schemas.py`, `archon_search/server/routes_search.py`, `archon_search/server/mcp.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - A1 already extended `SearchResultSchema` with `file_type, indexed_at, updated_at, ingested_by, metadata`. A2 adds ONLY `language: str | None = None`. Update `from_result` to forward `language` from the dataclass.

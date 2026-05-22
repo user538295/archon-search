@@ -724,6 +724,17 @@
             "title": "Ingested By",
             "type": "string"
           },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
           "metadata": {
             "additionalProperties": {
               "type": "string"

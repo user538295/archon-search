@@ -81,7 +81,7 @@ async def test_mcp_search_tool_includes_new_keys() -> None:
 
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
         search_fn = app.tools["search"]
-        payload = await search_fn(query="hello", collection=None)
+        payload = await search_fn(query="hello", collection=None, include_metadata=True)
 
     assert "results" in payload and payload["results"]
     item = payload["results"][0]

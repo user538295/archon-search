@@ -65,5 +65,7 @@ def test_rest_search_response_includes_new_keys(tmp_path: Path) -> None:
         assert key in item, f"missing key {key!r} in REST /search response"
     assert item["file_type"] == "md"
     assert item["ingested_by"] == "cli"
-    assert item["metadata"] == {"k": "v"}
+    # metadata is suppressed by default (include_metadata=False); the key must
+    # still be present but with an empty dict.
+    assert item["metadata"] == {}
     assert item["acl"] == ["team-a"]

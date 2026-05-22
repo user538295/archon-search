@@ -43,6 +43,7 @@ class SearchResultSchema(BaseModel):
     score: float
     source_path: str
     file_type: str = ""
+    language: str | None = None
     indexed_at: str = ""
     updated_at: str = ""
     ingested_by: str = "cli"
@@ -58,6 +59,7 @@ class SearchResultSchema(BaseModel):
             score=r.score,
             source_path=r.source_path,
             file_type=r.file_type,
+            language=r.language,
             indexed_at=r.indexed_at,
             updated_at=r.updated_at,
             ingested_by=r.ingested_by,
@@ -87,8 +89,15 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
 
     try:
         result = await pipeline.search(body.query, body.collection, namespace=ns)
+        # SearchRequest gains filters: SearchFilters in Task 4.1; until then,
+        # include_metadata always defaults to False (metadata always suppressed).
+        include_metadata = getattr(getattr(body, "filters", None), "include_metadata", False)
+        schemas = [SearchResultSchema.from_result(r) for r in result.results]
+        if not include_metadata:
+            for schema in schemas:
+                schema.metadata = {}
         return SearchResponse(
-            results=[SearchResultSchema.from_result(r) for r in result.results],
+            results=schemas,
             acl_filtered=result.acl_filtered,
         )
     except Exception as exc:

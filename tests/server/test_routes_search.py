@@ -401,6 +401,69 @@ def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCa
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Task 1.3: language field + metadata suppression
+# ---------------------------------------------------------------------------
+
+
+def test_search_response_includes_language_field(tmp_path: Path) -> None:
+    """REST response must include language from SearchResult."""
+    result = SearchResult(
+        doc_id="a" * 64,
+        chunk_id="a" * 64 + "-000001",
+        text="some text",
+        score=0.9,
+        source_path="/tmp/doc.md",
+        language="en",
+    )
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=[result])
+
+    response = client.post("/search", json={"collection": "col", "query": "q"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["results"][0]["language"] == "en"
+
+
+def test_search_response_omits_custom_metadata_when_include_metadata_false(tmp_path: Path) -> None:
+    """REST response must strip metadata when no filters / include_metadata is absent (default False)."""
+    result = SearchResult(
+        doc_id="a" * 64,
+        chunk_id="a" * 64 + "-000001",
+        text="some text",
+        score=0.9,
+        source_path="/tmp/doc.md",
+        metadata={"k": "v"},
+    )
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=[result])
+
+    # No filters in request body → include_metadata defaults to False → metadata stripped
+    response = client.post("/search", json={"collection": "col", "query": "q"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["results"][0]["metadata"] == {}
+
+
+def test_search_result_schema_from_result_preserves_metadata(tmp_path: Path) -> None:
+    """Schema-level test: SearchResultSchema.from_result always preserves metadata.
+    The REST endpoint always suppresses it (default) until Task 4.1 wires SearchFilters."""
+    from archon_search.server.routes_search import SearchResultSchema
+
+    result = SearchResult(
+        doc_id="a" * 64,
+        chunk_id="a" * 64 + "-000001",
+        text="some text",
+        score=0.9,
+        source_path="/tmp/doc.md",
+        metadata={"k": "v"},
+    )
+    schema = SearchResultSchema.from_result(result)
+    assert schema.metadata == {"k": "v"}
+
+
 @pytest.mark.integration
 async def test_search_end_to_end(tmp_path: Path) -> None:
     """Full pipeline: ingest → search → result appears."""
