@@ -253,7 +253,7 @@ def test_search_whitespace_collection(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Exception in pipeline.search() → log WARNING + return []
+# 5. Exception in pipeline.search() → HTTP 500 with structured error log
 # ---------------------------------------------------------------------------
 
 
@@ -267,6 +267,7 @@ def test_search_store_exception_returns_500(tmp_path: Path, caplog: pytest.LogCa
 
     assert response.status_code == 500
     assert "detail" in response.json()
+    assert any("search pipeline failed" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +289,7 @@ def test_search_top_k_accepted_but_ignored_by_pipeline(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Pipeline search failure → 200 + []
+# 7. Pipeline search failure → HTTP 500
 # ---------------------------------------------------------------------------
 
 
@@ -304,7 +305,7 @@ def test_search_embedder_failure_returns_500(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. Reranker failure inside pipeline → 200 + []
+# 8. Reranker failure inside pipeline → HTTP 500
 # ---------------------------------------------------------------------------
 
 
