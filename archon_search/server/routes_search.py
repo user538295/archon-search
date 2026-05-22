@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import logging
+from time import monotonic
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
+
+from archon_search.telemetry.entry import TelemetryEntry
 
 from archon_search._types import SearchResult
 
@@ -75,6 +78,7 @@ class SearchResponse(BaseModel):
 async def search(body: SearchRequest, request: Request) -> SearchResponse | JSONResponse:
     pipeline = request.app.state.pipeline
     ns = request.state.namespace
+    start = monotonic()
 
     try:
         meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
@@ -92,5 +96,23 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             acl_filtered=result.acl_filtered,
         )
     except Exception as exc:
-        logger.warning("search failed for collection %r: %s", body.collection, exc, exc_info=True)
-        return SearchResponse(results=[], acl_filtered=False)
+        writer = getattr(request.app.state, "telemetry_writer", None)
+        if writer is not None:
+            try:
+                writer.enqueue(
+                    TelemetryEntry.from_error(
+                        endpoint="search",
+                        status="internal_error",
+                        error_kind="other",
+                        latency_ms=(monotonic() - start) * 1000.0,
+                    )
+                )
+            except Exception as tel_exc:
+                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+        logger.error(
+            "search pipeline failed: %s",
+            type(exc).__name__,
+            extra={"event_type": "search_pipeline_failure"},
+            exc_info=True,
+        )
+        raise
