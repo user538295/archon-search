@@ -251,7 +251,7 @@ class FilterFlags(BaseModel):
 > **Releasable**: when Task 2.3 is complete, filters can be validated, normalized, and compiled to a safe-quoted SQL predicate string — but no caller uses them yet.
 
 #### Task 2.1 — `SearchFilters` Pydantic model
-- [ ] **File**: `archon_search/filters.py` (NEW)
+- [x] **File**: `archon_search/filters.py` (NEW)
 - **Depends on**: nothing
 - **Description**:
   - Add the `SearchFilters` model with the signature in the Architecture section, in its own module `filters.py`. Do NOT add this to `_types.py` — keeping Pydantic out of the core types module preserves the dataclass-only import graph for `store.py`, `pipeline.py`, and all consumers that depend transitively on `_types.py`.
