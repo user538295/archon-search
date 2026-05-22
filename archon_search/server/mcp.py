@@ -12,6 +12,8 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from archon_search.config import SearchConfig
+from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.key_manager import load_or_generate_key
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingState, IndexingStatus
@@ -40,6 +42,7 @@ def create_app(
     pipeline: SearchPipeline,
     default_collection: str,
     writer: TelemetryWriter | None = None,
+    config: SearchConfig | None = None,
 ) -> FastMCP:
     """Create a FastMCP app with 10 RAG tools registered."""
     app = FastMCP("archon-search")
@@ -272,17 +275,21 @@ def create_app(
                 chosen_collection = collection
             else:
                 # Collectionless path
-                all_meta: list[CollectionMeta] = await pipeline.get_all_collections_meta()
+                _cfg = config if config is not None else SearchConfig()
+                all_meta: list[CollectionMeta] = await pipeline.get_all_collections_meta(
+                    namespace=DEFAULT_NAMESPACE
+                )
                 if not all_meta:
                     return McpErrorResponse(
                         error="No collections found", code="not_found"
                     )
                 query_vector = await pipeline._embedder.embed_one(query)
+                _confidence_threshold = _cfg.routing_confidence_threshold
                 inline_router = MultiCollectionRouter(
                     search_url="",
                     embedder=pipeline._embedder,
-                    shortlist_size=len(all_meta),
-                    confidence_threshold=0.0,
+                    shortlist_size=_cfg.routing_shortlist_size,
+                    confidence_threshold=_confidence_threshold,
                     embedding_model=pipeline._embedder.model_name,
                 )
                 scored_pairs = inline_router.rank_with_scores(query_vector, all_meta)
@@ -296,11 +303,14 @@ def create_app(
                     RoutingCandidate(collection=m.name, centroid_score=score)
                     for m, score in scored_pairs
                 ]
+                _chosen_below_threshold = bool(
+                    chosen_score is not None and chosen_score < _confidence_threshold
+                )
                 routing_block = RoutingExplain(
                     invoked=True,
                     chosen_collection=chosen_collection,
-                    confidence_threshold=0.0,
-                    chosen_below_threshold=False,
+                    confidence_threshold=_confidence_threshold,
+                    chosen_below_threshold=_chosen_below_threshold,
                     candidates=routing_candidates,
                 )
                 pipeline_result = await pipeline.explain(
