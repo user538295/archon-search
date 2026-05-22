@@ -699,6 +699,7 @@ class SearchStore:
                     score=score,
                     source_path=row["source_path"],
                     file_type=row.get("file_type") or "",
+                    language=row.get("language") or None,
                     indexed_at=indexed_at,
                     updated_at=row.get("updated_at") or indexed_at,
                     ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]

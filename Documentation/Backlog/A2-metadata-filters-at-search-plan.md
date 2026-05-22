@@ -217,7 +217,7 @@ class FilterFlags(BaseModel):
   - Checkpoint: `uv run pytest tests/test_types.py -x`
 
 #### Task 1.2 — Populate `language` in `hybrid_search` row projection
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - A1 already populates `file_type, indexed_at, updated_at, ingested_by, metadata` in the row projection — do NOT re-add that code.

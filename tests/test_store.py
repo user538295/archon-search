@@ -1953,7 +1953,7 @@ def test_mcp_search_response_schema_matches_public_contract_without_eval_provena
     # updated_at, ingested_by, metadata in addition to the previous fields.
     assert set(payload.keys()) == {
         "doc_id", "chunk_id", "text", "score", "source_path",
-        "file_type", "indexed_at", "updated_at", "ingested_by", "metadata",
+        "file_type", "language", "indexed_at", "updated_at", "ingested_by", "metadata",
         "acl",
     }
     # No eval provenance keys
@@ -1982,7 +1982,7 @@ def test_mcp_search_with_context_response_schema_matches_public_contract_without
         # updated_at, ingested_by, metadata in addition to the previous fields.
         assert set(payload.keys()) == {
             "doc_id", "chunk_id", "text", "score", "source_path",
-            "file_type", "indexed_at", "updated_at", "ingested_by", "metadata",
+            "file_type", "language", "indexed_at", "updated_at", "ingested_by", "metadata",
             "acl",
         }
         for forbidden in ("vector_score", "fts_score", "vector_rank", "fts_rank", "score_breakdown"):
@@ -2371,6 +2371,140 @@ def test_list_collections_orphan_table_defaults(tmp_path: Path) -> None:
     assert collections[0].namespace == DEFAULT_NAMESPACE, (
         f"Expected DEFAULT_NAMESPACE fallback for orphan table, got {collections[0].namespace!r}"
     )
+
+
+def test_hybrid_search_row_projection_populates_language(tmp_path: Path) -> None:
+    """Unit: row with language='en' produces SearchResult.language == 'en'."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = SearchStore(tmp_path / "db")
+    doc_id = _doc_id()
+    chunk_id = f"{doc_id}-000000"
+
+    row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "hello",
+        "source_path": "/tmp/f.md",
+        "language": "en",
+    }
+
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[row]))))
+    )
+    fts_result = MagicMock()
+    fts_result.limit = MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[])))
+    mock_table.search = AsyncMock(return_value=fts_result)
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", 5))
+    assert len(results) == 1
+    assert results[0].language == "en"
+
+
+def test_hybrid_search_row_projection_language_empty_string_yields_none(tmp_path: Path) -> None:
+    """Unit: row with language='' (current A1/A2 stored value) produces SearchResult.language is None."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = SearchStore(tmp_path / "db")
+    doc_id = _doc_id()
+    chunk_id = f"{doc_id}-000000"
+
+    row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "hello",
+        "source_path": "/tmp/f.md",
+        "language": "",  # A1/A2 write path stores "" for undetected language
+    }
+
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[row]))))
+    )
+    fts_result = MagicMock()
+    fts_result.limit = MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[])))
+    mock_table.search = AsyncMock(return_value=fts_result)
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", 5))
+    assert len(results) == 1
+    assert results[0].language is None
+
+
+def test_hybrid_search_row_projection_language_missing_yields_none(tmp_path: Path) -> None:
+    """Unit: row without language column produces SearchResult.language is None."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = SearchStore(tmp_path / "db")
+    doc_id = _doc_id()
+    chunk_id = f"{doc_id}-000000"
+
+    row = {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "text": "hello",
+        "source_path": "/tmp/f.md",
+        # no 'language' key
+    }
+
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[row]))))
+    )
+    fts_result = MagicMock()
+    fts_result.limit = MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[])))
+    mock_table.search = AsyncMock(return_value=fts_result)
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+
+    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", 5))
+    assert len(results) == 1
+    assert results[0].language is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_hybrid_search_returns_language_field(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Integration: ingest chunk with language='en'; SearchResult.language carries it."""
+    doc_id = _doc_id()
+    chunk = ChunkRecord(
+        doc_id=doc_id,
+        chunk_id=f"{doc_id}-000000",
+        text="language field test",
+        vector=[1.0] * _DIM,
+        source_path="/tmp/lang.md",
+        indexed_at=datetime.now(timezone.utc).isoformat(),
+        language="en",
+    )
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, [chunk])
+    results = await connected_store.hybrid_search(col_name, [1.0] * _DIM, "language", 5)
+    assert results, "expected at least one result"
+    assert results[0].language == "en"
 
 
 def test_hybrid_search_trace_score_kind_values_match_backend_polarity(tmp_path: Path) -> None:

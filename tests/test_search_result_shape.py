@@ -16,6 +16,7 @@ _EXPECTED_FIELDS = {
     "score",
     "source_path",
     "file_type",
+    "language",  # A2 addition (extractor lands in C2)
     "indexed_at",
     "updated_at",
     "ingested_by",
@@ -29,9 +30,10 @@ def test_search_result_field_set() -> None:
     assert names == _EXPECTED_FIELDS
 
 
-def test_search_result_does_not_have_language() -> None:
+def test_search_result_has_language() -> None:
+    """A2 adds language to SearchResult (extractor lands in C2)."""
     names = {f.name for f in dataclasses.fields(SearchResult)}
-    assert "language" not in names
+    assert "language" in names
 
 
 def test_search_result_does_not_have_custom_score() -> None:
