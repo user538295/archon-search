@@ -476,6 +476,7 @@ def create_mcp_http_app(
     pipeline: SearchPipeline,
     default_collection: str,
     writer: TelemetryWriter | None = None,
+    config: SearchConfig | None = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
@@ -483,7 +484,7 @@ def create_mcp_http_app(
     (endpoint: /mcp).  APIKeyMiddleware is added so every request to /mcp
     requires a valid Bearer token; /health remains exempt per _EXEMPT_PATHS.
     """
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer)
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config)
     starlette_app: Starlette = fastmcp_app.streamable_http_app()
     api_key, _ = load_or_generate_key()
     starlette_app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces={})
