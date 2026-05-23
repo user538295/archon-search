@@ -186,7 +186,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 def test_mcp_path_unsafe_message_maps_all_reasons() -> None:
     """_path_unsafe_message maps all five reason codes to non-empty LLM-readable phrases."""
     from archon_search.server.mcp import _path_unsafe_message
@@ -197,7 +196,6 @@ def test_mcp_path_unsafe_message_maps_all_reasons() -> None:
         assert msg.startswith("path is unsafe:"), f"bad prefix for reason={reason!r}: {msg!r}"
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 @pytest.mark.asyncio
 async def test_mcp_ingest_file_rejects_dotdot() -> None:
     """ingest_file rejects a path with '..' and returns code='path_unsafe'."""
@@ -209,7 +207,6 @@ async def test_mcp_ingest_file_rejects_dotdot() -> None:
     assert "'..'" in result.get("error", "")
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 @pytest.mark.asyncio
 async def test_mcp_ingest_file_rejects_relative() -> None:
     """ingest_file rejects a relative path and returns code='path_unsafe' with not-absolute phrasing."""
@@ -221,7 +218,6 @@ async def test_mcp_ingest_file_rejects_relative() -> None:
     assert "not absolute" in result.get("error", "").lower()
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 @pytest.mark.asyncio
 async def test_mcp_ingest_file_rejects_empty() -> None:
     """ingest_file rejects an empty path and returns code='path_unsafe' with 'empty' phrasing."""
@@ -233,7 +229,6 @@ async def test_mcp_ingest_file_rejects_empty() -> None:
     assert "empty" in result.get("error", "")
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 @pytest.mark.asyncio
 async def test_mcp_ingest_file_rejects_whitespace_only() -> None:
     """ingest_file rejects a whitespace-only path and returns code='path_unsafe'."""
@@ -245,7 +240,6 @@ async def test_mcp_ingest_file_rejects_whitespace_only() -> None:
     assert "whitespace" in result.get("error", "")
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 @pytest.mark.asyncio
 async def test_mcp_ingest_file_rejects_nul_byte() -> None:
     """ingest_file rejects a path with a NUL byte and returns code='path_unsafe'."""
@@ -257,7 +251,6 @@ async def test_mcp_ingest_file_rejects_nul_byte() -> None:
     assert "NUL" in result.get("error", "")
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 @pytest.mark.asyncio
 async def test_mcp_ingest_file_uses_validator_returned_path() -> None:
     """ingest_file passes the Path object returned by validate_ingest_path directly to pipeline."""

@@ -12,6 +12,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.key_manager import load_or_generate_key
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingState, IndexingStatus
@@ -25,6 +26,17 @@ logger = logging.getLogger("archon.search")
 class McpErrorResponse(TypedDict):
     error: str
     code: str
+
+
+def _path_unsafe_message(reason: str) -> str:
+    """Map a PathUnsafeError reason code to an LLM-readable rejection phrase."""
+    return {
+        "empty": "path is unsafe: the path is empty — provide an absolute filesystem path",
+        "whitespace_only": "path is unsafe: the path is only whitespace — provide an absolute filesystem path",
+        "nul_byte": "path is unsafe: the path contains a NUL byte — provide a valid absolute path",
+        "contains_dotdot": "path is unsafe: input contains a '..' segment — use an absolute path without traversal",
+        "not_absolute": "path is unsafe: the path is not absolute — use an absolute path (no relative or '..' segments)",
+    }.get(reason, f"path is unsafe: {reason}")
 
 
 def _chunk_to_context_dict(chunk: Any) -> dict[str, Any]:
@@ -137,8 +149,12 @@ def create_app(
     ) -> dict[str, Any]:
         """Ingest a single file into the RAG store."""
         try:
+            validated = validate_ingest_path(path)
+        except PathUnsafeError as e:
+            return McpErrorResponse(error=_path_unsafe_message(e.reason), code="path_unsafe")
+        try:
             result = await pipeline.ingest_file(
-                Path(path), collection or default_collection, ingested_by="http",
+                validated, collection or default_collection, ingested_by="http",
             )
             return asdict(result)
         except Exception as exc:
