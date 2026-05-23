@@ -20,6 +20,7 @@ _EXPECTED_FIELDS = {
     "updated_at",
     "ingested_by",
     "metadata",
+    "language",
     "acl",
 }
 
@@ -29,9 +30,10 @@ def test_search_result_field_set() -> None:
     assert names == _EXPECTED_FIELDS
 
 
-def test_search_result_does_not_have_language() -> None:
+def test_search_result_has_language() -> None:
+    """language is added in A2 (reserved; populated by C2 language detector)."""
     names = {f.name for f in dataclasses.fields(SearchResult)}
-    assert "language" not in names
+    assert "language" in names
 
 
 def test_search_result_does_not_have_custom_score() -> None:

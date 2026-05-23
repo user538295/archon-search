@@ -51,24 +51,50 @@ def create_app(
     async def search(
         query: str,
         collection: str | None = None,
+        file_type: str | None = None,
+        source_path_prefix: str | None = None,
+        source_path_glob: str | None = None,
+        indexed_after: str | None = None,
+        indexed_before: str | None = None,
+        include_metadata: bool = False,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search."""
+        from archon_search.filters import SearchFilters  # noqa: PLC0415
+        from pydantic import ValidationError  # noqa: PLC0415
+
         start = monotonic()
         try:
-            result_obj = await pipeline.search(query, collection or default_collection)
+            filters: SearchFilters | None = None
+            if any(v is not None for v in [file_type, source_path_prefix, source_path_glob, indexed_after, indexed_before]) or include_metadata:
+                try:
+                    filters = SearchFilters(
+                        file_type=file_type,
+                        source_path_prefix=source_path_prefix,
+                        source_path_glob=source_path_glob,
+                        indexed_after=indexed_after,
+                        indexed_before=indexed_before,
+                        include_metadata=include_metadata,
+                    )
+                except ValidationError as exc:
+                    return McpErrorResponse(error=str(exc), code="validation_error")
+            result_obj = await pipeline.search(query, collection or default_collection, filters=filters)
+            results = [asdict(r) for r in result_obj.results]
+            if not include_metadata:
+                for r in results:
+                    r["metadata"] = {}
             if writer is not None:
                 try:
                     writer.enqueue(
                         TelemetryEntry.from_search_tool_result(
                             endpoint="search",
                             collection=collection or default_collection,
-                            result_doc_ids=[r.doc_id for r in result_obj.results],
+                            result_doc_ids=[r["doc_id"] for r in results],
                             latency_ms=(monotonic() - start) * 1000.0,
                         )
                     )
                 except Exception:
                     logger.warning("telemetry: search entry enqueue failed", exc_info=True)
-            return {"results": [asdict(r) for r in result_obj.results], "acl_filtered": result_obj.acl_filtered}
+            return {"results": results, "acl_filtered": result_obj.acl_filtered}
         except Exception as exc:
             if writer is not None:
                 try:
@@ -90,12 +116,34 @@ def create_app(
         query: str,
         collection: str | None = None,
         context_window: int = 1,
+        file_type: str | None = None,
+        source_path_prefix: str | None = None,
+        source_path_glob: str | None = None,
+        indexed_after: str | None = None,
+        indexed_before: str | None = None,
+        include_metadata: bool = False,
     ) -> list[dict[str, Any]]:
         """Search and return surrounding chunks for richer context."""
+        from archon_search.filters import SearchFilters  # noqa: PLC0415
+        from pydantic import ValidationError  # noqa: PLC0415
+
         start = monotonic()
         try:
+            filters: SearchFilters | None = None
+            if any(v is not None for v in [file_type, source_path_prefix, source_path_glob, indexed_after, indexed_before]) or include_metadata:
+                try:
+                    filters = SearchFilters(
+                        file_type=file_type,
+                        source_path_prefix=source_path_prefix,
+                        source_path_glob=source_path_glob,
+                        indexed_after=indexed_after,
+                        indexed_before=indexed_before,
+                        include_metadata=include_metadata,
+                    )
+                except ValidationError as exc:
+                    return McpErrorResponse(error=str(exc), code="validation_error")
             results = await pipeline.search_with_context(
-                query, collection or default_collection, context_window
+                query, collection or default_collection, context_window, filters=filters
             )
             if writer is not None:
                 try:
@@ -109,14 +157,17 @@ def create_app(
                     )
                 except Exception:
                     logger.warning("telemetry: search_with_context entry enqueue failed", exc_info=True)
-            return [
-                {
-                    "result": asdict(r["result"]),
+            output = []
+            for r in results:
+                result_dict = asdict(r["result"])
+                if not include_metadata:
+                    result_dict["metadata"] = {}
+                output.append({
+                    "result": result_dict,
                     "context_before": [_chunk_to_context_dict(c) for c in r["context_before"]],
                     "context_after": [_chunk_to_context_dict(c) for c in r["context_after"]],
-                }
-                for r in results
-            ]
+                })
+            return output
         except Exception as exc:
             if writer is not None:
                 try:

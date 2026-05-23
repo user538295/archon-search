@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
+from archon_search.filters import SearchFilters
 
 logger = logging.getLogger("archon.search")
 
@@ -18,6 +19,7 @@ class SearchRequest(BaseModel):
     collection: str
     query: str
     top_k: int = Field(default=5, ge=1, le=100)
+    filters: SearchFilters | None = None
 
     @field_validator("collection")
     @classmethod
@@ -47,10 +49,11 @@ class SearchResultSchema(BaseModel):
     updated_at: str = ""
     ingested_by: str = "cli"
     metadata: dict[str, str] = Field(default_factory=dict)
+    language: str | None = None
     acl: list[str] | None = None
 
     @classmethod
-    def from_result(cls, r: SearchResult) -> "SearchResultSchema":
+    def from_result(cls, r: SearchResult, *, include_metadata: bool = True) -> "SearchResultSchema":
         return cls(
             doc_id=r.doc_id,
             chunk_id=r.chunk_id,
@@ -61,7 +64,8 @@ class SearchResultSchema(BaseModel):
             indexed_at=r.indexed_at,
             updated_at=r.updated_at,
             ingested_by=r.ingested_by,
-            metadata=r.metadata,
+            metadata=r.metadata if include_metadata else {},
+            language=r.language,
             acl=r.acl,
         )
 
@@ -75,6 +79,7 @@ class SearchResponse(BaseModel):
 async def search(body: SearchRequest, request: Request) -> SearchResponse | JSONResponse:
     pipeline = request.app.state.pipeline
     ns = request.state.namespace
+    include_metadata = bool(body.filters and body.filters.include_metadata)
 
     try:
         meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
@@ -86,9 +91,12 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         return JSONResponse({"detail": "collection not found"}, status_code=404)
 
     try:
-        result = await pipeline.search(body.query, body.collection, namespace=ns)
+        result = await pipeline.search(body.query, body.collection, namespace=ns, filters=body.filters)
         return SearchResponse(
-            results=[SearchResultSchema.from_result(r) for r in result.results],
+            results=[
+                SearchResultSchema.from_result(r, include_metadata=include_metadata)
+                for r in result.results
+            ],
             acl_filtered=result.acl_filtered,
         )
     except Exception as exc:

@@ -37,6 +37,23 @@ class ErrorKind(StrEnum):
     validation_error = "validation_error"
     other = "other"
 
+
+class FilterFlags(BaseModel):
+    """Which A2 filter dimensions were active in a search call.
+
+    All fields default to False.  Structural invariant: no raw filter values
+    are stored — only presence flags.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    file_type: bool = False
+    source_path_prefix: bool = False
+    source_path_glob: bool = False
+    indexed_after: bool = False
+    indexed_before: bool = False
+
+
 DOCUMENTED_SCHEMA_FIELDS: frozenset[str] = frozenset(
     {
         "query_id",
@@ -51,6 +68,7 @@ DOCUMENTED_SCHEMA_FIELDS: frozenset[str] = frozenset(
         "collections",
         "decomposer_invoked",
         "error_kind",
+        "filter_flags",
     }
 )
 
@@ -73,6 +91,8 @@ class TelemetryEntry(BaseModel):
     decomposer_invoked: bool | None = None
 
     error_kind: ErrorKind | None = None
+
+    filter_flags: FilterFlags | None = None
 
     @staticmethod
     def _new_query_id() -> str:

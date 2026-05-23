@@ -443,7 +443,7 @@ async def test_search_pipeline_search_acl_filter_applied(tmp_path):
         vector=[0.0] * 4, source_path="/g.md", indexed_at=now, acl=["ns2"],
     )
 
-    async def _hybrid_search(collection, vector, query, top_k):
+    async def _hybrid_search(collection, vector, query, top_k, **kwargs):
         return [chunk_allowed, chunk_denied]
 
     store.hybrid_search = _hybrid_search
@@ -491,7 +491,7 @@ async def test_search_pipeline_search_default_namespace_denies_protected(tmp_pat
         vector=[0.0] * 4, source_path="/b.md", indexed_at=now, acl=["tenantX"],
     )
 
-    async def _hybrid_search(collection, vector, query, top_k):
+    async def _hybrid_search(collection, vector, query, top_k, **kwargs):
         return [open_chunk, protected_chunk]
 
     store.hybrid_search = _hybrid_search
@@ -535,7 +535,7 @@ async def test_search_with_context_acl_filter_applied(tmp_path):
         vector=[0.0] * 4, source_path="/a.md", indexed_at=now, acl=["ns1"],
     )
 
-    async def _hybrid_search(collection, vector, query, top_k):
+    async def _hybrid_search(collection, vector, query, top_k, **kwargs):
         return [allowed]
 
     store.hybrid_search = _hybrid_search
@@ -643,7 +643,7 @@ async def test_search_context_expansion_acl_filtered(tmp_path):
         vector=[0.0] * 4, source_path="/x.md", indexed_at=now, acl=None,
     )
 
-    async def _hybrid_search(collection, vector, query, top_k):
+    async def _hybrid_search(collection, vector, query, top_k, **kwargs):
         return [main_chunk]
 
     store.hybrid_search = _hybrid_search

@@ -193,17 +193,34 @@ def info(collection_name: str, config_path: Path | None) -> None:
         raise SystemExit(1)
 
 
+_FIXED_WIDTH_TS_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
+
+
 @collection.command("reindex-metadata")
 @click.argument("collection_name")
 @click.option("--dry-run", is_flag=True, default=False, help="Report counts without writing")
+@click.option(
+    "--normalize-timestamps/--no-normalize-timestamps",
+    default=True,
+    help="Rewrite indexed_at/updated_at to fixed-width ISO-8601 UTC (default: on)",
+)
 @click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
-def reindex_metadata_cmd(collection_name: str, dry_run: bool, config_path: Path | None) -> None:
+def reindex_metadata_cmd(
+    collection_name: str,
+    dry_run: bool,
+    normalize_timestamps: bool,
+    config_path: Path | None,
+) -> None:
     """Backfill metadata fields (file_type, updated_at, ingested_by) on an existing collection.
 
     Reads each row, refreshes file_type from source_path extension and
     updated_at from mtime, and rewrites legacy ``"archon-search-cli"`` ->
     ``"reindex"``. Holds a per-collection lock for the duration; ingest into
     the same collection is blocked until reindex finishes.
+
+    When --normalize-timestamps is set (the default), also rewrites indexed_at
+    and updated_at for rows that don't match the fixed-width
+    ``YYYY-MM-DDTHH:MM:SS.ffffffZ`` format, silencing date-filter warnings.
     """
     try:
         cfg = load_config(config_path)
@@ -212,6 +229,8 @@ def reindex_metadata_cmd(collection_name: str, dry_run: bool, config_path: Path 
         raise SystemExit(1)
 
     async def _run() -> None:
+        from archon_search._types import normalize_iso_utc  # noqa: PLC0415
+
         pipeline = create_pipeline(cfg)
         try:
             await pipeline.store.connect()
@@ -233,6 +252,63 @@ def reindex_metadata_cmd(collection_name: str, dry_run: bool, config_path: Path 
                 click.echo("warnings:")
                 for w in result.warnings:
                     click.echo(f"  - {w}")
+
+            # Timestamp normalization pass
+            if normalize_timestamps:
+                try:
+                    db = pipeline.store._require_connected()
+                    try:
+                        table = await db.open_table(collection_name)
+                    except ValueError:
+                        click.echo(
+                            f"reindex-metadata: collection '{collection_name}' not found for timestamp normalization",
+                            err=True,
+                        )
+                        return
+                    rows = await table.query().to_list()
+                    legacy_rows = [
+                        r for r in rows
+                        if not _FIXED_WIDTH_TS_RE.match(r.get("indexed_at", ""))
+                        or not _FIXED_WIDTH_TS_RE.match(r.get("updated_at", "") or "")
+                    ]
+                    if dry_run:
+                        click.echo(
+                            f"reindex-metadata: --normalize-timestamps (dry-run): "
+                            f"{len(legacy_rows)} rows with legacy-format timestamps"
+                        )
+                    else:
+                        normalized_count = 0
+                        for row in legacy_rows:
+                            updates: dict[str, str] = {}
+                            ia = row.get("indexed_at", "")
+                            ua = row.get("updated_at", "")
+                            if ia and not _FIXED_WIDTH_TS_RE.match(ia):
+                                try:
+                                    updates["indexed_at"] = normalize_iso_utc(ia)
+                                except Exception:
+                                    pass
+                            if ua and not _FIXED_WIDTH_TS_RE.match(ua):
+                                try:
+                                    updates["updated_at"] = normalize_iso_utc(ua)
+                                except Exception:
+                                    pass
+                            if updates:
+                                cid = row.get("chunk_id", "")
+                                if cid:
+                                    await table.update(
+                                        where=f"chunk_id = '{cid}'",
+                                        updates=updates,
+                                    )
+                                    normalized_count += 1
+                        click.echo(
+                            f"reindex-metadata: --normalize-timestamps: "
+                            f"{normalized_count} rows normalized"
+                        )
+                except Exception as exc:
+                    click.echo(
+                        f"reindex-metadata: --normalize-timestamps failed: {exc}",
+                        err=True,
+                    )
         finally:
             try:
                 await pipeline.store.disconnect()

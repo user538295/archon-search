@@ -1954,6 +1954,7 @@ def test_mcp_search_response_schema_matches_public_contract_without_eval_provena
     assert set(payload.keys()) == {
         "doc_id", "chunk_id", "text", "score", "source_path",
         "file_type", "indexed_at", "updated_at", "ingested_by", "metadata",
+        "language",
         "acl",
     }
     # No eval provenance keys
@@ -1980,9 +1981,11 @@ def test_mcp_search_with_context_response_schema_matches_public_contract_without
     for payload in payloads:
         # Post-A1 public contract: SearchResult gained file_type, indexed_at,
         # updated_at, ingested_by, metadata in addition to the previous fields.
+        # Post-A2: language added (reserved; populated by C2).
         assert set(payload.keys()) == {
             "doc_id", "chunk_id", "text", "score", "source_path",
             "file_type", "indexed_at", "updated_at", "ingested_by", "metadata",
+            "language",
             "acl",
         }
         for forbidden in ("vector_score", "fts_score", "vector_rank", "fts_rank", "score_breakdown"):

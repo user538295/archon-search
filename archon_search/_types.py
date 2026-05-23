@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Literal
 
 from archon_search.constants import DEFAULT_NAMESPACE
@@ -72,6 +73,7 @@ class SearchResult:
     updated_at: str = ""
     ingested_by: IngestedBy = "cli"
     metadata: dict[str, str] = field(default_factory=dict)
+    language: str | None = None  # A2 addition; extractor in C2
     acl: list[str] | None = None
 
 
@@ -97,3 +99,36 @@ class IngestResult:
     chunks_created: int
     status: str
     error: str | None = None
+
+
+def normalize_iso_utc(dt: "datetime | str") -> str:
+    """Return YYYY-MM-DDTHH:MM:SS.ffffffZ (6-digit microseconds, always Z UTC).
+
+    Accepts datetime objects (naive treated as UTC; aware converted to UTC)
+    and ISO-8601 strings (including +00:00, missing tz, variable-precision).
+    """
+    if isinstance(dt, str):
+        from datetime import datetime as _dt  # noqa: PLC0415
+        dt_str = dt.strip()
+        # Remove trailing Z and replace with +00:00 for fromisoformat compatibility
+        if dt_str.endswith("Z"):
+            dt_str = dt_str[:-1] + "+00:00"
+        try:
+            parsed = _dt.fromisoformat(dt_str)
+        except ValueError:
+            # fallback: treat as UTC naive, strip tz suffix
+            dt_str_clean = dt_str.split("+")[0].split("-")[0] if "T" not in dt_str else dt_str.replace("Z", "").split("+")[0]
+            try:
+                parsed = _dt.fromisoformat(dt_str_clean)
+            except ValueError:
+                parsed = _dt.fromisoformat(dt.strip().replace("Z", "").split("+")[0])
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.astimezone(timezone.utc)
+        return parsed.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    # datetime object
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"

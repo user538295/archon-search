@@ -20,10 +20,15 @@ from archon_search.server.app import create_app
 
 
 def _make_client(tmp_path: Path) -> TestClient:
+    from unittest.mock import patch
+
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     job_store = JobStore(path=tmp_path / "jobs.json")
-    app = create_app(config, job_store)
+    # Patch DocumentChunker to avoid chonkie tokenizer download
+    with patch("archon_search.server.app.DocumentChunker") as mock_chunker_cls:
+        mock_chunker_cls.return_value = MagicMock()
+        app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
     pipeline = MagicMock()
@@ -56,7 +61,11 @@ def _make_client(tmp_path: Path) -> TestClient:
 
 def test_rest_search_response_includes_new_keys(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
-    response = client.post("/search", json={"collection": "col", "query": "hello"})
+    # include_metadata=True so that metadata dict is returned (A2: default is False)
+    response = client.post(
+        "/search",
+        json={"collection": "col", "query": "hello", "filters": {"include_metadata": True}},
+    )
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["results"], "expected at least one result"

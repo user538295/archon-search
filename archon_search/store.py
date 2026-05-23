@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import hashlib
 import json
 import logging
@@ -14,6 +15,10 @@ from typing import TYPE_CHECKING, Any, Optional
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, _validate_namespace
+from archon_search.store_filters import GLOB_OVERFETCH_FACTOR, _compute_fetch, build_where
+
+if TYPE_CHECKING:
+    from archon_search.filters import SearchFilters
 
 
 from dataclasses import dataclass, field
@@ -641,6 +646,7 @@ class SearchStore:
         query_vector: list[float],
         query_text: str,
         top_k: int,
+        filters: "SearchFilters | None" = None,
     ) -> list[SearchResult]:
         self._validate_collection(collection)
         db = self._require_connected()
@@ -649,10 +655,15 @@ class SearchStore:
         except ValueError:
             return []
 
-        fetch = max(top_k * 3, 20)
+        has_glob = bool(filters and filters.source_path_glob)
+        fetch = _compute_fetch(top_k, has_glob=has_glob)
+        pred = build_where(filters) if filters is not None else ""
 
         # Vector search
-        vec_rows = await table.vector_search(query_vector).limit(fetch).to_list()
+        vec_q = table.vector_search(query_vector).limit(fetch)
+        if pred:
+            vec_q = vec_q.where(pred)
+        vec_rows = await vec_q.to_list()
         vec_rank: dict[str, int] = {r["chunk_id"]: i for i, r in enumerate(vec_rows)}
 
         # FTS search (may fail if no index)
@@ -660,6 +671,8 @@ class SearchStore:
         fts_rank: dict[str, int] = {}
         try:
             fts_q = await table.search(query_text, query_type="fts")
+            if pred:
+                fts_q = fts_q.where(pred)
             fts_rows = await fts_q.limit(fetch).to_list()
             fts_rank = {r["chunk_id"]: i for i, r in enumerate(fts_rows)}
         except Exception as exc:
@@ -686,6 +699,29 @@ class SearchStore:
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
+        # Glob post-filter (applied after RRF scoring, before top_k slice)
+        if filters and filters.source_path_glob:
+            pattern = filters.source_path_glob
+            scored = [(s, r) for s, r in scored if fnmatch.fnmatchcase(r.get("source_path", ""), pattern)]
+            if len(scored) < top_k:
+                logger.warning(
+                    "glob post-filter shrank pool below top_k: %d/%d",
+                    len(scored), top_k,
+                )
+
+        # Mixed-format indexed_at warning when a date filter is set
+        _FIXED_WIDTH_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
+        if filters and (filters.indexed_after or filters.indexed_before):
+            legacy_count = sum(
+                1 for _, row in scored if not _FIXED_WIDTH_RE.match(row.get("indexed_at", ""))
+            )
+            if legacy_count > 0:
+                logger.warning(
+                    "date filter applied to %d legacy-format rows in collection %r; "
+                    "run reindex-metadata --normalize-timestamps to silence this",
+                    legacy_count, collection,
+                )
+
         results = []
         for score, row in scored[:top_k]:
             raw_acl = row.get("acl")
@@ -703,6 +739,7 @@ class SearchStore:
                     updated_at=row.get("updated_at") or indexed_at,
                     ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
                     metadata=parse_metadata(row.get("metadata") or "{}"),
+                    language=row.get("language") or None,
                     acl=row_acl,
                 )
             )

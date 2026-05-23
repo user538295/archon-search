@@ -23,6 +23,7 @@ from archon_search.store import SearchStore
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
+    from archon_search.filters import SearchFilters
 
 logger = logging.getLogger("archon")
 
@@ -325,11 +326,24 @@ class SearchPipeline:
     # ------------------------------------------------------------------
 
     async def search(
-        self, query: str, collection: str, namespace: str = DEFAULT_NAMESPACE
+        self,
+        query: str,
+        collection: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        filters: "SearchFilters | None" = None,
     ) -> SearchPipelineResult:
         vector = await self._embedder.embed_one(query)
-        candidates = await self.store.hybrid_search(collection, vector, query, top_k=self._top_k_retrieve)
+        candidates = await self.store.hybrid_search(
+            collection, vector, query, top_k=self._top_k_retrieve, filters=filters
+        )
+        pre_acl_count = len(candidates)
         candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, namespace)
+        if filters is not None and len(candidates) < self._top_k_return:
+            logger.warning(
+                "search: filter+ACL reduced candidate pool to %d (top_k_return=%d) "
+                "for collection %r",
+                len(candidates), self._top_k_return, collection,
+            )
         results = await self._reranker.rerank(query, candidates, top_k=self._top_k_return)
         return SearchPipelineResult(results=results, acl_filtered=acl_filtered)
 
@@ -394,9 +408,14 @@ class SearchPipeline:
         )
 
     async def search_with_context(
-        self, query: str, collection: str, context_window: int = 1, namespace: str = DEFAULT_NAMESPACE
+        self,
+        query: str,
+        collection: str,
+        context_window: int = 1,
+        namespace: str = DEFAULT_NAMESPACE,
+        filters: "SearchFilters | None" = None,
     ) -> list[dict[str, Any]]:
-        result_obj = await self.search(query, collection, namespace=namespace)
+        result_obj = await self.search(query, collection, namespace=namespace, filters=filters)
         output: list[dict[str, Any]] = []
 
         for result in result_obj.results:
