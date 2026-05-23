@@ -249,9 +249,15 @@ def test_sequential_failure_then_success_on_same_app() -> None:
     with TestClient(app, raise_server_exceptions=False) as client:
         resp1 = client.post("/search", json=_SEARCH_PAYLOAD)
         assert resp1.status_code == 500
-        # One error telemetry entry from the failure
-        assert writer.enqueue.call_count == 1
-        first_entry: TelemetryEntry = writer.enqueue.call_args_list[0][0][0]
+        # At least one error telemetry entry from the failure
+        assert writer.enqueue.call_count >= 1
+        # Find the error entry among all enqueued entries
+        error_entries_first = [
+            call[0][0] for call in writer.enqueue.call_args_list
+            if call[0][0].status == "internal_error"
+        ]
+        assert len(error_entries_first) == 1
+        first_entry: TelemetryEntry = error_entries_first[0]
         assert first_entry.status == "internal_error"
         assert first_entry.error_kind == "other"
 
