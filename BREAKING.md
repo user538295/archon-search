@@ -64,3 +64,11 @@ The 30-second timeout constant (`_SEARCH_TIMEOUT_SECONDS = 30.0`) is defined in 
 
 **Migration**: Clients that matched on `HTTP 200` + `results: []` to detect pipeline failure must now handle `HTTP 500` and `HTTP 504`. Clients performing graceful-degradation on empty results are unaffected for the "no hits" case, but must be updated to not mistake `500`/`504` for "no hits". The `503` response for meta-lookup failure is unchanged.
 **Announced in**: this release. The old silent-failure behavior was never documented as stable; the fix eliminates debt item `CON-5`.
+
+### [next release] — A5a ingest path safety
+
+**Surface**: MCP (`ingest_file`, `ingest_directory`), REST (`POST /collections`, `POST /ingest`).
+
+- MCP `ingest_file` and `ingest_directory` previously accepted paths containing `..` segments, empty strings, NUL bytes, and non-absolute paths, and silently followed/resolved them. They now return `McpErrorResponse(error=..., code="path_unsafe")`. HTTP `POST /collections` and `POST /jobs/ingest` gain a new `400` response for the same input classes (additive — was previously not in the OpenAPI schema).
+
+**Migration**: MCP clients passing relative paths, `..`-containing paths, empty strings, NUL bytes, or non-absolute paths must update to use valid absolute paths. REST clients using strict OpenAPI schema validation must regenerate from the updated spec to accept the new `400` response code.
