@@ -213,7 +213,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 > **Releasable**: when Task 1.7 lands. The whole phase ships as **one PR** ("A5a: ingest path safety"). Every prior task is internal-only until the four entry points and the OpenAPI/BREAKING.md updates are all in place.
 
 #### Task 1.1 — `PathUnsafeError` and `validate_ingest_path` in `_path_safety.py`
-- [ ] **File**: `archon_search/_path_safety.py` (new, top-level)
+- [x] **File**: `archon_search/_path_safety.py` (new, top-level)
 - **Depends on**: nothing
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: add `tests/test_path_safety.py` with all unit tests below. The module under test does not yet exist, so tests fail on import — acceptable red state; if preferred, mark them `@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)` so CI is green at this commit.
