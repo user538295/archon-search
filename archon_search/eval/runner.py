@@ -503,9 +503,8 @@ async def _run_router_for_query(
         shortlist_size=max(1, len(collection_metas)),
         confidence_threshold=0.0,  # accept any non-zero similarity
         embedding_model=pipeline._embedder.model_name,
+        initial_metadata=list(collection_metas),  # inject metadata to avoid HTTP fetch
     )
-    # Inject metadata directly to avoid HTTP fetch
-    router._cached_metadata = list(collection_metas)
     shortlist = await router.select(query_text)
     return [m.name for m in shortlist]
 

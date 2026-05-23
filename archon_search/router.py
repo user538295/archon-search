@@ -40,6 +40,7 @@ class MultiCollectionRouter:
         shortlist_size: int,
         confidence_threshold: float,
         embedding_model: str,
+        initial_metadata: "list[CollectionMeta] | None" = None,
     ) -> None:
         self._search_url = search_url
         self._embedder = embedder
@@ -47,7 +48,9 @@ class MultiCollectionRouter:
         self._confidence_threshold = confidence_threshold
         self._embedding_model = embedding_model
 
-        self._cached_metadata: list[CollectionMeta] | None = None
+        self._cached_metadata: list[CollectionMeta] | None = (
+            list(initial_metadata) if initial_metadata is not None else None
+        )
         self._last_routable_names: list[str] = []
         self._decomposer_was_invoked: bool = False
 
@@ -60,6 +63,20 @@ class MultiCollectionRouter:
     def decomposer_was_invoked(self) -> bool:
         """Whether the decomposer was invoked in the last get_pre_context() call."""
         return self._decomposer_was_invoked
+
+    def invalidate(self) -> None:
+        """Clear cached metadata. Idempotent; safe on already-empty cache.
+
+        TOCTOU note: if fetch_metadata() is in flight when this is called,
+        the completed fetch may re-populate the cache with pre-mutation data.
+        Callers must ensure the mutation completes before calling invalidate().
+
+        Note: callers that used ``initial_metadata`` to bypass HTTP (e.g. the
+        eval harness) should not call ``invalidate()`` — doing so will cause the
+        next ``fetch_metadata()`` call to attempt an HTTP request to whatever
+        ``search_url`` was provided.
+        """
+        self._cached_metadata = None
 
     async def fetch_metadata(self) -> list[CollectionMeta]:
         """Fetch collection metadata via JSON-RPC; result is cached.
