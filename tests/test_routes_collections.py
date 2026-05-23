@@ -1242,7 +1242,6 @@ def test_add_collection_rollback_save_failure(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 def test_add_collection_rejects_dotdot_path(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
@@ -1265,7 +1264,6 @@ def test_add_collection_rejects_dotdot_path(
     assert response.json()["detail"].startswith("path is unsafe:")
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 def test_add_collection_uses_validator_returned_path(
     tmp_path: Path, tmp_store: JobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1301,15 +1299,15 @@ def test_add_collection_uses_validator_returned_path(
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
-    with patch("archon_search.server.routes_collections.asyncio.create_task",
-               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
-        response = c.post("/collections/", json={"path": "/some/legitimate/path"})
+    # Do NOT patch asyncio.create_task here — the task must actually run so that
+    # captured receives body.path.  TestClient drives a real event loop that will
+    # schedule and execute _capturing_ingest_task before the response is returned.
+    response = c.post("/collections/", json={"path": "/some/legitimate/path"})
 
     assert response.status_code == 202
     assert captured == [str(Path("/sentinel/value"))]
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 def test_add_collection_rejects_relative_path(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
@@ -1331,7 +1329,6 @@ def test_add_collection_rejects_relative_path(
     assert response.status_code == 400
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 def test_add_collection_rejects_empty_path(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
@@ -1404,7 +1401,6 @@ def test_add_collection_accepts_legitimate_absolute_path(
     assert "job_id" in data
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 def test_add_collection_openapi_lists_400_response(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
