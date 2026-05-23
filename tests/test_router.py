@@ -441,3 +441,133 @@ def test_rank_preserves_shortlist_truncation_after_refactor() -> None:
     ]
     result = router.rank([1.0, 0.0], collections)
     assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 2.1 — invalidate() and initial_metadata tests
+# ---------------------------------------------------------------------------
+
+
+def test_invalidate_clears_cached_metadata() -> None:
+    """invalidate() sets _cached_metadata to None."""
+    router = _router()
+    router._cached_metadata = [_meta("col-a")]
+    router.invalidate()
+    assert router._cached_metadata is None
+
+
+def test_invalidate_is_idempotent() -> None:
+    """Calling invalidate() twice when cache is already None must not raise."""
+    router = _router()
+    router._cached_metadata = None
+    router.invalidate()  # first call — no-op
+    router.invalidate()  # second call — still no-op
+    assert router._cached_metadata is None
+
+
+def test_initial_metadata_populates_cache() -> None:
+    """Constructor with initial_metadata sets _cached_metadata without fetch."""
+    meta = [_meta("col-a"), _meta("col-b")]
+    router = MultiCollectionRouter(
+        search_url="http://localhost:9999",
+        embedder=_make_embedder(),
+        shortlist_size=5,
+        confidence_threshold=0.5,
+        embedding_model="model-a",
+        initial_metadata=meta,
+    )
+    assert router._cached_metadata is not None
+    assert len(router._cached_metadata) == 2
+    assert router._cached_metadata[0].name == "col-a"
+
+
+def test_initial_metadata_none_leaves_cache_empty() -> None:
+    """Constructor with initial_metadata=None leaves _cached_metadata as None."""
+    router = MultiCollectionRouter(
+        search_url="http://localhost:9999",
+        embedder=_make_embedder(),
+        shortlist_size=5,
+        confidence_threshold=0.5,
+        embedding_model="model-a",
+        initial_metadata=None,
+    )
+    assert router._cached_metadata is None
+
+
+def test_initial_metadata_empty_list_marks_cache_populated() -> None:
+    """initial_metadata=[] sets cache to [] (distinct from None — cache is populated)."""
+    router = MultiCollectionRouter(
+        search_url="http://localhost:9999",
+        embedder=_make_embedder(),
+        shortlist_size=5,
+        confidence_threshold=0.5,
+        embedding_model="model-a",
+        initial_metadata=[],
+    )
+    assert router._cached_metadata == []
+    assert router._cached_metadata is not None
+
+
+def test_initial_metadata_is_copied() -> None:
+    """Mutating the original list after construction must not affect _cached_metadata."""
+    original = [_meta("col-a")]
+    router = MultiCollectionRouter(
+        search_url="http://localhost:9999",
+        embedder=_make_embedder(),
+        shortlist_size=5,
+        confidence_threshold=0.5,
+        embedding_model="model-a",
+        initial_metadata=original,
+    )
+    original.append(_meta("col-b"))
+    assert len(router._cached_metadata) == 1
+
+
+@pytest.mark.asyncio
+async def test_select_uses_initial_metadata_without_http() -> None:
+    """Router with initial_metadata uses cache without making any HTTP call."""
+    embedder = _make_embedder(vector=[1.0, 0.0])
+    meta = [_meta("col-a", centroid=[1.0, 0.0])]
+    router = MultiCollectionRouter(
+        search_url="http://localhost:9999",
+        embedder=embedder,
+        shortlist_size=5,
+        confidence_threshold=0.0,
+        embedding_model="model-a",
+        initial_metadata=meta,
+    )
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        result = await router.select("test query")
+        mock_client_cls.assert_not_called()
+
+    assert len(result) == 1
+    assert result[0].name == "col-a"
+
+
+# ---------------------------------------------------------------------------
+# Task 2.2 — No direct _cached_metadata write outside router.py
+# ---------------------------------------------------------------------------
+
+
+def test_eval_runner_no_direct_cached_metadata_write() -> None:
+    """No file in archon_search/ (except router.py) may directly assign to _cached_metadata."""
+    import re
+    from pathlib import Path
+
+    archon_search = Path(__file__).parent.parent / "archon_search"
+    pattern = re.compile(r'_cached_metadata\s*=')
+
+    violations = []
+    for py_file in archon_search.rglob("*.py"):
+        if py_file.name == "router.py":
+            continue
+        text = py_file.read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if pattern.search(line):
+                violations.append(f"{py_file.relative_to(archon_search)}:{lineno}: {line.strip()}")
+
+    assert not violations, (
+        "Direct _cached_metadata assignment found outside router.py:\n"
+        + "\n".join(violations)
+    )
