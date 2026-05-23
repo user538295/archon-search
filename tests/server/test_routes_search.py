@@ -386,9 +386,17 @@ def test_search_cross_namespace_404(tmp_path: Path) -> None:
 
 
 def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """When get_collection_meta raises (LanceDB error), response is 503, not 404 or 200."""
+    """When get_collection_meta raises (LanceDB error), response is 503, not 404 or 200.
+
+    Also verifies that the 503 meta-lookup failure path does NOT enqueue a telemetry
+    entry (telemetry is reserved for the search-execution failure paths).
+    """
+    from archon_search.telemetry.writer import TelemetryWriter
+
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(meta_raises=RuntimeError("lancedb failure"))
+    writer_mock = MagicMock(spec=TelemetryWriter)
+    app.state.telemetry_writer = writer_mock
 
     with caplog.at_level(logging.ERROR, logger="archon.search"):
         response = client.post("/search", json={"collection": "col", "query": "test"})
@@ -396,6 +404,8 @@ def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCa
     assert response.status_code == 503
     app.state.pipeline.search.assert_not_called()
     assert any("service unavailable" in record.message.lower() or "lancedb" in record.message.lower() or "col" in record.message for record in caplog.records)
+    # 503 meta-lookup path must not enqueue telemetry.
+    assert writer_mock.enqueue.call_count == 0
 
 
 # ---------------------------------------------------------------------------

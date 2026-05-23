@@ -30,8 +30,8 @@ Verified against the route modules under `archon_search/server/`:
 | `404` | Unknown collection, unknown job, cross-namespace access | `{"detail": "..."}` | Treat as logical "not visible to me". Do not retry. |
 | `409` | `POST /collections/` — path or name already registered; `DELETE /collections/{name}` — pinned-only | `{"detail": "..."}` | Reconcile config; do not retry blindly. |
 | `422` | FastAPI body validation (e.g. empty `collection` / `query` in `/search`) | FastAPI's structured error body | Fix the request; never retry as-is. |
-| `500` | Unmapped internal failure; `POST /search` — pipeline stage exception (embedder, store, reranker) (`routes_search.py`); `APIKeyMiddleware` returns a bare `500` (no body) if the resolved namespace fails revalidation (`middleware_auth.py:55-59`) | `{"detail": "..."}` (or empty from the middleware path) | Backoff + retry once; surface to operator if it recurs. |
-| `503` | `POST /search` — any exception raised by `pipeline.get_collection_meta` (`routes_search.py:67-71`) | `{"detail": "service unavailable"}` | Retry with exponential backoff. |
+| `500` | Unmapped internal failure; `POST /search` — pipeline stage exception (embedder, store, reranker) (`routes_search.py`); `APIKeyMiddleware` returns a bare `500` (no body) if the resolved namespace fails revalidation (`middleware_auth.py:55-59`) | `{"detail": "..."}` for the routes that build a `JSONResponse({"detail": ...}, status_code=500)` (e.g. `routes_collections.py`, `routes_jobs.py`). **Exception: `POST /search` pipeline-failure 500 has a plain-text body `Internal Server Error` (Content-Type `text/plain`)** — the route bare-re-raises and Starlette's `ServerErrorMiddleware` renders the default response, not a JSON envelope. `APIKeyMiddleware`'s 500 path returns an empty body. | Backoff + retry once; surface to operator if it recurs. |
+| `503` | `POST /search` — any exception raised by `pipeline.get_collection_meta` (`routes_search.py:86-90`) | `{"detail": "service unavailable"}` | Retry with exponential backoff. |
 | `504` | `POST /route` — 30 s routing timeout; `POST /search` — pipeline call timed out (~30 s) | `{"detail": "routing timed out"}` / `{"detail": "Search timed out"}` | Retry at most once; if persistent, check CPU pressure or model load. |
 
 The full server-side mapping with file:line citations is in `Architecture/140_error_handling_strategy.md`.
@@ -50,13 +50,19 @@ The full server-side mapping with file:line citations is in `Architecture/140_er
 
 ## REST error envelope
 
-For every status except `401` and FastAPI's `422`, the body is:
+For most statuses the body is:
 
 ```json
 {"detail": "human-readable string"}
 ```
 
-`schemas.ErrorDetail` is registered on the `responses=` map of routes in `routes_collections.py` and `routes_jobs.py`, so the OpenAPI schema documents this envelope per route for the statuses they declare (typically `401`, and where relevant `404` / `409`). `routes_search.py` and `routes_route.py` do **not** register a `responses=` map — the envelope shape is the same on the wire, but is not documented in OpenAPI for those endpoints.
+There are three exceptions to that envelope:
+
+1. **`401`** — empty body (the auth middleware sets `WWW-Authenticate: Bearer` and writes no body).
+2. **`422`** — FastAPI's Pydantic-v2 validation shape, where `detail` is a **list** of structured error objects (see the example below), not a string.
+3. **`POST /search` `500` on pipeline failure** — plain-text body `Internal Server Error` with `Content-Type: text/plain`. The route bare-re-raises the pipeline exception and Starlette's `ServerErrorMiddleware` renders the default response; there is no `detail` key and the body is not JSON. Branch on `response.status_code` (and `Content-Type`) before parsing.
+
+`schemas.ErrorDetail` is registered on the `responses=` map of routes in `routes_collections.py` and `routes_jobs.py`, so the OpenAPI schema documents this envelope per route for the statuses they declare (typically `401`, and where relevant `404` / `409`). `routes_search.py` and `routes_route.py` do **not** register a `responses=` map — the envelope shape is the same on the wire for the `JSONResponse`-built statuses, but is not documented in OpenAPI for those endpoints.
 
 `422` follows FastAPI's default Pydantic-v2 validation-error shape. The exact `msg` is prefixed with `"Value error, "` and the body includes an `input` field; the simplified example below shows the relevant fields only:
 

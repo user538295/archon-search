@@ -18,6 +18,7 @@ Verified ground-truth claims include the auth middleware behavior, the `ErrorKin
    **Ground truth**: The 503 at `routes_search.py:71` fires when `await pipeline.get_collection_meta(...)` raises *any* exception (caught by `except Exception as exc`). It is not gated on "pipeline missing" — `pipeline` is unconditionally pulled from `request.app.state.pipeline` (would `AttributeError` first). The handler does **not** enqueue a telemetry entry at all — the `internal_error` column is fabricated. `routes_search.py` never imports or calls `TelemetryEntry.from_error`.
    **Ref**: `archon_search/server/routes_search.py:62-84` (no telemetry imports, no `from_error` call). Compare `routes_route.py:152-165` which *does* enqueue `internal_error`.
    **Severity**: Major (table column claims a telemetry contract the code does not implement).
+   **Update (superseded by A3)**: Post-A3, `routes_search.py` imports `TelemetryEntry` (line 13) and *does* enqueue telemetry on the pipeline-failure and timeout paths (calls at lines 109 and 129). The 503 meta-lookup branch (now at lines 86-90) still does not enqueue telemetry — that part of the finding stands — but the "never imports or calls `TelemetryEntry.from_error`" claim is no longer accurate.
 
 3. **Quoted**: "The cancellation handshake is `RUNNING → CANCELLING → CANCELLED`".
    **Ground truth**: `_ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.PENDING}` (`routes_jobs.py:24`); a DELETE on a PENDING job also transitions it to `CANCELLING`. The handshake is `{PENDING, RUNNING} → CANCELLING → CANCELLED`.
@@ -35,6 +36,7 @@ Verified ground-truth claims include the auth middleware behavior, the `ErrorKin
    So the `internal_error` telemetry column is wrong for both sources.
    **Ref**: `archon_search/server/routes_collections.py:149-155`; `archon_search/server/routes_jobs.py:149-157`.
    **Severity**: Moderate (telemetry column repeatedly claims behavior the code does not perform).
+   **Update (superseded by A3)**: Post-A3, there is now a separate 500 source — `routes_search.py` (lines 124-144) bare-re-raises pipeline exceptions, and that path *does* enqueue telemetry with `status="internal_error"` (line 129). The original findings about `routes_collections.py` and `routes_jobs.py` still stand.
 
 6. **Quoted**: "The middleware iterates the full namespace map without short-circuit (`no break` — `middleware_auth.py:42`)".
    **Ground truth**: The `# no break` comment is at line **43** (`resolved_namespace = ns  # no break`), not 42. Line 42 is the `secrets.compare_digest` call.
@@ -69,6 +71,7 @@ Verified ground-truth claims include the auth middleware behavior, the `ErrorKin
 12. **Quoted**: "Collection not found | `404` | `routes_search.py:74`, `routes_collections.py:180/186/243/251/309/313`".
     **Ground truth**: All cited lines verified as 404 sources. `routes_search.py:74` returns `JSONResponse({"detail": "collection not found"}, status_code=404)` (not an `HTTPException`, so the response shape is `{"detail": "..."}` via JSONResponse, not FastAPI's automatic `HTTPException` rendering — same wire format, different code path; worth noting if a maintainer expects uniform shape).
     **Severity**: None (verified) — flagged for completeness.
+    **Update (superseded by A3)**: Post-A3 the 404 source in `routes_search.py` moved to lines 92-93; the `routes_collections.py` line refs are unchanged.
 
 13. **Quoted**: "Bad request body (Pydantic) | `400` / `422` | FastAPI validation | `validation_error`".
     **Ground truth**: FastAPI's default for Pydantic body validation errors is **422 Unprocessable Entity**, not 400. The `400` in the same row is reachable only via the `routes_route.py` explicit `HTTPException(400, "query must not be empty")` / `"slots must be >= 1"` — that path *is* mapped to `validation_error` telemetry via `_redact_validation`. The Pydantic-validation path returns 422 and does **not** record telemetry (the exception happens before the handler body runs). Pretending "400 / 422" share one telemetry contract obscures that.

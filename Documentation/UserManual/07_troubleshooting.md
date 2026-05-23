@@ -67,7 +67,7 @@ Symptoms: `archon-search collection list` shows no growth in `chunks=`, `GET /st
 
 ## Symptom: 503 from `/search`
 
-The route returns 503 when *any* exception is raised by the collection-metadata lookup (`routes_search.py:67-71`). LanceDB unreachable is one possible cause, but the same 503 can be produced by metadata-row deserialization errors, a transient store init failure, or any other exception in `pipeline.get_collection_meta(...)`. Check disk space and inspect the log for `meta lookup failed for collection …` — the logged exception is the authoritative cause. #Unverified (specific failure modes beyond what the code line catches are operational, not enumerated in source)
+The route returns 503 when *any* exception is raised by the collection-metadata lookup (`routes_search.py:86-90`). LanceDB unreachable is one possible cause, but the same 503 can be produced by metadata-row deserialization errors, a transient store init failure, or any other exception in `pipeline.get_collection_meta(...)`. Check disk space and inspect the log for `meta lookup failed for collection …` — the logged exception is the authoritative cause. #Unverified (specific failure modes beyond what the code line catches are operational, not enumerated in source)
 
 ## Symptom: 504 from `/route`
 

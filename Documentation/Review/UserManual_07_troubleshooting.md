@@ -28,7 +28,7 @@ Doc is largely accurate. Symptom-to-fix mappings, file paths, line references (`
    Verified the subcommand exists (`cli/collection.py:196`) but the doc says it "clears the state and rebuilds from scratch". The reindex command does clear state (cli/collection.py:224 comment confirms), so this is accurate — *withdraw* (moved to Verified).
 
 7. **Symptom: 503 from `/search` (line 67-68) — root cause is broader than stated.**
-   Doc claims 503 only when "the collection-metadata lookup itself fails" and "usually indicates LanceDB is not reachable". `routes_search.py:67-71` returns 503 on *any* exception from `pipeline.get_collection_meta(...)`. That is more general than "LanceDB unreachable" — it could be a metadata-row deserialization error, a transient store init failure, etc. Stating "this usually indicates LanceDB is not reachable" is a reasonable heuristic but not a definitive cause; the doc presents it more definitively than the code warrants.
+   Doc claims 503 only when "the collection-metadata lookup itself fails" and "usually indicates LanceDB is not reachable". `routes_search.py:86-90` (post-A3; was `:67-71` at the time of this review) returns 503 on *any* exception from `pipeline.get_collection_meta(...)`. That is more general than "LanceDB unreachable" — it could be a metadata-row deserialization error, a transient store init failure, etc. Stating "this usually indicates LanceDB is not reachable" is a reasonable heuristic but not a definitive cause; the doc presents it more definitively than the code warrants.
 
 8. **Symptom: install hangs — exit-code phrasing (line 76).**
    The doc says install "prints `Warning: service did not become ready within 60s` and exits 1". `install_cmd.py:117-118` confirms exact message and `SystemExit(1)`. Accurate — *withdraw* (moved to Verified).
@@ -55,7 +55,7 @@ Doc is largely accurate. Symptom-to-fix mappings, file paths, line references (`
 - `POST /search` returns 404 on missing/cross-namespace collection (`routes_search.py:73-74`); meta is fetched filtered by namespace (line 68), so cross-namespace access is collapsed to 404. Doc's nuance about "404 not empty results" for cross-namespace is correct.
 - `GET /collections/` filters by caller namespace silently (`routes_collections.py:75-90`).
 - `POST /search` previously returned `{"results": [], "acl_filtered": false}` on internal exception with warning log `search failed for collection %r` (`routes_search.py:82-84`) — this was verified against pre-A3 code. Post-A3 (CON-5 resolved): pipeline exceptions bare-re-raise as HTTP 500; a `search_pipeline_failure` event is logged at ERROR with `exc_info=True`. The warning-level log and silent-empty path no longer exist.
-- `routes_search.py:71` is the 503 return. Correct line number.
+- `routes_search.py:90` is the 503 return (post-A3; was `:71` at the time of this review). Line number updated.
 - `/route` has a 30-second `asyncio.wait_for` and raises HTTP 504 on timeout (`routes_route.py:94-101, 122-135`). Line refs match.
 - `install_cmd._HEALTH_TIMEOUT = 60` polls `GET /health` until ready (`install_cmd.py:14, 49-61`); on timeout prints `Warning: service did not become ready within 60s` and exits 1 (lines 117-118).
 - `_needs_install_trigger` in `server/mcp.py:255-277` treats any non-DONE status (including `IN_PROGRESS`) as needing reindex on restart, matching doc's "stale `IN_PROGRESS` is treated as a crash". Additionally `sync.py:321-344` resets stale `IN_PROGRESS` → `PENDING` on startup ("Crash recovery").

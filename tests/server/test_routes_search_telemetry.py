@@ -282,6 +282,11 @@ def test_serialization_error_in_response_construction_enqueues_telemetry(
 
     assert response.status_code == 500
     assert writer_mock.enqueue.call_count == 1
+    entry = writer_mock.enqueue.call_args.args[0]
+    assert entry.endpoint == "search"
+    assert entry.status == "internal_error"
+    assert entry.error_kind == "other"
+    assert entry.latency_ms > 0
 
 
 # ---------------------------------------------------------------------------

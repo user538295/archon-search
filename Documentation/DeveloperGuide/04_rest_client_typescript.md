@@ -242,8 +242,14 @@ export class ArchonError extends Error {
   }
 
   /** Best-effort parse of the FastAPI `{detail: string}` envelope.
-   * Returns `null` if the body is not JSON, or if `detail` is a list (422
-   * validation responses use `detail: [...]`). */
+   * Returns `null` in three known cases:
+   *   - `401` — body is empty (auth middleware writes no body).
+   *   - `422` — `detail` is a list of structured validation errors, not a string.
+   *   - `POST /search` `500` (pipeline-stage failure) — body is plain text
+   *     `Internal Server Error` (Content-Type `text/plain`) emitted by
+   *     Starlette's `ServerErrorMiddleware`, not a JSON envelope.
+   * Callers that need the raw bytes for those cases should read `this.body`
+   * directly and branch on `this.status` (and Content-Type) first. */
   parsedDetail(): string | null {
     try {
       const parsed = JSON.parse(this.body) as { detail?: unknown };

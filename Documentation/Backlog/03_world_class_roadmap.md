@@ -201,7 +201,7 @@ If only one ordering is used for planning, use this — each phase is a coherent
 **Phase A — Trust the core**
 1. ⬜ A1. Metadata schema v1 (item 3 minimum slice).
 2. ⬜ A2. Metadata filters at search (item 7).
-3. ⬜ A3. Search-failure semantics (`CON-5`).
+3. ✅ A3. Search-failure semantics (`CON-5`) — shipped; see `BREAKING.md` `[next release]` — `POST /search` pipeline-exception behavior.
 4. ⬜ A4. Explain / debug endpoint (item 12).
 5. ⬜ A5. Ingest path safety + parameterised store queries (`VAL-1`, `RP-5`).
 6. ⬜ A6. State-store and router cache locks (`CON-2`, `CON-3`).
@@ -256,7 +256,7 @@ If only one ordering is used for planning, use this — each phase is a coherent
 If the goal is **a full-featured world-class search system that is also safe to run in production**, the balanced sequence is:
 
 1. ✅ Product boundary (done).
-2. ⬜ **Phase A** — ship metadata + filters + explain (user wins), and close the most painful safety debt (path, SQL, locks, fsync, search-failure semantics) in the same release. Cheap, broad impact, unlocks every later phase.
+2. ⬜ **Phase A** — ship metadata + filters + explain (user wins), and close the most painful safety debt (path, SQL, locks, fsync) in the same release. Cheap, broad impact, unlocks every later phase. (Search-failure semantics is already closed via A3; see `BREAKING.md`.)
 3. ⬜ **Phase B** — observability + production-model eval lane first; then the server-side multi-collection refactor and stronger routing. Without B1/B6 the later ranking work has no story.
 4. ⬜ **Phase C** — the ranking-leap features (per-collection model, multilingual, enrichment, HyDE, RAG Fusion). Each gated by the eval harness.
 5. ⬜ **Phase D** — finish the job contract, export/import, key rotation; the system becomes operable end-to-end.

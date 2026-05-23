@@ -180,7 +180,7 @@ for hit in payload["results"]:
 - Empty `query` or empty `collection` → `422` from Pydantic validators.
 - Unknown / cross-namespace collection → `404 {"detail": "collection not found"}`.
 - Meta lookup failure → `503 {"detail": "service unavailable"}`.
-- Pipeline failure mid-search → HTTP 500 with `{"detail": "Internal Server Error"}`. Pipeline timeout → HTTP 504 with `{"detail": "Search timed out"}`. HTTP 200 with `results=[]` means no matches found on a healthy pipeline.
+- Pipeline failure mid-search → HTTP 500 with a **plain-text** body `Internal Server Error` (Content-Type `text/plain`), produced by Starlette's `ServerErrorMiddleware` after the route bare-re-raises. Do NOT call `response.json()` on the 500 body — it is not JSON and `requests`/`httpx` will raise `JSONDecodeError`. Use `response.text` or branch on `response.status_code` before parsing. Pipeline timeout → HTTP 504 with `{"detail": "Search timed out"}` (JSON, safe to parse). HTTP 200 with `results=[]` means no matches found on a healthy pipeline.
 
 There is no REST `/search/with_context` endpoint. That capability is exposed only as the MCP tool `search_with_context` (`mcp.py:77`). If you need it from REST today, ingest the document and issue follow-up `/search` calls; or use the MCP transport.
 

@@ -92,7 +92,7 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 3. If a stale lock file remains after an unclean shutdown, restart resolves it. There is no manual lock-clearing tool. #Unverified (LanceDB lock-file semantics are external to this repo).
 4. As a last resort, restore `search/` from backup (`OperatorGuide/03_backup_restore_disaster_recovery.md`).
 
-### Search returns HTTP 500/504 (pipeline failure — `CON-5` resolved in A3)
+### Search returns HTTP 500/503/504 (pipeline failure — `CON-5` resolved in A3; 503 is the unchanged meta-lookup path)
 
 **Symptoms**: `POST /search` returns HTTP 500, HTTP 503, or HTTP 504 instead of expected results; or `/telemetry/entries` shows entries with `endpoint="search"` and `status="internal_error"` or `status="timeout"`. Note: HTTP 503 from the meta-lookup branch produces no telemetry entry and no `event_type` log field — check the raw server log for the `"search: meta lookup failed"` ERROR message instead.
 

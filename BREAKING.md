@@ -20,7 +20,7 @@
 A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic models.
 
 **REST — additive (non-breaking)**:
-- `/search` and `/search/context` result items gain the same six keys. Tolerant JSON consumers see new fields appear; strict-schema consumers (e.g., generated clients pinned to the older OpenAPI snapshot) must regenerate.
+- `/search` result items gain the same six keys. Tolerant JSON consumers see new fields appear; strict-schema consumers (e.g., generated clients pinned to the older OpenAPI snapshot) must regenerate. (There is no `/search/context` REST endpoint; the equivalent capability is the MCP `search_with_context` tool, listed separately in the MCP section above.)
 
 **New 503 contract on `/ingest`**:
 - During an active reindex of the same collection, the store may raise `StoreBusyError` after a 30s lock-acquisition timeout. The lifecycle wrapper surfaces this in job state today (REST 202 + background task model); a synchronous 503 + `Retry-After: 30` response is a follow-up tied to a request-lifecycle refactor.
@@ -41,7 +41,7 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 ### [next release] — `POST /search` pipeline-exception behavior (CON-5 / A3)
 
 **`POST /search` pipeline-exception behavior** (`routes_search.py`, CON-5 / A3):
-- Pipeline stage exceptions (embedder, store, reranker) now return **HTTP 500** with `{"detail": "Internal Server Error"}` instead of HTTP 200 with `{results: [], acl_filtered: false}`.
+- Pipeline stage exceptions (embedder, store, reranker) now return **HTTP 500** with a **plain-text** body `Internal Server Error` (Content-Type `text/plain`) instead of HTTP 200 with `{results: [], acl_filtered: false}`. The route bare-re-raises the exception; Starlette's `ServerErrorMiddleware` produces the default text response — this is **not** a JSON envelope. Callers MUST NOT call `.json()` on the 500 response body; doing so will raise a JSON decode error.
 - A hung pipeline call now returns **HTTP 504** with `{"detail": "Search timed out"}` after ~30 s (matching the `/route` timeout contract).
 - Migration: callers that treated an empty-results 200 as a pipeline-error signal must now handle HTTP 5xx. Callers that already treat 5xx as errors are unaffected.
 - The `503` meta-lookup path (`get_collection_meta` raises) is unchanged.
