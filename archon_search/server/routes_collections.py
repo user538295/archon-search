@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
@@ -110,9 +111,14 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
 _ERROR_401 = {401: {"model": ErrorDetail}}
 _ERROR_401_404 = {401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}}
 _ERROR_401_409 = {401: {"model": ErrorDetail}, 409: {"model": ErrorDetail}}
+_ERROR_400_401_409 = {
+    400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
+    401: {"model": ErrorDetail},
+    409: {"model": ErrorDetail},
+}
 
 
-@router.post("/", status_code=202, response_model=JobResponse, responses=_ERROR_401_409)
+@router.post("/", status_code=202, response_model=JobResponse, responses=_ERROR_400_401_409)
 async def add_collection(body: AddCollectionRequest, request: Request) -> JobResponse | JSONResponse:
     """Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob."""
     config: SearchConfig = request.app.state.config
@@ -120,7 +126,11 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     search_store = request.app.state.search_store
     ns: str = request.state.namespace
 
-    resolved = str(Path(body.path).expanduser().resolve())
+    try:
+        validated_path = validate_ingest_path(body.path)
+    except PathUnsafeError as e:
+        raise HTTPException(status_code=400, detail=f"path is unsafe: {e.reason}")
+    resolved = str(validated_path)
 
     # Dedup check against resolved paths from both lists
     existing_resolved = {

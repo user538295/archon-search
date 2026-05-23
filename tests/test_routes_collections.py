@@ -1250,6 +1250,8 @@ def _make_collections_app(
 ) -> "FastAPI":  # type: ignore[name-defined]
     """Create a minimal FastAPI app with only the collections router."""
     import os as _os
+    import tempfile as _tempfile
+    from pathlib import Path as _Path
     from fastapi import FastAPI, Request
     from archon_search.server.routes_collections import router
     from archon_search.config import SearchConfig as _SC
@@ -1261,9 +1263,8 @@ def _make_collections_app(
     app = FastAPI()
     # Minimal state
     app.state.config = _SC()
-    _tmp_store = _JS.__new__(_JS)
-    _tmp_store._jobs = {}
-    _tmp_store._path = None
+    _tmpdir = _tempfile.mkdtemp()
+    _tmp_store = _JS(path=_Path(_tmpdir) / "jobs.json")
     app.state.job_store = _tmp_store
 
     mock_search = MagicMock()
@@ -1297,7 +1298,6 @@ def _collections_client(app: "FastAPI") -> "TestClient":  # type: ignore[name-de
     return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
 
-@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
 def test_add_collection_rejects_dotdot_path() -> None:
     """POST /collections/ with a dotdot path returns 400 with 'path is unsafe:' detail."""
     app = _make_collections_app()
@@ -1307,7 +1307,6 @@ def test_add_collection_rejects_dotdot_path() -> None:
     assert response.json()["detail"].startswith("path is unsafe:")
 
 
-@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
 def test_add_collection_rejects_relative_path() -> None:
     """POST /collections/ with a relative path returns 400."""
     app = _make_collections_app()
@@ -1317,7 +1316,6 @@ def test_add_collection_rejects_relative_path() -> None:
     assert "path is unsafe:" in response.json()["detail"]
 
 
-@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
 def test_add_collection_rejects_empty_path() -> None:
     """POST /collections/ with empty path returns 400 with 'empty' in detail."""
     app = _make_collections_app()
@@ -1329,7 +1327,6 @@ def test_add_collection_rejects_empty_path() -> None:
     assert "empty" in detail
 
 
-@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
 def test_add_collection_uses_validator_returned_path() -> None:
     """Handler uses the Path returned by validate_ingest_path (not re-resolving body.path)."""
     from pathlib import Path as _Path
@@ -1357,7 +1354,6 @@ def test_add_collection_unauth_takes_precedence() -> None:
     assert response.status_code == 401
 
 
-@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
 def test_add_collection_openapi_lists_400_response() -> None:
     """GET /openapi.json shows 400 under /collections/ POST responses."""
     app = _make_collections_app()
