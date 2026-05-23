@@ -5,6 +5,7 @@ import enum
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -77,13 +78,14 @@ def to_dict(state: IndexingState) -> dict:
 class IndexingStateStore:
     """Persistent store for IndexingState, backed by a JSON file with atomic writes.
 
-    Note: concurrent callers must provide external synchronization. This class is not
-    thread-safe on its own — locks live at SearchCollectionSync level, not here.
+    Thread-safe: all public mutating methods are serialized by an internal RLock.
+    read() is intentionally unlocked — it is a snapshot read.
     """
 
     def __init__(self, state_dir: Path) -> None:
         self._state_dir = Path(state_dir).expanduser()
         self._state_file = self._state_dir / ".indexing_state.json"
+        self._lock = threading.RLock()
 
     def read(self) -> IndexingState | None:
         """Read and deserialize state file. Returns None if missing, unreadable, or corrupt."""
@@ -106,41 +108,45 @@ class IndexingStateStore:
 
     def write(self, state: IndexingState) -> None:
         """Serialize and atomically write state to disk. Re-raises on failure."""
-        self._state_dir.mkdir(parents=True, exist_ok=True)
-        tmp_path = self._state_file.with_suffix(".json.tmp")
-        try:
-            tmp_path.write_text(json.dumps(to_dict(state), indent=2), encoding="utf-8")
-            os.replace(tmp_path, self._state_file)
-        except Exception as exc:
-            logger.error("IndexingStateStore: failed to write state file: %s", exc)
+        with self._lock:
+            self._state_dir.mkdir(parents=True, exist_ok=True)
+            tmp_path = self._state_file.with_suffix(".json.tmp")
             try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+                tmp_path.write_text(json.dumps(to_dict(state), indent=2), encoding="utf-8")
+                os.replace(tmp_path, self._state_file)
+            except Exception as exc:
+                logger.error("IndexingStateStore: failed to write state file: %s", exc)
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
 
     def update_collection(self, name: str, progress: CollectionProgress) -> None:
         """Update a single collection entry, creating state if absent."""
-        state = self.read() or IndexingState()
-        state.collections[name] = progress
-        state.last_updated = datetime.now(UTC).isoformat()
-        self.write(state)
+        with self._lock:
+            state = self.read() or IndexingState()
+            state.collections[name] = progress
+            state.last_updated = datetime.now(UTC).isoformat()
+            self.write(state)
 
     def set_trigger(self, trigger: str | None) -> None:
         """Read current state (or create empty state if absent), set trigger field, write atomically."""
-        state = self.read() or IndexingState()
-        state.trigger = trigger
-        state.last_updated = datetime.now(UTC).isoformat()
-        self.write(state)
+        with self._lock:
+            state = self.read() or IndexingState()
+            state.trigger = trigger
+            state.last_updated = datetime.now(UTC).isoformat()
+            self.write(state)
 
     def remove_collection(self, name: str) -> None:
         """Remove a collection entry. No-op if missing or state file absent."""
-        state = self.read()
-        if state is None or name not in state.collections:
-            return
-        del state.collections[name]
-        state.last_updated = datetime.now(UTC).isoformat()
-        self.write(state)
+        with self._lock:
+            state = self.read()
+            if state is None or name not in state.collections:
+                return
+            del state.collections[name]
+            state.last_updated = datetime.now(UTC).isoformat()
+            self.write(state)
 
 
 def compute_eta_seconds(

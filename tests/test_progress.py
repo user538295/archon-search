@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -999,3 +1001,416 @@ class TestIndexingStateStoreEdgeCases:
         result = store.read()
         assert result is not None
         assert result.collections["col"].file_mtimes == {}
+
+
+class TestIndexingStateStoreThreadSafety:
+    """Concurrency regression tests for the internal RLock (CON-3).
+
+    The lost-update bug lives in the read-modify-write window of each composite
+    method: reader A reads, reader B reads, A writes, B writes over A's update.
+    The internal RLock closes that window by making the whole RMW atomic.
+
+    To make the race manifest WITHOUT the lock (the "red" phase that proves these
+    tests can detect a regression), we widen the no-lock RMW window by sleeping a
+    few milliseconds immediately after each ``read()`` returns. Without the lock,
+    that sleep guarantees every thread reads stale state before any thread writes,
+    so the last writer clobbers the others (lost update) and the shared
+    ``.json.tmp`` path can be torn apart.
+
+    Note the injected sleep does NOT, by itself, "deterministically expose" the
+    race for composite methods WITH the lock: under a correct lock the sleep runs
+    while the lock is held, so it cannot interleave two RMW cycles — only one
+    thread is ever inside the critical section. WITH the lock these tests instead
+    assert correctness / serialization that must hold regardless of how threads
+    happen to interleave. We do NOT place a ``Barrier`` inside the critical
+    section: under a correct lock only one thread can be inside it, so a barrier
+    there would deadlock by construction.
+    """
+
+    @staticmethod
+    def _slow_read_patch(
+        monkeypatch: pytest.MonkeyPatch, delay: float = 0.05
+    ) -> None:
+        """Widen every composite's read-modify-write window to force interleaving."""
+        original_read = IndexingStateStore.read
+
+        def slow_read(self: IndexingStateStore) -> IndexingState | None:
+            result = original_read(self)
+            time.sleep(delay)  # AFTER read returns, BEFORE the modify+write
+            return result
+
+        monkeypatch.setattr(IndexingStateStore, "read", slow_read)
+
+    def test_concurrent_update_collection_no_lost_writes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store = IndexingStateStore(tmp_path)
+        n = 8
+        self._slow_read_patch(monkeypatch)
+        start = threading.Barrier(n)  # start all threads simultaneously
+
+        def worker(idx: int) -> None:
+            start.wait()
+            store.update_collection(
+                f"col_{idx}", CollectionProgress(status=IndexingStatus.DONE)
+            )
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+            assert not t.is_alive()
+
+        result = store.read()
+        assert result is not None
+        assert len(result.collections) == n
+        for i in range(n):
+            assert f"col_{i}" in result.collections
+
+    def test_concurrent_writers_same_key_no_torn_or_mixed_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Same-key writers: plain "last write wins" is the correct outcome with OR
+        # without a lock, so asserting it is tautological and does NOT detect CON-3.
+        # Instead each of N writers writes a fully self-consistent record whose
+        # three int fields all carry the SAME writer id (v). The guarded invariant
+        # is that the surviving record is never TORN (invalid JSON) nor MIXED (a
+        # Frankenstein with fields from different writers). The lock makes each
+        # whole read-modify-write atomic; without it, concurrent writes to the
+        # shared ``.json.tmp`` path tear the record apart.
+        n = 8
+        store = IndexingStateStore(tmp_path)
+
+        # Widen the no-lock write window deterministically. We split every tmp
+        # write of the state JSON into two flushes and gather ALL writers at a
+        # barrier in between, so they all resume and overwrite the SHARED tmp
+        # mid-write together -> a torn/mixed record. The barrier can only be
+        # satisfied when N writers are inside write() at once, which the lock
+        # forbids: under the lock exactly one writer is ever in the critical
+        # section, the barrier times out (BrokenBarrierError), and that writer
+        # finishes a clean atomic write. We also widen read() so all writers read
+        # stale state and reach the tmp write together.
+        self._slow_read_patch(monkeypatch, delay=0.03)
+        original_write_text = Path.write_text
+        tear_barrier = threading.Barrier(n, timeout=0.5)
+
+        def torn_write_text(self: Path, data: str, *args: object, **kwargs: object) -> int:
+            if str(self).endswith(".json.tmp"):
+                mid = len(data) // 2
+                with open(self, "w", encoding="utf-8") as f:
+                    f.write(data[:mid])
+                    f.flush()
+                    try:
+                        tear_barrier.wait()  # all N writers gather (no-lock only)
+                    except threading.BrokenBarrierError:
+                        pass  # lock serialized us -> finish cleanly
+                    f.write(data[mid:])
+                return len(data)
+            return original_write_text(self, data, *args, **kwargs)  # type: ignore[arg-type]
+
+        # Tolerate the incidental shared-tmp collision so the TORN/MIXED record
+        # (not an unrelated FileNotFoundError crash) is what the assertions catch.
+        original_replace = os.replace
+
+        def tolerant_replace(src: object, dst: object) -> None:
+            try:
+                original_replace(src, dst)  # type: ignore[arg-type]
+            except FileNotFoundError:
+                pass
+
+        monkeypatch.setattr(Path, "write_text", torn_write_text)
+        monkeypatch.setattr(os, "replace", tolerant_replace)
+        start = threading.Barrier(n)
+
+        def worker(v: int) -> None:
+            start.wait()
+            store.update_collection(
+                "col",
+                CollectionProgress(
+                    status=IndexingStatus.DONE,
+                    total_files=v,
+                    processed_files=v,
+                    error_count=v,
+                ),
+            )
+
+        threads = [threading.Thread(target=worker, args=(v,)) for v in range(1, n + 1)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+            assert not t.is_alive()
+
+        # (a) file is valid JSON — not torn by interleaved writes
+        raw = json.loads(store._state_file.read_text())
+        result = store.read()
+        assert result is not None
+        assert list(result.collections.keys()) == ["col"]
+        # (b) surviving record is internally consistent: all three fields equal the
+        # SAME writer's id (1..n), never a mix like total=3 / error_count=7.
+        col = result.collections["col"]
+        fields = {col.total_files, col.processed_files, col.error_count}
+        assert len(fields) == 1, f"mixed record: {fields}"
+        assert col.total_files in range(1, n + 1)
+        raw_col = raw["collections"]["col"]
+        raw_fields = {raw_col["total_files"], raw_col["processed_files"], raw_col["error_count"]}
+        assert len(raw_fields) == 1, f"mixed record on disk: {raw_fields}"
+
+    def test_remove_collection_early_return_is_locked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The guarded invariant is the lost-update window of remove_collection's
+        # read-modify-write -- NOT merely the incidental shared-.json.tmp crash.
+        # We race remove("k") against an update of a DIFFERENT key "m" (plus a
+        # pre-seeded "survivor"). Under the lock the two RMW cycles serialize, so
+        # BOTH effects land: "k" is gone AND "m" is present. Without the lock one
+        # writer reads the other's stale snapshot and clobbers it on write, so
+        # EITHER "k" is revived (the remove is lost) OR "m" is dropped (the update
+        # is lost) -- either way the invariant below fails, and it fails on the
+        # lost update itself even if the tmp path were ever made per-call-unique
+        # (no crash). We assert no ordering: both effects must hold regardless of
+        # which writer serialized first.
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(
+                collections={
+                    "k": CollectionProgress(status=IndexingStatus.DONE),
+                    "survivor": CollectionProgress(status=IndexingStatus.DONE),
+                }
+            )
+        )
+        self._slow_read_patch(monkeypatch)
+        start = threading.Barrier(2)
+
+        def remover() -> None:
+            start.wait()
+            store.remove_collection("k")
+
+        def updater() -> None:
+            start.wait()
+            store.update_collection("m", CollectionProgress(status=IndexingStatus.PENDING))
+
+        threads = [threading.Thread(target=remover), threading.Thread(target=updater)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+            assert not t.is_alive()
+
+        raw = json.loads(store._state_file.read_text())  # valid JSON, no corruption
+        result = store.read()
+        assert result is not None
+        # No update is lost: the remove ("k" absent) AND the unrelated update
+        # ("m" present) both survive, and the pre-seeded "survivor" is untouched.
+        assert "k" not in result.collections
+        assert "m" in result.collections
+        assert "survivor" in result.collections
+        assert "k" not in raw["collections"]
+        assert "m" in raw["collections"]
+        assert "survivor" in raw["collections"]
+
+    def test_exception_under_lock_releases_lock(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+
+        def boom(_state: IndexingState) -> None:
+            raise OSError("disk full")
+
+        with patch.object(store, "write", side_effect=boom):
+            with pytest.raises(OSError, match="disk full"):
+                store.update_collection("col", CollectionProgress(status=IndexingStatus.DONE))
+
+        # Lock must have been released by the `with` context manager.
+        done = threading.Event()
+
+        def call_set_trigger() -> None:
+            store.set_trigger("x")
+            done.set()
+
+        t = threading.Thread(target=call_set_trigger)
+        t.start()
+        t.join(timeout=1)
+        assert not t.is_alive()
+        assert done.is_set()
+        result = store.read()
+        assert result is not None
+        assert result.trigger == "x"
+
+    def test_write_is_locked_independently(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # write() must hold the lock for its whole body, so two concurrent
+        # write() calls serialize: the second cannot start os.replace until the
+        # first returns. To make the serialized ordering a genuine consequence of
+        # the lock (and not scheduling luck), we coordinate with Events so writer 1
+        # does NOT finish its os.replace until writer 2 has definitely entered
+        # write() and is queued on the lock. (No barrier INSIDE the critical
+        # section — that would deadlock against a correct lock.)
+        store = IndexingStateStore(tmp_path)
+        order: list[str] = []
+        order_lock = threading.Lock()
+        original_replace = os.replace
+        w1_in_replace = threading.Event()
+        w2_entered_write = threading.Event()
+
+        def wrapped_replace(src: object, dst: object) -> None:
+            with order_lock:
+                order.append("enter")
+            # Only writer 1 reaches here first: it started first and holds the
+            # lock, so writer 2 is still blocked acquiring it. Hold the replace
+            # open until writer 2 has entered write() and queued on the lock,
+            # proving the resulting order is forced by the lock, not by timing.
+            if not w1_in_replace.is_set():
+                w1_in_replace.set()
+                w2_entered_write.wait(timeout=5)
+                time.sleep(0.02)  # let writer 2 actually block on the lock
+            original_replace(src, dst)
+            with order_lock:
+                order.append("exit")
+
+        monkeypatch.setattr(os, "replace", wrapped_replace)
+
+        def writer1() -> None:
+            store.write(
+                IndexingState(
+                    collections={"col": CollectionProgress(status=IndexingStatus.DONE, total_files=1)}
+                )
+            )
+
+        def writer2() -> None:
+            w1_in_replace.wait(timeout=5)  # writer 1 is inside its critical section first
+            w2_entered_write.set()
+            store.write(
+                IndexingState(
+                    collections={"col": CollectionProgress(status=IndexingStatus.DONE, total_files=2)}
+                )
+            )
+
+        threads = [threading.Thread(target=writer1), threading.Thread(target=writer2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+            assert not t.is_alive()
+
+        # Serialized: each enter is followed by its own exit before the next enter.
+        assert order == ["enter", "exit", "enter", "exit"]
+        raw = json.loads(store._state_file.read_text())
+        assert raw["collections"]["col"]["total_files"] in (1, 2)
+
+    def test_set_trigger_under_concurrent_update_collection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The guarded invariant is the lost-update window between set_trigger and
+        # update_collection -- NOT merely the incidental shared-.json.tmp crash.
+        # set_trigger writes the `trigger` field; update_collection writes the
+        # `collections` dict. Both read-modify-write the same state, so under the
+        # lock both fields survive. Without the lock one writer reads the other's
+        # stale snapshot and clobbers its field on write: the most common
+        # observable loss is `trigger` reverting to None (the updater wrote a
+        # snapshot read before set_trigger ran). We pre-seed a distinct "survivor"
+        # key so the assertion also proves no unrelated state is lost. This fails
+        # on the lost update itself, independent of any tmp-collision crash.
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(
+                collections={"survivor": CollectionProgress(status=IndexingStatus.DONE)}
+            )
+        )
+        self._slow_read_patch(monkeypatch)
+        start = threading.Barrier(2)
+
+        def trigger_worker() -> None:
+            start.wait()
+            store.set_trigger("t")
+
+        def update_worker() -> None:
+            start.wait()
+            store.update_collection("col", CollectionProgress(status=IndexingStatus.DONE))
+
+        threads = [threading.Thread(target=trigger_worker), threading.Thread(target=update_worker)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+            assert not t.is_alive()
+
+        result = store.read()
+        assert result is not None
+        # No update is lost: the trigger set by one writer AND the collection
+        # added by the other BOTH survive, and the pre-seeded survivor remains.
+        assert result.trigger == "t"
+        assert "col" in result.collections
+        assert "survivor" in result.collections
+
+    def test_rlock_reentry_does_not_deadlock(self, tmp_path: Path) -> None:
+        # update_collection acquires the lock and then calls write(), which
+        # re-acquires it — RLock re-entry must not deadlock. This is only the
+        # interesting scenario while write() itself re-acquires the lock; a valid
+        # future refactor that splits out an unlocked `_write_unlocked` helper for
+        # composites would make re-entry impossible by construction, so skip
+        # rather than fail in that case.
+        if hasattr(IndexingStateStore, "_write_unlocked"):
+            pytest.skip("write() refactored to a lock-free helper; RLock re-entry no longer occurs")
+        store = IndexingStateStore(tmp_path)
+
+        def worker() -> None:
+            store.update_collection("col", CollectionProgress(status=IndexingStatus.DONE))
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        t.join(timeout=2)
+        assert not t.is_alive()
+        result = store.read()
+        assert result is not None
+        assert "col" in result.collections
+
+    def test_read_does_not_acquire_lock(self, tmp_path: Path) -> None:
+        # read() is lock-free: even while a writer holds the lock for a long time,
+        # concurrent read() calls return without blocking.
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(collections={"col": CollectionProgress(status=IndexingStatus.DONE)})
+        )
+        writer_holding = threading.Event()
+        release_writer = threading.Event()
+        original_write = IndexingStateStore.write
+
+        def slow_write(self: IndexingStateStore, state: IndexingState) -> None:
+            writer_holding.set()
+            release_writer.wait(timeout=5)
+            original_write(self, state)
+
+        writer = threading.Thread(
+            target=lambda: store.update_collection(
+                "blocker", CollectionProgress(status=IndexingStatus.PENDING)
+            )
+        )
+        with patch.object(IndexingStateStore, "write", slow_write):
+            writer.start()
+            assert writer_holding.wait(timeout=5)  # writer now holds the lock
+
+            barrier = threading.Barrier(2)
+            results: list[IndexingState | None] = []
+            results_lock = threading.Lock()
+
+            def reader() -> None:
+                barrier.wait()
+                res = store.read()
+                with results_lock:
+                    results.append(res)
+
+            readers = [threading.Thread(target=reader) for _ in range(2)]
+            for t in readers:
+                t.start()
+            for t in readers:
+                t.join(timeout=2)
+                assert not t.is_alive()  # readers did NOT block on the held lock
+
+            release_writer.set()
+
+        writer.join(timeout=5)
+        assert not writer.is_alive()
+
+        assert len(results) == 2
+        assert all(r is not None for r in results)
