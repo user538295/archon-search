@@ -318,7 +318,7 @@ router = MultiCollectionRouter(
   - Checkpoint: `uv run pytest tests/test_router.py -v -k "cached_metadata or run_router_for_query"`
 
 #### Task 2.3 — FastAPI per-request router lifecycle regression guard
-- [ ] **File**: `tests/test_routes_route.py`
+- [x] **File**: `tests/test_routes_route.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - Add two regression guard tests to `tests/test_routes_route.py`:

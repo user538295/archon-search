@@ -428,3 +428,58 @@ def test_route_no_pinned_for_namespace(tmp_path: Path) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["pinned_names"] == []
+
+
+# ---------------------------------------------------------------------------
+# 14. Per-request router lifecycle regression guards (CON-2 / Task 2.3)
+# ---------------------------------------------------------------------------
+def test_build_router_called_once_per_request(tmp_path: Path) -> None:
+    """`_build_router` must run exactly once per /route request — not be cached.
+
+    RATIONALE: a single-request check (call_count == 1) would still pass if a
+    future refactor cached the router on the FIRST request and reused it on
+    later ones. Only the TWO-request `== 2` assertion detects that the router is
+    genuinely rebuilt per request rather than stashed and reused.
+    """
+    router_mock = _patch_router(
+        pre_context=None,
+        routable_names=[],
+        decomposer_invoked=False,
+    )
+    with patch(
+        "archon_search.server.routes_route._build_router", return_value=router_mock
+    ) as spy:
+        client = _make_client(tmp_path)
+        first = client.post("/route", json={"query": "first query"})
+        second = client.post("/route", json={"query": "second query"})
+
+    # Both requests reached _build_router (handler ran to completion, no
+    # validation short-circuit) — so call_count reflects real per-request builds.
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert spy.call_count == 2
+
+
+def test_app_state_has_no_router_attribute(tmp_path: Path) -> None:
+    """No router is ever stashed on app.state.
+
+    RATIONALE: the id()-inequality form alone is insufficient — together with
+    `test_build_router_called_once_per_request` (call_count == 2), these pin the
+    per-request lifecycle so a future refactor that caches the router on
+    app.state and skips per-request `_build_router` is caught.
+    """
+    router_mock = _patch_router(
+        pre_context=None,
+        routable_names=[],
+        decomposer_invoked=False,
+    )
+    with patch(
+        "archon_search.server.routes_route._build_router", return_value=router_mock
+    ):
+        client = _make_client(tmp_path)
+        response = client.post("/route", json={"query": "anything"})
+
+    assert response.status_code == 200
+    app = client.app
+    assert not hasattr(app.state, "router")
+    assert not hasattr(app.state, "multi_collection_router")
