@@ -141,7 +141,6 @@ import asyncio as _asyncio
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="_path_unsafe_message helper pending in next commit")
 def test_mcp_path_unsafe_message_maps_all_reasons() -> None:
     """_path_unsafe_message returns non-empty string for all 5 reason codes."""
     from archon_search.server.mcp import _path_unsafe_message
@@ -155,7 +154,6 @@ def test_mcp_path_unsafe_message_maps_all_reasons() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="ingest_file path wiring pending in next commit")
 def test_mcp_ingest_file_rejects_dotdot() -> None:
     """MCP ingest_file rejects dotdot path with code='path_unsafe'."""
     pipeline = _MagicMock()
@@ -165,17 +163,16 @@ def test_mcp_ingest_file_rejects_dotdot() -> None:
     assert "contains_dotdot" in result.get("error", "").lower() or "dotdot" in result.get("error", "").lower() or ".." in result.get("error", "")
 
 
-@pytest.mark.xfail(strict=True, reason="ingest_file path wiring pending in next commit")
 def test_mcp_ingest_file_rejects_relative() -> None:
     """MCP ingest_file rejects relative path with code='path_unsafe'."""
     pipeline = _MagicMock()
     app = _build_mcp_ingest_app(pipeline)
     result = _asyncio.run(app.tools["ingest_file"](path="./foo"))
     assert result.get("code") == "path_unsafe"
-    assert "not_absolute" in result.get("error", "")
+    # The message contains "not absolute" or "not_absolute" (LLM-readable phrase)
+    assert "absolute" in result.get("error", "").lower()
 
 
-@pytest.mark.xfail(strict=True, reason="ingest_file path wiring pending in next commit")
 def test_mcp_ingest_file_rejects_empty() -> None:
     """MCP ingest_file rejects empty path with code='path_unsafe'."""
     pipeline = _MagicMock()
@@ -185,7 +182,6 @@ def test_mcp_ingest_file_rejects_empty() -> None:
     assert "empty" in result.get("error", "")
 
 
-@pytest.mark.xfail(strict=True, reason="ingest_file path wiring pending in next commit")
 def test_mcp_ingest_file_rejects_whitespace_only() -> None:
     """MCP ingest_file rejects whitespace-only path with code='path_unsafe'."""
     pipeline = _MagicMock()
@@ -195,7 +191,6 @@ def test_mcp_ingest_file_rejects_whitespace_only() -> None:
     assert "whitespace" in result.get("error", "").lower()
 
 
-@pytest.mark.xfail(strict=True, reason="ingest_file path wiring pending in next commit")
 def test_mcp_ingest_file_rejects_nul_byte() -> None:
     """MCP ingest_file rejects NUL byte path with code='path_unsafe'."""
     pipeline = _MagicMock()
@@ -205,7 +200,6 @@ def test_mcp_ingest_file_rejects_nul_byte() -> None:
     assert "nul" in result.get("error", "").lower()
 
 
-@pytest.mark.xfail(strict=True, reason="ingest_file path wiring pending in next commit")
 def test_mcp_ingest_file_uses_validator_returned_path() -> None:
     """ingest_file passes the validator's Path directly to pipeline.ingest_file."""
     from pathlib import Path as _Path
@@ -265,7 +259,6 @@ def test_mcp_ingest_file_accepts_legitimate_absolute_path() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="ingest_directory path wiring pending in next commit")
 def test_mcp_ingest_directory_rejects_dotdot() -> None:
     """MCP ingest_directory rejects dotdot path with code='path_unsafe'."""
     pipeline = _MagicMock()
@@ -274,7 +267,6 @@ def test_mcp_ingest_directory_rejects_dotdot() -> None:
     assert result.get("code") == "path_unsafe"
 
 
-@pytest.mark.xfail(strict=True, reason="ingest_directory path wiring pending in next commit")
 def test_mcp_ingest_directory_reuses_path_unsafe_message() -> None:
     """ingest_directory uses _path_unsafe_message (not a hardcoded copy)."""
     from archon_search.server.mcp import _path_unsafe_message
@@ -285,7 +277,6 @@ def test_mcp_ingest_directory_reuses_path_unsafe_message() -> None:
     assert result.get("error") == expected_msg
 
 
-@pytest.mark.xfail(strict=True, reason="ingest_directory path wiring pending in next commit")
 def test_mcp_ingest_directory_uses_validator_returned_path() -> None:
     """ingest_directory passes the validator's Path directly to pipeline.ingest_directory."""
     from pathlib import Path as _Path
