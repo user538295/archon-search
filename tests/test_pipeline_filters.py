@@ -102,16 +102,31 @@ async def test_pipeline_no_filter_passes_none_to_store() -> None:
 async def test_pipeline_warns_on_filter_plus_acl_under_delivery(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """When filters reduce pool below top_k_return, pipeline emits a WARNING."""
-    # Return only 2 results (below top_k_return=5) after ACL filter
-    results = [_make_result(i) for i in range(2)]
+    """When ACL reduces a pool that started >= top_k_return to below it, pipeline emits WARNING."""
+    # Return 6 results (>= top_k_return=5) from store.  Of these, 5 are ACL-protected to
+    # namespace "restricted" — so searching from namespace "default" drops them, leaving 1.
+    from archon_search._types import SearchResult
+
+    def _make_protected(n: int) -> SearchResult:
+        r = _make_result(n)
+        return SearchResult(
+            doc_id=r.doc_id,
+            chunk_id=r.chunk_id,
+            text=r.text,
+            score=r.score,
+            source_path=r.source_path,
+            acl=["restricted"],  # only "restricted" namespace may access
+        )
+
+    results = [_make_result(0)] + [_make_protected(i) for i in range(1, 6)]
     pipeline, _ = _make_pipeline_with_mock_store(results=results)
     f = SearchFilters(file_type="md")
 
     with caplog.at_level(logging.WARNING, logger="archon"):
-        await pipeline.search("hello", "my-col", filters=f)
+        # namespace="default" is not in acl=["restricted"], so 5 chunks are dropped
+        await pipeline.search("hello", "my-col", filters=f, namespace="default")
 
-    assert any("reduced candidate pool" in r.message for r in caplog.records)
+    assert any("combined attrition" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio

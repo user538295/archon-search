@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
 from archon_search.filters import SearchFilters
-from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
+from archon_search.telemetry.entry import ErrorKind, FilterFlags, TelemetryEntry
 
 logger = logging.getLogger("archon.search")
 
@@ -126,4 +126,16 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         )
     except Exception as exc:
         logger.warning("search failed for collection %r: %s", body.collection, exc, exc_info=True)
+        if writer is not None:
+            try:
+                writer.enqueue(
+                    TelemetryEntry.from_error(
+                        endpoint="search",
+                        status="internal_error",
+                        error_kind=ErrorKind.other,
+                        latency_ms=(monotonic() - start) * 1000.0,
+                    )
+                )
+            except Exception:
+                logger.warning("telemetry: search error entry enqueue failed", exc_info=True)
         return SearchResponse(results=[], acl_filtered=False)

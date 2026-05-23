@@ -336,12 +336,12 @@ class SearchPipeline:
         candidates = await self.store.hybrid_search(
             collection, vector, query, top_k=self._top_k_retrieve, filters=filters
         )
+        pre_acl_count = len(candidates)
         candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, namespace)
-        if filters is not None and len(candidates) < self._top_k_return:
+        if filters is not None and pre_acl_count >= self._top_k_return and len(candidates) < self._top_k_return:
             logger.warning(
-                "search: filter+ACL reduced candidate pool to %d (top_k_return=%d) "
-                "for collection %r",
-                len(candidates), self._top_k_return, collection,
+                "filter+ACL combined attrition: only %d/%d candidates reached reranker",
+                len(candidates), self._top_k_return,
             )
         results = await self._reranker.rerank(query, candidates, top_k=self._top_k_return)
         return SearchPipelineResult(results=results, acl_filtered=acl_filtered)
