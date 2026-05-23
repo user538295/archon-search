@@ -172,3 +172,29 @@ async def test_mcp_explain_collectionless_no_collections_returns_not_found() -> 
         result = await explain_fn(query="hello")
 
     assert result.get("code") == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_top_k_below_1_returns_validation_error() -> None:
+    pipeline = _make_pipeline()
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default")  # type: ignore[call-arg]
+        explain_fn = app.tools["explain"]  # type: ignore[attr-defined]
+        result = await explain_fn(query="hello", collection="my-col", top_k=0)
+
+    assert result.get("code") == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_top_k_above_100_returns_validation_error() -> None:
+    pipeline = _make_pipeline()
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default")  # type: ignore[call-arg]
+        explain_fn = app.tools["explain"]  # type: ignore[attr-defined]
+        result = await explain_fn(query="hello", collection="my-col", top_k=101)
+
+    assert result.get("code") == "validation_error"

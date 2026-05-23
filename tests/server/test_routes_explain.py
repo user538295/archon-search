@@ -183,6 +183,28 @@ def test_post_explain_store_failure_returns_500(tmp_path: Path) -> None:
     assert response.status_code == 500
 
 
+def test_post_explain_error_path_emits_error_telemetry(tmp_path: Path) -> None:
+    """Error paths must call writer.enqueue with a from_error entry (not abort the response)."""
+    from archon_search.telemetry.entry import TelemetryEntry
+    from archon_search.telemetry.writer import TelemetryWriter
+
+    enqueued: list[TelemetryEntry] = []
+    writer = MagicMock(spec=TelemetryWriter)
+    writer.enqueue.side_effect = lambda entry: enqueued.append(entry)
+
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(explain_raises=RuntimeError("pipeline fail"))
+    app.state.telemetry_writer = writer
+
+    response = client.post("/explain", json={"query": "error test", "collection": "my-col"})
+
+    assert response.status_code == 500
+    assert len(enqueued) == 1
+    entry = enqueued[0]
+    assert entry.status != "ok"
+    assert entry.endpoint == "explain"
+
+
 def test_post_explain_reranker_failure_returns_500(tmp_path: Path) -> None:
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(
