@@ -267,7 +267,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/server/test_routes_collections.py -v -k "path_safety or unauth_takes or openapi_lists or legitimate_absolute"`
 
 #### Task 1.3 — Wire validator into `POST /jobs/ingest`
-- [ ] **File**: `archon_search/server/routes_jobs.py`
+- [x] **File**: `archon_search/server/routes_jobs.py`
 - **Depends on**: Task 1.1
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: append the integration tests below to `tests/server/test_routes_jobs.py`; mark them `@pytest.mark.xfail(strict=True, reason="wiring pending")` if CI must stay green at this commit.

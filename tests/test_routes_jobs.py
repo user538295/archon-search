@@ -433,6 +433,22 @@ def test_ingest_rejects_nul_byte_path(client: TestClient) -> None:
     assert "nul_byte" in response.json()["detail"]
 
 
+def test_ingest_rejects_empty_string_path(client: TestClient) -> None:
+    """POST /ingest with path: "" (distinct from null) reaches the validator -> 400 'empty'."""
+    response = client.post("/ingest", json={"collection": "c", "path": ""})
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail.startswith("path is unsafe:")
+    assert "empty" in detail
+
+
+def test_ingest_rejects_relative_path(client: TestClient) -> None:
+    """POST /ingest with a non-absolute path returns 400 with 'not_absolute' in detail."""
+    response = client.post("/ingest", json={"collection": "c", "path": "relative/path.md"})
+    assert response.status_code == 400
+    assert "not_absolute" in response.json()["detail"]
+
+
 def test_ingest_accepts_null_path(client: TestClient) -> None:
     """POST /ingest with path: null is accepted — documents-only ingest keeps working."""
     response = client.post("/ingest", json={"collection": "c", "path": None})
