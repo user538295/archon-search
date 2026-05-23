@@ -1235,3 +1235,135 @@ def test_add_collection_rollback_save_failure(
         response = c.post("/collections/", json={"path": str(src)})
 
     assert response.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# A5a — Path safety tests for POST /collections/ (bare FastAPI pattern)
+# ---------------------------------------------------------------------------
+# These tests use a bare FastAPI app (no create_app, no chonkie tokenizer)
+# following the pattern from test_routes_search_telemetry.py.
+
+
+def _make_collections_app(
+    *,
+    auth_key: str | None = None,
+) -> "FastAPI":  # type: ignore[name-defined]
+    """Create a minimal FastAPI app with only the collections router."""
+    import os as _os
+    from fastapi import FastAPI, Request
+    from archon_search.server.routes_collections import router
+    from archon_search.config import SearchConfig as _SC
+    from archon_search.jobs.store import JobStore as _JS
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    key = auth_key or _os.environ.get("ARCHON_SEARCH_API_KEY", "0" * 64)
+
+    app = FastAPI()
+    # Minimal state
+    app.state.config = _SC()
+    _tmp_store = _JS.__new__(_JS)
+    _tmp_store._jobs = {}
+    _tmp_store._path = None
+    app.state.job_store = _tmp_store
+
+    mock_search = MagicMock()
+    mock_search.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_search.update_collection_meta = AsyncMock()
+    app.state.search_store = mock_search
+    app.state._background_tasks = set()
+    app.state.ingest_pipeline = None
+
+    # Inject auth + namespace middleware
+    from archon_search.server.middleware_auth import APIKeyMiddleware
+    app.add_middleware(APIKeyMiddleware, api_key=key, namespaces={})
+
+    @app.middleware("http")
+    async def _inject_namespace(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.namespace = DEFAULT_NAMESPACE
+        return await call_next(request)
+
+    app.include_router(router)
+    return app
+
+
+import pytest
+
+from fastapi import FastAPI
+
+
+def _collections_client(app: "FastAPI") -> "TestClient":  # type: ignore[name-defined]
+    import os as _os
+    key = _os.environ.get("ARCHON_SEARCH_API_KEY", "0" * 64)
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+
+@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
+def test_add_collection_rejects_dotdot_path() -> None:
+    """POST /collections/ with a dotdot path returns 400 with 'path is unsafe:' detail."""
+    app = _make_collections_app()
+    c = _collections_client(app)
+    response = c.post("/collections/", json={"path": "/foo/../bar"})
+    assert response.status_code == 400
+    assert response.json()["detail"].startswith("path is unsafe:")
+
+
+@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
+def test_add_collection_rejects_relative_path() -> None:
+    """POST /collections/ with a relative path returns 400."""
+    app = _make_collections_app()
+    c = _collections_client(app)
+    response = c.post("/collections/", json={"path": "./foo"})
+    assert response.status_code == 400
+    assert "path is unsafe:" in response.json()["detail"]
+
+
+@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
+def test_add_collection_rejects_empty_path() -> None:
+    """POST /collections/ with empty path returns 400 with 'empty' in detail."""
+    app = _make_collections_app()
+    c = _collections_client(app)
+    response = c.post("/collections/", json={"path": ""})
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "path is unsafe:" in detail
+    assert "empty" in detail
+
+
+@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
+def test_add_collection_uses_validator_returned_path() -> None:
+    """Handler uses the Path returned by validate_ingest_path (not re-resolving body.path)."""
+    from pathlib import Path as _Path
+    app = _make_collections_app()
+    c = _collections_client(app)
+
+    sentinel = _Path("/sentinel/value")
+    with patch("archon_search.server.routes_collections.validate_ingest_path", return_value=sentinel):
+        with patch("archon_search.server.routes_collections.asyncio.create_task",
+                   side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+            response = c.post("/collections/", json={"path": "/some/valid/path"})
+
+    # Should succeed (409 is fine if duplicate, but NOT 400/422)
+    assert response.status_code in (202, 409)
+    # The config should contain the sentinel path (str form)
+    config = app.state.config
+    assert str(sentinel) in config.collections or response.status_code == 409
+
+
+def test_add_collection_unauth_takes_precedence() -> None:
+    """Unsafe path WITHOUT auth headers → 401 (auth fires before path validation)."""
+    app = _make_collections_app()
+    c_no_auth = TestClient(app)
+    response = c_no_auth.post("/collections/", json={"path": ".."})
+    assert response.status_code == 401
+
+
+@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
+def test_add_collection_openapi_lists_400_response() -> None:
+    """GET /openapi.json shows 400 under /collections/ POST responses."""
+    app = _make_collections_app()
+    c = _collections_client(app)
+    response = c.get("/openapi.json")
+    assert response.status_code == 200
+    spec = response.json()
+    post_responses = spec["paths"]["/collections/"]["post"]["responses"]
+    assert "400" in post_responses
