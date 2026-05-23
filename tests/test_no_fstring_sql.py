@@ -57,3 +57,31 @@ def test_guard_ignores_helper_internals() -> None:
         assert p.search(content) is None, (
             f"Pattern {p.pattern!r} falsely matched helper internals: {content!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Real guard — reads store.py and asserts zero violations
+# ---------------------------------------------------------------------------
+
+
+def test_no_fstring_sql_in_store() -> None:
+    """store.py must contain zero f-string-wrapped .where/.delete/.count_rows calls.
+
+    On failure the assertion message names the matching line numbers so a
+    contributor sees exactly where the violation is.
+    """
+    store_path = Path(__file__).parent.parent / "archon_search" / "store.py"
+    source = store_path.read_text(encoding="utf-8")
+    lines = source.splitlines()
+
+    violations: list[str] = []
+    for pat in _PATTERNS:
+        for lineno, line in enumerate(lines, start=1):
+            if pat.search(line):
+                violations.append(f"  line {lineno}: {line.strip()}")
+
+    assert not violations, (
+        "F-string SQL violations found in archon_search/store.py:\n"
+        + "\n".join(violations)
+        + "\nReplace with _where_eq / _where_in helpers."
+    )
