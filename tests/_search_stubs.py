@@ -79,4 +79,25 @@ def install_stubs() -> None:
     if "onnxruntime" not in sys.modules:
         sys.modules["onnxruntime"] = types.ModuleType("onnxruntime")
 
+    # chonkie.RecursiveChunker hardcodes tokenizer="gpt2", which requires a
+    # HuggingFace download. In offline environments that load fails (and would
+    # break every test that builds a chunker, pipeline, or the FastAPI app).
+    # Wrap __init__ to fall back to the always-available "character" tokenizer
+    # ONLY when the requested tokenizer cannot be loaded — so when network IS
+    # available (CI) the real tokenizer is used unchanged and nothing is masked.
+    try:
+        import chonkie as _chonkie_top  # noqa: PLC0415
+
+        _orig_chunker_init = _chonkie_top.RecursiveChunker.__init__
+
+        def _patched_chunker_init(self, tokenizer="character", chunk_size=512, **kwargs):  # type: ignore[override]
+            try:
+                return _orig_chunker_init(self, tokenizer=tokenizer, chunk_size=chunk_size, **kwargs)
+            except Exception:
+                return _orig_chunker_init(self, tokenizer="character", chunk_size=chunk_size, **kwargs)
+
+        _chonkie_top.RecursiveChunker.__init__ = _patched_chunker_init  # type: ignore[method-assign]
+    except Exception:
+        pass  # chonkie not installed — silently skip
+
     _STUBS_INSTALLED = True

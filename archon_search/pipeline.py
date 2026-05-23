@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestedBy, IngestResult, SearchResult
 from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.constants import DEFAULT_NAMESPACE
@@ -29,6 +30,13 @@ logger = logging.getLogger("archon")
 @dataclass
 class SearchPipelineResult:
     results: list[SearchResult]
+    acl_filtered: bool
+
+
+@dataclass
+class ExplainPipelineResult:
+    top_results: list[ScoredSearchCandidate]
+    near_misses: list[ScoredSearchCandidate]
     acl_filtered: bool
 
 
@@ -322,6 +330,50 @@ class SearchPipeline:
         candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, namespace)
         results = await self._reranker.rerank(query, candidates, top_k=self._top_k_return)
         return SearchPipelineResult(results=results, acl_filtered=acl_filtered)
+
+    async def explain(
+        self,
+        query: str,
+        collection: str,
+        *,
+        top_k: int = 5,
+        rerank: bool = True,
+        namespace: str = DEFAULT_NAMESPACE,
+        query_vector: list[float] | None = None,
+    ) -> ExplainPipelineResult:
+        """Fetch an amplified pool (``max(top_k_retrieve*3, 20)`` candidates) and, when
+        ``rerank=True``, rerank the entire ACL-filtered pool so near-misses carry real
+        reranker scores.  Top-k equality with ``search`` holds only when corpus ≤
+        ``top_k_retrieve`` (identical pools) and all reranker scores are distinct.
+        """
+        vector = query_vector if query_vector is not None else await self._embedder.embed_one(query)
+
+        candidate_depth = max(self._top_k_retrieve * 3, 20)
+        candidates = await self.store.hybrid_search_with_trace(
+            collection, vector, query, candidate_depth=candidate_depth
+        )
+
+        candidates, acl_filtered = apply_acl_filter(candidates, lambda c: c.acl, namespace)
+
+        if rerank:
+            candidates = await self._reranker._rerank_with_trace(
+                query, candidates, top_k=len(candidates)
+            )
+
+        def _final_score(c: ScoredSearchCandidate) -> float:
+            rs = c.score_breakdown.reranker_score
+            return rs if rs is not None else c.score_breakdown.rrf_score
+
+        candidates.sort(key=lambda c: (-_final_score(c), c.doc_id, c.chunk_id))
+
+        top_results = candidates[:top_k]
+        near_misses = candidates[top_k : top_k + 20]
+
+        return ExplainPipelineResult(
+            top_results=top_results,
+            near_misses=near_misses,
+            acl_filtered=acl_filtered,
+        )
 
     async def search_with_context(
         self, query: str, collection: str, context_window: int = 1, namespace: str = DEFAULT_NAMESPACE
