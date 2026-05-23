@@ -387,3 +387,28 @@ def test_post_explain_acl_filtered_flag_true(tmp_path: Path) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["acl_filtered"] is True
+
+
+# ---------------------------------------------------------------------------
+# AC8: Collectionless + all collections in wrong namespace → 404
+# ---------------------------------------------------------------------------
+
+
+def test_post_explain_collectionless_all_acl_filtered_returns_404(tmp_path: Path) -> None:
+    """When all available collections belong to a different namespace, return 404."""
+    app, client = _make_app(tmp_path)
+    # All collections are in "other-ns", not the caller's "default" namespace
+    other_meta = CollectionMeta(name="col-other", namespace="other-ns")
+    app.state.pipeline = _make_pipeline_mock(
+        all_meta_return=[other_meta],
+        explain_return=ExplainPipelineResult(
+            top_results=[_make_candidate()],
+            near_misses=[],
+            acl_filtered=False,
+        ),
+    )
+
+    response = client.post("/explain", json={"query": "test query"})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "no collections available"

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+from archon_search._types import SearchResult
 from archon_search.pipeline import ExplainPipelineResult, SearchPipeline
 
 
@@ -203,3 +204,62 @@ async def test_explain_identical_scores_tie_break_by_doc_chunk_id() -> None:
 
     doc_ids = [c.doc_id for c in result.top_results]
     assert doc_ids == ["a" * 64, "b" * 64, "c" * 64]
+
+
+@pytest.mark.asyncio
+async def test_explain_top_k_matches_search_when_rerank_true_and_top_k_equals_top_k_return() -> None:
+    """AC3: When top_k == _top_k_return and rerank=True, explain top_results ordering
+    must match search results ordering (same (doc_id, chunk_id) sequence)."""
+    ids = ["a" * 64, "b" * 64, "c" * 64]
+    reranker_scores = [0.9, 0.7, 0.5]
+
+    # ScoredSearchCandidate list for explain path
+    trace_candidates = [
+        _make_candidate(doc_id=doc_id, chunk_id_suffix="000000", rrf_score=0.1, reranker_score=score)
+        for doc_id, score in zip(ids, reranker_scores)
+    ]
+
+    # SearchResult list for search path — same order
+    search_results = [
+        SearchResult(
+            doc_id=doc_id,
+            chunk_id=f"{doc_id}-000000",
+            text="text",
+            score=score,
+            source_path="/path/doc.md",
+        )
+        for doc_id, score in zip(ids, reranker_scores)
+    ]
+
+    store = MagicMock()
+    store.hybrid_search_with_trace = AsyncMock(return_value=trace_candidates)
+    store.hybrid_search = AsyncMock(return_value=search_results)
+
+    embedder = MagicMock()
+    embedder.embed_one = AsyncMock(return_value=[1.0, 0.0])
+    embedder.model_name = "test-model"
+
+    reranker = MagicMock()
+    # _rerank_with_trace returns full list with reranker scores already set (explain path)
+    reranker._rerank_with_trace = AsyncMock(return_value=trace_candidates)
+    # rerank returns SearchResults in same order (search path)
+    reranker.rerank = AsyncMock(return_value=search_results[:3])
+
+    top_k_return = 3
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=embedder,
+        reranker=reranker,
+        chunker=MagicMock(),
+        parser=MagicMock(),
+        top_k_retrieve=5,
+        top_k_return=top_k_return,
+    )
+
+    explain_result = await pipeline.explain("query", "col", top_k=top_k_return, rerank=True)
+    search_result = await pipeline.search("query", "col")
+
+    explain_pairs = [(c.doc_id, c.chunk_id) for c in explain_result.top_results]
+    search_pairs = [(r.doc_id, r.chunk_id) for r in search_result.results]
+
+    assert explain_pairs == search_pairs
