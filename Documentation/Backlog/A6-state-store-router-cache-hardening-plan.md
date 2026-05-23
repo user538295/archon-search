@@ -304,7 +304,7 @@ router = MultiCollectionRouter(
   - Checkpoint: `uv run pytest tests/test_router.py -v -k "invalidate or initial_metadata"`
 
 #### Task 2.2 — Replace `eval/runner.py` direct `_cached_metadata` assignment with constructor injection
-- [ ] **File**: `archon_search/eval/runner.py`
+- [x] **File**: `archon_search/eval/runner.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - At `runner.py:508`, remove `router._cached_metadata = list(collection_metas)`.

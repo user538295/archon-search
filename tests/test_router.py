@@ -445,3 +445,75 @@ async def test_tier3_confidence_gate_failure_returns_none() -> None:
     assert result is None
     assert router._decomposer_was_invoked is False
     assert router._last_routable_names == []
+
+
+# ---------------------------------------------------------------------------
+# eval/runner.py constructor-injection guard tests (Task 2.2)
+# ---------------------------------------------------------------------------
+
+
+def test_eval_runner_no_direct_cached_metadata_write() -> None:
+    """Source-level guard: no code under archon_search/ (excluding router.py)
+    assigns to the private _cached_metadata field.
+
+    The router class owns that field; every other caller must populate it via
+    the ``initial_metadata`` constructor argument. This is the automated
+    regression guard for Task 2.2. Test files are intentionally out of scope
+    (tests legitimately poke the private field).
+    """
+    import re
+    from pathlib import Path
+
+    import archon_search
+
+    package_dir = Path(archon_search.__file__).parent
+    router_path = (package_dir / "router.py").resolve()
+    # Negative lookahead `(?!=)` matches assignment (`_cached_metadata = ...`)
+    # but NOT the equality comparison form (`_cached_metadata == ...`), so a
+    # legitimate read in a comparison elsewhere won't trip this write guard.
+    pattern = re.compile(r"_cached_metadata\s*=(?!=)")
+
+    offenders: list[str] = []
+    for py_file in package_dir.rglob("*.py"):
+        if py_file.resolve() == router_path:
+            continue
+        source = py_file.read_text(encoding="utf-8")
+        if pattern.search(source):
+            offenders.append(str(py_file))
+
+    assert not offenders, (
+        "Direct _cached_metadata assignment found outside router.py: "
+        f"{offenders}. Use the initial_metadata constructor argument instead."
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_router_for_query_uses_initial_metadata() -> None:
+    """_run_router_for_query seeds the router via initial_metadata and triggers
+    no HTTP fetch when ranking the injected collections."""
+    from archon_search.eval.runner import _run_router_for_query
+
+    embedder = _make_embedder(vector=[1.0, 0.0])
+    # model_name must match the injected metas' embedding_model; otherwise the
+    # router skips centroid scoring and the non-empty assertion is meaningless.
+    embedder.model_name = "model-a"
+
+    # `_run_router_for_query` only touches `pipeline._embedder`.
+    pipeline = MagicMock()
+    pipeline._embedder = embedder
+
+    collection_metas = [
+        _meta("col-a", centroid=[1.0, 0.0], embedding_model="model-a"),
+        _meta("col-b", centroid=[0.0, 1.0], embedding_model="model-a"),
+    ]
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        shortlist = await _run_router_for_query(pipeline, "test query", collection_metas)
+        mock_client_cls.assert_not_called()
+
+    assert shortlist, "expected a non-empty shortlist from the injected metadata"
+    # col-a's centroid aligns with the query vector (sim 1.0); col-b is
+    # orthogonal (sim 0.0). With threshold 0.0 both pass, ranked by descending
+    # similarity, so col-a must come first.
+    assert shortlist == ["col-a", "col-b"]
+    embedder.embed_one.assert_awaited_once_with("test query")
