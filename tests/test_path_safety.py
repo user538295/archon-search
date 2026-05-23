@@ -98,13 +98,13 @@ def test_rejects_dotdot_mid_path():
 
 
 def test_rejects_relative_dotdot_path():
-    """../foo is rejected with reason='not_absolute' (relative fires before dotdot-parts)."""
+    """../foo is rejected (has '..' in parts — dotdot check fires before absoluteness)."""
     from archon_search._path_safety import validate_ingest_path, PathUnsafeError
 
     with pytest.raises(PathUnsafeError) as exc_info:
         validate_ingest_path("../foo")
-    # Per plan C1-I-DA1-1: relative-path rejection fires before dotdot-parts rejection
-    assert exc_info.value.reason == "not_absolute"
+    # dotdot-parts check fires before absolute check so both '..' and '../foo' get contains_dotdot
+    assert exc_info.value.reason == "contains_dotdot"
 
 
 def test_rejects_empty_string():
