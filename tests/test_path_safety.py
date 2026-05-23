@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_accepts_absolute_path():
     from archon_search._path_safety import validate_ingest_path
 
@@ -12,7 +11,6 @@ def test_accepts_absolute_path():
     assert result == Path("/tmp/foo.md").resolve()
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_accepts_path_with_spaces_and_unicode():
     from archon_search._path_safety import validate_ingest_path
 
@@ -20,7 +18,6 @@ def test_accepts_path_with_spaces_and_unicode():
     assert result == Path("/home/user/My Documents/notés.md").resolve()
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_accepts_tilde_expansion():
     from archon_search._path_safety import validate_ingest_path
 
@@ -29,7 +26,6 @@ def test_accepts_tilde_expansion():
     assert result != Path("~/foo")
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_accepts_dotdot_substring_in_dirname():
     from archon_search._path_safety import validate_ingest_path
 
@@ -38,7 +34,6 @@ def test_accepts_dotdot_substring_in_dirname():
     assert result.is_absolute()
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_accepts_nonexistent_absolute_path():
     from archon_search._path_safety import validate_ingest_path
 
@@ -46,7 +41,6 @@ def test_accepts_nonexistent_absolute_path():
     assert result.is_absolute()
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_accepts_trailing_slash():
     from archon_search._path_safety import validate_ingest_path
 
@@ -54,7 +48,6 @@ def test_accepts_trailing_slash():
     assert result.is_absolute()
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_rejects_dotdot_standalone():
     from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 
@@ -64,7 +57,6 @@ def test_rejects_dotdot_standalone():
     assert exc_info.value.reason == "not_absolute"
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_rejects_dotdot_mid_path():
     from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 
@@ -74,7 +66,6 @@ def test_rejects_dotdot_mid_path():
     assert exc_info.value.reason == "contains_dotdot"
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_rejects_relative_dotdot_path():
     from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 
@@ -83,7 +74,6 @@ def test_rejects_relative_dotdot_path():
     assert exc_info.value.reason == "not_absolute"
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_rejects_empty_string():
     from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 
@@ -92,7 +82,6 @@ def test_rejects_empty_string():
     assert exc_info.value.reason == "empty"
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_rejects_whitespace_only():
     from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 
@@ -101,7 +90,6 @@ def test_rejects_whitespace_only():
     assert exc_info.value.reason == "whitespace_only"
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_rejects_nul_byte():
     from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 
@@ -110,7 +98,6 @@ def test_rejects_nul_byte():
     assert exc_info.value.reason == "nul_byte"
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_rejects_relative_path():
     from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 
@@ -120,14 +107,12 @@ def test_rejects_relative_path():
         assert exc_info.value.reason == "not_absolute", f"expected not_absolute for {raw!r}"
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_path_unsafe_error_is_value_error():
     from archon_search._path_safety import PathUnsafeError
 
     assert isinstance(PathUnsafeError("x"), ValueError)
 
 
-@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)
 def test_path_unsafe_error_carries_reason():
     from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 
