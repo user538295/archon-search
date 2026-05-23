@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, _validate_namespace
+from archon_search.store_filters import _sql_quote_str
 
 
 from dataclasses import dataclass, field
@@ -61,6 +63,24 @@ _RRF_K = 60  # RRF constant
 _META_MAX_FIELDS = 50
 _META_MAX_KEY_LEN = 256
 _META_MAX_VAL_LEN = 4096
+
+
+# ---------------------------------------------------------------------------
+# SQL fragment helpers — defense-in-depth behind upstream identifier regexes.
+# LanceDB 0.30.2 async delete()/count_rows() accept only str (no bind params),
+# so we build safe fragments via _sql_quote_str from store_filters.
+# ---------------------------------------------------------------------------
+
+
+def _where_eq(col: str, value: str) -> str:
+    """Return e.g. "name = 'O''Brien'". Callers compose with literal ' AND '."""
+    return f"{col} = {_sql_quote_str(value)}"
+
+
+def _where_in(col: str, values: Iterable[str]) -> str:
+    """Return e.g. "chunk_id IN ('a', 'b')". Empty values yield "1=0" (always-false)."""
+    items = ", ".join(_sql_quote_str(v) for v in values)
+    return f"{col} IN ({items})" if items else "1=0"
 
 
 def _rrf_score(rank: int) -> float:

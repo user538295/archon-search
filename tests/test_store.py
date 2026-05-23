@@ -2432,14 +2432,12 @@ def test_hybrid_search_trace_score_kind_values_match_backend_polarity(tmp_path: 
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="helpers pending in next commit")
 def test_where_eq_basic() -> None:
     from archon_search.store import _where_eq  # noqa: PLC0415
 
     assert _where_eq("name", "foo") == "name = 'foo'"
 
 
-@pytest.mark.xfail(strict=True, reason="helpers pending in next commit")
 def test_where_eq_adversarial() -> None:
     """Belt-and-braces: call directly, bypassing upstream regex gate."""
     from archon_search.store import _where_eq  # noqa: PLC0415
@@ -2447,28 +2445,24 @@ def test_where_eq_adversarial() -> None:
     assert _where_eq("name", "O'Brien") == "name = 'O''Brien'"
 
 
-@pytest.mark.xfail(strict=True, reason="helpers pending in next commit")
 def test_where_in_basic() -> None:
     from archon_search.store import _where_in  # noqa: PLC0415
 
     assert _where_in("chunk_id", ["a", "b"]) == "chunk_id IN ('a', 'b')"
 
 
-@pytest.mark.xfail(strict=True, reason="helpers pending in next commit")
 def test_where_in_empty_returns_always_false() -> None:
     from archon_search.store import _where_in  # noqa: PLC0415
 
     assert _where_in("chunk_id", []) == "1=0"
 
 
-@pytest.mark.xfail(strict=True, reason="helpers pending in next commit")
 def test_where_in_single() -> None:
     from archon_search.store import _where_in  # noqa: PLC0415
 
     assert _where_in("chunk_id", ["a"]) == "chunk_id IN ('a')"
 
 
-@pytest.mark.xfail(strict=True, reason="helpers pending in next commit")
 def test_where_in_adversarial() -> None:
     """Values containing single-quotes are doubled."""
     from archon_search.store import _where_in  # noqa: PLC0415
