@@ -361,7 +361,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 > **A2 sequencing canary**: A5b MUST be sequenced AFTER A2 merges — it consumes `_sql_quote_str` from `archon_search/store_filters.py`, which A2 creates. Task 2.0 below is the contract test that fails loudly if A2 renames the symbol or changes its signature before A5b code is touched.
 
 #### Task 2.0 — Import contract assertion for `_sql_quote_str`
-- [ ] **File**: `tests/test_store_filters_contract.py` (new)
+- [x] **File**: `tests/test_store_filters_contract.py` (new)
 - **Depends on**: A2 (`archon_search/store_filters.py` must exist and export `_sql_quote_str`)
 - **Description**:
   - Lands FIRST in the A5b PR, before Task 2.1. Acts as a canary: if A2 renames `_sql_quote_str` or changes its signature, this test fails before any A5b implementation code is touched.
@@ -377,7 +377,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: `uv run pytest tests/test_store_filters_contract.py -v`
 
 #### Task 2.1 — Probe LanceDB native bind support
-- [ ] **File**: N/A (research task, output is a one-paragraph note in the PR description and a comment at the top of the helpers module if Task 2.2 uses helpers)
+- [x] **File**: N/A (research task, output is a one-paragraph note in the PR description and a comment at the top of the helpers module if Task 2.2 uses helpers)
 - **Depends on**: nothing
 - **Description**:
   - Read the pinned `lancedb` version from `pyproject.toml` and consult its docs / source for a parameterised `where()` / `delete()` API (look for `?`, `@name`, `bind`, `params=`, or DataFusion-style binds).
@@ -390,7 +390,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: PR description contains the probe finding.
 
 #### Task 2.2 — Implement SQL helpers (or skip if native binds available)
-- [ ] **File**: `archon_search/store.py` (private helpers at top of file). (C1-I-DA2-6: location committed — no `_sql.py` alternative.)
+- [x] **File**: `archon_search/store.py` (private helpers at top of file). (C1-I-DA2-6: location committed — no `_sql.py` alternative.)
 - **Depends on**: Task 2.1
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: append the unit tests below to `tests/test_store.py`; tests fail because the helpers do not yet exist. Mark `@pytest.mark.xfail(strict=True, reason="helpers pending")` if CI must stay green at this commit.
@@ -412,7 +412,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "where_eq or where_in"`
 
 #### Task 2.3 — Replace the five f-string SQL sites in `store.py`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 2.2; Task 2.4 is a **blocking prerequisite for merging the A5b PR** (the CI guard must land in the same PR as the f-string replacements — C1-I-DA3-5).
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: append the integration tests below to `tests/test_store.py`. These are behaviour-preservation regression tests; if they pass against unchanged code, mark them `@pytest.mark.xfail(strict=False, reason="pending refactor — should remain green after f-string replacement")` and flip them to non-xfail in Commit 2. Pure-regression tasks are the one exception where the test commit can land green; the discipline is preserved by adding tests in a dedicated commit before any production code changes.
@@ -433,7 +433,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "delete_collection_meta or update_collection_meta or delete_document or fetch_adjacent_chunks or injection_safe or a5b_end_to_end"` (all green, including the pre-existing `test_store_delete_document_injection_safe`).
 
 #### Task 2.4 — CI guard preventing f-string SQL regressions
-- [ ] **File**: `tests/test_no_fstring_sql.py` (new)
+- [x] **File**: `tests/test_no_fstring_sql.py` (new)
 - **Depends on**: Task 2.2 (must ship in same PR as Task 2.3 — see Phase 2 header)
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: write the meta-test `test_guard_detects_injected_violation` against a tempfile fixture; confirm it fails (no guard regex exists yet). Mark `@pytest.mark.xfail(strict=True, reason="guard pending")` if CI must stay green at this commit.
