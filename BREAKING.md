@@ -72,3 +72,11 @@ The 30-second timeout constant (`_SEARCH_TIMEOUT_SECONDS = 30.0`) is defined in 
 - MCP `ingest_file` and `ingest_directory` previously accepted paths containing `..` segments, empty strings, NUL bytes, and non-absolute paths, and silently followed/resolved them. They now return `McpErrorResponse(error=..., code="path_unsafe")`. HTTP `POST /collections` and `POST /jobs/ingest` gain a new `400` response for the same input classes (additive — was previously not in the OpenAPI schema).
 
 **Migration**: MCP clients passing relative paths, `..`-containing paths, empty strings, NUL bytes, or non-absolute paths must update to use valid absolute paths. REST clients using strict OpenAPI schema validation must regenerate from the updated spec to accept the new `400` response code.
+
+### [next release] — A5c synchronous 503 on POST /ingest when store is busy
+
+**Surface**: REST (`POST /ingest`, `POST /collections`).
+
+**Change**: Previously, `StoreBusyError` from a concurrent reindex surfaced only in job state (`GET /jobs/{id}` → `FAILED`), not as a synchronous HTTP response. With A5c, both endpoints pre-acquire the per-collection lock within `INGEST_LOCK_TIMEOUT_S` seconds (30s). On timeout, they return `HTTP 503` with `Retry-After: 30` and `{"error": "store_busy", "detail": "..."}` immediately. This closes the A1 deferral noted in `BREAKING.md [next release] — A1 metadata schema v1`.
+
+**Migration**: Clients that previously relied on 202 + job polling to detect busy-store conditions should now handle 503 with `Retry-After` header directly.
