@@ -204,7 +204,7 @@ async def test_mcp_ingest_file_rejects_dotdot() -> None:
     result = await app.tools["ingest_file"](path="/foo/../bar", collection=None)
     assert isinstance(result, dict)
     assert result.get("code") == "path_unsafe"
-    assert "'..'" in result.get("error", "")
+    assert "contains a '..' segment" in result.get("error", "")
 
 
 @pytest.mark.asyncio

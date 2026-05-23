@@ -286,7 +286,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/server/test_routes_jobs.py -v -k "rejects_dotdot or nul_byte or null_path or legitimate_absolute or openapi_lists"`
 
 #### Task 1.4 — Wire validator into MCP `ingest_file`
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 1.1
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: append the tests below to `tests/server/test_mcp.py`; mark them `@pytest.mark.xfail(strict=True, reason="wiring pending")` if CI must stay green at this commit.
