@@ -198,6 +198,49 @@ async def test_mcp_explain_rest_parity(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_explain_collectionless_rest_parity(tmp_path: Path) -> None:
+    """Collectionless: routing block is populated AND REST<->MCP stay deep-equal."""
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "mock-embedder"
+    config.routing_confidence_threshold = 0.0
+    pipeline = await _build_real_pipeline(tmp_path, config)
+
+    # Second collection so routing.candidates is non-trivial (and sorted).
+    store = pipeline.store
+    await store.ensure_collection("code", 4)
+    await store.ingest_chunks("code", _make_records(5, id_offset=20))
+    await store.rebuild_fts_index("code")
+    await store.update_collection_meta(
+        CollectionMeta(
+            name="code",
+            centroid=[0.4, 0.3, 0.2, 0.1],
+            embedding_model=config.embedding_model,
+            namespace="default",
+        )
+    )
+
+    mcp_app = _make_mcp_app(pipeline, config=config, writer=None)
+    mcp_result = await mcp_app.tools["explain"](query="common alpha beta", top_k=3)
+
+    rest_app = create_rest_app(config, JobStore(path=tmp_path / "jobs.json"))
+    rest_app.state.pipeline = pipeline
+    rest_app.state.embedder = pipeline._embedder
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    transport = httpx.ASGITransport(app=rest_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t", headers={"Authorization": f"Bearer {key}"}) as ac:
+        rest_resp = await ac.post("/explain", json={"query": "common alpha beta", "top_k": 3})
+
+    assert rest_resp.status_code == 200, rest_resp.text
+    # Routing must be populated over MCP (the config-driven collectionless path).
+    assert mcp_result["routing"] is not None
+    assert len(mcp_result["routing"]["candidates"]) == 2
+    assert json.loads(json.dumps(mcp_result)) == rest_resp.json()
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_mcp_explain_telemetry_no_query(tmp_path: Path) -> None:
     """MCP explain telemetry must not contain the query key or the raw query string."""
     from archon_search.telemetry.reader import TelemetryReader
