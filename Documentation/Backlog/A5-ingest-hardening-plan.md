@@ -522,7 +522,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: `grep -E "VAL-1|RP-5" Documentation/Backlog/03_world_class_roadmap.md` returns nothing AND the A5a / A5b checkmarks are visible.
 
 #### Task 3.3 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, Architecture docs, UserManual, OperatorGuide, CHANGELOG, contributing.md, CLAUDE.md, brief, roadmap) and update every file whose content is affected by A5. Specifically check:
