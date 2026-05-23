@@ -339,7 +339,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: `grep -F "path_unsafe" BREAKING.md` returns the new entry.
 
 #### Task 1.7 — A5a final wiring sanity
-- [ ] **File**: N/A (verification task)
+- [x] **File**: N/A (verification task)
 - **Depends on**: Tasks 1.1 – 1.6
 - **Description (C1-I-DA2-4)**:
   - Run the full default-tier pytest suite locally to confirm nothing outside A5a regressed.
