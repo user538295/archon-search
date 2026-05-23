@@ -489,7 +489,13 @@ class SearchStore:
     # Ingest
     # ------------------------------------------------------------------
 
-    async def ingest_chunks(self, collection: str, chunks: list[ChunkRecord]) -> int:
+    async def ingest_chunks(
+        self,
+        collection: str,
+        chunks: list[ChunkRecord],
+        *,
+        _locked_by_caller: bool = False,
+    ) -> int:
         self._validate_collection(collection)
         db = self._require_connected()
         for chunk in chunks:
@@ -499,6 +505,10 @@ class SearchStore:
 
         if not chunks:
             return 0
+
+        if _locked_by_caller:
+            # REST /ingest pre-acquire path: caller holds the lock; skip acquire/release.
+            return await self._do_ingest(db, collection, chunks)
 
         # Acquire the per-collection lock; the timeout applies only to
         # acquisition. Once acquired, the write runs to completion.
