@@ -270,7 +270,7 @@ router = MultiCollectionRouter(
 > **Releasable**: after Task 2.3 — CON-2 is fully addressed: `invalidate()` exists, eval path uses the constructor injection pattern, and FastAPI per-request lifecycle is pinned by a regression test.
 
 #### Task 2.1 — Add `MultiCollectionRouter.invalidate()` and `initial_metadata` constructor param
-- [ ] **File**: `archon_search/router.py`
+- [x] **File**: `archon_search/router.py`
 - **Depends on**: nothing (independent of Phase 1)
 - **Description**:
   - Add `initial_metadata: list[CollectionMeta] | None = None` as the last parameter of `MultiCollectionRouter.__init__`.
