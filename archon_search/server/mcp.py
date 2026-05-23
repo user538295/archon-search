@@ -173,12 +173,16 @@ def create_app(
     ) -> list[dict[str, Any]]:
         """Ingest all files in a directory into the RAG store."""
         try:
+            validated = validate_ingest_path(path)
+        except PathUnsafeError as e:
+            return McpErrorResponse(error=_path_unsafe_message(e.reason), code="path_unsafe")
+        try:
             async def progress_cb(done: int, total: int) -> None:
                 if ctx is not None:
                     await ctx.report_progress(done, total)
 
             results = await pipeline.ingest_directory(
-                Path(path),
+                validated,
                 collection or default_collection,
                 glob_pattern=glob_pattern,
                 progress_cb=progress_cb,

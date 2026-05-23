@@ -285,7 +285,6 @@ async def test_mcp_ingest_file_accepts_legitimate_absolute_path() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 @pytest.mark.asyncio
 async def test_mcp_ingest_directory_rejects_dotdot() -> None:
     """ingest_directory rejects a path with '..' and returns code='path_unsafe'."""
@@ -297,7 +296,6 @@ async def test_mcp_ingest_directory_rejects_dotdot() -> None:
     assert "contains a '..' segment" in result.get("error", "")
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 @pytest.mark.asyncio
 async def test_mcp_ingest_directory_reuses_path_unsafe_message() -> None:
     """ingest_directory uses _path_unsafe_message helper (not a hardcoded copy) for nul_byte reason."""
@@ -311,7 +309,6 @@ async def test_mcp_ingest_directory_reuses_path_unsafe_message() -> None:
     assert result.get("error") == _path_unsafe_message("nul_byte")
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 @pytest.mark.asyncio
 async def test_mcp_ingest_directory_uses_validator_returned_path() -> None:
     """ingest_directory passes the Path object returned by validate_ingest_path directly to pipeline."""
