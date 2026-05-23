@@ -235,7 +235,6 @@ def test_store_busy_retry_after_ceils_timeout(timeout_s: float, expected_header:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="_locked_by_caller parameter pending in next commit")
 async def test_ingest_chunks_skips_lock_when_locked_by_caller(
     connected_store: "SearchStore",
     col_name: str,

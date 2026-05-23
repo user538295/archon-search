@@ -499,7 +499,21 @@ class SearchStore:
     # Ingest
     # ------------------------------------------------------------------
 
-    async def ingest_chunks(self, collection: str, chunks: list[ChunkRecord]) -> int:
+    async def ingest_chunks(
+        self,
+        collection: str,
+        chunks: list[ChunkRecord],
+        *,
+        _locked_by_caller: bool = False,
+    ) -> int:
+        """Ingest *chunks* into *collection*.
+
+        ``_locked_by_caller=True`` signals that the caller has already acquired
+        the per-collection lock (e.g. the REST /ingest handler pre-acquires before
+        dispatching the background task).  When True, lock acquisition is skipped
+        and the caller is responsible for releasing the lock.  All other callers
+        (CLI, sync, watcher, eval) keep the default self-locking behaviour.
+        """
         self._validate_collection(collection)
         db = self._require_connected()
         for chunk in chunks:
@@ -509,6 +523,10 @@ class SearchStore:
 
         if not chunks:
             return 0
+
+        if _locked_by_caller:
+            # Caller holds the lock; run ingest directly without re-acquiring.
+            return await self._do_ingest(db, collection, chunks)
 
         # Acquire the per-collection lock; the timeout applies only to
         # acquisition. Once acquired, the write runs to completion.
