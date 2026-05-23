@@ -278,3 +278,61 @@ async def test_mcp_ingest_file_accepts_legitimate_absolute_path() -> None:
     result = await app.tools["ingest_file"](path="/tmp/legit.md", collection=None)
     assert isinstance(result, dict)
     assert result == asdict(expected)
+
+
+# ---------------------------------------------------------------------------
+# Task 1.5 — path-safety wiring for MCP ingest_directory
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="wiring pending")
+@pytest.mark.asyncio
+async def test_mcp_ingest_directory_rejects_dotdot() -> None:
+    """ingest_directory rejects a path with '..' and returns code='path_unsafe'."""
+    pipeline = MagicMock()
+    app = _make_app(pipeline)
+    result = await app.tools["ingest_directory"](path="/foo/../bar", collection=None)
+    assert isinstance(result, dict)
+    assert result.get("code") == "path_unsafe"
+    assert "contains a '..' segment" in result.get("error", "")
+
+
+@pytest.mark.xfail(strict=True, reason="wiring pending")
+@pytest.mark.asyncio
+async def test_mcp_ingest_directory_reuses_path_unsafe_message() -> None:
+    """ingest_directory uses _path_unsafe_message helper (not a hardcoded copy) for nul_byte reason."""
+    from archon_search.server.mcp import _path_unsafe_message
+
+    pipeline = MagicMock()
+    app = _make_app(pipeline)
+    result = await app.tools["ingest_directory"](path="/tmp/x\x00.md", collection=None)
+    assert isinstance(result, dict)
+    assert result.get("code") == "path_unsafe"
+    assert result.get("error") == _path_unsafe_message("nul_byte")
+
+
+@pytest.mark.xfail(strict=True, reason="wiring pending")
+@pytest.mark.asyncio
+async def test_mcp_ingest_directory_uses_validator_returned_path() -> None:
+    """ingest_directory passes the Path object returned by validate_ingest_path directly to pipeline."""
+    pipeline = MagicMock()
+    pipeline.ingest_directory = AsyncMock(return_value=[])
+    app = _make_app(pipeline)
+    sentinel = Path("/sentinel/value")
+    with patch("archon_search.server.mcp.validate_ingest_path", return_value=sentinel):
+        await app.tools["ingest_directory"](path="/any/dir", collection=None)
+    assert pipeline.ingest_directory.call_args.args[0] == Path("/sentinel/value")
+
+
+@pytest.mark.asyncio
+async def test_mcp_ingest_directory_accepts_legitimate_absolute_path() -> None:
+    """ingest_directory returns success list (not an error envelope) for a valid absolute path."""
+    from archon_search._types import IngestResult
+
+    expected = IngestResult(doc_id="d", chunks_created=1, status="ok")
+    pipeline = MagicMock()
+    pipeline.ingest_directory = AsyncMock(return_value=[expected])
+    app = _make_app(pipeline)
+    result = await app.tools["ingest_directory"](path="/tmp/legitdir", collection=None)
+    assert isinstance(result, list)
+    assert result == [asdict(expected)]
