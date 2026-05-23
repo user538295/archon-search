@@ -142,6 +142,24 @@ def _make_error_pipeline(exc: Exception) -> MagicMock:
     return pipeline
 
 
+def _make_rest_error_pipeline(exc: Exception) -> MagicMock:
+    """Pipeline mock for REST /search error path.
+
+    Unlike the MCP error pipeline, the REST route calls get_collection_meta first
+    and only proceeds to search() if it returns a non-None value. We configure
+    get_collection_meta to return a valid CollectionMeta so search() is exercised.
+    """
+    from archon_search.collection_meta import CollectionMeta
+
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(
+        return_value=CollectionMeta(name="col1", namespace="default")
+    )
+    pipeline.search = AsyncMock(side_effect=exc)
+    pipeline.search_with_context = AsyncMock(side_effect=exc)
+    return pipeline
+
+
 # ---------------------------------------------------------------------------
 # E2E Test 1: key-set equality with DOCUMENTED_SCHEMA_FIELDS
 # ---------------------------------------------------------------------------
@@ -184,7 +202,7 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
             await err_mcp.tools["search_with_context"](query="q4", collection=None)
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    with TestClient(app, headers={"Authorization": f"Bearer {key}"}) as client:
+    with TestClient(app, headers={"Authorization": f"Bearer {key}"}, raise_server_exceptions=False) as client:
         writer = app.state.telemetry_writer
         assert writer is not None, "Writer must be set when telemetry is enabled"
 
@@ -208,6 +226,15 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
         with patch("archon_search.server.routes_route._build_router", return_value=timeout_router):
             resp = client.post("/route", json={"query": "q7"})
         assert resp.status_code == 504
+
+        # REST /search error → exercises the A3 error telemetry path (HTTP 500 + error entry)
+        # Temporarily swap pipeline to one whose search() raises so telemetry is written.
+        rest_err_pipeline = _make_rest_error_pipeline(RuntimeError("search error"))
+        original_pipeline = app.state.pipeline
+        app.state.pipeline = rest_err_pipeline
+        resp = client.post("/search", json={"collection": "col1", "query": "q8"})
+        assert resp.status_code == 500
+        app.state.pipeline = original_pipeline
 
         # Oversized entry → triggers truncation; serialized form gains truncated=True key.
         # The writer's drain task calls _truncate_to_fit() which adds truncated=True.
@@ -303,6 +330,15 @@ def test_handler_does_not_leak_query_text_into_log(
             ):
                 resp = client.post("/route", json={"query": SENTINEL})
             assert resp.status_code == 500
+
+            # REST /search error path — pipeline raises; telemetry enqueues error entry.
+            # Verifies that the sentinel (query text) never leaks into JSONL or log messages.
+            rest_err_pipeline = _make_rest_error_pipeline(RuntimeError("search error"))
+            original_pipeline = app.state.pipeline
+            app.state.pipeline = rest_err_pipeline
+            resp = client.post("/search", json={"collection": "col1", "query": SENTINEL})
+            assert resp.status_code == 500
+            app.state.pipeline = original_pipeline
 
     # (a) Sentinel must not appear anywhere in any JSONL file
     for f in log_dir.glob("*.jsonl"):

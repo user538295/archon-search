@@ -51,3 +51,16 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 **Change**: The `top_k` field in `SearchRequest` is now ignored at the route level; the pipeline uses `config.top_k_return` instead. Previously, each request could specify its own `top_k`.
 **Migration**: Configure `[search] top_k_return` in `archon-search.toml` to set the desired result count.
 **Announced in**: this release (the behavior was supported but never documented as stable).
+
+### [next release] — REST `/search` pipeline errors now surface as 5xx (A3)
+
+**Surface**: REST (`/search` POST)
+**Change**: Previously, exceptions raised by `pipeline.search()` after a successful meta lookup were swallowed and returned as `HTTP 200` with `{results: [], acl_filtered: false}`. Clients could not distinguish "no hits" from "search broke" (`CON-5`). With A3:
+- `asyncio.TimeoutError` (pipeline took > 30 s) → **`504 Gateway Timeout`** (`{"detail": "Search timed out"}`).
+- Any other exception from `pipeline.search()` → **`500 Internal Server Error`** (exception re-raised, FastAPI default body).
+- On both error paths, a telemetry entry is enqueued with `status="timeout"` / `status="internal_error"` and the matching `error_kind`. An ERROR log is emitted with `event_type="search_timeout"` or `event_type="search_pipeline_failure"`.
+
+The 30-second timeout constant (`_SEARCH_TIMEOUT_SECONDS = 30.0`) is defined in `routes_search.py` and is not yet config-knob-exposed (tracked as a TODO in the same file).
+
+**Migration**: Clients that matched on `HTTP 200` + `results: []` to detect pipeline failure must now handle `HTTP 500` and `HTTP 504`. Clients performing graceful-degradation on empty results are unaffected for the "no hits" case, but must be updated to not mistake `500`/`504` for "no hits". The `503` response for meta-lookup failure is unchanged.
+**Announced in**: this release. The old silent-failure behavior was never documented as stable; the fix eliminates debt item `CON-5`.

@@ -60,7 +60,7 @@ For architectural context, see [`100_system_architecture_overview.md`](./100_sys
 | CON-2 | `MultiCollectionRouter._cached_metadata` is populated once and never invalidated. After ingest/reindex/description regeneration, the router keeps routing on stale centroids until the process restarts or `fetch_metadata()` is manually re-invoked. No TTL, no event hook, no cache-bust API. | Reliability | Med | Collections evolve mid-process (long-lived server, frequent ingest) and route quality degrades silently. | `archon_search/router.py` (`_cached_metadata` field, `fetch_metadata`); [`210_performance_and_scalability.md`](./210_performance_and_scalability.md) |
 | CON-3 | `IndexingStateStore` (`progress.py`) performs read–modify–write on `.indexing_state.json` without internal locking. `sync.py` wraps `_safe_state_update` / `_safe_state_remove` call sites in **per-collection** `asyncio.Lock`s via `_get_lock(name)` (see `sync.py:487`, `sync.py:614`), so intra-collection writes are serialised. The residual race is **across collections**: two collections syncing concurrently hold two different locks but write the same shared `.indexing_state.json` file. `set_trigger` is defined on `IndexingStateStore` but is not invoked from `sync.py`. | Reliability | Med | Two collections sync concurrently; one writer overwrites the other's update to the shared state file. | `archon_search/progress.py` (`IndexingStateStore.update_collection`, `remove_collection`); `archon_search/sync.py` (`_get_lock`, `_safe_state_update`, `_safe_state_remove`) |
 | CON-4 | `SearchPipeline.recompute_collection_meta` re-reads **all** vectors for a collection and recomputes the centroid on every ingest, synchronously, inside the ingest path. No incremental update, no batching threshold. Cost is O(chunks) per ingest call and scales linearly with corpus size. | Performance | Med | Single-collection corpus grows past a few thousand chunks and ingest latency becomes user-visible. | `archon_search/pipeline.py` (`recompute_collection_meta`), `archon_search/store.py` `get_all_vectors`; [`210_performance_and_scalability.md`](./210_performance_and_scalability.md) |
-| CON-5 | `routes_search.py` returns **200 OK with empty `results`** when the search pipeline raises. Meta lookup failure surfaces as 503, but pipeline failure is logged at `warning` and downgraded to `SearchResponse(results=[], acl_filtered=False)`. Clients cannot distinguish "no hits" from "search broke". | Reliability / API contract | Med | A downstream LanceDB/embedder fault causes silent empty-result regressions; user-visible recall drops with no error signal. | `archon_search/server/routes_search.py:68–84`; [`140_error_handling_strategy.md`](./140_error_handling_strategy.md) |
+| CON-5 | ~~`routes_search.py` returns **200 OK with empty `results`** when the search pipeline raises.~~ **Resolved in A3**: pipeline timeout now surfaces as `504`; all other pipeline exceptions are re-raised as `500`. Telemetry entries and ERROR logs are emitted on both error paths. See `BREAKING.md` "[next release] — REST `/search` pipeline errors now surface as 5xx (A3)". | Reliability / API contract | ~~Med~~ **Resolved** | (resolved — no longer triggered) | `archon_search/server/routes_search.py`; [`140_error_handling_strategy.md`](./140_error_handling_strategy.md); [`BREAKING.md`](../../BREAKING.md) |
 
 ### Eval and CI
 
@@ -116,7 +116,6 @@ quadrantChart
     "CON-2 router cache stale": [0.3, 0.65]
     "CON-3 state-store race": [0.3, 0.55]
     "CON-4 centroid recompute": [0.55, 0.55]
-    "CON-5 search 200-on-error": [0.2, 0.6]
     "ARCH-1 dual types modules": [0.3, 0.3]
     "ARCH-2 host:port env": [0.15, 0.3]
     "ARCH-3 request IDs": [0.4, 0.4]
@@ -126,7 +125,7 @@ quadrantChart
     "DOC-1 CLAUDE.md MCP names": [0.1, 0.25]
 ```
 
-Quick wins (low effort, mid-to-high impact): **TEL-1**, **DOC-1**, **CON-2**, **CON-5**, **API-1/API-2** (already on the next-release queue). Plan deliberately (high effort, high impact): **EVL-1**, **SEC-1**, **SEC-2**, **API-3**, **API-4**, **CON-4**. Defer until a trigger fires: **PLT-1**, **PLT-2**, **PLT-3**, **CON-1**, **EVL-2**, **ARCH-1/2/3**.
+Quick wins (low effort, mid-to-high impact): **TEL-1**, **DOC-1**, **CON-2**, **API-1/API-2** (already on the next-release queue). **CON-5** is resolved (A3 — search pipeline errors now surface as 5xx). Plan deliberately (high effort, high impact): **EVL-1**, **SEC-1**, **SEC-2**, **API-3**, **API-4**, **CON-4**. Defer until a trigger fires: **PLT-1**, **PLT-2**, **PLT-3**, **CON-1**, **EVL-2**, **ARCH-1/2/3**.
 
 ## Planned refactors
 
@@ -136,7 +135,7 @@ Quick wins (low effort, mid-to-high impact): **TEL-1**, **DOC-1**, **CON-2**, **
 - **Production-model eval lane in CI** (EVL-1). Likely a `live`-marker job that runs on tag pushes only, gated by [`tests/eval/thresholds.toml`](../../tests/eval/thresholds.toml). See the long-form plan in [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) and the active [`roadmap.md`](../../roadmap.md).
 - **Multi-key auth with rotation** (SEC-1). Builds on the existing `namespaces` map in `middleware_auth.py`; needs a key-file format that supports expiry and revocation. Track in [`Backlog/`](../Backlog/).
 - **Lint/test that gates MCP tool name parity across `mcp.py`, `CLAUDE.md`, and the API reference** (DOC-1). Pair with API-3 review.
-- **Decide search-failure semantics** (CON-5). Either propagate a 5xx with the standard error envelope, or document that empty `results` + `acl_filtered=false` is the failure signal. Whichever wins, encode it in `routes_search.py` and a test.
+- ~~**Decide search-failure semantics** (CON-5).~~ Resolved in A3: pipeline timeout → `504`, all other pipeline exceptions → `500` (bare re-raise). Telemetry and ERROR logs emitted on both paths. See `BREAKING.md`.
 - **Invalidate `MultiCollectionRouter._cached_metadata` after collection mutations** (CON-2). Either a TTL or an explicit bust on ingest / reindex / description-regen. Cheap if scoped to a single-process invariant.
 - **Close the cross-collection race on `.indexing_state.json`** (CON-3). The per-collection locks in `sync.py` already serialise intra-collection writes; a single file-level mutex (or moving the state to per-collection files) is sufficient given local-only state.
 - **Wrap MCP responses in Pydantic models** (API-4). Reuse the REST `response_model` schemas (`SearchResponse`, `CollectionMeta`, etc.) so that MCP and REST share the validation gate.

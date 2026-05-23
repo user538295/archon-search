@@ -1,8 +1,8 @@
 **Purpose**: Triage steps for the failures that actually occur in production `archon-search` deployments, using only the existing endpoints, logs, and CLI.
 **Audience**: SREs and sysadmins responding to an `archon-search` incident.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
-**Next review**: 2027-05-20
+**Last reviewed**: 2026-05-23
+**Next review**: 2027-05-23
 
 # Incident Runbook
 
@@ -12,7 +12,7 @@ This runbook lists the failure modes the codebase is known to produce today, pai
 
 1. **Start with `/health`, then `/status`, then the log.** Three commands cover the first decision branch in nearly every incident.
 2. **Restart is a legitimate first step.** The router cache (`CON-2`) and the lack of cache-bust APIs mean restart is the only currently supported recovery for several issues.
-3. **Search failures may be silent.** `POST /search` returns 200 with empty `results` on pipeline error (`CON-5`). Do not equate HTTP 200 with correctness.
+3. **Search pipeline failures are now visible as 5xx.** Since A3, `POST /search` returns `504` on timeout and `500` on any other pipeline exception — empty `results` with `200 OK` always means "no hits", not "search broke". Telemetry entries carry `status="timeout"` or `status="internal_error"`.
 4. **Re-ingest is the rollback.** There is no transactional repair (`Architecture/160…md` principle 5).
 
 ## First-five-minutes checklist
@@ -83,7 +83,7 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 
 ### LanceDB lock contention or "table busy"
 
-**Symptoms**: `/search` may surface a LanceDB lock/IO condition as either a `503` (only from the meta-lookup branch, `routes_search.py:69-71`) **or** a silent `200 OK` with `results: []` (pipeline-path exceptions are swallowed at `routes_search.py:82-84`); or `archon-search start` fails to connect to the store; or two processes started against the same `db_path`. Check the log for LanceDB lock/IO messages — do not rely on the HTTP status alone.
+**Symptoms**: `/search` may surface a LanceDB lock/IO condition as `503` (from the meta-lookup branch), `500` (pipeline exception re-raised after A3), or `504` (pipeline timeout); or `archon-search start` fails to connect to the store; or two processes started against the same `db_path`. Check the log for LanceDB lock/IO messages — the ERROR log carries `event_type="search_pipeline_failure"` or `event_type="search_timeout"`.
 
 **Triage**:
 
@@ -92,23 +92,20 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 3. If a stale lock file remains after an unclean shutdown, restart resolves it. There is no manual lock-clearing tool. #Unverified (LanceDB lock-file semantics are external to this repo).
 4. As a last resort, restore `search/` from backup (`OperatorGuide/03_backup_restore_disaster_recovery.md`).
 
-### Search returns empty (silent regression — `CON-5`)
+### Search returns empty (genuine no-hits result)
 
-**Symptoms**: `POST /search` returns `200 OK` with `results: []` and `acl_filtered: false` for queries that previously returned hits. No 5xx, no client-visible error.
+**Symptoms**: `POST /search` returns `200 OK` with `results: []` and `acl_filtered: false` for queries that previously returned hits. No 5xx.
 
-This is the documented failure-downgrade behaviour: when the pipeline raises, `routes_search.py:82-84` logs a warning and returns an empty response. Treat empty results as suspect until verified.
+Since A3, `200` with empty `results` means the pipeline ran without error and found no hits — pipeline failures now surface as `500` or `504` (see [LanceDB lock contention or "table busy"](#lancedb-lock-contention-or-table-busy) above). If you're seeing empty results on a query that used to return hits, triage the data and routing layers rather than the pipeline itself.
 
 **Triage**:
 
 1. Confirm the collection is in the caller's namespace: `GET /collections`.
-2. `GET /status` — look for `status: "failed"` or non-zero `error_count` on that collection.
+2. `GET /status` — look for `status: "failed"` or non-zero `error_count` on that collection; a high `error_count` often means a recent ingest partially failed and the index is incomplete.
 3. `GET /indexing-state` — check `error` and `error_count` fields.
-4. Grep the log for `search failed for collection` and `meta lookup failed` — these are the exact log strings emitted on the two failure branches (`routes_search.py:70`, `:83`).
-5. If telemetry is enabled, `GET /telemetry/entries?collection=<name>&endpoint=search&status=error` enumerates the failure entries.
-6. Re-run with a known-good query. Persistent emptiness with no log signal indicates either an empty collection or a model-load issue.
-7. If the cause is router staleness after a recent reindex (`CON-2`), restart the service to repopulate `MultiCollectionRouter._cached_metadata` (`router.py:50, :69-70, :124`). This is a private one-shot in-process cache with no public bust API; restart is the only supported recovery. #Unverified (operator-symptom mapping to router staleness is inferential; cache mechanics are verified in source).
-
-Roadmap fix `A3` (propagate 5xx on pipeline failure) will eliminate this class of silent failure.
+4. If telemetry is enabled, `GET /telemetry/entries?collection=<name>&endpoint=search&status=ok` — confirm that the result_count is 0, not that the entry is absent (which would indicate the route errored before writing the telemetry entry).
+5. Re-run with a known-good query. Persistent emptiness with `200 OK` and no `error_kind` in telemetry indicates either an empty/unindexed collection or a routing miss.
+6. If the cause is router staleness after a recent reindex (`CON-2`), restart the service to repopulate `MultiCollectionRouter._cached_metadata` (`router.py:50, :69-70, :124`). This is a private one-shot in-process cache with no public bust API; restart is the only supported recovery. #Unverified (operator-symptom mapping to router staleness is inferential; cache mechanics are verified in source).
 
 ### Telemetry log explosion
 
