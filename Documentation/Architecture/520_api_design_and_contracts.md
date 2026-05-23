@@ -40,10 +40,10 @@ The key itself is bootstrapped by `key_manager.py` (auto-generated at `~/.archon
 
 `server/mcp.py` exposes an MCP endpoint that uses the same `APIKeyMiddleware` and wraps the same internal services as the REST routes. The two surfaces overlap but do not mirror each other:
 
-- **MCP tools** (nine total, from `server/mcp.py`): `search`, `search_with_context`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document`.
-- **REST routes** (from `routes_*.py`): `GET /health`, `GET /status`, `GET /indexing-state`, collection ops on `/{name}` (`GET`/`POST`/`DELETE`) plus `POST /{name}/reindex`, `POST /ingest`, `GET /jobs/{job_id}`, `DELETE /jobs/{job_id}`, `POST /search`, `POST /route`, `GET /telemetry/stats`, `GET /telemetry/entries`.
+- **MCP tools** (ten total, from `server/mcp.py`): `search`, `search_with_context`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document`, `explain`.
+- **REST routes** (from `routes_*.py`): `GET /health`, `GET /status`, `GET /indexing-state`, collection ops on `/{name}` (`GET`/`POST`/`DELETE`) plus `POST /{name}/reindex`, `POST /ingest`, `GET /jobs/{job_id}`, `DELETE /jobs/{job_id}`, `POST /search`, `POST /route`, `POST /explain`, `GET /telemetry/stats`, `GET /telemetry/entries`.
 
-MCP-only (no REST counterpart): `search_with_context`, `ingest_file`, `ingest_directory` (REST exposes only the async job-based `POST /ingest`, not these synchronous per-path tools), `list_documents`, `delete_document`. REST-only (no MCP counterpart): `/route`, `/jobs/*`, `/status`, `/indexing-state`, `/telemetry/*`.
+MCP-only (no REST counterpart): `search_with_context`, `ingest_file`, `ingest_directory` (REST exposes only the async job-based `POST /ingest`, not these synchronous per-path tools), `list_documents`, `delete_document`. REST-only (no MCP counterpart): `/route`, `/jobs/*`, `/status`, `/indexing-state`, `/telemetry/*`. Both surfaces: `/search` (`search`), `/explain` (`explain`).
 
 When adding capability, prefer this order:
 

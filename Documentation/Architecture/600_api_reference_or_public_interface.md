@@ -60,6 +60,16 @@ Returns `404` when the collection is not visible to the caller's namespace; `503
 
 Errors: `400` empty query / `slots < 1`; `504` on 30 s routing timeout.
 
+### `routes_explain.py`
+
+| Method | Path | Purpose | Request schema | Response schema |
+| --- | --- | --- | --- | --- |
+| POST | `/explain` | Full per-stage score breakdown for a query (vector/FTS/RRF/reranker) plus routing decision. Returns top-`top_k` results with text and score breakdowns, up to 20 near-miss candidates without text, and the routing decision (when collection is omitted). | `ExplainRequest` (`routes_explain.py`) — `{query: str, collection: str \| null, top_k: int = 5 [1..100], rerank: bool = true}` | `ExplainResponse` — `{rerank: bool, routing: RoutingExplain \| null, collection: str, acl_filtered: bool, results: [ExplainResult...], near_misses: [ExplainNearMiss...]}` |
+
+`ExplainResult` fields: `doc_id`, `chunk_id`, `source_path`, `text`, `score`, `breakdown` (`ExplainScoreBreakdown`), plus A1/A2 metadata (`file_type`, `indexed_at`, `updated_at`, `ingested_by`, `language`, `metadata`). `ExplainNearMiss` is identical but has no `text` field. `ExplainScoreBreakdown` fields: `vector_rank`, `vector_score`, `vector_score_kind`, `fts_rank`, `fts_score`, `fts_score_kind`, `rrf_score`, `reranker_score`. `RoutingExplain` fields: `invoked`, `chosen_collection`, `confidence_threshold`, `chosen_below_threshold`, `candidates: [RoutingCandidate{collection, centroid_score}]`.
+
+Errors: `422` empty/whitespace query or `top_k` out of range; `404` collection not found or no ACL-allowed collections available; `503` meta-lookup failure; `500` pipeline-stage (store/reranker) failure. Telemetry is emitted on both success and error paths; the entry never carries the raw query string.
+
 ### `routes_collections.py`
 
 All paths under `/collections`. Namespace gating: cross-namespace access surfaces as `404`.
@@ -104,6 +114,7 @@ Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mount
 | `get_collection_meta` | Full meta for one collection. | `name: str` | `CollectionMeta` or `{error, code: "not_found"}` |
 | `list_documents` | List documents in a collection. | `collection?`, `limit: int = 100` | `list[doc dict]` |
 | `delete_document` | Delete all chunks for one document. | `doc_id: str`, `collection?` | `{"deleted": int}` |
+| `explain` | Per-stage score breakdown (vector/FTS/RRF/reranker) plus routing decision. Returns top results with full breakdowns and near-miss candidates without text. Mirrors `POST /explain` but operates against `DEFAULT_NAMESPACE` only (no per-request namespace in MCP v1). | `query: str`, `collection: str \| None = None`, `top_k: int = 5`, `rerank: bool = True` | `ExplainResponse` dict (same shape as REST). On error: `{error, code}`. |
 
 **Breaking-change note (from [`/BREAKING.md`](../../BREAKING.md)):**
 
