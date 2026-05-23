@@ -2435,42 +2435,36 @@ def test_hybrid_search_trace_score_kind_values_match_backend_polarity(tmp_path: 
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="SQL helpers pending implementation in next commit")
 def test_where_eq_basic() -> None:
     """_where_eq('name', 'foo') == \"name = 'foo'\"."""
     from archon_search.store import _where_eq
     assert _where_eq("name", "foo") == "name = 'foo'"
 
 
-@pytest.mark.xfail(strict=True, reason="SQL helpers pending implementation in next commit")
 def test_where_eq_adversarial() -> None:
     """_where_eq handles single quote in value (doubles it, belt-and-braces test)."""
     from archon_search.store import _where_eq
     assert _where_eq("name", "O'Brien") == "name = 'O''Brien'"
 
 
-@pytest.mark.xfail(strict=True, reason="SQL helpers pending implementation in next commit")
 def test_where_in_basic() -> None:
     """_where_in('chunk_id', ['a', 'b']) == \"chunk_id IN ('a', 'b')\"."""
     from archon_search.store import _where_in
     assert _where_in("chunk_id", ["a", "b"]) == "chunk_id IN ('a', 'b')"
 
 
-@pytest.mark.xfail(strict=True, reason="SQL helpers pending implementation in next commit")
 def test_where_in_empty_returns_always_false() -> None:
     """_where_in with empty iterable returns '1=0' (always-false predicate)."""
     from archon_search.store import _where_in
     assert _where_in("chunk_id", []) == "1=0"
 
 
-@pytest.mark.xfail(strict=True, reason="SQL helpers pending implementation in next commit")
 def test_where_in_single() -> None:
     """_where_in('chunk_id', ['a']) == \"chunk_id IN ('a')\"."""
     from archon_search.store import _where_in
     assert _where_in("chunk_id", ["a"]) == "chunk_id IN ('a')"
 
 
-@pytest.mark.xfail(strict=True, reason="SQL helpers pending implementation in next commit")
 def test_where_in_adversarial() -> None:
     """_where_in doubles single quotes in values."""
     from archon_search.store import _where_in

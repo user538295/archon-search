@@ -15,14 +15,38 @@ from typing import TYPE_CHECKING, Any, Optional
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, _validate_namespace
-from archon_search.store_filters import GLOB_OVERFETCH_FACTOR, _compute_fetch, build_where
+from archon_search.store_filters import GLOB_OVERFETCH_FACTOR, _compute_fetch, _sql_quote_str, build_where
 
 if TYPE_CHECKING:
     from archon_search.filters import SearchFilters
 
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Iterable
+
+
+# ---------------------------------------------------------------------------
+# Private SQL builder helpers (A5b defense-in-depth)
+# LanceDB 0.30.x does not support parameterized WHERE/DELETE clauses on the
+# async API, so we use these helpers to safely quote values. They reuse
+# _sql_quote_str from store_filters (A2) — do NOT add a local _quote_literal.
+# Callers compose multiple predicates with literal ' AND '.
+# ---------------------------------------------------------------------------
+
+
+def _where_eq(col: str, value: str) -> str:
+    """Return e.g. \"name = 'O''Brien'\". Callers compose with literal ' AND '."""
+    return f"{col} = {_sql_quote_str(value)}"
+
+
+def _where_in(col: str, values: Iterable[str]) -> str:
+    """Return e.g. \"chunk_id IN ('a', 'b')\". Empty values yield '1=0' (always-false).
+
+    The '1=0' branch is purely defensive for future callers; current call sites
+    all have an 'if not target_ids: return []' guard before reaching this helper.
+    """
+    items = ", ".join(_sql_quote_str(v) for v in values)
+    return f"{col} IN ({items})" if items else "1=0"
 
 
 @dataclass
