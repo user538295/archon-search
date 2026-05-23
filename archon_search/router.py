@@ -124,38 +124,72 @@ class MultiCollectionRouter:
         self._cached_metadata = result
         return result
 
+    def _score_collections(
+        self,
+        query_embedding: list[float],
+        collections: list[CollectionMeta],
+    ) -> list[tuple[CollectionMeta, float | None]]:
+        """Score collections by centroid cosine similarity. Shared by rank() and rank_with_scores().
+
+        Scored entries (centroid present AND embedding_model matches) come first, sorted by
+        similarity descending with an ascending ``meta.name`` tie-break for equal scores.
+        Unscored entries (None centroid or mismatched model) are paired with ``None`` and
+        appended last in ascending ``meta.name`` order.
+        """
+        scored: list[tuple[CollectionMeta, float]] = []
+        unscored: list[CollectionMeta] = []
+
+        for col in collections:
+            if col.centroid is not None and col.embedding_model == self._embedding_model:
+                sim = _cosine_similarity(query_embedding, col.centroid)
+                scored.append((col, sim))
+            else:
+                unscored.append(col)
+
+        scored.sort(key=lambda p: (-p[1], p[0].name))
+        unscored.sort(key=lambda c: c.name)
+
+        return [(m, s) for m, s in scored] + [(m, None) for m in unscored]
+
     def rank(
         self, query_embedding: list[float], collections: list[CollectionMeta]
     ) -> list[CollectionMeta]:
         """Rank collections by cosine similarity to query_embedding.
 
         - Collections with mismatched embedding_model are treated as centroid=None.
-        - None-centroid collections are placed after scored ones.
+        - Scored entries (centroid present AND model matches) come first, sorted by similarity
+          descending; ascending ``meta.name`` is the tie-break for equal scores.
+        - Unscored entries (None centroid or mismatched model) always follow scored ones, sorted
+          by ascending ``meta.name`` — including the all-unscored case (fully deterministic).
         - Confidence gate: if max(similarity) < threshold and there are scored collections,
           returns [].
         - All-None-centroid case: bypass gate, return up to shortlist_size.
         """
-        scored: list[tuple[float, CollectionMeta]] = []
-        unscored: list[CollectionMeta] = []
-
-        for col in collections:
-            if col.centroid is not None and col.embedding_model == self._embedding_model:
-                sim = _cosine_similarity(query_embedding, col.centroid)
-                scored.append((sim, col))
-            else:
-                unscored.append(col)
+        scored_pairs = self._score_collections(query_embedding, collections)
+        has_scored = any(s is not None for _, s in scored_pairs)
+        ordered = [m for m, _ in scored_pairs]
 
         # All None/mismatched — bypass confidence gate
-        if not scored:
-            return unscored[: self._shortlist_size]
+        if not has_scored:
+            return ordered[: self._shortlist_size]
 
-        scored.sort(key=lambda t: t[0], reverse=True)
-        max_sim = scored[0][0]
+        max_sim = scored_pairs[0][1]  # first entry is the top scored
         if max_sim < self._confidence_threshold:
             return []
 
-        ranked = [col for _, col in scored] + unscored
-        return ranked[: self._shortlist_size]
+        return ordered[: self._shortlist_size]
+
+    def rank_with_scores(
+        self,
+        query_embedding: list[float],
+        collections: list[CollectionMeta],
+    ) -> list[tuple[CollectionMeta, float | None]]:
+        """Return every collection paired with its centroid similarity (None when unscored).
+
+        Unlike rank(), this bypasses the confidence-threshold gate and does NOT truncate to
+        shortlist_size. Intended for /explain only.
+        """
+        return self._score_collections(query_embedding, collections)
 
     async def select(self, query: str) -> list[CollectionMeta]:
         """Embed query, fetch metadata, rank, and return shortlist."""

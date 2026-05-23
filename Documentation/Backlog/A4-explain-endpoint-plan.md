@@ -430,7 +430,7 @@ POST /explain {query, top_k, rerank}
   - Checkpoint: `uv run pytest tests/test_diagnostics.py tests/test_store_trace.py -v`
 
 #### Task 2.2 — Router refactor + `rank_with_scores`
-- [ ] **File**: `archon_search/router.py`
+- [x] **File**: `archon_search/router.py`
 - **Depends on**: nothing
 - **Description**:
   - Extract `_score_collections(self, query_embedding, collections) -> list[tuple[CollectionMeta, float | None]]`. Iterates collections; for each, computes cosine similarity if `centroid is not None and embedding_model == self._embedding_model`, else pairs with `None`. Returns scored entries sorted by descending score with ascending `meta.name` tie-break; unscored entries appended in ascending-name order.
