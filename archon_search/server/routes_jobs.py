@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
+from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
@@ -87,14 +88,25 @@ async def _default_ingest_task(
 
 
 _ERROR_401 = {401: {"model": ErrorDetail}}
+_ERROR_400_401 = {
+    400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
+    401: {"model": ErrorDetail},
+}
 
 
-@router.post("/ingest", status_code=202, response_model=JobResponse, responses=_ERROR_401)
-async def ingest(body: IngestRequest, request: Request) -> JobResponse:
+@router.post("/ingest", status_code=202, response_model=JobResponse, responses=_ERROR_400_401)
+async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONResponse:
     store: JobStore = request.app.state.job_store
     pipeline_fn: Callable[..., Awaitable[None]] | None = getattr(
         request.app.state, "ingest_pipeline", None
     )
+    # Validate path if provided (path is optional for document-list ingests)
+    if body.path is not None:
+        try:
+            validated_path = validate_ingest_path(body.path)
+        except PathUnsafeError as e:
+            raise HTTPException(status_code=400, detail=f"path is unsafe: {e.reason}")
+        body.path = str(validated_path)
     # Populate ingested_by from HTTP header (normalized at boundary).
     body.ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     ns = request.state.namespace

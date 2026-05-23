@@ -420,7 +420,6 @@ def _ingest_client(app: "FastAPI") -> "TestClient":  # type: ignore[name-defined
     return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
 
-@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
 def test_ingest_rejects_dotdot_path() -> None:
     """POST /ingest with dotdot path returns 400 with 'path is unsafe:' detail."""
     from fastapi import FastAPI
@@ -431,7 +430,6 @@ def test_ingest_rejects_dotdot_path() -> None:
     assert response.json()["detail"].startswith("path is unsafe:")
 
 
-@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
 def test_ingest_rejects_nul_byte_path() -> None:
     """POST /ingest with NUL byte path returns 400 with 'nul_byte' in detail."""
     from fastapi import FastAPI
@@ -444,7 +442,6 @@ def test_ingest_rejects_nul_byte_path() -> None:
     assert "nul_byte" in detail
 
 
-@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
 def test_ingest_uses_validator_returned_path() -> None:
     """Handler uses the Path returned by validate_ingest_path, not re-resolving body.path."""
     from pathlib import Path as _Path
@@ -493,7 +490,6 @@ def test_ingest_accepts_legitimate_absolute_path() -> None:
     assert response.status_code == 202
 
 
-@pytest.mark.xfail(strict=True, reason="path validation wiring pending in next commit")
 def test_ingest_openapi_lists_400_response() -> None:
     """GET /openapi.json shows 400 under /ingest POST responses."""
     from fastapi import FastAPI
