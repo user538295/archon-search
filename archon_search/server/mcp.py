@@ -18,7 +18,7 @@ from archon_search.key_manager import load_or_generate_key
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingState, IndexingStatus
 from archon_search.server.middleware_auth import APIKeyMiddleware
-from archon_search.telemetry.entry import ErrorKind, TelemetryEntry
+from archon_search.telemetry.entry import ErrorKind, FilterFlags, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger("archon.search")
@@ -84,12 +84,21 @@ def create_app(
                     r["metadata"] = {}
             if writer is not None:
                 try:
+                    _ff = FilterFlags(
+                        file_type=bool(file_type is not None),
+                        source_path_prefix=bool(source_path_prefix is not None),
+                        source_path_glob=bool(source_path_glob is not None),
+                        indexed_after=bool(indexed_after is not None),
+                        indexed_before=bool(indexed_before is not None),
+                        include_metadata=bool(include_metadata),
+                    )
                     writer.enqueue(
                         TelemetryEntry.from_search_tool_result(
                             endpoint="search",
                             collection=collection or default_collection,
                             result_doc_ids=[r["doc_id"] for r in results],
                             latency_ms=(monotonic() - start) * 1000.0,
+                            filter_flags=_ff,
                         )
                     )
                 except Exception:
@@ -147,12 +156,21 @@ def create_app(
             )
             if writer is not None:
                 try:
+                    _ff = FilterFlags(
+                        file_type=bool(file_type is not None),
+                        source_path_prefix=bool(source_path_prefix is not None),
+                        source_path_glob=bool(source_path_glob is not None),
+                        indexed_after=bool(indexed_after is not None),
+                        indexed_before=bool(indexed_before is not None),
+                        include_metadata=bool(include_metadata),
+                    )
                     writer.enqueue(
                         TelemetryEntry.from_search_tool_result(
                             endpoint="search_with_context",
                             collection=collection or default_collection,
                             result_doc_ids=[r["result"].doc_id for r in results],
                             latency_ms=(monotonic() - start) * 1000.0,
+                            filter_flags=_ff,
                         )
                     )
                 except Exception:
@@ -162,10 +180,15 @@ def create_app(
                 result_dict = asdict(r["result"])
                 if not include_metadata:
                     result_dict["metadata"] = {}
+                ctx_before = [_chunk_to_context_dict(c) for c in r["context_before"]]
+                ctx_after = [_chunk_to_context_dict(c) for c in r["context_after"]]
+                if not include_metadata:
+                    for ctx in ctx_before + ctx_after:
+                        ctx.pop("metadata", None)
                 output.append({
                     "result": result_dict,
-                    "context_before": [_chunk_to_context_dict(c) for c in r["context_before"]],
-                    "context_after": [_chunk_to_context_dict(c) for c in r["context_after"]],
+                    "context_before": ctx_before,
+                    "context_after": ctx_after,
                 })
             return output
         except Exception as exc:

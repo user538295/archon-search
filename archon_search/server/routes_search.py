@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from time import monotonic
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
 from archon_search.filters import SearchFilters
+from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
 logger = logging.getLogger("archon.search")
 
@@ -80,6 +82,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     pipeline = request.app.state.pipeline
     ns = request.state.namespace
     include_metadata = bool(body.filters and body.filters.include_metadata)
+    writer = getattr(request.app.state, "telemetry_writer", None)
+    start = monotonic()
 
     try:
         meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
@@ -92,6 +96,27 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
 
     try:
         result = await pipeline.search(body.query, body.collection, namespace=ns, filters=body.filters)
+        if writer is not None:
+            try:
+                _ff = FilterFlags(
+                    file_type=bool(body.filters and body.filters.file_type is not None),
+                    source_path_prefix=bool(body.filters and body.filters.source_path_prefix is not None),
+                    source_path_glob=bool(body.filters and body.filters.source_path_glob is not None),
+                    indexed_after=bool(body.filters and body.filters.indexed_after is not None),
+                    indexed_before=bool(body.filters and body.filters.indexed_before is not None),
+                    include_metadata=bool(body.filters and body.filters.include_metadata),
+                )
+                writer.enqueue(
+                    TelemetryEntry.from_search_tool_result(
+                        endpoint="search",
+                        collection=body.collection,
+                        result_doc_ids=[r.doc_id for r in result.results],
+                        latency_ms=(monotonic() - start) * 1000.0,
+                        filter_flags=_ff,
+                    )
+                )
+            except Exception:
+                logger.warning("telemetry: search entry enqueue failed", exc_info=True)
         return SearchResponse(
             results=[
                 SearchResultSchema.from_result(r, include_metadata=include_metadata)

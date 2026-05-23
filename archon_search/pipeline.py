@@ -336,7 +336,6 @@ class SearchPipeline:
         candidates = await self.store.hybrid_search(
             collection, vector, query, top_k=self._top_k_retrieve, filters=filters
         )
-        pre_acl_count = len(candidates)
         candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, namespace)
         if filters is not None and len(candidates) < self._top_k_return:
             logger.warning(
@@ -370,8 +369,9 @@ class SearchPipeline:
         Returns:
             ExplainPipelineResult with top_results ([:top_k]) and near_misses ([top_k:top_k+20]).
         """
+        from archon_search.store_filters import _compute_fetch  # noqa: PLC0415
         vector = query_vector if query_vector is not None else await self._embedder.embed_one(query)
-        candidate_depth = max(self._top_k_retrieve * 3, 20)
+        candidate_depth = _compute_fetch(self._top_k_retrieve, has_glob=False)
         candidates = await self.store.hybrid_search_with_trace(
             collection, vector, query, candidate_depth
         )

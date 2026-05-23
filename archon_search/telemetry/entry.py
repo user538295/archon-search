@@ -52,6 +52,7 @@ class FilterFlags(BaseModel):
     source_path_glob: bool = False
     indexed_after: bool = False
     indexed_before: bool = False
+    include_metadata: bool = False
 
 
 DOCUMENTED_SCHEMA_FIELDS: frozenset[str] = frozenset(
@@ -110,7 +111,8 @@ class TelemetryEntry(BaseModel):
         collection: str,
         result_doc_ids: list[str],
         latency_ms: float,
-    ) -> TelemetryEntry:
+        filter_flags: "FilterFlags | None" = None,
+    ) -> "TelemetryEntry":
         if endpoint not in ("search", "search_with_context"):
             raise ValueError(
                 f"from_search_tool_result endpoint must be 'search' or "
@@ -125,6 +127,7 @@ class TelemetryEntry(BaseModel):
             collection=collection,
             result_count=len(result_doc_ids),
             result_doc_ids=result_doc_ids,
+            filter_flags=filter_flags,
         )
 
     @classmethod

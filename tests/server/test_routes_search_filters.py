@@ -108,6 +108,7 @@ def test_post_search_invalid_filter_returns_422_with_validator_message(tmp_path:
     )
 
     assert response.status_code == 422
+    assert "C2" in response.text
 
 
 def test_post_search_no_filter_unchanged_behavior(tmp_path: Path) -> None:

@@ -58,6 +58,7 @@ logger = logging.getLogger("archon")
 _CHUNK_ID_RE = re.compile(r"^[a-f0-9]{64}-\d{6}$")
 _DOC_ID_RE = re.compile(r"^[a-f0-9]{64}$")
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+_FIXED_WIDTH_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 _ARCHON_PREFIX = "_archon_"
 _META_TABLE = "_archon_collection_meta"
 
@@ -699,6 +700,21 @@ class SearchStore:
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
+        # Mixed-format indexed_at warning when a date filter is set.
+        # Computed BEFORE the glob post-filter so that glob-excluded rows with
+        # legacy timestamps are still counted (they were fetched and incorrectly
+        # matched by the date predicate).
+        if filters and (filters.indexed_after or filters.indexed_before):
+            legacy_count = sum(
+                1 for _, row in scored if not _FIXED_WIDTH_TS_RE.match(row.get("indexed_at", ""))
+            )
+            if legacy_count > 0:
+                logger.warning(
+                    "date filter applied to %d legacy-format rows in collection %r; "
+                    "run reindex-metadata --normalize-timestamps to silence this",
+                    legacy_count, collection,
+                )
+
         # Glob post-filter (applied after RRF scoring, before top_k slice)
         if filters and filters.source_path_glob:
             pattern = filters.source_path_glob
@@ -707,19 +723,6 @@ class SearchStore:
                 logger.warning(
                     "glob post-filter shrank pool below top_k: %d/%d",
                     len(scored), top_k,
-                )
-
-        # Mixed-format indexed_at warning when a date filter is set
-        _FIXED_WIDTH_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
-        if filters and (filters.indexed_after or filters.indexed_before):
-            legacy_count = sum(
-                1 for _, row in scored if not _FIXED_WIDTH_RE.match(row.get("indexed_at", ""))
-            )
-            if legacy_count > 0:
-                logger.warning(
-                    "date filter applied to %d legacy-format rows in collection %r; "
-                    "run reindex-metadata --normalize-timestamps to silence this",
-                    legacy_count, collection,
                 )
 
         results = []

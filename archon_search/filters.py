@@ -31,10 +31,10 @@ class SearchFilters(BaseModel):
     """Filter to chunks whose source_path matches this fnmatch glob (post-RRF)."""
 
     indexed_after: datetime | None = None
-    """Exclusive lower bound on indexed_at (ISO-8601 datetime)."""
+    """Inclusive lower bound on indexed_at (ISO-8601 datetime)."""
 
     indexed_before: datetime | None = None
-    """Exclusive upper bound on indexed_at (ISO-8601 datetime)."""
+    """Inclusive upper bound on indexed_at (ISO-8601 datetime)."""
 
     language: str | None = None
     """Reserved for C2 — non-empty value raises 422."""

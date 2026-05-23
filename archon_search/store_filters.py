@@ -58,7 +58,10 @@ def build_where(filters: "SearchFilters") -> str:  # type: ignore[name-defined]
             f"indexed_at <= {_sql_quote_str(normalize_iso_utc(filters.indexed_before))}"
         )
 
-    assert filters.language is None, "language must be rejected by SearchFilters validator"
+    if filters.language is not None:
+        raise RuntimeError(
+            "language filter must be rejected by SearchFilters validator before reaching build_where"
+        )
 
     return " AND ".join(clauses)
 
