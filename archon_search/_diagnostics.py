@@ -55,6 +55,7 @@ class ScoredSearchCandidate:
         source_path: File path of the source document.
         score_breakdown: Full score provenance for this candidate.
         collection: Collection this candidate was retrieved from.
+        acl: ACL namespace tokens from the stored row; None when absent.
     """
 
     doc_id: str
@@ -63,3 +64,4 @@ class ScoredSearchCandidate:
     source_path: str
     score_breakdown: SearchScoreBreakdown
     collection: str
+    acl: list[str] | None = None

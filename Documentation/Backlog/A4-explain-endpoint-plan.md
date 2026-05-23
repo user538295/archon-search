@@ -415,7 +415,7 @@ POST /explain {query, top_k, rerank}
 > **Releasable**: after Task 2.3 the pipeline can compute an explain trace end-to-end against a real LanceDB collection. Still no HTTP surface.
 
 #### Task 2.1 — Extend `ScoredSearchCandidate` with ACL and expose store delegate
-- [ ] **Files**: `archon_search/_diagnostics.py`, `archon_search/store.py`
+- [x] **Files**: `archon_search/_diagnostics.py`, `archon_search/store.py`
 - **Depends on**: nothing
 - **Description**:
   - Append `acl: list[str] | None = None` to `ScoredSearchCandidate`.
