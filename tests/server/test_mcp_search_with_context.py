@@ -114,6 +114,7 @@ async def test_search_with_context_strips_vector_from_neighbors() -> None:
 
 @pytest.mark.asyncio
 async def test_search_with_context_preserves_other_chunk_fields_in_neighbors() -> None:
+    """Context neighbors include core fields; metadata absent when include_metadata=False."""
     pipeline_result = [
         {
             "result": _result(1),
@@ -123,6 +124,7 @@ async def test_search_with_context_preserves_other_chunk_fields_in_neighbors() -
     ]
     payload = await _call_search_with_context(pipeline_result)
     entry = payload[0]
+    # metadata is suppressed when include_metadata=False (the default)
     expected_keys = {
         "text",
         "chunk_id",
@@ -131,8 +133,35 @@ async def test_search_with_context_preserves_other_chunk_fields_in_neighbors() -
         "file_type",
         "updated_at",
         "ingested_by",
-        "metadata",
     }
     for neighbor in entry["context_before"] + entry["context_after"]:
         missing = expected_keys - set(neighbor.keys())
         assert not missing, f"neighbor missing keys {missing}: {neighbor!r}"
+        assert "metadata" not in neighbor, (
+            "metadata must be absent in context chunks when include_metadata=False"
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_includes_metadata_in_neighbors_when_requested() -> None:
+    """Context neighbors include metadata when include_metadata=True."""
+    pipeline_result = [
+        {
+            "result": _result(1),
+            "context_before": [_neighbor(0)],
+            "context_after": [_neighbor(2)],
+        }
+    ]
+    pipeline = MagicMock()
+    pipeline.search_with_context = AsyncMock(return_value=pipeline_result)
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
+        fn = app.tools["search_with_context"]
+        payload = await fn(query="hello", collection=None, context_window=1, include_metadata=True)
+
+    entry = payload[0]
+    for neighbor in entry["context_before"] + entry["context_after"]:
+        assert "metadata" in neighbor, "metadata must be present when include_metadata=True"

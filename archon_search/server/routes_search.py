@@ -1,10 +1,11 @@
 """POST /search endpoint — delegates to SearchPipeline (Task 3.4)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from time import monotonic
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -15,6 +16,10 @@ from archon_search.telemetry.entry import ErrorKind, FilterFlags, TelemetryEntry
 logger = logging.getLogger("archon.search")
 
 router = APIRouter()
+
+# 30-second hard timeout for pipeline.search(); surface as HTTP 504.
+# TODO: make configurable via config.py (see /route for parity)
+_SEARCH_TIMEOUT_SECONDS = 30.0
 
 
 class SearchRequest(BaseModel):
@@ -95,7 +100,10 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         return JSONResponse({"detail": "collection not found"}, status_code=404)
 
     try:
-        result = await pipeline.search(body.query, body.collection, namespace=ns, filters=body.filters)
+        result = await asyncio.wait_for(
+            pipeline.search(body.query, body.collection, namespace=ns, filters=body.filters),
+            timeout=_SEARCH_TIMEOUT_SECONDS,
+        )
         if writer is not None:
             try:
                 _ff = FilterFlags(
@@ -124,8 +132,27 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             ],
             acl_filtered=result.acl_filtered,
         )
+    except asyncio.TimeoutError:
+        if writer is not None:
+            try:
+                writer.enqueue(
+                    TelemetryEntry.from_error(
+                        endpoint="search",
+                        status="timeout",
+                        error_kind=ErrorKind.timeout,
+                        latency_ms=(monotonic() - start) * 1000.0,
+                    )
+                )
+            except Exception:
+                logger.warning("telemetry: search timeout entry enqueue failed", exc_info=True)
+        logger.error(
+            "search timed out after %.1fs",
+            _SEARCH_TIMEOUT_SECONDS,
+            extra={"event_type": "search_timeout"},
+            exc_info=True,
+        )
+        raise HTTPException(status_code=504, detail="Search timed out")
     except Exception as exc:
-        logger.warning("search failed for collection %r: %s", body.collection, exc, exc_info=True)
         if writer is not None:
             try:
                 writer.enqueue(
@@ -138,4 +165,10 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 )
             except Exception:
                 logger.warning("telemetry: search error entry enqueue failed", exc_info=True)
-        return SearchResponse(results=[], acl_filtered=False)
+        logger.error(
+            "search pipeline failed: %s",
+            type(exc).__name__,
+            extra={"event_type": "search_pipeline_failure"},
+            exc_info=True,
+        )
+        raise

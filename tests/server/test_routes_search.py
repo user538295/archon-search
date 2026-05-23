@@ -23,7 +23,7 @@ def _make_app(tmp_path: Path) -> tuple:
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    client = TestClient(app, headers={"Authorization": f"Bearer {key}"}, raise_server_exceptions=False)
     return app, client
 
 
@@ -137,17 +137,15 @@ def test_search_collection_not_found_returns_404(tmp_path: Path) -> None:
     assert response.status_code == 404
 
 
-def test_search_pipeline_error_returns_empty(tmp_path: Path) -> None:
-    """When pipeline.search() raises, returns SearchResponse(results=[], acl_filtered=False)."""
+def test_search_pipeline_error_returns_500(tmp_path: Path) -> None:
+    """When pipeline.search() raises, returns HTTP 500 with detail."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=RuntimeError("search boom"))
 
     response = client.post("/search", json={"collection": "col", "query": "q"})
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["results"] == []
-    assert data["acl_filtered"] is False
+    assert response.status_code == 500
+    assert "detail" in response.json()
 
 
 # ---------------------------------------------------------------------------
@@ -259,18 +257,17 @@ def test_search_whitespace_collection(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_search_store_exception_returns_empty(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """Exception in pipeline.search() (after successful meta lookup) → log WARNING + return []."""
+def test_search_store_exception_returns_500(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Exception in pipeline.search() (after successful meta lookup) → HTTP 500 with detail."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=RuntimeError("db failure"))
 
-    with caplog.at_level(logging.WARNING, logger="archon.search"):
+    with caplog.at_level(logging.ERROR, logger="archon.search"):
         response = client.post("/search", json={"collection": "col", "query": "test"})
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["results"] == []
-    assert any("search failed" in record.message for record in caplog.records)
+    assert response.status_code == 500
+    assert "detail" in response.json()
+    assert any("search pipeline failed" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -296,15 +293,15 @@ def test_search_top_k_accepted_but_ignored_by_pipeline(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_search_embedder_failure_returns_empty(tmp_path: Path) -> None:
-    """pipeline.search() failure → 200 + [] (pipeline encapsulates embed+rerank)."""
+def test_search_embedder_failure_returns_500(tmp_path: Path) -> None:
+    """pipeline.search() failure → HTTP 500 with detail."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=RuntimeError("model error"))
 
     response = client.post("/search", json={"collection": "col", "query": "test"})
 
-    assert response.status_code == 200
-    assert response.json()["results"] == []
+    assert response.status_code == 500
+    assert "detail" in response.json()
 
 
 # ---------------------------------------------------------------------------
@@ -312,15 +309,15 @@ def test_search_embedder_failure_returns_empty(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_search_reranker_failure_returns_empty(tmp_path: Path) -> None:
-    """Any exception from pipeline.search() → 200 + [] (reranker failure path)."""
+def test_search_reranker_failure_returns_500(tmp_path: Path) -> None:
+    """Any exception from pipeline.search() → HTTP 500 with detail."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=ValueError("score count mismatch"))
 
     response = client.post("/search", json={"collection": "col", "query": "test"})
 
-    assert response.status_code == 200
-    assert response.json()["results"] == []
+    assert response.status_code == 500
+    assert "detail" in response.json()
 
 
 # ---------------------------------------------------------------------------
