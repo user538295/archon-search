@@ -1288,6 +1288,8 @@ def test_add_collection_uses_validator_returned_path(
     # Capture the IngestRequest passed to _default_ingest_task.
     captured: list[str] = []
 
+    # Must stay await-free: the assertion below relies on this completing in a single
+    # event-loop step before the response is returned (no await point => no race).
     async def _capturing_ingest_task(job_id, store, body, *, namespace="default"):  # type: ignore[no-untyped-def]
         captured.append(body.path)
 
@@ -1399,6 +1401,7 @@ def test_add_collection_accepts_legitimate_absolute_path(
     assert response.status_code == 202
     data = response.json()
     assert "job_id" in data
+    assert data["status"] == JobStatus.PENDING.value
 
 
 def test_add_collection_openapi_lists_400_response(

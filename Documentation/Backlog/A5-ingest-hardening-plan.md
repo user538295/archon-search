@@ -242,7 +242,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/test_path_safety.py -v`
 
 #### Task 1.2 — Wire validator into `POST /collections`
-- [ ] **File**: `archon_search/server/routes_collections.py`
+- [x] **File**: `archon_search/server/routes_collections.py`
 - **Depends on**: Task 1.1
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: append the integration tests below to `tests/server/test_routes_collections.py`. Tests fail (wiring absent); if CI must stay green, mark them `@pytest.mark.xfail(strict=True, reason="wiring pending")`.
