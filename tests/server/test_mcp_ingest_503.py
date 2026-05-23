@@ -61,7 +61,6 @@ def _make_app(pipeline: MagicMock) -> _FakeApp:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="store_busy clause pending")
 async def test_mcp_ingest_file_store_busy_returns_store_busy_code() -> None:
     """ingest_file surfaces StoreBusyError as McpErrorResponse with code='store_busy'."""
     pipeline = MagicMock()
@@ -74,7 +73,6 @@ async def test_mcp_ingest_file_store_busy_returns_store_busy_code() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="store_busy clause pending")
 async def test_mcp_ingest_directory_store_busy_returns_store_busy_code() -> None:
     """ingest_directory surfaces StoreBusyError as McpErrorResponse with code='store_busy'."""
     pipeline = MagicMock()

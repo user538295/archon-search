@@ -17,6 +17,7 @@ from archon_search.key_manager import load_or_generate_key
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingState, IndexingStatus
 from archon_search.server.middleware_auth import APIKeyMiddleware
+from archon_search.store import StoreBusyError
 from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
@@ -160,6 +161,8 @@ def create_app(
                 validated, collection or default_collection, ingested_by="http",
             )
             return asdict(result)
+        except StoreBusyError as exc:
+            return McpErrorResponse(error=str(exc), code="store_busy")
         except Exception as exc:
             logger.exception("ingest_file failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
@@ -189,6 +192,8 @@ def create_app(
                 ingested_by="http",
             )
             return [asdict(r) for r in results]
+        except StoreBusyError as exc:
+            return McpErrorResponse(error=str(exc), code="store_busy")
         except Exception as exc:
             logger.exception("ingest_directory failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
