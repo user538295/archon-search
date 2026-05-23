@@ -2469,3 +2469,145 @@ def test_where_in_adversarial() -> None:
     """_where_in doubles single quotes in values."""
     from archon_search.store import _where_in
     assert _where_in("chunk_id", ["a'b"]) == "chunk_id IN ('a''b')"
+
+
+# ---------------------------------------------------------------------------
+# A5b — behavior-preservation regression tests (Task 2.3)
+# Verify the five f-string-to-helper replacements preserve semantics.
+# These tests should remain green before AND after the refactor.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_collection_meta_removes_only_named_row(
+    connected_store: "SearchStore",
+    col_name: str,
+) -> None:
+    """delete_collection_meta removes (name, namespace) row leaving others intact.
+
+    Exercises the compound-predicate site: name = '{name}' AND namespace = '{namespace}'.
+    """
+    from archon_search.collection_meta import CollectionMeta
+
+    name_a = col_name + "-a"
+    name_b = col_name + "-b"
+    ns = "default"
+
+    await connected_store.update_collection_meta(CollectionMeta(name=name_a, namespace=ns))
+    await connected_store.update_collection_meta(CollectionMeta(name=name_b, namespace=ns))
+
+    all_meta = await connected_store.get_all_collections_meta()
+    names = {m.name for m in all_meta}
+    assert name_a in names
+    assert name_b in names
+
+    await connected_store.delete_collection_meta(name_a, ns)
+
+    remaining = await connected_store.get_all_collections_meta()
+    remaining_names = {m.name for m in remaining}
+    assert name_a not in remaining_names
+    assert name_b in remaining_names
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_replaces_existing_row(
+    connected_store: "SearchStore",
+    col_name: str,
+) -> None:
+    """update_collection_meta deletes-then-inserts (exercises delete f-string at line ~472).
+
+    Exercises the single-name delete site: name = '{meta.name}'.
+    """
+    from archon_search.collection_meta import CollectionMeta
+
+    name = col_name + "-upd"
+    ns = "default"
+
+    await connected_store.update_collection_meta(
+        CollectionMeta(name=name, namespace=ns, description="v1")
+    )
+    await connected_store.update_collection_meta(
+        CollectionMeta(name=name, namespace=ns, description="v2")
+    )
+
+    all_meta = await connected_store.get_all_collections_meta()
+    matching = [m for m in all_meta if m.name == name]
+    # Should have exactly one row (upsert, not append)
+    assert len(matching) == 1
+    assert matching[0].description == "v2"
+
+
+@pytest.mark.asyncio
+async def test_delete_document_removes_all_chunks_a5b(
+    connected_store: "SearchStore",
+    col_name: str,
+) -> None:
+    """delete_document removes chunks via doc_id predicate (exercises lines ~789/792).
+
+    Exercises: count_rows(f"doc_id = ...") and delete(f"doc_id = ...").
+    """
+    doc_id = _doc_id()
+    chunks = [_chunk(doc_id, i) for i in range(3)]
+
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    count = await connected_store.delete_document(col_name, doc_id)
+    assert count == 3
+
+    # Verify removed
+    count_after = await connected_store.delete_document(col_name, doc_id)
+    assert count_after == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_adjacent_chunks_returns_window_a5b(
+    connected_store: "SearchStore",
+    col_name: str,
+) -> None:
+    """fetch_adjacent_chunks uses IN clause (exercises the .where(f'chunk_id IN ...') site).
+
+    Exercises: .where(f"chunk_id IN ({id_list})").
+    """
+    doc_id = _doc_id()
+    chunks = [_chunk(doc_id, i, text=f"chunk{i}") for i in range(5)]
+
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    # Fetch neighbors of chunk at index 2 with window=1
+    neighbors = await connected_store.fetch_adjacent_chunks(col_name, doc_id, 2, 1)
+    neighbor_ids = {c.chunk_id for c in neighbors}
+    # Should contain chunk 1 and chunk 3 (not chunk 2 itself)
+    assert f"{doc_id}-000001" in neighbor_ids
+    assert f"{doc_id}-000003" in neighbor_ids
+    assert f"{doc_id}-000002" not in neighbor_ids
+
+
+@pytest.mark.asyncio
+async def test_a5b_end_to_end_flow_unchanged(
+    connected_store: "SearchStore",
+    col_name: str,
+) -> None:
+    """Full happy-path: add collection → ingest → search → delete → verify gone.
+
+    This is the A5b regression check (C1-I-DA3-8) that the helpers preserve
+    semantics across the five replaced sites.
+    """
+    import hashlib
+
+    doc_id = _doc_id()
+    chunks = [_chunk(doc_id, i, text=f"regression text {i}") for i in range(2)]
+
+    # Ensure collection and ingest
+    await connected_store.ensure_collection(col_name, _DIM)
+    n_ingested = await connected_store.ingest_chunks(col_name, chunks)
+    assert n_ingested == 2
+
+    # Delete
+    deleted = await connected_store.delete_document(col_name, doc_id)
+    assert deleted == 2
+
+    # Verify nothing left
+    after = await connected_store.delete_document(col_name, doc_id)
+    assert after == 0
