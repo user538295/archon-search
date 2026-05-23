@@ -374,7 +374,12 @@ def create_app(
         try:
             if collection is not None:
                 # Pinned path
-                meta = await pipeline.get_collection_meta(collection, namespace=DEFAULT_NAMESPACE)
+                try:
+                    meta = await pipeline.get_collection_meta(collection, namespace=DEFAULT_NAMESPACE)
+                except Exception as exc:
+                    logger.error("explain: meta lookup failed for collection %r: %s", collection, exc, exc_info=True)
+                    _enqueue_explain_error(writer, start, "internal_error", ErrorKind.other)
+                    return McpErrorResponse(error="service unavailable", code="service_unavailable")
                 if meta is None:
                     _enqueue_explain_error(writer, start, "validation_error", ErrorKind.validation_error)
                     return McpErrorResponse(

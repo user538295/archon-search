@@ -345,6 +345,21 @@ async def test_mcp_explain_collectionless_chosen_below_threshold_true() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_explain_pinned_meta_lookup_exception_returns_service_unavailable() -> None:
+    """When get_collection_meta raises, MCP explain returns code='service_unavailable'."""
+    pipeline = _make_pipeline(meta_raises=RuntimeError("db connection lost"))
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default")  # type: ignore[call-arg]
+        explain_fn = app.tools["explain"]  # type: ignore[attr-defined]
+        result = await explain_fn(query="hello", collection="my-col")
+
+    assert result.get("code") == "service_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_mcp_explain_pipeline_failure_returns_internal_error() -> None:
     """When pipeline.explain raises unexpectedly, MCP explain returns code='internal_error'."""
     pipeline = _make_pipeline()
