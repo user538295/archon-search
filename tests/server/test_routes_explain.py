@@ -257,8 +257,10 @@ def test_post_explain_store_failure_returns_500(tmp_path: Path) -> None:
 
     response = client.post("/explain", json={"query": "hello", "collection": "col"})
     assert response.status_code == 500
-    assert response.json()["detail"] == str(exc)
-    assert response.json()["detail"].startswith("store error:")
+    detail = response.json()["detail"]
+    # Detail is sanitized to stage + exception type — the original message is NOT echoed.
+    assert detail == "store error: RuntimeError"
+    assert "lancedb exploded" not in detail
 
 
 def test_post_explain_reranker_failure_returns_500(tmp_path: Path) -> None:
@@ -276,6 +278,9 @@ def test_post_explain_reranker_failure_returns_500(tmp_path: Path) -> None:
     assert response.status_code == 500
     detail = response.json()["detail"]
     assert detail.startswith("reranker error:"), f"Expected 'reranker error:' prefix, got: {detail!r}"
+    # Original message is sanitized out of the response (only the exception type leaks).
+    assert detail == "reranker error: ValueError"
+    assert "score count mismatch" not in detail
 
 
 def test_post_explain_telemetry_writer_failure_does_not_abort_response(tmp_path: Path) -> None:
@@ -330,7 +335,12 @@ async def test_post_explain_concurrent_collectionless_requests(tmp_path: Path) -
 
     for resp in resps:
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-    # All responses must have the same top-level shape
+        data = resp.json()
+        # Each collectionless response must carry a routing block and the mock's shape
+        # (2 results) intact — detects cross-request state bleed or content corruption.
+        assert data["routing"] is not None
+        assert data["routing"]["invoked"] is True
+        assert len(data["results"]) == 2
     keys_list = [set(resp.json().keys()) for resp in resps]
     assert keys_list[0] == keys_list[1] == keys_list[2]
 
@@ -388,7 +398,12 @@ async def test_post_explain_pinned_collection_happy_path(tmp_path: Path) -> None
     data = resp.json()
     assert data["routing"] is None
     assert len(data["results"]) <= top_k
+    assert len(data["results"]) > 0
     assert data["collection"] == "docs"
+    # rerank defaults to True → every result carries a populated reranker_score.
+    assert data["rerank"] is True
+    for r in data["results"]:
+        assert r["breakdown"]["reranker_score"] is not None
     await store.disconnect()
 
 
@@ -486,13 +501,20 @@ async def test_post_explain_routing_covers_every_collection_no_gating(tmp_path: 
     store = SearchStore(tmp_path / "realdb")
     await store.connect()
 
-    col_names = ["alpha", "beta", "gamma"]
+    # Distinct centroids so the collections score differently — proves a genuinely
+    # low-scoring collection is retained (not just identical-score ones).
+    centroids = {
+        "alpha": [0.1, 0.2, 0.3, 0.4],  # ~cosine 1.0 with query [0.1,0.2,0.3,0.4]
+        "beta": [0.4, 0.3, 0.2, 0.1],   # lower cosine
+        "gamma": [1.0, 0.0, 0.0, 0.0],  # low cosine
+    }
+    col_names = list(centroids)
     for i, col in enumerate(col_names):
         await _ingest(store, col, _make_records(3, id_offset=i * 10))
         await store.update_collection_meta(
             CollectionMeta(
                 name=col,
-                centroid=[0.1, 0.2, 0.3, 0.4],
+                centroid=centroids[col],
                 embedding_model=config.embedding_model,
                 namespace="default",
             )
@@ -703,6 +725,8 @@ async def test_post_explain_search_top_k_equality_at_top_k_return(tmp_path: Path
     # Call pipeline.search directly for baseline
     search_result = await pipeline.search(query, "docs")
     search_ids = [(r.doc_id, r.chunk_id) for r in search_result.results]
+    # Guard against a vacuous [] == [] pass: search must return a full top_k_return slice.
+    assert len(search_ids) == top_k_return
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -1076,12 +1100,19 @@ async def test_post_explain_acl_filtered_returns_empty_and_flag(tmp_path: Path) 
         headers={"Authorization": f"Bearer {key}"},
     ) as ac:
         resp = await ac.post("/explain", json={"query": "common alpha beta", "collection": "docs", "top_k": 5})
+        # AC11: /search must report the same acl_filtered + empty-results shape.
+        search_resp = await ac.post("/search", json={"collection": "docs", "query": "common alpha beta"})
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["acl_filtered"] is True
     assert data["results"] == []
     assert data["near_misses"] == []
+
+    assert search_resp.status_code == 200, search_resp.text
+    search_data = search_resp.json()
+    assert search_data["acl_filtered"] is True
+    assert search_data["results"] == []
 
     await store.disconnect()
 
@@ -1284,6 +1315,7 @@ async def test_post_explain_telemetry_emits_no_query(tmp_path: Path) -> None:
     entry = explain_entries[0]
     assert entry.endpoint == "explain"
     assert entry.result_count == result_count
+    assert entry.collection == "docs"
 
     await store.disconnect()
 

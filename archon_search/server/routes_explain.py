@@ -315,13 +315,18 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             query_vector=query_vector,
         )
     except ExplainStageError as exc:
-        logger.warning("explain stage %s failed: %s", exc.stage, type(exc.original).__name__)
+        # Full original is logged server-side; the response detail is sanitized to
+        # stage + exception type only — the original message could echo the query
+        # (e.g. an FTS error), and the query must never leave the process.
+        logger.warning("explain stage %s failed: %s", exc.stage, exc.original, exc_info=exc.original)
         _emit_err()
-        return JSONResponse({"detail": str(exc)}, status_code=500)
+        return JSONResponse(
+            {"detail": f"{exc.stage} error: {type(exc.original).__name__}"}, status_code=500
+        )
     except Exception as exc:
-        logger.error("explain failed for %r: %s", chosen, type(exc).__name__, exc_info=True)
+        logger.error("explain failed for %r: %s", chosen, exc, exc_info=True)
         _emit_err()
-        return JSONResponse({"detail": f"explain failed: {exc}"}, status_code=500)
+        return JSONResponse({"detail": "explain failed"}, status_code=500)
 
     response = ExplainResponse.from_pipeline_result(
         rerank=body.rerank, collection=chosen, routing=routing, result=result
