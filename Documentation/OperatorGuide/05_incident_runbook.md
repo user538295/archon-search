@@ -11,7 +11,7 @@ This runbook lists the failure modes the codebase is known to produce today, pai
 ## Principles
 
 1. **Start with `/health`, then `/status`, then the log.** Three commands cover the first decision branch in nearly every incident.
-2. **Restart is a legitimate first step.** The router cache (`CON-2`) and the lack of cache-bust APIs mean restart is the only currently supported recovery for several issues.
+2. **Restart is a legitimate first step.** It clears LanceDB lock-file remnants and re-loads models. (Note: the FastAPI `/route` path builds a fresh router per request, so router-cache staleness — `CON-2`, addressed by A6 — is no longer a reason to restart.)
 3. **Search failures may be silent.** `POST /search` returns 200 with empty `results` on pipeline error (`CON-5`). Do not equate HTTP 200 with correctness.
 4. **Re-ingest is the rollback.** There is no transactional repair (`Architecture/160…md` principle 5).
 
@@ -106,7 +106,7 @@ This is the documented failure-downgrade behaviour: when the pipeline raises, `r
 4. Grep the log for `search failed for collection` and `meta lookup failed` — these are the exact log strings emitted on the two failure branches (`routes_search.py:70`, `:83`).
 5. If telemetry is enabled, `GET /telemetry/entries?collection=<name>&endpoint=search&status=error` enumerates the failure entries.
 6. Re-run with a known-good query. Persistent emptiness with no log signal indicates either an empty collection or a model-load issue.
-7. If the cause is router staleness after a recent reindex (`CON-2`), restart the service to repopulate `MultiCollectionRouter._cached_metadata` (`router.py:50, :69-70, :124`). This is a private one-shot in-process cache with no public bust API; restart is the only supported recovery. #Unverified (operator-symptom mapping to router staleness is inferential; cache mechanics are verified in source).
+7. Router staleness is **not** a likely cause on the server path: `POST /route` builds a fresh `MultiCollectionRouter` per request (`routes_route._build_router`), so `_cached_metadata` never outlives a single call and centroids cannot go stale across requests (`CON-2`, addressed by A6; per-request lifecycle pinned by a regression test). If a future build switches to a shared, long-lived router, it must call `MultiCollectionRouter.invalidate()` after collection mutations.
 
 Roadmap fix `A3` (propagate 5xx on pipeline failure) will eliminate this class of silent failure.
 

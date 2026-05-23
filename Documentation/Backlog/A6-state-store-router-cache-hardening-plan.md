@@ -336,7 +336,7 @@ router = MultiCollectionRouter(
 ### Phase 3 — Verification & Documentation
 
 #### Task 3.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: Tasks 1.1, 1.2, 1.3, 2.1, 2.2, 2.3
 - **Description**:
   - Run the full test suite and confirm no regressions: `uv run pytest`.

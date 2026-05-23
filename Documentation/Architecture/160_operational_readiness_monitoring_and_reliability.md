@@ -14,7 +14,7 @@
 2. **Observability is local-only.** Health, status, indexing state, and telemetry are all served from the same process to the same operator. Nothing is exported off-box. Telemetry is opt-in and disabled by default (`Architecture/000_introduction_and_guiding_principles.md`, principle 4).
 3. **OS-native supervision.** The service is registered as a `launchd` user agent (macOS) or `systemd --user` unit (Linux). The OS — not `archon-search` — is responsible for restart-on-crash and start-at-login.
 4. **One health endpoint is unauthenticated; everything else requires bearer auth.** `GET /health` exists so a supervisor or installer can probe the port without holding the API key.
-5. **State recovery via re-sync, not via clever rollback.** When indexes drift, the runbook is to re-run `archon-search sync` or `archon-search collection reindex`. There is no transactional repair path.
+5. **State recovery via re-sync, not via clever rollback.** When indexes drift, the runbook is to re-run `archon-search sync` or `archon-search collection reindex`. There is no transactional repair path. Concurrent multi-collection syncs no longer lose progress: `IndexingStateStore` (`archon_search/progress.py`) serializes all mutating writes to `.indexing_state.json` via an internal `threading.RLock` (A6 closed `CON-3`; see `Architecture/530_technical_debt_refactoring_roadmap.md`). On-disk durability under power-loss or torn writes is still open, tracked under A7 (fsync).
 
 ## Reliability targets
 
