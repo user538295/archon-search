@@ -281,7 +281,7 @@ def create_app(
                 )
                 if not all_meta:
                     return McpErrorResponse(
-                        error="No collections found", code="not_found"
+                        error="no collections available", code="not_found"
                     )
                 query_vector = await pipeline._embedder.embed_one(query)
                 _confidence_threshold = _cfg.routing_confidence_threshold
@@ -293,9 +293,10 @@ def create_app(
                     embedding_model=pipeline._embedder.model_name,
                 )
                 scored_pairs = inline_router.rank_with_scores(query_vector, all_meta)
+                scored_pairs = [(m, s) for m, s in scored_pairs if m.namespace == DEFAULT_NAMESPACE]  # defensive
                 if not scored_pairs:
                     return McpErrorResponse(
-                        error="No collections found", code="not_found"
+                        error="no collections available", code="not_found"
                     )
                 chosen_meta, chosen_score = scored_pairs[0]
                 chosen_collection = chosen_meta.name

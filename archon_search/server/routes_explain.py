@@ -229,7 +229,7 @@ async def explain(
     body: ExplainRequest, request: Request
 ) -> ExplainResponse | JSONResponse:
     from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
-    from archon_search.router import MultiCollectionRouter, _cosine_similarity  # noqa: PLC0415
+    from archon_search.router import MultiCollectionRouter  # noqa: PLC0415
     from archon_search.telemetry.entry import TelemetryEntry  # noqa: PLC0415
 
     start = monotonic()

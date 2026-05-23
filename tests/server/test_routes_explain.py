@@ -289,3 +289,101 @@ def test_post_explain_near_miss_no_text_field(tmp_path: Path) -> None:
     data = response.json()
     assert len(data["near_misses"]) == 1
     assert "text" not in data["near_misses"][0]
+
+
+# ---------------------------------------------------------------------------
+# AC9: Telemetry emits no query text
+# ---------------------------------------------------------------------------
+
+
+def test_post_explain_telemetry_emits_no_query(tmp_path: Path) -> None:
+    from unittest.mock import MagicMock
+
+    from archon_search.telemetry.entry import TelemetryEntry
+    from archon_search.telemetry.writer import TelemetryWriter
+
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock()
+
+    mock_writer = MagicMock(spec=TelemetryWriter)
+    app.state.telemetry_writer = mock_writer
+
+    unique_query = "UNIQUE_SENTINEL_QUERY_AC9_XYZ"
+    response = client.post(
+        "/explain",
+        json={"query": unique_query, "collection": "my-col"},
+    )
+
+    assert response.status_code == 200
+    mock_writer.enqueue.assert_called_once()
+    entry: TelemetryEntry = mock_writer.enqueue.call_args[0][0]
+
+    entry_dict = entry.model_dump()
+    assert "query" not in entry_dict
+    assert unique_query not in str(entry_dict)
+    assert entry.endpoint == "explain"
+    assert isinstance(entry.result_count, int)
+
+
+# ---------------------------------------------------------------------------
+# AC8: ACL filtering — only same-namespace collections appear in routing.candidates
+# ---------------------------------------------------------------------------
+
+
+def test_post_explain_routing_candidates_acl_filtered(tmp_path: Path) -> None:
+    app, client = _make_app(tmp_path)
+
+    meta_ns = CollectionMeta(
+        name="col-ns",
+        namespace="default",
+        centroid=[1.0, 0.0],
+        embedding_model="test-model",
+    )
+    meta_other = CollectionMeta(
+        name="col-other",
+        namespace="other-ns",
+        centroid=[0.0, 1.0],
+        embedding_model="test-model",
+    )
+
+    app.state.pipeline = _make_pipeline_mock(
+        all_meta_return=[meta_ns, meta_other],
+        explain_return=ExplainPipelineResult(
+            top_results=[_make_candidate()],
+            near_misses=[],
+            acl_filtered=False,
+        ),
+    )
+
+    response = client.post("/explain", json={"query": "what is archon?"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["routing"] is not None
+    candidate_names = [c["collection"] for c in data["routing"]["candidates"]]
+    assert "col-ns" in candidate_names
+    assert "col-other" not in candidate_names
+
+
+# ---------------------------------------------------------------------------
+# AC11: acl_filtered=True propagates to response
+# ---------------------------------------------------------------------------
+
+
+def test_post_explain_acl_filtered_flag_true(tmp_path: Path) -> None:
+    app, client = _make_app(tmp_path)
+    explain_result = ExplainPipelineResult(
+        top_results=[_make_candidate()],
+        near_misses=[],
+        acl_filtered=True,
+    )
+    app.state.pipeline = _make_pipeline_mock(explain_return=explain_result)
+
+    response = client.post(
+        "/explain",
+        json={"query": "what is archon?", "collection": "my-col"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["acl_filtered"] is True
