@@ -32,13 +32,13 @@ def validate_ingest_path(raw: str) -> Path:
     if raw == "":
         raise PathUnsafeError("empty")
 
+    # Two branches are deliberate: emit distinct reason codes ("empty" vs "whitespace_only") for caller diagnostics.
     if not raw.strip():
         raise PathUnsafeError("whitespace_only")
 
     if "\x00" in raw:
         raise PathUnsafeError("nul_byte")
 
-    # Absoluteness is checked after expanduser() so that ~/foo is accepted.
     expanded = Path(raw).expanduser()
     if not expanded.is_absolute():
         raise PathUnsafeError("not_absolute")

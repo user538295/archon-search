@@ -230,7 +230,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Unit: `test_accepts_dotdot_substring_in_dirname` — `/data/..backup/x.md` accepted (`..backup` is a real-dir-name substring, not a `..` part).
   - Unit: `test_accepts_nonexistent_absolute_path` — `/no/such/file.md` passes the validator; existence is downstream's concern.
   - Unit: `test_accepts_trailing_slash` — `/tmp/foo/` accepted.
-  - Unit: `test_rejects_dotdot_standalone` — raises `PathUnsafeError(reason="contains_dotdot")` for `..`.
+  - Unit: `test_rejects_dotdot_standalone` — raises `PathUnsafeError(reason="not_absolute")` for `..` (`..` is relative, so the not_absolute check fires before the dotdot-parts check).
   - Unit: `test_rejects_dotdot_mid_path` — `/foo/../bar` rejected.
   - Unit: `test_rejects_relative_dotdot_path` — `../foo` rejected with `reason == "not_absolute"` (relative-path rejection fires before dotdot-parts rejection per the check order documented above). (C1-I-DA1-1)
   - Unit: `test_rejects_empty_string` — `""` → `reason="empty"`.

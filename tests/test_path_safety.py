@@ -1,56 +1,64 @@
 """Unit tests for archon_search._path_safety."""
+import os
 from pathlib import Path
 
 import pytest
 
+from archon_search._path_safety import PathUnsafeError, validate_ingest_path
+
 
 def test_accepts_absolute_path():
-    from archon_search._path_safety import validate_ingest_path
-
     result = validate_ingest_path("/tmp/foo.md")
     assert result == Path("/tmp/foo.md").resolve()
 
 
 def test_accepts_path_with_spaces_and_unicode():
-    from archon_search._path_safety import validate_ingest_path
-
     result = validate_ingest_path("/home/user/My Documents/notés.md")
     assert result == Path("/home/user/My Documents/notés.md").resolve()
 
 
 def test_accepts_tilde_expansion():
-    from archon_search._path_safety import validate_ingest_path
-
     result = validate_ingest_path("~/foo")
     assert result.is_absolute()
     assert result != Path("~/foo")
+    assert "~" not in str(result)
 
 
 def test_accepts_dotdot_substring_in_dirname():
-    from archon_search._path_safety import validate_ingest_path
-
     # "..backup" is a dir name containing ".." as substring — not a ".." part
     result = validate_ingest_path("/data/..backup/x.md")
     assert result.is_absolute()
 
 
 def test_accepts_nonexistent_absolute_path():
-    from archon_search._path_safety import validate_ingest_path
-
     result = validate_ingest_path("/no/such/file.md")
     assert result.is_absolute()
 
 
 def test_accepts_trailing_slash():
-    from archon_search._path_safety import validate_ingest_path
-
     result = validate_ingest_path("/tmp/foo/")
     assert result.is_absolute()
 
 
-def test_rejects_dotdot_standalone():
-    from archon_search._path_safety import PathUnsafeError, validate_ingest_path
+def test_accepts_long_absolute_path():
+    long_path = "/tmp/" + "a" * 200 + ".md"
+    result = validate_ingest_path(long_path)
+    assert result.is_absolute()
 
+
+def test_accepts_symlink_without_dotdot(tmp_path):
+    real_file = tmp_path / "real.md"
+    real_file.write_text("content")
+    symlink = tmp_path / "link.md"
+    try:
+        os.symlink(real_file, symlink)
+    except OSError:
+        pytest.skip("os.symlink not supported on this platform")
+    result = validate_ingest_path(str(symlink))
+    assert result.is_absolute()
+
+
+def test_rejects_dotdot_standalone():
     # ".." is relative, so not_absolute fires before contains_dotdot per check order
     with pytest.raises(PathUnsafeError) as exc_info:
         validate_ingest_path("..")
@@ -58,8 +66,6 @@ def test_rejects_dotdot_standalone():
 
 
 def test_rejects_dotdot_mid_path():
-    from archon_search._path_safety import PathUnsafeError, validate_ingest_path
-
     # "/foo/../bar" is absolute, passes absoluteness check, then fails on ".." part
     with pytest.raises(PathUnsafeError) as exc_info:
         validate_ingest_path("/foo/../bar")
@@ -67,40 +73,30 @@ def test_rejects_dotdot_mid_path():
 
 
 def test_rejects_relative_dotdot_path():
-    from archon_search._path_safety import PathUnsafeError, validate_ingest_path
-
     with pytest.raises(PathUnsafeError) as exc_info:
         validate_ingest_path("../foo")
     assert exc_info.value.reason == "not_absolute"
 
 
 def test_rejects_empty_string():
-    from archon_search._path_safety import PathUnsafeError, validate_ingest_path
-
     with pytest.raises(PathUnsafeError) as exc_info:
         validate_ingest_path("")
     assert exc_info.value.reason == "empty"
 
 
 def test_rejects_whitespace_only():
-    from archon_search._path_safety import PathUnsafeError, validate_ingest_path
-
     with pytest.raises(PathUnsafeError) as exc_info:
         validate_ingest_path("   ")
     assert exc_info.value.reason == "whitespace_only"
 
 
 def test_rejects_nul_byte():
-    from archon_search._path_safety import PathUnsafeError, validate_ingest_path
-
     with pytest.raises(PathUnsafeError) as exc_info:
         validate_ingest_path("/tmp/foo\x00.md")
     assert exc_info.value.reason == "nul_byte"
 
 
 def test_rejects_relative_path():
-    from archon_search._path_safety import PathUnsafeError, validate_ingest_path
-
     for raw in ["./foo", "foo/bar", "."]:
         with pytest.raises(PathUnsafeError) as exc_info:
             validate_ingest_path(raw)
@@ -108,17 +104,10 @@ def test_rejects_relative_path():
 
 
 def test_path_unsafe_error_is_value_error():
-    from archon_search._path_safety import PathUnsafeError
-
     assert isinstance(PathUnsafeError("x"), ValueError)
 
 
 def test_path_unsafe_error_carries_reason():
-    from archon_search._path_safety import PathUnsafeError, validate_ingest_path
-
-    try:
+    with pytest.raises(PathUnsafeError) as exc_info:
         validate_ingest_path("/foo/../bar")
-    except PathUnsafeError as e:
-        assert e.reason == "contains_dotdot"
-    else:
-        pytest.fail("PathUnsafeError not raised")
+    assert exc_info.value.reason == "contains_dotdot"
