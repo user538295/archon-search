@@ -40,6 +40,19 @@ class ExplainPipelineResult:
     acl_filtered: bool
 
 
+class ExplainStageError(Exception):
+    """A pipeline stage (store / reranker) failed during explain.
+
+    Carries the stage name so the route layer can surface a stage-specific
+    500 detail without re-implementing the pipeline or inspecting tracebacks.
+    """
+
+    def __init__(self, stage: str, original: Exception) -> None:
+        self.stage = stage
+        self.original = original
+        super().__init__(f"{stage} error: {original}")
+
+
 _BINARY_EXTENSIONS = frozenset(
     {
         ".pyc", ".pyo", ".so", ".dll", ".exe", ".bin", ".o", ".a", ".lib",
@@ -349,16 +362,22 @@ class SearchPipeline:
         vector = query_vector if query_vector is not None else await self._embedder.embed_one(query)
 
         candidate_depth = max(self._top_k_retrieve * 3, 20)
-        candidates = await self.store.hybrid_search_with_trace(
-            collection, vector, query, candidate_depth=candidate_depth
-        )
+        try:
+            candidates = await self.store.hybrid_search_with_trace(
+                collection, vector, query, candidate_depth=candidate_depth
+            )
+        except Exception as exc:
+            raise ExplainStageError("store", exc) from exc
 
         candidates, acl_filtered = apply_acl_filter(candidates, lambda c: c.acl, namespace)
 
         if rerank:
-            candidates = await self._reranker._rerank_with_trace(
-                query, candidates, top_k=len(candidates)
-            )
+            try:
+                candidates = await self._reranker._rerank_with_trace(
+                    query, candidates, top_k=len(candidates)
+                )
+            except Exception as exc:
+                raise ExplainStageError("reranker", exc) from exc
 
         def _final_score(c: ScoredSearchCandidate) -> float:
             rs = c.score_breakdown.reranker_score

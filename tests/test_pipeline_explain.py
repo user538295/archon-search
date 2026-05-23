@@ -11,7 +11,7 @@ from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import ChunkRecord
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder import Embedder
-from archon_search.pipeline import ExplainPipelineResult, SearchPipeline
+from archon_search.pipeline import ExplainPipelineResult, ExplainStageError, SearchPipeline
 from archon_search.reranker import Reranker, RerankerBackend
 
 
@@ -387,3 +387,36 @@ async def test_explain_near_misses_carry_reranker_score_when_rerank_true(connect
         assert c.score_breakdown.reranker_score is not None, (
             f"Near-miss {c.chunk_id} has reranker_score=None but rerank=True was requested"
         )
+
+
+@pytest.mark.asyncio
+async def test_explain_wraps_store_failure_in_stage_error(connected_store, col_name, monkeypatch):
+    """A store failure during explain raises ExplainStageError(stage='store')."""
+    pipeline = _make_pipeline(connected_store, top_k_retrieve=10, top_k_return=5)
+    await _ingest(connected_store, col_name, _make_records(5))
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("store boom")
+
+    monkeypatch.setattr(pipeline.store, "hybrid_search_with_trace", _boom)
+    with pytest.raises(ExplainStageError) as excinfo:
+        await pipeline.explain("common alpha beta", col_name, top_k=5)
+    assert excinfo.value.stage == "store"
+    assert isinstance(excinfo.value.original, RuntimeError)
+    assert str(excinfo.value).startswith("store error:")
+
+
+@pytest.mark.asyncio
+async def test_explain_wraps_reranker_failure_in_stage_error(connected_store, col_name, monkeypatch):
+    """A reranker failure during explain raises ExplainStageError(stage='reranker')."""
+    pipeline = _make_pipeline(connected_store, top_k_retrieve=10, top_k_return=5)
+    await _ingest(connected_store, col_name, _make_records(5))
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("rerank boom")
+
+    monkeypatch.setattr(pipeline._reranker, "_rerank_with_trace", _boom)
+    with pytest.raises(ExplainStageError) as excinfo:
+        await pipeline.explain("common alpha beta", col_name, top_k=5, rerank=True)
+    assert excinfo.value.stage == "reranker"
+    assert str(excinfo.value).startswith("reranker error:")

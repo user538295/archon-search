@@ -314,6 +314,379 @@
         "title": "ErrorKind",
         "type": "string"
       },
+      "ExplainNearMiss": {
+        "additionalProperties": false,
+        "properties": {
+          "acl": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acl"
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/ExplainScoreBreakdown"
+          },
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "file_type": {
+            "default": "",
+            "title": "File Type",
+            "type": "string"
+          },
+          "indexed_at": {
+            "default": "",
+            "title": "Indexed At",
+            "type": "string"
+          },
+          "ingested_by": {
+            "default": "cli",
+            "enum": [
+              "cli",
+              "http",
+              "watcher",
+              "reindex"
+            ],
+            "title": "Ingested By",
+            "type": "string"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Metadata",
+            "type": "object"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          },
+          "updated_at": {
+            "default": "",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "chunk_id",
+          "source_path",
+          "score",
+          "breakdown"
+        ],
+        "title": "ExplainNearMiss",
+        "type": "object"
+      },
+      "ExplainRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "rerank": {
+            "default": true,
+            "title": "Rerank",
+            "type": "boolean"
+          },
+          "top_k": {
+            "default": 5,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "ExplainRequest",
+        "type": "object"
+      },
+      "ExplainResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "acl_filtered": {
+            "title": "Acl Filtered",
+            "type": "boolean"
+          },
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "near_misses": {
+            "items": {
+              "$ref": "#/components/schemas/ExplainNearMiss"
+            },
+            "title": "Near Misses",
+            "type": "array"
+          },
+          "rerank": {
+            "title": "Rerank",
+            "type": "boolean"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ExplainResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingExplain"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "rerank",
+          "routing",
+          "collection",
+          "acl_filtered",
+          "results",
+          "near_misses"
+        ],
+        "title": "ExplainResponse",
+        "type": "object"
+      },
+      "ExplainResult": {
+        "additionalProperties": false,
+        "properties": {
+          "acl": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acl"
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/ExplainScoreBreakdown"
+          },
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "file_type": {
+            "default": "",
+            "title": "File Type",
+            "type": "string"
+          },
+          "indexed_at": {
+            "default": "",
+            "title": "Indexed At",
+            "type": "string"
+          },
+          "ingested_by": {
+            "default": "cli",
+            "enum": [
+              "cli",
+              "http",
+              "watcher",
+              "reindex"
+            ],
+            "title": "Ingested By",
+            "type": "string"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Metadata",
+            "type": "object"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "updated_at": {
+            "default": "",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "chunk_id",
+          "source_path",
+          "text",
+          "score",
+          "breakdown"
+        ],
+        "title": "ExplainResult",
+        "type": "object"
+      },
+      "ExplainScoreBreakdown": {
+        "additionalProperties": false,
+        "properties": {
+          "fts_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fts Rank"
+          },
+          "fts_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fts Score"
+          },
+          "fts_score_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fts Score Kind"
+          },
+          "reranker_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker Score"
+          },
+          "rrf_score": {
+            "title": "Rrf Score",
+            "type": "number"
+          },
+          "vector_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Rank"
+          },
+          "vector_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Score"
+          },
+          "vector_score_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Score Kind"
+          }
+        },
+        "required": [
+          "vector_rank",
+          "vector_score",
+          "vector_score_kind",
+          "fts_rank",
+          "fts_score",
+          "fts_score_kind",
+          "rrf_score",
+          "reranker_score"
+        ],
+        "title": "ExplainScoreBreakdown",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -638,6 +1011,69 @@
           "decomposer_invoked"
         ],
         "title": "RouteResponse",
+        "type": "object"
+      },
+      "RoutingCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "centroid_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Centroid Score"
+          },
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection",
+          "centroid_score"
+        ],
+        "title": "RoutingCandidate",
+        "type": "object"
+      },
+      "RoutingExplain": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/RoutingCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "chosen_below_threshold": {
+            "title": "Chosen Below Threshold",
+            "type": "boolean"
+          },
+          "chosen_collection": {
+            "title": "Chosen Collection",
+            "type": "string"
+          },
+          "confidence_threshold": {
+            "title": "Confidence Threshold",
+            "type": "number"
+          },
+          "invoked": {
+            "title": "Invoked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "invoked",
+          "chosen_collection",
+          "confidence_threshold",
+          "chosen_below_threshold",
+          "candidates"
+        ],
+        "title": "RoutingExplain",
         "type": "object"
       },
       "SearchRequest": {
@@ -1312,6 +1748,50 @@
           }
         ],
         "summary": "Reindex Collection"
+      }
+    },
+    "/explain": {
+      "post": {
+        "description": "Return the per-stage retrieval/reranking trace for a query, plus the\nrouting decision when no collection is pinned.\n\n503 is reserved for meta-lookup / router failures (mirrors A3's /search\ntaxonomy); pipeline-stage failures (store / reranker) surface as 500 with a\nstage-specific detail. The query is never echoed in the response or telemetry.",
+        "operationId": "explain_endpoint_explain_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplainResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Explain Endpoint"
       }
     },
     "/health": {

@@ -13,16 +13,24 @@ The route handler is added in Task 3.1; for now ``router`` is an empty
 """
 from __future__ import annotations
 
+import logging
+from time import monotonic
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from archon_search._types import IngestedBy
+from archon_search.pipeline import ExplainStageError
+from archon_search.router import MultiCollectionRouter
+from archon_search.telemetry.entry import TelemetryEntry
 
 if TYPE_CHECKING:
     from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
     from archon_search.pipeline import ExplainPipelineResult
+
+logger = logging.getLogger("archon.search")
 
 router = APIRouter()
 
@@ -200,3 +208,123 @@ class ExplainResponse(BaseModel):
             results=[ExplainResult.from_candidate(c) for c in result.top_results],
             near_misses=[ExplainNearMiss.from_candidate(c) for c in result.near_misses],
         )
+
+
+@router.post("/explain", response_model=ExplainResponse)
+async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainResponse | JSONResponse:
+    """Return the per-stage retrieval/reranking trace for a query, plus the
+    routing decision when no collection is pinned.
+
+    503 is reserved for meta-lookup / router failures (mirrors A3's /search
+    taxonomy); pipeline-stage failures (store / reranker) surface as 500 with a
+    stage-specific detail. The query is never echoed in the response or telemetry.
+    """
+    start = monotonic()
+    pipeline = request.app.state.pipeline
+    config = request.app.state.config
+    writer = getattr(request.app.state, "telemetry_writer", None)
+    ns: str = request.state.namespace
+
+    def _emit_ok(collection: str, result_count: int) -> None:
+        if writer is None:
+            return
+        try:
+            writer.enqueue(
+                TelemetryEntry.from_explain_result(
+                    collection=collection,
+                    result_count=result_count,
+                    latency_ms=(monotonic() - start) * 1000.0,
+                )
+            )
+        except Exception as tel_exc:
+            logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+
+    def _emit_err() -> None:
+        if writer is None:
+            return
+        try:
+            writer.enqueue(
+                TelemetryEntry.from_error(
+                    endpoint="explain",
+                    status="internal_error",
+                    error_kind="other",
+                    latency_ms=(monotonic() - start) * 1000.0,
+                )
+            )
+        except Exception as tel_exc:
+            logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+
+    routing: RoutingExplain | None = None
+    query_vector: list[float] | None = None
+
+    if body.collection is not None:
+        try:
+            meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
+        except Exception as exc:
+            logger.error("explain: meta lookup failed for %r: %s", body.collection, type(exc).__name__)
+            _emit_err()
+            return JSONResponse({"detail": "service unavailable"}, status_code=503)
+        if meta is None:
+            return JSONResponse({"detail": "collection not found"}, status_code=404)
+        chosen = body.collection
+    else:
+        try:
+            all_meta = await pipeline.get_all_collections_meta(namespace=ns)
+        except Exception as exc:
+            logger.error("explain: meta lookup failed: %s", type(exc).__name__)
+            _emit_err()
+            return JSONResponse({"detail": "service unavailable"}, status_code=503)
+        if not all_meta:
+            return JSONResponse({"detail": "no collections available"}, status_code=404)
+        # all_meta is already namespace-filtered, which IS the collection-level ACL
+        # boundary in this codebase: a caller only ever sees collections in its own
+        # namespace, so disallowed collections can never leak into routing.candidates.
+        try:
+            query_vector = await pipeline._embedder.embed_one(body.query)
+            col_router = MultiCollectionRouter(
+                search_url=f"http://{config.host}:{config.port}",
+                embedder=pipeline._embedder,
+                shortlist_size=config.routing_shortlist_size,
+                confidence_threshold=config.routing_confidence_threshold,
+                embedding_model=config.embedding_model,
+            )
+            ranked = col_router.rank_with_scores(query_vector, all_meta)
+        except Exception as exc:
+            logger.error("explain: routing failed: %s", type(exc).__name__)
+            _emit_err()
+            return JSONResponse({"detail": "service unavailable"}, status_code=503)
+        # rank_with_scores returns every supplied collection, so ranked is non-empty.
+        chosen_meta, chosen_score = ranked[0]
+        chosen = chosen_meta.name
+        threshold = config.routing_confidence_threshold
+        routing = RoutingExplain(
+            invoked=True,
+            chosen_collection=chosen,
+            confidence_threshold=threshold,
+            chosen_below_threshold=(chosen_score is not None and chosen_score < threshold),
+            candidates=[RoutingCandidate(collection=m.name, centroid_score=s) for m, s in ranked],
+        )
+
+    try:
+        result = await pipeline.explain(
+            body.query,
+            chosen,
+            top_k=body.top_k,
+            rerank=body.rerank,
+            namespace=ns,
+            query_vector=query_vector,
+        )
+    except ExplainStageError as exc:
+        logger.warning("explain stage %s failed: %s", exc.stage, type(exc.original).__name__)
+        _emit_err()
+        return JSONResponse({"detail": str(exc)}, status_code=500)
+    except Exception as exc:
+        logger.error("explain failed for %r: %s", chosen, type(exc).__name__, exc_info=True)
+        _emit_err()
+        return JSONResponse({"detail": f"explain failed: {exc}"}, status_code=500)
+
+    response = ExplainResponse.from_pipeline_result(
+        rerank=body.rerank, collection=chosen, routing=routing, result=result
+    )
+    _emit_ok(chosen, len(response.results))
+    return response
