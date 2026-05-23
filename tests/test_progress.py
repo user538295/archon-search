@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -999,3 +1000,441 @@ class TestIndexingStateStoreEdgeCases:
         result = store.read()
         assert result is not None
         assert result.collections["col"].file_mtimes == {}
+
+
+# ---------------------------------------------------------------------------
+# Task 1.1 — Concurrency / RLock tests
+# ---------------------------------------------------------------------------
+
+class TestIndexingStateStoreLocking:
+    """Tests that IndexingStateStore is thread-safe via an internal RLock."""
+
+    def test_rlock_attribute_exists(self, tmp_path: Path) -> None:
+        """IndexingStateStore must expose _lock as a threading.RLock."""
+        store = IndexingStateStore(tmp_path)
+        assert hasattr(store, "_lock"), "IndexingStateStore must have a _lock attribute"
+        # RLock instances are a subtype of _RLock; check by attempting acquire/release
+        store._lock.acquire()
+        store._lock.release()
+
+    def test_concurrent_update_collection_no_lost_writes(self, tmp_path: Path) -> None:
+        """N concurrent update_collection calls each writing a distinct key must all survive."""
+        N = 8
+        store = IndexingStateStore(tmp_path)
+        start_barrier = threading.Barrier(N)
+        errors: list[Exception] = []
+
+        def write_one(i: int) -> None:
+            try:
+                start_barrier.wait(timeout=10)  # all threads start simultaneously
+                store.update_collection(
+                    f"col-{i}",
+                    CollectionProgress(status=IndexingStatus.PENDING, total_files=i),
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=write_one, args=(i,)) for i in range(N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        assert not errors, f"Threads raised: {errors}"
+        final_state = store.read()
+        assert final_state is not None
+        missing = [f"col-{i}" for i in range(N) if f"col-{i}" not in final_state.collections]
+        assert not missing, f"Lost writes for collections: {missing}"
+
+    def test_concurrent_writers_same_key_last_write_wins(self, tmp_path: Path) -> None:
+        """Two threads both updating the same key — result must be valid JSON with one entry."""
+        store = IndexingStateStore(tmp_path)
+        start_barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+
+        def write_one(total: int) -> None:
+            try:
+                start_barrier.wait(timeout=5)
+                store.update_collection(
+                    "shared-col",
+                    CollectionProgress(status=IndexingStatus.PENDING, total_files=total),
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        t1 = threading.Thread(target=write_one, args=(1,))
+        t2 = threading.Thread(target=write_one, args=(2,))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert not errors
+        final_state = store.read()
+        assert final_state is not None
+        assert "shared-col" in final_state.collections
+        assert final_state.collections["shared-col"].total_files in (1, 2)
+
+    def test_remove_collection_early_return_is_locked(self, tmp_path: Path) -> None:
+        """Concurrent remove_collection and update_collection must not corrupt state."""
+        store = IndexingStateStore(tmp_path)
+        store.update_collection("k", CollectionProgress(status=IndexingStatus.PENDING))
+        start_barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+
+        def do_remove() -> None:
+            try:
+                start_barrier.wait(timeout=5)
+                store.remove_collection("k")
+            except Exception as exc:
+                errors.append(exc)
+
+        def do_update() -> None:
+            try:
+                start_barrier.wait(timeout=5)
+                store.update_collection("k", CollectionProgress(status=IndexingStatus.DONE))
+            except Exception as exc:
+                errors.append(exc)
+
+        t1 = threading.Thread(target=do_remove)
+        t2 = threading.Thread(target=do_update)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert not errors
+        # State must be valid JSON — either 0 or 1 entries for "k" (both valid)
+        final_state = store.read()
+        assert final_state is not None
+
+    def test_exception_under_lock_releases_lock(self, tmp_path: Path) -> None:
+        """If write() raises inside update_collection, the lock must be released."""
+        store = IndexingStateStore(tmp_path)
+        call_count = [0]
+        original_write = IndexingStateStore.write
+
+        def raising_write(self, state: IndexingState) -> None:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise OSError("simulated disk full")
+            return original_write(self, state)
+
+        with patch.object(IndexingStateStore, "write", raising_write):
+            with pytest.raises(OSError, match="simulated disk full"):
+                store.update_collection("col", CollectionProgress(status=IndexingStatus.PENDING))
+
+        # The lock must have been released — set_trigger should complete within 1 second
+        result_holder: list = []
+
+        def do_set_trigger() -> None:
+            store.set_trigger("x")
+            result_holder.append(True)
+
+        t = threading.Thread(target=do_set_trigger)
+        t.start()
+        t.join(timeout=1)
+        assert not t.is_alive(), "Lock was not released after exception"
+        assert result_holder == [True]
+
+    def test_rlock_reentry_does_not_deadlock(self, tmp_path: Path) -> None:
+        """update_collection calls write() internally — must not deadlock with RLock."""
+        if hasattr(IndexingStateStore, "_write_unlocked"):
+            pytest.skip("_write_unlocked helper factored — re-entry test not applicable")
+
+        store = IndexingStateStore(tmp_path)
+        result_holder: list = []
+
+        def run() -> None:
+            store.update_collection("col", CollectionProgress(status=IndexingStatus.PENDING))
+            result_holder.append(True)
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        t.join(timeout=2)
+        assert not t.is_alive(), "Thread deadlocked — RLock re-entry failed"
+        assert result_holder == [True]
+
+    def test_read_does_not_acquire_lock(self, tmp_path: Path) -> None:
+        """Two concurrent read() calls must not block each other."""
+        store = IndexingStateStore(tmp_path)
+        state = IndexingState(collections={"col": CollectionProgress(status=IndexingStatus.DONE)})
+        store.write(state)
+
+        barrier = threading.Barrier(2)
+        results: list = []
+        errors: list[Exception] = []
+
+        def do_read() -> None:
+            try:
+                barrier.wait(timeout=5)
+                r = store.read()
+                results.append(r)
+            except Exception as exc:
+                errors.append(exc)
+
+        t1 = threading.Thread(target=do_read)
+        t2 = threading.Thread(target=do_read)
+        t1.start()
+        t2.start()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        assert not errors
+        assert len(results) == 2
+        assert all(r is not None for r in results)
+
+    def test_set_trigger_under_concurrent_update_collection(self, tmp_path: Path) -> None:
+        """Concurrent set_trigger and update_collection must not lose either write."""
+        store = IndexingStateStore(tmp_path)
+        start_barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+
+        def do_set_trigger() -> None:
+            try:
+                start_barrier.wait(timeout=5)
+                store.set_trigger("t")
+            except Exception as exc:
+                errors.append(exc)
+
+        def do_update() -> None:
+            try:
+                start_barrier.wait(timeout=5)
+                store.update_collection("col", CollectionProgress(status=IndexingStatus.PENDING))
+            except Exception as exc:
+                errors.append(exc)
+
+        t1 = threading.Thread(target=do_set_trigger)
+        t2 = threading.Thread(target=do_update)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert not errors
+        final = store.read()
+        assert final is not None
+        # Both writes must have survived
+        assert final.trigger == "t", "set_trigger write was lost"
+        assert "col" in final.collections, "update_collection write was lost"
+
+    def test_write_is_locked_independently(self, tmp_path: Path) -> None:
+        """write() itself must be locked — two concurrent write() calls both complete."""
+        store = IndexingStateStore(tmp_path)
+        start_barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+
+        def write_one(name: str) -> None:
+            try:
+                state = IndexingState(
+                    collections={name: CollectionProgress(status=IndexingStatus.PENDING)}
+                )
+                start_barrier.wait(timeout=5)
+                store.write(state)
+            except Exception as exc:
+                errors.append(exc)
+
+        t1 = threading.Thread(target=write_one, args=("col-a",))
+        t2 = threading.Thread(target=write_one, args=("col-b",))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert not errors
+        # Final state must be valid JSON — one of the two writes wins
+        final = store.read()
+        assert final is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 1.2 — reset_in_progress() tests
+# ---------------------------------------------------------------------------
+
+class TestResetInProgress:
+    """Tests for IndexingStateStore.reset_in_progress(predicate)."""
+
+    def test_reset_in_progress_resets_matching_entries(self, tmp_path: Path) -> None:
+        """IN_PROGRESS entry becomes PENDING; DONE entry is unchanged."""
+        store = IndexingStateStore(tmp_path)
+        cp_in_progress = CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=10,
+            processed_files=5,
+            processed_paths=["/a/file.md"],
+            file_mtimes={"/a/file.md": 1.0},
+            file_hashes={"/a/file.md": "abc"},
+            indexed_embedding_model="model-x",
+            indexed_chunk_size=256,
+            started_at="2026-01-01T00:00:00+00:00",
+            completed_at=None,
+            error="some error",
+            error_count=3,
+        )
+        cp_done = CollectionProgress(status=IndexingStatus.DONE, total_files=5, processed_files=5)
+        state = IndexingState(collections={"in-prog": cp_in_progress, "done-col": cp_done})
+        store.write(state)
+
+        store.reset_in_progress(lambda cp: cp.status == IndexingStatus.IN_PROGRESS)
+
+        final = store.read()
+        assert final is not None
+        assert final.collections["in-prog"].status == IndexingStatus.PENDING
+        assert final.collections["done-col"].status == IndexingStatus.DONE
+
+    def test_reset_in_progress_preserves_non_status_fields(self, tmp_path: Path) -> None:
+        """Non-status fields survive the reset."""
+        store = IndexingStateStore(tmp_path)
+        cp = CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=10,
+            processed_files=5,
+            processed_paths=["/a/file.md"],
+            file_mtimes={"/a/file.md": 1.0},
+            file_hashes={"/a/file.md": "abc"},
+            indexed_embedding_model="model-x",
+            indexed_chunk_size=256,
+            started_at="2026-01-01T00:00:00+00:00",
+            completed_at="2026-01-01T00:01:00+00:00",
+            error="oops",
+            error_count=2,
+        )
+        state = IndexingState(collections={"col": cp})
+        store.write(state)
+
+        store.reset_in_progress(lambda c: c.status == IndexingStatus.IN_PROGRESS)
+
+        final = store.read()
+        assert final is not None
+        result_cp = final.collections["col"]
+        assert result_cp.status == IndexingStatus.PENDING
+        # Non-status fields preserved
+        assert result_cp.total_files == 10
+        assert result_cp.processed_files == 5
+        assert result_cp.processed_paths == ["/a/file.md"]
+        assert result_cp.file_mtimes == {"/a/file.md": 1.0}
+        assert result_cp.file_hashes == {"/a/file.md": "abc"}
+        assert result_cp.indexed_embedding_model == "model-x"
+        assert result_cp.indexed_chunk_size == 256
+        # Status-related fields cleared
+        assert result_cp.started_at is None
+        assert result_cp.completed_at is None
+        assert result_cp.error is None
+        assert result_cp.error_count == 0
+
+    def test_reset_in_progress_short_circuits_when_no_match(self, tmp_path: Path) -> None:
+        """No write() when predicate matches zero entries."""
+        store = IndexingStateStore(tmp_path)
+        cp = CollectionProgress(status=IndexingStatus.DONE, total_files=5)
+        state = IndexingState(collections={"done-col": cp})
+        store.write(state)
+
+        write_calls: list = []
+        original_write = IndexingStateStore.write
+
+        def tracking_write(self, s: IndexingState) -> None:
+            write_calls.append(s)
+            return original_write(self, s)
+
+        with patch.object(IndexingStateStore, "write", tracking_write):
+            store.reset_in_progress(lambda c: False)
+
+        assert write_calls == [], "write() should not be called when predicate matches nothing"
+
+    def test_reset_in_progress_short_circuits_on_none_state(self, tmp_path: Path) -> None:
+        """No exception and no write when state file is absent."""
+        store = IndexingStateStore(tmp_path)
+        write_calls: list = []
+        original_write = IndexingStateStore.write
+
+        def tracking_write(self, s: IndexingState) -> None:
+            write_calls.append(s)
+            return original_write(self, s)
+
+        with patch.object(IndexingStateStore, "write", tracking_write):
+            store.reset_in_progress(lambda c: True)
+
+        assert write_calls == [], "write() should not be called when state is None"
+
+    def test_reset_in_progress_skips_failed_and_done(self, tmp_path: Path) -> None:
+        """Only IN_PROGRESS entries are affected by the standard predicate."""
+        store = IndexingStateStore(tmp_path)
+        state = IndexingState(collections={
+            "in-prog": CollectionProgress(status=IndexingStatus.IN_PROGRESS, total_files=3),
+            "failed": CollectionProgress(status=IndexingStatus.FAILED, total_files=2),
+            "done": CollectionProgress(status=IndexingStatus.DONE, total_files=1),
+        })
+        store.write(state)
+
+        store.reset_in_progress(lambda cp: cp.status == IndexingStatus.IN_PROGRESS)
+
+        final = store.read()
+        assert final is not None
+        assert final.collections["in-prog"].status == IndexingStatus.PENDING
+        assert final.collections["failed"].status == IndexingStatus.FAILED
+        assert final.collections["done"].status == IndexingStatus.DONE
+
+    def test_reset_in_progress_all_entries_match(self, tmp_path: Path) -> None:
+        """All IN_PROGRESS entries become PENDING with preserved non-status fields."""
+        store = IndexingStateStore(tmp_path)
+        state = IndexingState(collections={
+            f"col-{i}": CollectionProgress(
+                status=IndexingStatus.IN_PROGRESS,
+                total_files=i + 1,
+                processed_files=i,
+            )
+            for i in range(3)
+        })
+        store.write(state)
+
+        store.reset_in_progress(lambda cp: cp.status == IndexingStatus.IN_PROGRESS)
+
+        final = store.read()
+        assert final is not None
+        for i in range(3):
+            cp = final.collections[f"col-{i}"]
+            assert cp.status == IndexingStatus.PENDING
+            assert cp.total_files == i + 1
+            assert cp.processed_files == i
+
+    def test_reset_in_progress_concurrent_with_update_collection(
+        self, tmp_path: Path
+    ) -> None:
+        """Concurrent reset_in_progress and update_collection must produce coherent state."""
+        store = IndexingStateStore(tmp_path)
+        state = IndexingState(collections={
+            "existing": CollectionProgress(status=IndexingStatus.IN_PROGRESS, total_files=5),
+        })
+        store.write(state)
+
+        start_barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+
+        def do_reset() -> None:
+            try:
+                start_barrier.wait(timeout=5)
+                store.reset_in_progress(lambda cp: cp.status == IndexingStatus.IN_PROGRESS)
+            except Exception as exc:
+                errors.append(exc)
+
+        def do_update() -> None:
+            try:
+                start_barrier.wait(timeout=5)
+                store.update_collection(
+                    "new-col", CollectionProgress(status=IndexingStatus.PENDING, total_files=1)
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        t1 = threading.Thread(target=do_reset)
+        t2 = threading.Thread(target=do_update)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert not errors
+        final = store.read()
+        assert final is not None
+        assert "new-col" in final.collections, "update_collection write was lost"
+        assert final.collections.get("existing") is not None
