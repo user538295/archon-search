@@ -485,7 +485,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: `uv run pytest tests/test_routes_ingest_503.py -v`.
 
 #### Task 2c.3 — MCP path verification + docs
-- [ ] **File**: `tests/server/test_mcp_ingest_503.py` (new), `BREAKING.md`, A1 plan acceptance note.
+- [x] **File**: `tests/server/test_mcp_ingest_503.py` (new), `BREAKING.md`, A1 plan acceptance note.
 - **Depends on**: Task 2c.2.
 - **Description**:
   - Verify MCP `ingest_file` / `ingest_directory` surface `StoreBusyError` as `McpErrorResponse(code="store_busy")` synchronously (no code change expected — they call `pipeline.ingest_file` directly, which calls `ingest_chunks`; the existing `except Exception` in mcp.py wraps it into the error envelope). Add an explicit test that pre-acquires the per-collection lock and asserts the MCP tool returns the error envelope rather than a success dict.
