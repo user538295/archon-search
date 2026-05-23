@@ -101,6 +101,94 @@ def test_hybrid_search_with_trace_acl_none_for_non_list_value(tmp_path: Path) ->
     assert candidates[0].acl is None
 
 
+def test_hybrid_search_with_trace_populates_file_type(tmp_path: Path) -> None:
+    """file_type is copied verbatim from the stored row."""
+    store = _trace_store_with_row(tmp_path, "db4", _row("ft", file_type="py"))
+    candidates = _run_trace(store)
+    assert len(candidates) == 1
+    assert candidates[0].file_type == "py"
+
+
+def test_hybrid_search_with_trace_populates_indexed_at(tmp_path: Path) -> None:
+    """indexed_at is copied verbatim from the stored row."""
+    ts = "2026-01-02T03:04:05Z"
+    store = _trace_store_with_row(tmp_path, "db5", _row("ia", indexed_at=ts))
+    candidates = _run_trace(store)
+    assert len(candidates) == 1
+    assert candidates[0].indexed_at == ts
+
+
+def test_hybrid_search_with_trace_updated_at_falls_back_to_indexed_at(tmp_path: Path) -> None:
+    """updated_at falls back to indexed_at when absent or empty."""
+    ts = "2026-01-02T03:04:05Z"
+    # No updated_at key present
+    store = _trace_store_with_row(tmp_path, "db6a", _row("ua_none", indexed_at=ts))
+    candidates = _run_trace(store)
+    assert candidates[0].updated_at == ts
+
+    # updated_at is explicitly empty string
+    store2 = _trace_store_with_row(tmp_path, "db6b", _row("ua_empty", indexed_at=ts, updated_at=""))
+    candidates2 = _run_trace(store2)
+    assert candidates2[0].updated_at == ts
+
+    # updated_at present and distinct from indexed_at → used verbatim (no fallback)
+    other = "2026-02-09T00:00:00Z"
+    store3 = _trace_store_with_row(tmp_path, "db6c", _row("ua_real", indexed_at=ts, updated_at=other))
+    candidates3 = _run_trace(store3)
+    assert candidates3[0].updated_at == other
+
+
+def test_hybrid_search_with_trace_populates_ingested_by(tmp_path: Path) -> None:
+    """ingested_by is copied from the stored row; defaults to 'cli' when absent."""
+    store = _trace_store_with_row(tmp_path, "db7", _row("ib", ingested_by="watcher"))
+    candidates = _run_trace(store)
+    assert len(candidates) == 1
+    assert candidates[0].ingested_by == "watcher"
+
+    # Absent ingested_by → _normalize_ingested_by(None) → "cli"
+    store2 = _trace_store_with_row(tmp_path, "db7b", _row("ib_absent"))
+    candidates2 = _run_trace(store2)
+    assert candidates2[0].ingested_by == "cli"
+
+
+def test_hybrid_search_with_trace_normalizes_legacy_ingested_by(tmp_path: Path) -> None:
+    """Legacy 'archon-search-cli' value is normalized to 'cli'."""
+    store = _trace_store_with_row(tmp_path, "db8", _row("legacy", ingested_by="archon-search-cli"))
+    candidates = _run_trace(store)
+    assert len(candidates) == 1
+    assert candidates[0].ingested_by == "cli"
+
+
+def test_hybrid_search_with_trace_populates_language(tmp_path: Path) -> None:
+    """language is copied when present; normalizes empty/absent to None."""
+    store = _trace_store_with_row(tmp_path, "db9a", _row("lang_en", language="en"))
+    candidates = _run_trace(store)
+    assert candidates[0].language == "en"
+
+    # Absent key → None
+    store2 = _trace_store_with_row(tmp_path, "db9b", _row("lang_absent"))
+    candidates2 = _run_trace(store2)
+    assert candidates2[0].language is None
+
+    # Empty string → None
+    store3 = _trace_store_with_row(tmp_path, "db9c", _row("lang_empty", language=""))
+    candidates3 = _run_trace(store3)
+    assert candidates3[0].language is None
+
+
+def test_hybrid_search_with_trace_metadata_is_parsed_dict(tmp_path: Path) -> None:
+    """metadata JSON string is parsed into a dict."""
+    store = _trace_store_with_row(tmp_path, "db10", _row("meta", metadata='{"k": "v"}'))
+    candidates = _run_trace(store)
+    assert len(candidates) == 1
+    assert candidates[0].metadata == {"k": "v"}
+
+    # Absent metadata key → parsed empty dict (not None)
+    store2 = _trace_store_with_row(tmp_path, "db10b", _row("meta_absent"))
+    candidates2 = _run_trace(store2)
+    assert candidates2[0].metadata == {}
+
+
 def test_lance_store_hybrid_search_with_trace_delegates_to_module_function(
     tmp_path: Path,
 ) -> None:

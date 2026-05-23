@@ -1017,6 +1017,7 @@ async def _hybrid_search_with_trace(
 
         raw_acl = row.get("acl")
         row_acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
+        indexed_at = row.get("indexed_at") or ""
 
         candidates.append(
             ScoredSearchCandidate(
@@ -1036,6 +1037,12 @@ async def _hybrid_search_with_trace(
                 ),
                 collection=collection,
                 acl=row_acl,
+                file_type=row.get("file_type") or "",
+                indexed_at=indexed_at,
+                updated_at=row.get("updated_at") or indexed_at,
+                ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
+                language=row.get("language") or None,
+                metadata=parse_metadata(row.get("metadata") or "{}"),
             )
         )
 

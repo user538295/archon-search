@@ -452,7 +452,7 @@ POST /explain {query, top_k, rerank}
   - Checkpoint: `uv run pytest tests/test_router.py -v`
 
 #### Task 2.2.5 — Thread A1/A2 metadata fields through `ScoredSearchCandidate` and `_hybrid_search_with_trace`
-- [ ] **Files**: `archon_search/_diagnostics.py`, `archon_search/store.py`
+- [x] **Files**: `archon_search/_diagnostics.py`, `archon_search/store.py`
 - **Depends on**: Task 2.1 (which already touches both files for the `acl` field; this task extends that change)
 - **Description**:
   - In `_diagnostics.py`: append the following defaulted fields to `ScoredSearchCandidate` (after the `acl` field added by Task 2.1): `file_type: str = ""`, `indexed_at: str = ""`, `updated_at: str = ""`, `ingested_by: IngestedBy = "cli"` (import `IngestedBy` from `archon_search._types`), `language: str | None = None`, `metadata: dict[str, str] = field(default_factory=dict)` (import `field` from `dataclasses`). All defaulted — no breaking constructor change.
