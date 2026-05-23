@@ -179,7 +179,7 @@ router = MultiCollectionRouter(
 > **Releasable**: after Task 1.3 — CON-3 is fully closed, `sync._reset_stale_in_progress` delegates entirely to the store, and all concurrency regression tests pass.
 
 #### Task 1.1 — Add `threading.RLock` and lock public mutating methods on `IndexingStateStore`
-- [ ] **File**: `archon_search/progress.py`
+- [x] **File**: `archon_search/progress.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `import threading` to imports.
@@ -215,7 +215,7 @@ router = MultiCollectionRouter(
   - Checkpoint: `uv run pytest tests/test_progress.py -v -k "concurrent or locked or lock or reentry or write_is_locked or set_trigger_under"`
 
 #### Task 1.2 — Add `IndexingStateStore.reset_in_progress(predicate)` locked method
-- [ ] **File**: `archon_search/progress.py`
+- [x] **File**: `archon_search/progress.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Add `from collections.abc import Callable` to imports.

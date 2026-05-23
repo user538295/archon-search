@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -145,6 +146,31 @@ class IndexingStateStore:
             if state is None or name not in state.collections:
                 return
             del state.collections[name]
+            state.last_updated = datetime.now(UTC).isoformat()
+            self.write(state)
+
+    def reset_in_progress(self, predicate: Callable[[CollectionProgress], bool]) -> None:
+        """Reset matching entries to PENDING, clearing run state; locked RMW so a
+        concurrent mutator cannot lose the reset (or have its write clobbered)."""
+        with self._lock:
+            state = self.read()
+            if state is None:
+                return
+            matching = [name for name, cp in state.collections.items() if predicate(cp)]
+            if not matching:
+                return
+            for name in matching:
+                cp = state.collections[name]
+                state.collections[name] = CollectionProgress(
+                    status=IndexingStatus.PENDING,
+                    total_files=cp.total_files,
+                    processed_files=cp.processed_files,
+                    processed_paths=cp.processed_paths,
+                    file_mtimes=cp.file_mtimes,
+                    file_hashes=cp.file_hashes,
+                    indexed_embedding_model=cp.indexed_embedding_model,
+                    indexed_chunk_size=cp.indexed_chunk_size,
+                )
             state.last_updated = datetime.now(UTC).isoformat()
             self.write(state)
 

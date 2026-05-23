@@ -1003,33 +1003,14 @@ class TestIndexingStateStoreEdgeCases:
         assert result.collections["col"].file_mtimes == {}
 
 
-class TestIndexingStateStoreThreadSafety:
-    """Concurrency regression tests for the internal RLock (CON-3).
+class _ThreadSafetyHarness:
+    """Shared concurrency test scaffolding (helpers + tuning constants).
 
-    The lost-update bug lives in the read-modify-write (RMW) window of each
-    composite method: reader A reads, reader B reads, A writes, B writes over A's
-    update. The internal RLock closes that window by making the whole RMW atomic.
-
-    To make the race manifest WITHOUT the lock (the "red" phase that proves these
-    tests can detect a regression), we widen the no-lock RMW window by sleeping a
-    few milliseconds immediately after each ``read()`` returns. Without the lock,
-    that sleep guarantees every thread reads stale state before any thread writes,
-    so the last writer clobbers the others (lost update). WITH the lock the sleep
-    runs while the lock is held, so it cannot interleave two RMW cycles — only one
-    thread is ever inside the critical section.
-
-    Shared rationale for the lost-update tests below
-    (``remove_collection`` / ``set_trigger`` races): the guarded invariant is the
-    lost-update window of the RMW, NOT the incidental shared-``.json.tmp`` tear.
-    To keep the tear from pre-empting the intended assertion, these tests also
-    make the inner ``write()`` body atomic with a test-local lock
-    (``_atomic_write_patch``) — the final file is therefore always valid JSON, so
-    they read back via ``store.read()`` and go red on the lost update itself, not
-    on a torn file that would make ``read()`` return None. We do NOT place a
-    ``Barrier`` inside the critical section: under a correct lock only one thread
-    can be inside it, so a barrier there would deadlock by construction. Where
-    ordering must be forced deterministically (without timing luck), we signal an
-    Event BEFORE acquiring the lock so a peer can wait on it without deadlock.
+    Deliberately NOT prefixed with ``Test`` so pytest does not collect it as a
+    test class. Both ``TestIndexingStateStoreThreadSafety`` and
+    ``TestResetInProgressThreadSafety`` inherit from this mixin to reuse the
+    ``_slow_read_patch`` / ``_atomic_write_patch`` helpers and the load-bearing
+    timing/sizing constants — without either class re-running the other's tests.
     """
 
     # --- Load-bearing timing/sizing constants (named so intent is explicit) ---
@@ -1076,6 +1057,40 @@ class TestIndexingStateStoreThreadSafety:
                 original_write(self, state)
 
         monkeypatch.setattr(IndexingStateStore, "write", atomic_write)
+
+
+class TestIndexingStateStoreThreadSafety(_ThreadSafetyHarness):
+    """Concurrency regression tests for the internal RLock (CON-3).
+
+    The lost-update bug lives in the read-modify-write (RMW) window of each
+    composite method: reader A reads, reader B reads, A writes, B writes over A's
+    update. The internal RLock closes that window by making the whole RMW atomic.
+
+    To make the race manifest WITHOUT the lock (the "red" phase that proves these
+    tests can detect a regression), we widen the no-lock RMW window by sleeping a
+    few milliseconds immediately after each ``read()`` returns. Without the lock,
+    that sleep guarantees every thread reads stale state before any thread writes,
+    so the last writer clobbers the others (lost update). WITH the lock the sleep
+    runs while the lock is held, so it cannot interleave two RMW cycles — only one
+    thread is ever inside the critical section.
+
+    Shared rationale for the lost-update tests below
+    (``remove_collection`` / ``set_trigger`` races): the guarded invariant is the
+    lost-update window of the RMW, NOT the incidental shared-``.json.tmp`` tear.
+    To keep the tear from pre-empting the intended assertion, these tests also
+    make the inner ``write()`` body atomic with a test-local lock
+    (``_atomic_write_patch``) — the final file is therefore always valid JSON, so
+    they read back via ``store.read()`` and go red on the lost update itself, not
+    on a torn file that would make ``read()`` return None. We do NOT place a
+    ``Barrier`` inside the critical section: under a correct lock only one thread
+    can be inside it, so a barrier there would deadlock by construction. Where
+    ordering must be forced deterministically (without timing luck), we signal an
+    Event BEFORE acquiring the lock so a peer can wait on it without deadlock.
+
+    The shared helpers (``_slow_read_patch`` / ``_atomic_write_patch``) and tuning
+    constants live on ``_ThreadSafetyHarness`` so they can be reused without
+    re-running these tests under a subclass.
+    """
 
     def test_concurrent_update_collection_no_lost_writes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1435,3 +1450,231 @@ class TestIndexingStateStoreThreadSafety:
 
         assert len(results) == 2
         assert all(r is not None for r in results)
+
+
+class TestResetInProgress:
+    """Tests for IndexingStateStore.reset_in_progress(predicate) — locked RMW."""
+
+    def test_reset_in_progress_resets_matching_entries(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        in_prog = CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=10,
+            processed_files=4,
+            started_at="2026-01-01T00:00:00+00:00",
+            error="boom",
+            error_count=3,
+            processed_paths=["/a/file.md"],
+            indexed_embedding_model="BAAI/bge-small-en-v1.5",
+            indexed_chunk_size=512,
+        )
+        done = CollectionProgress(
+            status=IndexingStatus.DONE,
+            total_files=5,
+            processed_files=5,
+            completed_at="2026-01-01T00:05:00+00:00",
+        )
+        old_last_updated = "2020-01-01T00:00:00+00:00"
+        store.write(
+            IndexingState(
+                collections={"working": in_prog, "finished": done},
+                last_updated=old_last_updated,
+            )
+        )
+
+        store.reset_in_progress(lambda c: c.status == IndexingStatus.IN_PROGRESS)
+
+        result = store.read()
+        assert result is not None
+        # A real reset bumps the top-level last_updated timestamp.
+        assert result.last_updated != old_last_updated
+        reset = result.collections["working"]
+        assert reset.status == IndexingStatus.PENDING
+        # non-status fields preserved
+        assert reset.total_files == 10
+        assert reset.processed_files == 4
+        assert reset.processed_paths == ["/a/file.md"]
+        assert reset.indexed_embedding_model == "BAAI/bge-small-en-v1.5"
+        assert reset.indexed_chunk_size == 512
+        # status-related fields cleared
+        assert reset.started_at is None
+        assert reset.completed_at is None
+        assert reset.error is None
+        assert reset.error_count == 0
+        # DONE entry untouched
+        assert result.collections["finished"].status == IndexingStatus.DONE
+        assert result.collections["finished"].completed_at == "2026-01-01T00:05:00+00:00"
+
+    def test_reset_in_progress_short_circuits_when_no_match(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(collections={"col": CollectionProgress(status=IndexingStatus.DONE)})
+        )
+        calls: list[IndexingState] = []
+
+        def spy_write(state: IndexingState) -> None:
+            calls.append(state)
+
+        with patch.object(store, "write", side_effect=spy_write):
+            store.reset_in_progress(lambda c: False)
+        assert calls == []
+
+    def test_reset_in_progress_short_circuits_on_none_state(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        assert not store._state_file.exists()
+        calls: list[IndexingState] = []
+
+        def spy_write(state: IndexingState) -> None:
+            calls.append(state)
+
+        with patch.object(store, "write", side_effect=spy_write):
+            # No state file → must not raise and must not write.
+            store.reset_in_progress(lambda cp: True)
+        assert calls == []
+        assert not store._state_file.exists()
+
+    def test_reset_in_progress_preserves_non_status_fields(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        cp = CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=20,
+            processed_files=7,
+            started_at="2026-01-01T00:00:00+00:00",
+            completed_at="2026-01-01T00:09:00+00:00",
+            error="some error",
+            error_count=2,
+            processed_paths=["/a/file.md", "/b/doc.txt"],
+            file_mtimes={"/a/file.md": 1700000000.5},
+            file_hashes={"/a/file.md": "abc123"},
+            indexed_embedding_model="BAAI/bge-small-en-v1.5",
+            indexed_chunk_size=256,
+        )
+        store.write(IndexingState(collections={"col": cp}))
+
+        store.reset_in_progress(lambda c: c.status == IndexingStatus.IN_PROGRESS)
+
+        result = store.read()
+        assert result is not None
+        out = result.collections["col"]
+        assert out.status == IndexingStatus.PENDING
+        # preserved
+        assert out.total_files == 20
+        assert out.processed_files == 7
+        assert out.processed_paths == ["/a/file.md", "/b/doc.txt"]
+        assert out.file_mtimes == {"/a/file.md": 1700000000.5}
+        assert out.file_hashes == {"/a/file.md": "abc123"}
+        assert out.indexed_embedding_model == "BAAI/bge-small-en-v1.5"
+        assert out.indexed_chunk_size == 256
+        # cleared
+        assert out.started_at is None
+        assert out.completed_at is None
+        assert out.error is None
+        assert out.error_count == 0
+
+    def test_reset_in_progress_skips_failed_and_done(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(
+                collections={
+                    "working": CollectionProgress(
+                        status=IndexingStatus.IN_PROGRESS, total_files=3, processed_files=1
+                    ),
+                    "broken": CollectionProgress(
+                        status=IndexingStatus.FAILED, error="bad", error_count=4
+                    ),
+                    "finished": CollectionProgress(
+                        status=IndexingStatus.DONE, total_files=2, processed_files=2
+                    ),
+                }
+            )
+        )
+
+        store.reset_in_progress(lambda cp: cp.status == IndexingStatus.IN_PROGRESS)
+
+        result = store.read()
+        assert result is not None
+        assert result.collections["working"].status == IndexingStatus.PENDING
+        assert result.collections["broken"].status == IndexingStatus.FAILED
+        assert result.collections["broken"].error == "bad"
+        assert result.collections["broken"].error_count == 4
+        assert result.collections["finished"].status == IndexingStatus.DONE
+
+    def test_reset_in_progress_all_entries_match(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(
+                collections={
+                    f"col_{i}": CollectionProgress(
+                        status=IndexingStatus.IN_PROGRESS,
+                        total_files=i + 1,
+                        processed_files=i,
+                        started_at="2026-01-01T00:00:00+00:00",
+                        error_count=i,
+                    )
+                    for i in range(3)
+                }
+            )
+        )
+
+        store.reset_in_progress(lambda cp: cp.status == IndexingStatus.IN_PROGRESS)
+
+        result = store.read()
+        assert result is not None
+        for i in range(3):
+            out = result.collections[f"col_{i}"]
+            assert out.status == IndexingStatus.PENDING
+            assert out.total_files == i + 1
+            assert out.processed_files == i
+            assert out.started_at is None
+            assert out.error_count == 0
+
+
+class TestResetInProgressThreadSafety(_ThreadSafetyHarness):
+    """Concurrency regression test for reset_in_progress (reuses the CON-3 harness)."""
+
+    def test_reset_in_progress_concurrent_with_update_collection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Race reset_in_progress (resets IN_PROGRESS entries to PENDING) against an
+        # update of a DIFFERENT key. Under the lock both RMW cycles serialize so
+        # BOTH effects land; without it the last writer clobbers the other's stale
+        # snapshot, dropping one effect. See the parent class docstring for the
+        # shared lost-update rationale.
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(
+                collections={
+                    "working": CollectionProgress(
+                        status=IndexingStatus.IN_PROGRESS, total_files=5, processed_files=2
+                    ),
+                }
+            )
+        )
+        self._slow_read_patch(monkeypatch)
+        self._atomic_write_patch(monkeypatch)  # final file always valid JSON
+        start = threading.Barrier(2)
+
+        def resetter() -> None:
+            start.wait()
+            store.reset_in_progress(lambda cp: cp.status == IndexingStatus.IN_PROGRESS)
+
+        def updater() -> None:
+            start.wait()
+            store.update_collection("new-col", CollectionProgress(status=IndexingStatus.DONE))
+
+        threads = [threading.Thread(target=resetter), threading.Thread(target=updater)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=self._JOIN_TIMEOUT)
+            assert not t.is_alive()
+
+        # (a) valid JSON on disk (atomic write guarantees this even without the lock)
+        raw = json.loads(store._state_file.read_text())
+        assert isinstance(raw, dict)
+        result = store.read()
+        assert result is not None
+        # (b) the update survived
+        assert "new-col" in result.collections
+        # (c) the reset survived: the previously IN_PROGRESS entry is now PENDING
+        assert result.collections["working"].status == IndexingStatus.PENDING
