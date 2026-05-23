@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import sys
 import types
+from dataclasses import asdict
+from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -51,7 +53,6 @@ class _FakeFastMCP:
 
 
 def _make_app(pipeline: MagicMock) -> _FakeApp:
-    from unittest.mock import patch
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         from archon_search.server import mcp as mcp_module
         return mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
@@ -180,10 +181,6 @@ async def test_delete_document_error_returns_structured_error() -> None:
 # ---------------------------------------------------------------------------
 # Task 1.4 — path-safety wiring for MCP ingest_file
 # ---------------------------------------------------------------------------
-
-from dataclasses import asdict
-from pathlib import Path
-from unittest.mock import patch
 
 
 def test_mcp_path_unsafe_message_maps_all_reasons() -> None:
