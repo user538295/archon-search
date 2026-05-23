@@ -227,3 +227,67 @@ def test_store_busy_retry_after_ceils_timeout(timeout_s: float, expected_header:
     """RFC 7231: Retry-After must be integer seconds — ceil non-integer timeouts."""
     err = StoreBusyError(timeout_s=timeout_s)
     assert str(math.ceil(err.timeout_s)) == expected_header
+
+
+# ---------------------------------------------------------------------------
+# A5c — _locked_by_caller parameter in ingest_chunks (Task 2c.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason="_locked_by_caller parameter pending in next commit")
+async def test_ingest_chunks_skips_lock_when_locked_by_caller(
+    connected_store: "SearchStore",
+    col_name: str,
+) -> None:
+    """When _locked_by_caller=True, ingest_chunks skips lock acquisition.
+
+    Pre-acquire the lock, then call ingest_chunks with _locked_by_caller=True;
+    assert no StoreBusyError and the row lands.
+    """
+    await connected_store.ensure_collection(col_name, _DIM)
+    chunk = _chunk(col_name)
+
+    lock = connected_store._lock_for(col_name)
+    # Pre-acquire the lock
+    await lock.acquire()
+    try:
+        # Should succeed without trying to acquire (which would deadlock/timeout)
+        count = await connected_store.ingest_chunks(
+            col_name, [chunk], _locked_by_caller=True
+        )
+        assert count == 1
+    finally:
+        lock.release()
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_default_still_acquires(
+    connected_store: "SearchStore",
+    col_name: str,
+) -> None:
+    """Without _locked_by_caller=True, ingest_chunks tries to acquire the lock.
+
+    Pre-acquire the lock and call without the flag; assert StoreBusyError
+    (or that the call blocks — we use a very short monkeypatch of INGEST_LOCK_TIMEOUT_S).
+    """
+    import archon_search.store as store_module
+    from archon_search.constants import INGEST_LOCK_TIMEOUT_S as _DEFAULT_TIMEOUT
+
+    await connected_store.ensure_collection(col_name, _DIM)
+    chunk = _chunk(col_name)
+
+    lock = connected_store._lock_for(col_name)
+    # Pre-acquire
+    await lock.acquire()
+    try:
+        # Temporarily shrink timeout so the test doesn't wait 30s
+        original = store_module.INGEST_LOCK_TIMEOUT_S
+        store_module.INGEST_LOCK_TIMEOUT_S = 0.05  # type: ignore[attr-defined]
+        try:
+            with pytest.raises(StoreBusyError):
+                await connected_store.ingest_chunks(col_name, [chunk])
+        finally:
+            store_module.INGEST_LOCK_TIMEOUT_S = original  # type: ignore[attr-defined]
+    finally:
+        lock.release()
