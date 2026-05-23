@@ -370,7 +370,8 @@ class SearchStore:
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
-        await table.delete(f"name = '{name}' AND namespace = '{namespace}'")
+        # name validated upstream by _COLLECTION_RE; _where_eq is defense-in-depth
+        await table.delete(_where_eq("name", name) + " AND " + _where_eq("namespace", namespace))
 
     async def get_all_collections_meta(self) -> "list[CollectionMeta]":
         db = self._require_connected()
@@ -459,7 +460,8 @@ class SearchStore:
                         f"Collection {meta.name!r} belongs to namespace {existing_ns!r}; "
                         f"cannot reassign to {meta.namespace!r}"
                     )
-                await table.delete(f"name = '{meta.name}'")
+                # meta.name validated upstream by _COLLECTION_RE; _where_eq is defense-in-depth
+                await table.delete(_where_eq("name", meta.name))
 
         centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
         last_indexed_str = meta.last_indexed.isoformat() if meta.last_indexed else ""
@@ -742,10 +744,12 @@ class SearchStore:
             table = await db.open_table(collection)
         except ValueError:
             return 0
-        count: int = await table.count_rows(f"doc_id = '{doc_id}'")
+        # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
+        count: int = await table.count_rows(_where_eq("doc_id", doc_id))
         if count == 0:
             return 0
-        await table.delete(f"doc_id = '{doc_id}'")
+        # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
+        await table.delete(_where_eq("doc_id", doc_id))
         return count
 
     async def delete_by_source_path(self, collection: str, source_path: str) -> int:
@@ -833,11 +837,10 @@ class SearchStore:
         except ValueError:
             return []
 
-        # Build SQL IN clause
-        id_list = ", ".join(f"'{cid}'" for cid in target_ids)
+        # chunk_ids are constructed from doc_id (validated by _DOC_ID_RE); _where_in is defense-in-depth
         rows = (
             await table.query()
-            .where(f"chunk_id IN ({id_list})")
+            .where(_where_in("chunk_id", target_ids))
             .to_list()
         )
 

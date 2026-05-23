@@ -2477,7 +2477,6 @@ def test_where_in_adversarial() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=False, reason="pending refactor — should remain green after f-string replacement")
 @pytest.mark.asyncio
 async def test_delete_collection_meta_removes_only_named_row(connected_store: SearchStore) -> None:
     """delete_collection_meta removes only the named (name, namespace) row; other survives.
@@ -2500,7 +2499,6 @@ async def test_delete_collection_meta_removes_only_named_row(connected_store: Se
     assert "dcmr-col-b" in names, "sibling row must survive"
 
 
-@pytest.mark.xfail(strict=False, reason="pending refactor — should remain green after f-string replacement")
 @pytest.mark.asyncio
 async def test_update_collection_meta_replaces_existing_row(connected_store: SearchStore) -> None:
     """update_collection_meta upserts: a second write with the same name replaces the first.
@@ -2521,7 +2519,6 @@ async def test_update_collection_meta_replaces_existing_row(connected_store: Sea
     assert result.doc_count == 99, "second write should replace the first (upsert semantics)"
 
 
-@pytest.mark.xfail(strict=False, reason="pending refactor — should remain green after f-string replacement")
 @pytest.mark.asyncio
 async def test_delete_document_removes_all_chunks(connected_store: SearchStore, col_name: str) -> None:
     """delete_document returns chunk count > 0 and leaves no chunks behind.
@@ -2537,7 +2534,6 @@ async def test_delete_document_removes_all_chunks(connected_store: SearchStore, 
     assert all(d.doc_id != doc_id for d in docs), "doc must be absent after delete"
 
 
-@pytest.mark.xfail(strict=False, reason="pending refactor — should remain green after f-string replacement")
 @pytest.mark.asyncio
 async def test_fetch_adjacent_chunks_returns_window(connected_store: SearchStore, col_name: str) -> None:
     """fetch_adjacent_chunks returns neighbors within the window.
@@ -2557,7 +2553,6 @@ async def test_fetch_adjacent_chunks_returns_window(connected_store: SearchStore
     assert f"{doc_id}-000001" not in neighbor_ids, "center must be excluded"
 
 
-@pytest.mark.xfail(strict=False, reason="pending refactor — should remain green after f-string replacement")
 @pytest.mark.asyncio
 async def test_a5b_end_to_end_flow_unchanged(connected_store: SearchStore, col_name: str) -> None:
     """Full happy-path regression: add → ingest → search → delete → search empty.
