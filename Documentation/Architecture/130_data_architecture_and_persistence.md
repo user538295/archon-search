@@ -161,6 +161,10 @@ When `[telemetry].enabled = true`:
 
 The persisted schema is the closed field set declared in `telemetry/entry.py::DOCUMENTED_SCHEMA_FIELDS`; no raw query text is ever in any field (see `150_security_and_privacy_architecture.md`).
 
+## Indexing state file concurrency
+
+`.indexing_state.json` is written by `IndexingStateStore` in `progress.py`. All mutating methods (`write`, `update_collection`, `remove_collection`, `set_trigger`, `reset_in_progress`) hold an internal `threading.RLock` for the full read-modify-write critical section. This closes CON-3: concurrent sync writers across different collections no longer race on the JSON file. `read()` is intentionally not locked — it is a snapshot read; RMW callers must use the locked composite methods. `fsync` on the atomic `os.replace` is not yet performed (deferred to A7); power loss between `os.replace` and disk flush can still corrupt the file.
+
 ## Job state
 
 Long-running operations (ingest, reindex, delete) are tracked in `~/.archon-search/archon-search-jobs.json` (constant `JOBS_FILE` in `jobs/model.py`). Each job carries `JobStatus ∈ {PENDING, RUNNING, DONE, FAILED, CANCELLED, CANCELLING}` plus a `result` dict or an `error` string (see `archon_search/types.py::IngestJob`). The file is rewritten on every transition; see source: `archon_search/jobs/store.py` for the exact concurrency model.

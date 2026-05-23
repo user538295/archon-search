@@ -54,7 +54,7 @@ Goal: make the existing pipeline safe to extend, and ship two cheap features tha
   - [x] A5a path safety (`_path_safety.py`, four entry points)
   - [x] A5b SQL builder defense-in-depth (`_where_eq`, `_where_in`, CI guard)
   - [x] A5c sync `StoreBusyError` propagation (503 + `Retry-After`)
-- [ ] **A6. Hardening: state-store + router cache locks (`CON-2`, `CON-3`)** — `asyncio.Lock` around `IndexingStateStore` mutations; router cache invalidates on ingest/reindex/description-regen. One PR, both bugs.
+- [x] **A6. Hardening: state-store + router cache locks (`CON-2`, `CON-3`)** — `threading.RLock` on `IndexingStateStore` (all mutating methods locked; `reset_in_progress` new RMW); `sync._reset_stale_in_progress` delegates to store; `MultiCollectionRouter.invalidate()` + `initial_metadata` constructor param; eval runner uses constructor injection (no direct `_cached_metadata` write). CON-2 and CON-3 closed.
 - [ ] **A7. Hardening: stop writing without fsync (`PROG-1`, `TEL-2`, `SYN-1`)** — `IndexingStateStore`, telemetry writer, and sync manifest all `flush + fsync` before `os.replace`. Cheap durability win.
 
 ## Phase B — Make changes measurable (observability + retrieval seams)
@@ -207,7 +207,7 @@ If only one ordering is used for planning, use this — each phase is a coherent
 3. ⬜ A3. Search-failure semantics (`CON-5`).
 4. ⬜ A4. Explain / debug endpoint (item 12).
 5. ✅ A5. Ingest path safety + SQL builder defense-in-depth + sync 503 (A5a/A5b/A5c — complete).
-6. ⬜ A6. State-store and router cache locks (`CON-2`, `CON-3`).
+6. ✅ A6. State-store and router cache locks (`CON-2`, `CON-3`) — complete.
 7. ⬜ A7. fsync on durable writes (`PROG-1`, `TEL-2`, `SYN-1`).
 
 **Phase B — Make changes measurable**

@@ -74,6 +74,12 @@ All values live in `~/.archon-search/archon-search.toml` (see `archon-search.tom
 
 Before changing any of these in a release, re-run `uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py` to confirm `routing_accuracy` does not drop below the floor. Knob changes are eval-gated, not just benchmark-gated.
 
+## Router lifecycle and cache invalidation
+
+`POST /route` constructs a fresh `MultiCollectionRouter` per request via `_build_router()` in `routes_route.py`. No router is cached on `app.state`; stale centroids cannot accumulate across requests. A regression test (`test_build_router_called_once_per_request`) pins this invariant — any refactor that caches the router on `app.state` will break CI.
+
+`MultiCollectionRouter.invalidate()` (added in A6) clears `_cached_metadata` and is idempotent. It is intended for future long-lived router consumers (e.g. a planned shared-router migration); the current per-request lifecycle makes it unnecessary in the FastAPI path. The eval harness uses `initial_metadata=` constructor injection instead of direct `_cached_metadata` assignment (CON-2 closed).
+
 ## See also
 
 - `Architecture/100_system_architecture_overview.md` — the pipeline these knobs affect.

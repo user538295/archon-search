@@ -59,7 +59,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 
 | Module | Purpose | Key public symbols |
 |---|---|---|
-| `archon_search/router.py` | Fetch collection metadata over JSON-RPC, score each centroid against the query embedding, apply a confidence gate, build a three-tier shortlist for the decomposer. | `MultiCollectionRouter` |
+| `archon_search/router.py` | Fetch collection metadata over JSON-RPC, score each centroid against the query embedding, apply a confidence gate, build a three-tier shortlist for the decomposer. Now exposes `invalidate()` (clears cached metadata, idempotent) and `initial_metadata` constructor param (for eval/testing without HTTP). | `MultiCollectionRouter` |
 
 ## Metadata
 
@@ -147,7 +147,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/constants.py` | Default namespace and namespace validation. | `DEFAULT_NAMESPACE`, `_validate_namespace` |
 | `archon_search/_types.py` | Internal dataclass spine: `ChunkRecord`, `SearchResult`, `DocumentInfo`, `CollectionInfo`, `IngestResult`. | (internal) |
 | `archon_search/types.py` | Public job/collection types: `JobStatus`, `IngestJob`, `ReindexJob`, `DeleteJob`, `Query`, `RouteResponse`, `Collection`, `CollectionDetail`, `Chunk`. | (public surface) |
-| `archon_search/progress.py` | Indexing progress state: `IndexingStatus`, `CollectionProgress`, `IndexingState`, `IndexingStateStore`, ETA helpers. | `IndexingStatus`, `CollectionProgress`, `IndexingState`, `IndexingStateStore`, `compute_eta_seconds` |
+| `archon_search/progress.py` | Indexing progress state: `IndexingStatus`, `CollectionProgress`, `IndexingState`, `IndexingStateStore`, ETA helpers. `IndexingStateStore` is thread-safe via an internal `threading.RLock`; `reset_in_progress(predicate)` performs a locked RMW to reset matching entries to PENDING. | `IndexingStatus`, `CollectionProgress`, `IndexingState`, `IndexingStateStore`, `compute_eta_seconds` |
 | `archon_search/key_manager.py` | Resolve the API key from env (`ARCHON_SEARCH_API_KEY`), file (`ARCHON_SEARCH_KEY_FILE` or `~/.archon-search/.search.env`), or generate one (chmod 600). | `load_or_generate_key` |
 | `archon_search/watcher.py` | Watchdog-driven `CollectionWatcher` + `WatcherManager` with a debounced handler. | `CollectionWatcher`, `WatcherManager` |
 | `archon_search/sync.py` | `SearchCollectionSync`: full reconcile between on-disk corpora and the index; manifest-based collection naming. | `SearchCollectionSync`, `SyncResult`, `path_to_collection_name` |
