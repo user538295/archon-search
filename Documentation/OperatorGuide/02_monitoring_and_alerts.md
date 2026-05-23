@@ -56,7 +56,7 @@ These are starting thresholds for a single-host deployment. Tune to local noise;
 | Critical | `GET /status` 5xx | 3 consecutive failures | Auth or storage broken; user search broken too. |
 | Warning | `error_count` increases on any collection in `/status` | Δ ≥ 1 per 10 minutes | Ingest path is repeatedly failing for that source. |
 | Warning | `status == "in_progress"` with `processed_files` unchanged | Stuck > 30 min | Likely a hung ingest job; see `OperatorGuide/05_incident_runbook.md`. |
-| Warning | `/telemetry/stats` `success_rate < 0.95` over last 24h | When telemetry is enabled | Pipeline regression; see `CON-5` re. silent empty results. #Unverified (tech-debt ID not re-verified in this pass) |
+| Warning | `/telemetry/stats` `success_rate < 0.95` over last 24h | When telemetry is enabled | Pipeline regression — post-A3 these surface as HTTP 500/504 with `status="internal_error"` or `status="timeout"` telemetry entries; see "Search pipeline failures surface as 5xx" below. |
 | Warning | `/telemetry/stats` `latency_ms.p95` regresses ≥ 50% vs. 7d baseline | Rolling window | Slow path; correlate with model load, ingest activity, disk pressure. |
 | Warning | `skipped_lines > 0` in `/telemetry/stats` | Any non-zero | Schema-invalid JSONL lines; investigate the day's file under `~/.archon-search/search-logs/`. |
 | Info | Telemetry log dir growth > 100 MB/day | Per disk-monitor | Adjust `[telemetry].retention_days` (default 30). |
