@@ -79,21 +79,31 @@ def install_stubs() -> None:
     if "onnxruntime" not in sys.modules:
         sys.modules["onnxruntime"] = types.ModuleType("onnxruntime")
 
-    # Stub chonkie (RecursiveChunker tries to download gpt2 tokenizer) — not needed for tests.
+    # Stub chonkie: real RecursiveChunker downloads a gpt2 tokenizer over the network, which
+    # fails in offline test environments. The fake splits on whitespace into <= chunk_size word
+    # groups and reports token_count as the word count, preserving the size contract that
+    # DocumentChunker and its tests depend on (multiple chunks for long text, bounded size).
     if "chonkie" not in sys.modules:
         _chonkie = types.ModuleType("chonkie")
 
         class _FakeChunk:  # noqa: D101
-            def __init__(self, text: str) -> None:
+            def __init__(self, text: str, token_count: int) -> None:
                 self.text = text
+                self.token_count = token_count
 
         class _FakeRecursiveChunker:  # noqa: D101
             def __init__(self, tokenizer: str = "gpt2", chunk_size: int = 512, **kwargs: object) -> None:
-                self._chunk_size = chunk_size
+                self._chunk_size = max(1, chunk_size)
 
-            def chunk(self, text: str) -> list:  # type: ignore[return]
-                """Return a single chunk with all text — sufficient for unit tests."""
-                return [_FakeChunk(text)] if text else []
+            def chunk(self, text: str):  # type: ignore[return]
+                words = text.split()
+                if not words:
+                    return []
+                size = self._chunk_size
+                return [
+                    _FakeChunk(" ".join(words[i : i + size]), token_count=len(words[i : i + size]))
+                    for i in range(0, len(words), size)
+                ]
 
         _chonkie.RecursiveChunker = _FakeRecursiveChunker  # type: ignore[attr-defined]
         sys.modules["chonkie"] = _chonkie
