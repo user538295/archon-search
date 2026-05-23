@@ -161,8 +161,11 @@ def create_app(
         start = monotonic()
         try:
             req = ExplainRequest(query=query, collection=collection, top_k=top_k, rerank=rerank)
-        except ValidationError as exc:
-            return McpErrorResponse(error=str(exc), code="validation_error")
+        except ValidationError:
+            # Do not echo str(exc): a query-field validation failure embeds the
+            # rejected input value. The code conveys the category; the query is
+            # never reflected back.
+            return McpErrorResponse(error="invalid explain request", code="validation_error")
 
         ns = DEFAULT_NAMESPACE
         routing: RoutingExplain | None = None

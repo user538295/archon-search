@@ -474,7 +474,7 @@ POST /explain {query, top_k, rerank}
   - Integration: `test_hybrid_search_with_trace_normalizes_legacy_ingested_by` — write a row directly with `ingested_by="archon-search-cli"`; assert returned candidate's `ingested_by == "cli"` (boundary normalization parity with A1's `hybrid_search`).
   - Integration: `test_hybrid_search_with_trace_populates_language` — fixture row with `language="en"`; assert it propagates. Also test a row with no `language` column / `None` value; assert candidate's `language is None`.
   - Integration: `test_hybrid_search_with_trace_metadata_is_parsed_dict` — fixture row with `metadata='{"k":"v"}'` (JSON string as stored); assert `candidate.metadata == {"k": "v"}` (parsed, not the raw string).
-  - Unit: `test_scored_search_candidate_metadata_fields_default` — construct `ScoredSearchCandidate` with only required args; assert `file_type == ""`, `indexed_at == ""`, `updated_at == ""`, `ingested_by == "cli"`, `language is None`, `metadata is None`. Pins the defaults so direct test construction stays cheap.
+  - Unit: `test_scored_search_candidate_metadata_fields_default` — construct `ScoredSearchCandidate` with only required args; assert `file_type == ""`, `indexed_at == ""`, `updated_at == ""`, `ingested_by == "cli"`, `language is None`, `metadata == {}` (the field uses `default_factory=dict`). Pins the defaults so direct test construction stays cheap.
   - Checkpoint: `uv run pytest tests/test_diagnostics.py tests/test_store_trace.py -v`
 
 #### Task 2.3 — `SearchPipeline.explain` orchestration
