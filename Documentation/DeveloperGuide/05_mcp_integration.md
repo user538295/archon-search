@@ -24,8 +24,8 @@ Verified against `archon_search/server/mcp.py`. The `collection` argument defaul
 | --- | --- | --- |
 | `search` | `query: str`, `collection?: str` | `{"results": [SearchResult dict ...], "acl_filtered": bool}` |
 | `search_with_context` | `query: str`, `collection?: str`, `context_window: int = 1` | `list[{result, context_before, context_after}]` |
-| `ingest_file` | `path: str`, `collection?: str` | `asdict(IngestResult)` dict |
-| `ingest_directory` | `path: str`, `glob_pattern: str = "**/*"`, `collection?: str` | `list[dict]` (`asdict(IngestResult)` per entry); progress reported via `ctx.report_progress` |
+| `ingest_file` | `path: str`, `collection?: str` | `asdict(IngestResult)` dict. On unsafe `path`: `{"error": <phrase>, "code": "path_unsafe"}`; when a reindex holds the lock: `{"error": ..., "code": "store_busy"}`. |
+| `ingest_directory` | `path: str`, `glob_pattern: str = "**/*"`, `collection?: str` | `list[dict]` (`asdict(IngestResult)` per entry); progress reported via `ctx.report_progress`. On unsafe `path`: `{"error": <phrase>, "code": "path_unsafe"}`; when a reindex holds the lock: `{"error": ..., "code": "store_busy"}`. |
 | `list_collections` | — | `list[dict]` (per-collection `asdict(CollectionMeta)` with the `centroid` field popped) |
 | `get_collections_meta` | — | `list[dict]` (full `asdict(CollectionMeta)`, including `centroid`) |
 | `get_collection_meta` | `name: str` | `asdict(CollectionMeta)` dict, or `{"error": "Collection 'X' not found", "code": "not_found"}` (the literal uses `name!r`, so quote style follows `repr`) |

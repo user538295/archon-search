@@ -39,6 +39,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 |---|---|---|
 | `archon_search/parser.py` | Convert files (text, PDF, images via OCR) to Markdown. Raises `ParseError` on unrecoverable failure. | `DocumentParser`, `ParseError` |
 | `archon_search/chunker.py` | Split parsed Markdown into chunk records of a target size. | `DocumentChunker` |
+| `archon_search/_path_safety.py` | Validate caller-supplied ingest paths at the request boundary (HTTP `POST /collections`, `POST /ingest`; MCP `ingest_file`, `ingest_directory`). Rejects empty/whitespace-only/NUL/non-absolute/`..`-traversal inputs. Symlink resolution and absolute-path scope are intentionally **not** validated (deferred to a future `allowed_dirs` feature). | `validate_ingest_path`, `PathUnsafeError` |
 | `archon_search/acl.py` | Parse `_acl` front matter and `.acl` sidecars; resolve effective ACL per document; filter search results by request namespace. | `resolve_acl`, `apply_acl_filter`, `is_acl_allowed`, `read_acl_sidecar`, `parse_acl_value`, `is_acl_namespace_valid` |
 
 ## Index
@@ -46,7 +47,8 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | Module | Purpose | Key public symbols |
 |---|---|---|
 | `archon_search/embedder.py` | Dense-embedding façade with a Protocol backend. Default backend is fastembed. | `Embedder`, `EmbedderBackend`, `ModelEmbedder`, `make_embedder` |
-| `archon_search/store.py` | LanceDB-backed store: vector ANN + FTS, RRF fusion in `hybrid_search`, document/chunk lifecycle, namespace + ACL migrations, collection metadata persistence. | `SearchStore`, `validate_metadata`, `parse_metadata` |
+| `archon_search/store.py` | LanceDB-backed store: vector ANN + FTS, RRF fusion in `hybrid_search`, document/chunk lifecycle, namespace + ACL migrations, collection metadata persistence. Predicates are built via `_where_eq`/`_where_in` (defense-in-depth quoting), and `StoreBusyError` is raised when the per-collection ingest lock cannot be acquired. | `SearchStore`, `StoreBusyError`, `validate_metadata`, `parse_metadata` |
+| `archon_search/store_filters.py` | Single source of truth for SQL-literal quoting of values interpolated into LanceDB (DataFusion) `where`/`delete`/`count_rows` predicates; used by `store.py`'s `_where_eq`/`_where_in` as the defense-in-depth boundary behind the upstream identifier regex gates. | `_sql_quote_str` |
 | `archon_search/reranker.py` | Cross-encoder second-stage rerank façade with a Protocol backend. | `Reranker`, `RerankerBackend`, `ModelReranker`, `make_reranker` |
 
 ## Query
@@ -82,6 +84,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/server/routes_route.py` | `POST /route` — driver for `MultiCollectionRouter`. Defines a route-local Pydantic `RouteResponse` distinct from the dataclass `RouteResponse` in `archon_search/types.py` (two public objects share the name). | `router`, `RouteRequest`, `RouteResponse` (Pydantic) |
 | `archon_search/server/routes_collections.py` | `GET/POST /collections/`, `GET/DELETE /collections/{name}`, `POST /collections/{name}/reindex`. Issues jobs for add, reindex, and delete (non-empty collections). | `router`, `AddCollectionRequest` |
 | `archon_search/server/routes_jobs.py` | `POST /ingest`, `GET /jobs/{id}`, `DELETE /jobs/{id}`. Spawns the ingest task against `SearchPipeline`. | `router`, `IngestRequest` |
+| `archon_search/server/_ingest_lock.py` | Shared helper for `POST /ingest` and `POST /collections/` to pre-acquire the per-collection ingest lock and return a `503` + `Retry-After` (`{"error": "store_busy", ...}`) when a reindex holds it. | `acquire_collection_lock_or_503` |
 | `archon_search/server/routes_telemetry.py` | `GET /telemetry/stats`, `GET /telemetry/entries`. | `router` |
 | `archon_search/server/schemas.py` | REST response models: `HealthResponse`, `StatusCollectionEntry`, `StatusResponse`, `IndexingStateCollectionEntry`, `IndexingStateResponse`, `CollectionSummary`, `CollectionDetail`, `JobResponse`, `DeleteResponse`, `ErrorDetail`. | (Pydantic models) |
 | `archon_search/server/schemas_telemetry.py` | Pydantic models for telemetry routes. | see source: `archon_search/server/schemas_telemetry.py` |

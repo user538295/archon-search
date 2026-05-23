@@ -85,6 +85,8 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 
 **Symptoms**: `/search` may surface a LanceDB lock/IO condition as either a `503` (only from the meta-lookup branch, `routes_search.py:69-71`) **or** a silent `200 OK` with `results: []` (pipeline-path exceptions are swallowed at `routes_search.py:82-84`); or `archon-search start` fails to connect to the store; or two processes started against the same `db_path`. Check the log for LanceDB lock/IO messages — do not rely on the HTTP status alone.
 
+Distinct from the above: `POST /ingest` or `POST /collections/` returning `503` with body `{"error": "store_busy", ...}` and header `Retry-After: 30` is **not** a fault — it is the expected, intentional signal that a reindex currently holds the per-collection ingest lock. The caller should honour `Retry-After` and retry; ingest to a *different* collection is unaffected. Treat a sustained `store_busy` window the same as a stuck reindex (see "Stuck job" above).
+
 **Triage**:
 
 1. Confirm only one `archon-search` is running: `pgrep -af archon-search`. Two processes against one `db_path` is a hard fault; stop the older one.

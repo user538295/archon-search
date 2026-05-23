@@ -67,7 +67,7 @@ All paths under `/collections`. Namespace gating: cross-namespace access surface
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
 | GET | `/collections/` | List collections visible to caller's namespace. | — | `list[CollectionSummary]` (`schemas.py`) |
-| POST | `/collections/` | Register a path as a collection and enqueue first ingest (returns `202`). Returns `409` for (a) duplicate resolved path or (b) name collision across namespaces. | `AddCollectionRequest` — `{path}` | `JobResponse` (`schemas.py`) |
+| POST | `/collections/` | Register a path as a collection and enqueue first ingest (returns `202`). Returns `400` (`"path is unsafe: <reason>"`) when `path` fails safety validation (empty/whitespace-only/NUL/non-absolute/`..`-traversal); `409` for (a) duplicate resolved path or (b) name collision across namespaces; `503` (body `{"error": "store_busy", ...}`, header `Retry-After: 30`) when a reindex holds the per-collection lock. | `AddCollectionRequest` — `{path}` | `JobResponse` (`schemas.py`) |
 | GET | `/collections/{name}` | Full detail for one collection (centroid presence, ACL counts, last indexed). | — | `CollectionDetail` (`schemas.py`) |
 | DELETE | `/collections/{name}` | Remove collection (config + LanceDB). `404` for unknown or cross-namespace name; `409` if pinned-only. | — | `DeleteResponse` (`schemas.py`) |
 | POST | `/collections/{name}/reindex` | Start a reindex job (returns `202`). | — | `JobResponse` |
@@ -76,7 +76,7 @@ All paths under `/collections`. Namespace gating: cross-namespace access surface
 
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
-| POST | `/ingest` | Submit an ingest job; returns `202` immediately. The `ingested_by` field in the body is always overwritten server-side from the `X-Ingested-By` header (missing → `"http"`; legacy `"archon-search-cli"` → `"cli"`; unknown → `"http"` + WARNING log; truncated to 32 chars). `collection` is rejected only when empty string (whitespace-only is currently accepted; inconsistent with `SearchRequest`). | `IngestRequest` — `{collection, path?, documents?, ingested_by (overwritten)}` | `JobResponse` |
+| POST | `/ingest` | Submit an ingest job; returns `202` immediately. When `path` is non-null it is validated by `_path_safety.validate_ingest_path`, returning `400` (`"path is unsafe: <reason>"`) on rejection (empty/whitespace-only/NUL/non-absolute/`..`-traversal); `path: null` documents-only ingest is unaffected. Returns `503` (body `{"error": "store_busy", ...}`, header `Retry-After: 30`) when a reindex holds the per-collection lock; ingest to a different collection is unaffected. The `ingested_by` field in the body is always overwritten server-side from the `X-Ingested-By` header (missing → `"http"`; legacy `"archon-search-cli"` → `"cli"`; unknown → `"http"` + WARNING log; truncated to 32 chars). `collection` is rejected only when empty string (whitespace-only is currently accepted; inconsistent with `SearchRequest`). | `IngestRequest` — `{collection, path?, documents?, ingested_by (overwritten)}` | `JobResponse` |
 | GET | `/jobs/{job_id}` | Read job status; `404` for cross-namespace IDs. | — | `JobResponse` |
 | DELETE | `/jobs/{job_id}` | Cancel a job. Terminal jobs (`DONE`/`FAILED`/`CANCELLED`) return `200` (idempotent); `RUNNING`/`PENDING` transition to `CANCELLING` and return `202`; already-`CANCELLING` jobs also return `202`. | — | `JobResponse` |
 
@@ -97,8 +97,8 @@ Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mount
 | --- | --- | --- | --- |
 | `search` | Hybrid vector + FTS search, rerank, ACL filter. | `query: str`, `collection: str \| None` | `{"results": [SearchResult...], "acl_filtered": bool}` — new shape per `BREAKING.md`. On error: `{error, code}`. |
 | `search_with_context` | Search plus surrounding chunks for each hit. | `query`, `collection?`, `context_window: int = 1` | `list[{result, context_before, context_after}]` |
-| `ingest_file` | Ingest one file. | `path: str`, `collection?` | Ingest result dict |
-| `ingest_directory` | Ingest a directory tree (reports progress via `ctx`). | `path`, `glob_pattern = "**/*"`, `collection?` | `list[ingest result]` |
+| `ingest_file` | Ingest one file. | `path: str`, `collection?` | Ingest result dict. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`. |
+| `ingest_directory` | Ingest a directory tree (reports progress via `ctx`). | `path`, `glob_pattern = "**/*"`, `collection?` | `list[ingest result]`. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`. |
 | `list_collections` | List collections with counts (centroid omitted). | — | `list[dict]` — `asdict(CollectionMeta)` with `centroid` popped (not a typed `CollectionMeta`). |
 | `get_collections_meta` | Full meta for all collections including centroid. | — | `list[CollectionMeta]` |
 | `get_collection_meta` | Full meta for one collection. | `name: str` | `CollectionMeta` or `{error, code: "not_found"}` |
