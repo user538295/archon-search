@@ -182,7 +182,8 @@
         "enum": [
           "search",
           "search_with_context",
-          "route"
+          "route",
+          "explain"
         ],
         "title": "EndpointKind",
         "type": "string"
