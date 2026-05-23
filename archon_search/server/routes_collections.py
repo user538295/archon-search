@@ -152,16 +152,28 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     if any(m.name == collection_name for m in all_meta):
         return JSONResponse({"detail": "collection name already registered"}, status_code=409)
 
+    # Pre-acquire the per-collection lock BEFORE any state mutation so a 503
+    # leaves config, meta, and jobs completely untouched (no orphaned state).
+    lock_result = await acquire_collection_lock_or_503(search_store, collection_name)
+    if isinstance(lock_result, JSONResponse):
+        return lock_result
+
+    # ``lock_result`` is now either an acquired asyncio.Lock or None (store
+    # unavailable).  Track it so failure branches can release it.
+    held_lock: asyncio.Lock | None = lock_result if isinstance(lock_result, asyncio.Lock) else None
+
     config.collections.append(resolved)
     _maybe_save_config(config, request)
 
-    # Write stub meta — rollback config on failure
+    # Write stub meta — rollback config on failure and release the held lock.
     try:
         await search_store.update_collection_meta(CollectionMeta(name=collection_name, namespace=ns))
     except ValueError:
         # TOCTOU race: name claimed by another namespace between check and write
         config.collections.remove(resolved)
         _maybe_save_config(config, request)
+        if held_lock is not None and held_lock.locked():
+            held_lock.release()
         return JSONResponse({"detail": "collection name already registered"}, status_code=409)
     except Exception:
         config.collections.remove(resolved)
@@ -169,6 +181,8 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
             _maybe_save_config(config, request)
         except Exception:
             logger.exception("Failed to rollback config after stub meta write failure")
+        if held_lock is not None and held_lock.locked():
+            held_lock.release()
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
     ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
@@ -176,11 +190,6 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     ingest_body = IngestRequest(
         collection=collection_name, path=resolved, ingested_by=ingested_by
     )
-
-    # Pre-acquire the per-collection lock to return 503 synchronously on contention.
-    lock_result = await acquire_collection_lock_or_503(search_store, collection_name)
-    if isinstance(lock_result, JSONResponse):
-        return lock_result
 
     if lock_result is not None:
         task = asyncio.create_task(

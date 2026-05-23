@@ -133,8 +133,8 @@ def test_post_ingest_releases_lock_on_task_cancellation(tmp_path: Path) -> None:
     r_del = client.delete(f"/jobs/{job_id}")
     assert r_del.status_code in (200, 202)
 
-    # Give the event loop a moment to process cancellation.
-    asyncio.run(asyncio.sleep(0.05))
+    # The TestClient portal has already driven the cancellation to completion
+    # before returning; no additional settling is needed.
 
     # Lock must be free regardless of task cancellation.
     lock = mock_store._lock_for("cancel-col")
@@ -170,3 +170,82 @@ def test_post_collections_returns_503_when_lock_held(
     assert response.headers.get("Retry-After") == "30"
     body = response.json()
     assert body.get("error") == "store_busy"
+
+
+def test_post_collections_503_leaves_no_orphaned_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 503 on POST /collections/ must leave config, meta, and jobs completely untouched."""
+    src = tmp_path / "docs"
+    src.mkdir()
+
+    app, client, mock_store, jobs = _make_app_and_client(tmp_path)
+
+    # Record initial job count before the request.
+    initial_job_count = len(jobs._jobs) if hasattr(jobs, "_jobs") else 0
+
+    # Force asyncio.wait_for to raise TimeoutError immediately (pre-acquire path).
+    async def _raise_timeout(coro: object, timeout: object = None) -> None:
+        import inspect
+        if inspect.iscoroutine(coro):
+            coro.close()  # prevent ResourceWarning
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr("archon_search.server._ingest_lock.asyncio.wait_for", _raise_timeout)
+
+    response = client.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body.get("error") == "store_busy"
+
+    # Config must NOT contain the path — no orphaned config entry.
+    resolved = str(src.resolve())
+    assert resolved not in app.state.config.collections, (
+        "503 must not leave the collection path in config.collections"
+    )
+
+    # Stub meta must NOT have been written.
+    mock_store.update_collection_meta.assert_not_called()
+
+    # No new job must have been created.
+    final_job_count = len(jobs._jobs) if hasattr(jobs, "_jobs") else 0
+    assert final_job_count == initial_job_count, (
+        "503 must not create a new job (orphaned job_id)"
+    )
+
+
+def test_post_ingest_503_on_A_does_not_block_B(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A held lock on collection A must not prevent collection B from being ingested."""
+    app, client, mock_store, jobs = _make_app_and_client(tmp_path)
+
+    # Reduce the timeout so the contended case fails fast without a 30 s wait.
+    monkeypatch.setattr("archon_search.constants.INGEST_LOCK_TIMEOUT_S", 0.05)
+    # _ingest_lock.py reads _constants.INGEST_LOCK_TIMEOUT_S at call time via the
+    # module alias; patch it there too so the running call sees the new value.
+    import archon_search.server._ingest_lock as _ingest_lock_mod
+    import archon_search.constants as _constants_mod
+    monkeypatch.setattr(_ingest_lock_mod, "_constants", _constants_mod)
+
+    # Pre-acquire the lock for collection "A" so the request handler times out.
+    # We need the lock to be held BEFORE the TestClient request runs; since the
+    # TestClient drives its own event loop we acquire it via asyncio.run() — the
+    # lock object itself is not loop-bound, only its internal state matters.
+    lock_a = mock_store._lock_for("col-a")
+    asyncio.run(lock_a.acquire())  # lock_a is now held; TestClient's wait_for will time out
+
+    # POST /ingest for collection A → 503 (lock held).
+    r_a = client.post("/ingest", json={"collection": "col-a"})
+    assert r_a.status_code == 503, f"Expected 503 for locked col-a, got {r_a.status_code}"
+    assert r_a.json().get("error") == "store_busy"
+
+    # POST /ingest for collection B → 202 (different lock, uncontended).
+    r_b = client.post("/ingest", json={"collection": "col-b"})
+    assert r_b.status_code == 202, f"Expected 202 for free col-b, got {r_b.status_code}"
+    assert "job_id" in r_b.json()
+
+    # Release the pre-held lock to avoid ResourceWarning / state leakage.
+    if lock_a.locked():
+        lock_a.release()

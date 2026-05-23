@@ -757,6 +757,8 @@ def test_add_collection_rollback_on_meta_failure(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/ returns 500 and reverts config when update_collection_meta raises non-ValueError."""
+    import asyncio as _asyncio
+
     src = tmp_path / "myproject"
     src.mkdir()
     cfg = SearchConfig()
@@ -768,6 +770,8 @@ def test_add_collection_rollback_on_meta_failure(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    # Provide a real lock so the pre-acquire (moved before state mutation) can succeed.
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -785,6 +789,8 @@ def test_add_collection_cross_namespace_race_returns_409(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/ returns 409 (not 500) when update_collection_meta raises ValueError (TOCTOU race)."""
+    import asyncio as _asyncio
+
     src = tmp_path / "myproject"
     src.mkdir()
     cfg = SearchConfig()
@@ -798,6 +804,8 @@ def test_add_collection_cross_namespace_race_returns_409(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    # Provide a real lock so the pre-acquire (moved before state mutation) can succeed.
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -1211,6 +1219,8 @@ def test_add_collection_rollback_save_failure(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/ returns 500 when both update_collection_meta AND rollback _maybe_save_config raise."""
+    import asyncio as _asyncio
+
     src = tmp_path / "myproject"
     src.mkdir()
     cfg = SearchConfig()
@@ -1224,6 +1234,8 @@ def test_add_collection_rollback_save_failure(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    # Provide a real lock so the pre-acquire (moved before state mutation) can succeed.
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     # Inject config_path so _maybe_save_config is called during rollback
