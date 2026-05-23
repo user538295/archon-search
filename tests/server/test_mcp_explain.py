@@ -21,6 +21,7 @@ if "fastmcp" not in sys.modules:
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search.collection_meta import CollectionMeta
+from archon_search.config import SearchConfig
 from archon_search.pipeline import ExplainPipelineResult
 
 
@@ -288,3 +289,56 @@ async def test_mcp_explain_telemetry_emits_no_query() -> None:
     assert unique_query not in str(entry_dict)
     assert entry.endpoint == "explain"
     assert isinstance(entry.result_count, int)
+
+
+# ---------------------------------------------------------------------------
+# MCP collectionless routing: chosen_below_threshold True/False
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_collectionless_chosen_below_threshold_false() -> None:
+    """chosen_below_threshold is False when centroid score exceeds confidence threshold."""
+    # Centroid parallel to query vector [1.0, 0.0] → cosine sim = 1.0 > 0.30 threshold
+    meta = CollectionMeta(
+        name="my-col", namespace="default", centroid=[1.0, 0.0], embedding_model="test-model"
+    )
+    pipeline = _make_pipeline(all_meta_return=[meta])
+    pipeline._embedder.embed_one = AsyncMock(return_value=[1.0, 0.0])
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default")  # type: ignore[call-arg]
+        explain_fn = app.tools["explain"]  # type: ignore[attr-defined]
+        result = await explain_fn(query="hello")
+
+    assert isinstance(result, dict)
+    assert "code" not in result, f"Got error: {result}"
+    routing = result["routing"]
+    assert routing is not None
+    assert routing["chosen_below_threshold"] is False
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_collectionless_chosen_below_threshold_true() -> None:
+    """chosen_below_threshold is True when centroid score is below confidence threshold."""
+    # Orthogonal centroid → cosine sim ≈ 0.0 < 0.30 threshold
+    meta = CollectionMeta(
+        name="my-col", namespace="default", centroid=[0.0, 1.0], embedding_model="test-model"
+    )
+    pipeline = _make_pipeline(all_meta_return=[meta])
+    pipeline._embedder.embed_one = AsyncMock(return_value=[1.0, 0.0])
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default")  # type: ignore[call-arg]
+        explain_fn = app.tools["explain"]  # type: ignore[attr-defined]
+        result = await explain_fn(query="hello")
+
+    assert isinstance(result, dict)
+    assert "code" not in result, f"Got error: {result}"
+    routing = result["routing"]
+    assert routing is not None
+    assert routing["chosen_below_threshold"] is True

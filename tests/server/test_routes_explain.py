@@ -549,3 +549,55 @@ def test_post_explain_pipeline_timeout_returns_504(tmp_path: Path) -> None:
 
     response = client.post("/explain", json={"query": "hello", "collection": "my-col"})
     assert response.status_code == 504
+
+
+def test_post_explain_pipeline_timeout_emits_telemetry(tmp_path: Path) -> None:
+    """Timeout path emits a 'timeout' telemetry error entry."""
+    import asyncio as _asyncio
+    from unittest.mock import MagicMock
+
+    app, client = _make_app(tmp_path)
+    pipeline = _make_pipeline_mock()
+    pipeline.explain = AsyncMock(side_effect=_asyncio.TimeoutError())
+    app.state.pipeline = pipeline
+
+    writer = MagicMock()
+    app.state.telemetry_writer = writer
+
+    response = client.post("/explain", json={"query": "hello", "collection": "my-col"})
+    assert response.status_code == 504
+    assert writer.enqueue.called
+    entry = writer.enqueue.call_args[0][0]
+    assert entry.status == "timeout"
+
+
+def test_post_explain_collectionless_chosen_below_threshold_false(tmp_path: Path) -> None:
+    """chosen_below_threshold is False when centroid score exceeds confidence threshold."""
+    app, client = _make_app(tmp_path)
+    # Centroid parallel to query → cosine similarity = 1.0 > 0.30 threshold
+    meta = CollectionMeta(name="my-col", namespace="default", centroid=[1.0, 0.0], embedding_model="test-model")
+    app.state.pipeline = _make_pipeline_mock(
+        all_meta_return=[meta],
+        embed_vector=[1.0, 0.0],
+    )
+    response = client.post("/explain", json={"query": "hello"})
+    assert response.status_code == 200
+    routing = response.json()["routing"]
+    assert routing["chosen_below_threshold"] is False
+
+
+def test_post_explain_collectionless_chosen_below_threshold_true(tmp_path: Path) -> None:
+    """chosen_below_threshold is True when centroid score is below confidence threshold."""
+    app, client = _make_app(tmp_path)
+    config: SearchConfig = app.state.config
+    # Orthogonal centroid → cosine similarity ≈ 0.0 < threshold
+    meta = CollectionMeta(name="my-col", namespace="default", centroid=[0.0, 1.0], embedding_model="test-model")
+    app.state.pipeline = _make_pipeline_mock(
+        all_meta_return=[meta],
+        embed_vector=[1.0, 0.0],
+    )
+    response = client.post("/explain", json={"query": "hello"})
+    assert response.status_code == 200
+    routing = response.json()["routing"]
+    assert routing["chosen_below_threshold"] is True
+    assert routing["confidence_threshold"] == pytest.approx(config.routing_confidence_threshold)

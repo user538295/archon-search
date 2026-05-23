@@ -1,6 +1,7 @@
 """FastMCP HTTP server for RAG search."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import asdict
 from pathlib import Path
@@ -358,28 +359,55 @@ def create_app(
 
         start = monotonic()
         if not query or not query.strip():
+            if writer is not None:
+                try:
+                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
+                except Exception as tel_exc:
+                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
             return McpErrorResponse(error="query must not be empty", code="validation_error")
         if not (1 <= top_k <= 100):
+            if writer is not None:
+                try:
+                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
+                except Exception as tel_exc:
+                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
             return McpErrorResponse(error="top_k must be between 1 and 100", code="validation_error")
 
         _cfg = config if config is not None else SearchConfig()
 
+        _TIMEOUT = 30.0
         try:
             if collection is not None:
                 # Pinned path
                 meta = await pipeline.get_collection_meta(collection, namespace=DEFAULT_NAMESPACE)
                 if meta is None:
+                    if writer is not None:
+                        try:
+                            writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
+                        except Exception as tel_exc:
+                            logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
                     return McpErrorResponse(
                         error=f"Collection {collection!r} not found", code="not_found"
                     )
-                pipeline_result = await pipeline.explain(
-                    query, collection, top_k=top_k, rerank=rerank, namespace=DEFAULT_NAMESPACE
-                )
+                try:
+                    pipeline_result = await asyncio.wait_for(
+                        pipeline.explain(
+                            query, collection, top_k=top_k, rerank=rerank, namespace=DEFAULT_NAMESPACE
+                        ),
+                        timeout=_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    if writer is not None:
+                        try:
+                            writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="timeout", error_kind=ErrorKind.timeout, latency_ms=(monotonic() - start) * 1000.0))
+                        except Exception as tel_exc:
+                            logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+                    return McpErrorResponse(error="explain timed out", code="timeout")
                 routing_block = None
                 chosen_collection = collection
             else:
                 # Collectionless path — use shared helper
-                routing_block, _chosen_metas, query_vector, error_response = await _build_routing_explain(
+                routing_block, query_vector, error_response = await _build_routing_explain(
                     pipeline=pipeline,
                     query=query,
                     ns=DEFAULT_NAMESPACE,
@@ -388,22 +416,39 @@ def create_app(
                     start=start,
                 )
                 if error_response is not None:
-                    error_data = error_response.body
                     import json  # noqa: PLC0415
-                    detail = json.loads(error_data).get("detail", "error")
+                    detail = json.loads(error_response.body).get("detail", "error")
                     status_code = error_response.status_code
-                    code = "not_found" if status_code == 404 else "internal_error"
+                    if status_code == 404:
+                        code = "not_found"
+                    elif status_code == 422:
+                        code = "validation_error"
+                    elif status_code == 503:
+                        code = "service_unavailable"
+                    else:
+                        code = "internal_error"
                     return McpErrorResponse(error=detail, code=code)
 
                 chosen_collection = routing_block.chosen_collection  # type: ignore[union-attr]
-                pipeline_result = await pipeline.explain(
-                    query,
-                    chosen_collection,
-                    top_k=top_k,
-                    rerank=rerank,
-                    namespace=DEFAULT_NAMESPACE,
-                    query_vector=query_vector,
-                )
+                try:
+                    pipeline_result = await asyncio.wait_for(
+                        pipeline.explain(
+                            query,
+                            chosen_collection,
+                            top_k=top_k,
+                            rerank=rerank,
+                            namespace=DEFAULT_NAMESPACE,
+                            query_vector=query_vector,
+                        ),
+                        timeout=_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    if writer is not None:
+                        try:
+                            writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="timeout", error_kind=ErrorKind.timeout, latency_ms=(monotonic() - start) * 1000.0))
+                        except Exception as tel_exc:
+                            logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+                    return McpErrorResponse(error="explain timed out", code="timeout")
 
             response = ExplainResponse.from_pipeline_result(
                 pipeline_result=pipeline_result,

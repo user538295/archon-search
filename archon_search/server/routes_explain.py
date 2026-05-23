@@ -285,13 +285,13 @@ async def _build_routing_explain(
     config: "SearchConfig",
     writer: "TelemetryWriter | None",
     start: float,
-) -> "tuple[RoutingExplain | None, list[Any], list[float], JSONResponse | None]":
+) -> "tuple[RoutingExplain | None, list[float], JSONResponse | None]":
     """Build a RoutingExplain by embedding the query and ranking collections.
 
     Returns:
-        (routing, chosen_metas, query_vector, error_response) where:
-        - On success: (RoutingExplain, list[CollectionMeta], query_vector, None)
-        - On error: (None, [], [], JSONResponse to return to caller)
+        (routing, query_vector, error_response) where:
+        - On success: (RoutingExplain, query_vector, None)
+        - On error: (None, [], JSONResponse to return to caller)
     """
     from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
     from archon_search.router import MultiCollectionRouter  # noqa: PLC0415
@@ -303,11 +303,11 @@ async def _build_routing_explain(
     except Exception as exc:
         logger.error("explain: meta lookup failed: %s", exc, exc_info=True)
         _enqueue_explain_error(writer, start, "internal_error", ErrorKind.other)
-        return None, [], [], JSONResponse({"detail": "service unavailable"}, status_code=503)
+        return None, [], JSONResponse({"detail": "service unavailable"}, status_code=503)
 
     if not all_meta:
         _enqueue_explain_error(writer, start, "validation_error", ErrorKind.validation_error)
-        return None, [], [], JSONResponse({"detail": "no collections available"}, status_code=404)
+        return None, [], JSONResponse({"detail": "no collections available"}, status_code=404)
 
     # 2. Embed query
     try:
@@ -315,11 +315,11 @@ async def _build_routing_explain(
     except ValueError as exc:
         logger.error("explain: embedding validation failed: %s", exc, exc_info=True)
         _enqueue_explain_error(writer, start, "validation_error", ErrorKind.validation_error)
-        return None, [], [], JSONResponse({"detail": "invalid query for embedding"}, status_code=422)
+        return None, [], JSONResponse({"detail": "invalid query for embedding"}, status_code=422)
     except Exception as exc:
         logger.error("explain: embedding failed: %s", exc, exc_info=True)
         _enqueue_explain_error(writer, start, "internal_error", ErrorKind.other)
-        return None, [], [], JSONResponse({"detail": "internal server error"}, status_code=500)
+        return None, [], JSONResponse({"detail": "internal server error"}, status_code=500)
 
     # 3. Build inline router and rank
     inline_router = MultiCollectionRouter(
@@ -336,7 +336,7 @@ async def _build_routing_explain(
 
     if not scored_pairs:
         _enqueue_explain_error(writer, start, "validation_error", ErrorKind.validation_error)
-        return None, [], [], JSONResponse({"detail": "no collections available"}, status_code=404)
+        return None, [], JSONResponse({"detail": "no collections available"}, status_code=404)
 
     # 5. Build routing explain
     routing_candidates = [
@@ -359,7 +359,7 @@ async def _build_routing_explain(
         candidates=routing_candidates,
     )
 
-    return routing, [chosen_meta], query_vector, None
+    return routing, query_vector, None
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +436,7 @@ async def explain(
         # ----------------------------------------------------------------
         # Collectionless path — build routing explain
         # ----------------------------------------------------------------
-        routing, chosen_metas, query_vector, error_response = await _build_routing_explain(
+        routing, query_vector, error_response = await _build_routing_explain(
             pipeline=pipeline,
             query=body.query,
             ns=ns,
