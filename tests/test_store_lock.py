@@ -227,3 +227,41 @@ def test_store_busy_retry_after_ceils_timeout(timeout_s: float, expected_header:
     """RFC 7231: Retry-After must be integer seconds — ceil non-integer timeouts."""
     err = StoreBusyError(timeout_s=timeout_s)
     assert str(math.ceil(err.timeout_s)) == expected_header
+
+
+# ---------------------------------------------------------------------------
+# Task 2c.1 — _locked_by_caller flag
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ingest_chunks_skips_lock_when_locked_by_caller(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """When _locked_by_caller=True, ingest_chunks skips lock acquire — no deadlock."""
+    await connected_store.ensure_collection(col_name, _DIM)
+    lock = connected_store._lock_for(col_name)
+    await lock.acquire()
+    try:
+        n = await connected_store.ingest_chunks(col_name, [_chunk()], _locked_by_caller=True)
+        assert n == 1
+    finally:
+        lock.release()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ingest_chunks_default_still_acquires(
+    connected_store: SearchStore, col_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the flag, ingest_chunks tries to acquire and times out on a held lock."""
+    await connected_store.ensure_collection(col_name, _DIM)
+    monkeypatch.setattr("archon_search.store.INGEST_LOCK_TIMEOUT_S", 0.1)
+    lock = connected_store._lock_for(col_name)
+    await lock.acquire()
+    try:
+        with pytest.raises(StoreBusyError):
+            await connected_store.ingest_chunks(col_name, [_chunk()])
+    finally:
+        lock.release()
