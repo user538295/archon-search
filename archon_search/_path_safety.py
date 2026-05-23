@@ -35,8 +35,9 @@ def validate_ingest_path(raw: str) -> Path:
     2. Whitespace-only string → ``reason="whitespace_only"``.
     3. NUL byte in string → ``reason="nul_byte"``.
     4. ``Path(raw).expanduser()`` — so ``~/foo`` resolves to an absolute path.
-    5. Non-absolute after expanduser → ``reason="not_absolute"``.
-    6. Any element of ``Path.parts`` equal to ``".."`` → ``reason="contains_dotdot"``.
+    5. Any element of ``Path.parts`` equal to ``".."`` → ``reason="contains_dotdot"``.
+       (Checked BEFORE absoluteness so ``../foo`` gives ``contains_dotdot``, not ``not_absolute``.)
+    6. Non-absolute after expanduser → ``reason="not_absolute"``.
 
     On accept: returns ``Path(raw).expanduser().resolve(strict=False)``.
 

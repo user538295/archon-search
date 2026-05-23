@@ -1,8 +1,7 @@
 """Tests pinning the per-collection ``asyncio.Lock`` map on ``SearchStore``,
-the ``StoreBusyError`` raised on lock-acquisition timeout, and the REST 503
-contract (with ``Retry-After`` integer-ceil semantics).
-
-Implements Task 6.1 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
+the ``StoreBusyError`` raised on lock-acquisition timeout, the REST 503
+contract (with ``Retry-After`` integer-ceil semantics), and the
+``_locked_by_caller`` skip-acquire flag added in A5c.
 """
 from __future__ import annotations
 
