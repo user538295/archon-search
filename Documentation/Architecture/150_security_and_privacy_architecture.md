@@ -131,6 +131,42 @@ This is documented as accepted risk: telemetry is local-only and the operator al
 
 `telemetry/pruner.py::Pruner` deletes `*.jsonl` files older than `[telemetry].retention_days` (default 30) on a 24-hour interval. Today's file is never deleted. There is no per-entry redaction — older entries are deleted by file age only.
 
+## Ingest path validation (A5a)
+
+All four ingest entry points (`POST /collections`, `POST /jobs/ingest`, MCP `ingest_file`, MCP `ingest_directory`) validate the user-supplied path string through `archon_search/_path_safety.py::validate_ingest_path` before dispatch.
+
+### What is validated
+
+- Empty or whitespace-only strings → rejected (`reason="empty"` / `reason="whitespace_only"`).
+- NUL bytes → rejected (`reason="nul_byte"`).
+- Non-absolute paths (after `expanduser()`) → rejected (`reason="not_absolute"`).
+- Any path element equal to `".."` (dotdot traversal) → rejected (`reason="contains_dotdot"`).
+
+On rejection:
+- HTTP routes return `HTTP 400` with `{"detail": "path is unsafe: <reason>"}`.
+- MCP tools return `McpErrorResponse(error=<LLM-readable phrase>, code="path_unsafe")`.
+
+### What is NOT validated
+
+- **Symlink escapes**: the returned `resolve()`d path may follow a symlink to a location outside the apparent parent. Symlink-escape checking is deferred to a future `allowed_dirs` feature.
+- **Absolute-path scope**: `POST /ingest {"path": "/etc/passwd"}` still passes the validator. Closing this requires the `allowed_dirs` feature (out of scope for A5a).
+- **File size / MIME / encoding**: handled by downstream parsers with existing `errors="replace"` semantics.
+
+### Threat model note
+
+Auth is applied first. A `400 path_unsafe` response is only reachable after a valid `Bearer` token is presented. Unauthenticated requests always receive `401`.
+
+## SQL builder defense-in-depth (A5b)
+
+`archon_search/store.py` builds five SQL predicates for `.where()`, `.delete()`, and `.count_rows()` calls. All five sites have been refactored to use:
+
+- `_where_eq(col: str, value: str) -> str` — returns `"col = 'value'"` with single quotes escaped by doubling.
+- `_where_in(col: str, values: Iterable[str]) -> str` — returns `"col IN ('a', 'b')"` or `"1=0"` for empty.
+
+Both helpers delegate quoting to `_sql_quote_str` from `archon_search/store_filters.py` (A2). This is **defense-in-depth**: the primary security boundary remains the upstream regex gates (`_COLLECTION_RE`, `_validate_namespace`, `_DOC_ID_RE`). The helpers add a SQL-boundary layer so a future relaxation of those regexes cannot silently re-enable injection.
+
+A CI guard in `tests/test_no_fstring_sql.py` prevents regression: it reads `store.py` as text and fails if any of the three f-string SQL patterns are reintroduced.
+
 ## Operational notes
 
 - The server binds to `127.0.0.1` by default (`[server].host`). Binding to `0.0.0.0` is not recommended and the threat model does not cover it.

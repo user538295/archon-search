@@ -73,6 +73,10 @@ Verified from `archon_search/server/routes_*.py`:
 | `DELETE /jobs/{id}` with unrecognized `JobStatus` (defensive `else`) | `500` | `routes_jobs.py:153-157` | none — `routes_jobs.py` does not enqueue telemetry |
 | Unmapped exception in `/route` handler body | (re-raised, surfaces per FastAPI default; typically `500`) | `routes_route.py:152-166` | `other` (with `status="internal_error"`) |
 | Telemetry parameter validation | `400` | `routes_telemetry.py:36, 61` | n/a (telemetry endpoint itself) |
+| Ingest path failed safety validation (A5a) | `400` | `routes_collections.py`, `routes_jobs.py` | none — `{"detail": "path is unsafe: <reason>"}` where reason ∈ {`empty`, `whitespace_only`, `nul_byte`, `contains_dotdot`, `not_absolute`} |
+| Store busy during ingest (A5c) | `503` | `routes_jobs.py`, `routes_collections.py` | none — `{"error": "store_busy", "detail": "..."}` with `Retry-After: 30` header |
+
+**MCP error codes** (A5a): `path_unsafe` — `ingest_file` and `ingest_directory` return `McpErrorResponse(code="path_unsafe")` when the supplied path contains `..`, is empty, contains NUL bytes, or is non-absolute.
 
 Successful job submissions (POST collection-add, POST reindex, POST ingest) return `202 Accepted` with a `JobResponse`; the job's eventual outcome is observed via `GET /jobs/{job_id}`.
 

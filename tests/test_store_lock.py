@@ -187,16 +187,30 @@ async def test_drop_collection_removes_lock_entry(
 
 
 def _make_rest_client(tmp_path: Path) -> TestClient:
+    """Bare FastAPI app (no create_app, no chonkie) for store-busy testing."""
     import os
-    from archon_search.config import SearchConfig
+    from fastapi import FastAPI, Request
     from archon_search.jobs.store import JobStore
-    from archon_search.server.app import create_app
+    from archon_search.server.routes_jobs import router as jobs_router
+    from archon_search.server.middleware_auth import APIKeyMiddleware
+    from archon_search.constants import DEFAULT_NAMESPACE
 
-    config = SearchConfig()
-    config.db_path = str(tmp_path / "search")
-    jobs = JobStore(path=tmp_path / "jobs.json")
-    app = create_app(config, jobs)
-    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "0" * 64)
+
+    app = FastAPI()
+    app.state.job_store = JobStore(path=tmp_path / "jobs.json")
+    app.state._background_tasks = set()
+    app.state.ingest_pipeline = None
+    app.state.search_store = None
+
+    app.add_middleware(APIKeyMiddleware, api_key=key, namespaces={})
+
+    @app.middleware("http")
+    async def _inject_namespace(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.namespace = DEFAULT_NAMESPACE
+        return await call_next(request)
+
+    app.include_router(jobs_router)
     return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
 
