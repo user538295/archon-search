@@ -18,7 +18,7 @@ from archon_search.key_manager import load_or_generate_key
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingState, IndexingStatus
 from archon_search.server.middleware_auth import APIKeyMiddleware
-from archon_search.telemetry.entry import TelemetryEntry
+from archon_search.telemetry.entry import ErrorKind, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger("archon.search")
@@ -76,7 +76,7 @@ def create_app(
                         TelemetryEntry.from_error(
                             endpoint="search",
                             status="internal_error",
-                            error_kind="other",
+                            error_kind=ErrorKind.other,
                             latency_ms=(monotonic() - start) * 1000.0,
                         )
                     )
@@ -124,7 +124,7 @@ def create_app(
                         TelemetryEntry.from_error(
                             endpoint="search_with_context",
                             status="internal_error",
-                            error_kind="other",
+                            error_kind=ErrorKind.other,
                             latency_ms=(monotonic() - start) * 1000.0,
                         )
                     )
@@ -353,7 +353,7 @@ def create_app(
                         TelemetryEntry.from_error(
                             endpoint="explain",
                             status="internal_error",
-                            error_kind="other",
+                            error_kind=ErrorKind.other,
                             latency_ms=(monotonic() - start) * 1000.0,
                         )
                     )
