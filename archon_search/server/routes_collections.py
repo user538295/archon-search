@@ -15,6 +15,7 @@ from archon_search.config import SearchConfig, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
+from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse
@@ -164,6 +165,15 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         except Exception:
             logger.exception("Failed to rollback config after stub meta write failure")
         return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    # Pre-acquire per-collection lock to surface a busy store as immediate 503
+    # (A5c parity with POST /ingest). Release immediately so background task self-locks.
+    search_store = getattr(request.app.state, "search_store", None)
+    lock_result = await acquire_collection_lock_or_503(search_store, collection_name)
+    if isinstance(lock_result, JSONResponse):
+        return lock_result
+    if lock_result is not None:
+        lock_result.release()
 
     ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     job = store.create(namespace=ns)

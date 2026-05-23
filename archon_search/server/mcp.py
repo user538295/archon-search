@@ -13,6 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from archon_search._path_safety import PathUnsafeError, validate_ingest_path
+from archon_search.store import StoreBusyError
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.key_manager import load_or_generate_key
@@ -238,6 +239,8 @@ def create_app(
                 validated_path, collection or default_collection, ingested_by="http",
             )
             return asdict(result)
+        except StoreBusyError:
+            return McpErrorResponse(error="store busy — reindex in progress; retry later", code="store_busy")
         except Exception as exc:
             logger.exception("ingest_file failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
@@ -267,6 +270,8 @@ def create_app(
                 ingested_by="http",
             )
             return [asdict(r) for r in results]
+        except StoreBusyError:
+            return McpErrorResponse(error="store busy — reindex in progress; retry later", code="store_busy")
         except Exception as exc:
             logger.exception("ingest_directory failed")
             return McpErrorResponse(error=str(exc), code="internal_error")

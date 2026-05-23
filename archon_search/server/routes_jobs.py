@@ -111,26 +111,24 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
             raise HTTPException(status_code=400, detail=f"path is unsafe: {e.reason}")
         body.path = str(validated_path)
 
-    # Pre-acquire per-collection lock synchronously to surface StoreBusyError
-    # as an immediate 503 rather than a failed job (A5c).
-    held_lock = await acquire_collection_lock_or_503(search_store, body.collection)
-    if isinstance(held_lock, JSONResponse):
-        return held_lock
+    # Pre-acquire per-collection lock to surface a busy store as immediate 503
+    # rather than a failed background job (A5c). The lock is released immediately
+    # after the check so the background task self-locks via ingest_chunks — this
+    # avoids threading _locked_by_caller=True through the entire pipeline.
+    result = await acquire_collection_lock_or_503(search_store, body.collection)
+    if isinstance(result, JSONResponse):
+        return result
+    if result is not None:
+        result.release()  # release immediately; background task self-locks
 
     # Populate ingested_by from HTTP header (normalized at boundary).
     body.ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     ns = request.state.namespace
     job = store.create(namespace=ns)
 
-    async def _ingest_task_with_lock() -> None:
-        """Lifecycle wrapper that releases the pre-acquired lock when done."""
-        try:
-            await _default_ingest_task(job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn)
-        finally:
-            if held_lock is not None:
-                held_lock.release()
-
-    task = asyncio.create_task(_ingest_task_with_lock())
+    task = asyncio.create_task(
+        _default_ingest_task(job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn)
+    )
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
     return JobResponse(**job_to_dict(job))

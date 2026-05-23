@@ -52,26 +52,23 @@ def _build_app(pipeline: MagicMock) -> _FakeApp:
 
 
 def test_mcp_ingest_file_surfaces_store_busy_error() -> None:
-    """MCP ingest_file wraps StoreBusyError into an error response (not swallowed)."""
+    """MCP ingest_file returns code='store_busy' for StoreBusyError (not 'internal_error')."""
     pipeline = MagicMock()
     pipeline.ingest_file = AsyncMock(side_effect=StoreBusyError(timeout_s=30.0))
     app = _build_app(pipeline)
 
     result = asyncio.run(app.tools["ingest_file"](path="/tmp/legit.md"))
-    # StoreBusyError is surfaced as an error response
     assert isinstance(result, dict)
-    assert "error" in result or "code" in result
-    # Should not be a success response
+    assert result.get("code") == "store_busy", f"Expected store_busy; got {result}"
     assert "doc_id" not in result
 
 
 def test_mcp_ingest_directory_surfaces_store_busy_error() -> None:
-    """MCP ingest_directory wraps StoreBusyError into an error response (not swallowed)."""
+    """MCP ingest_directory returns code='store_busy' for StoreBusyError."""
     pipeline = MagicMock()
     pipeline.ingest_directory = AsyncMock(side_effect=StoreBusyError(timeout_s=30.0))
     app = _build_app(pipeline)
 
     result = asyncio.run(app.tools["ingest_directory"](path="/tmp/legit"))
-    # StoreBusyError is surfaced as an error response
     assert isinstance(result, dict)
-    assert "error" in result or "code" in result
+    assert result.get("code") == "store_busy", f"Expected store_busy; got {result}"
