@@ -379,7 +379,7 @@ POST /explain {query, top_k, rerank}
   - Checkpoint: `uv run pytest tests/test_telemetry_entry.py -v`
 
 #### Task 1.2 — Public explain schemas in `routes_explain.py`
-- [ ] **File**: `archon_search/server/routes_explain.py` (new — schema-only stub at this stage; route handler added in Task 3.1)
+- [x] **File**: `archon_search/server/routes_explain.py` (new — schema-only stub at this stage; route handler added in Task 3.1)
 - **Depends on**: nothing
 - **Description**:
   - Create `archon_search/server/routes_explain.py` with the seven public models listed in the Architecture section, plus the `from_pipeline_result` / `from_candidate` / `from_breakdown` classmethods. All `extra="forbid"`. Co-locating schemas with the route matches the `routes_search.py` pattern.
@@ -478,7 +478,7 @@ POST /explain {query, top_k, rerank}
   - Checkpoint: `uv run pytest tests/test_diagnostics.py tests/test_store_trace.py -v`
 
 #### Task 2.3 — `SearchPipeline.explain` orchestration
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 1.2 (consumer schemas exist), Task 2.1 (store delegate + ACL field), Task 2.2 (router method available; pipeline does not call it directly but the route handler in Phase 3 does), Task 2.2.5 (metadata fields populated on trace candidates so `from_candidate` has data to read)
 - **Description**:
   - Add `ExplainPipelineResult` dataclass at module scope (`top_results`, `near_misses`, `acl_filtered`).
