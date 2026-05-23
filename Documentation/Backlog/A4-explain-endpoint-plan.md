@@ -361,7 +361,7 @@ POST /explain {query, top_k, rerank}
 > **Releasable**: after Task 1.2 the public schemas and telemetry factory exist standalone — importable, validating, and unit-tested. Nothing user-callable yet.
 
 #### Task 1.1 — Extend telemetry entry with `explain`
-- [ ] **File**: `archon_search/telemetry/entry.py`
+- [x] **File**: `archon_search/telemetry/entry.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `explain = "explain"` to `EndpointKind`.

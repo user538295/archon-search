@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from archon_search.telemetry import TelemetryEntry
+from archon_search.telemetry import EndpointKind, TelemetryEntry
 
 
 def _make_entry(factory_name: str) -> TelemetryEntry:
@@ -26,10 +26,19 @@ def _make_entry(factory_name: str) -> TelemetryEntry:
             error_kind="other",
             latency_ms=1.0,
         )
+    if factory_name == "from_explain_result":
+        return TelemetryEntry.from_explain_result(
+            collection="docs", result_count=0, latency_ms=1.0
+        )
     raise AssertionError(f"unknown factory: {factory_name}")
 
 
-ALL_FACTORIES = ["from_search_tool_result", "from_route_response", "from_error"]
+ALL_FACTORIES = [
+    "from_search_tool_result",
+    "from_route_response",
+    "from_error",
+    "from_explain_result",
+]
 
 
 def test_from_search_tool_result_populates_retrieval_fields() -> None:
@@ -144,10 +153,7 @@ def test_from_error_rejects_ok_status() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "factory_name",
-    ["from_search_tool_result", "from_route_response", "from_error"],
-)
+@pytest.mark.parametrize("factory_name", ALL_FACTORIES)
 def test_factory_signatures_reject_raw_query_argument(factory_name: str) -> None:
     factory = getattr(TelemetryEntry, factory_name)
     params = inspect.signature(factory).parameters
@@ -175,3 +181,28 @@ def test_factories_emit_utc_z_timestamp(factory_name: str) -> None:
     assert parsed.utcoffset() == timedelta(0)
     # Should round-trip back to UTC
     assert parsed.astimezone(UTC) == parsed
+
+
+def test_from_explain_result_populates_fields() -> None:
+    entry = TelemetryEntry.from_explain_result(
+        collection="docs", result_count=3, latency_ms=12.5
+    )
+    assert entry.endpoint is EndpointKind.explain
+    assert isinstance(entry.endpoint, EndpointKind)
+    assert entry.collection == "docs"
+    assert entry.result_count == 3
+    assert entry.status == "ok"
+    assert entry.latency_ms == 12.5
+    # All cross-domain fields must be None
+    assert entry.result_doc_ids is None
+    assert entry.collections is None
+    assert entry.decomposer_invoked is None
+    assert entry.error_kind is None
+    assert entry.truncated is None
+
+
+def test_from_explain_result_rejects_query_kwarg() -> None:
+    with pytest.raises(TypeError):
+        TelemetryEntry.from_explain_result(  # type: ignore[call-arg]
+            query="x", collection="docs", result_count=0, latency_ms=1.0
+        )
