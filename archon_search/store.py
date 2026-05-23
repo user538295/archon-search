@@ -370,7 +370,7 @@ class SearchStore:
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
-        # name validated upstream by _COLLECTION_RE; _where_eq is defense-in-depth
+        # name validated by _COLLECTION_RE, namespace by _validate_namespace; _where_eq is defense-in-depth
         await table.delete(_where_eq("name", name) + " AND " + _where_eq("namespace", namespace))
 
     async def get_all_collections_meta(self) -> "list[CollectionMeta]":

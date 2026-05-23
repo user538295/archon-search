@@ -2482,6 +2482,11 @@ async def test_delete_collection_meta_removes_only_named_row(connected_store: Se
     """delete_collection_meta removes only the named (name, namespace) row; other survives.
 
     Exercises the compound-predicate site (delete_collection_meta, line ~353).
+
+    Note: a same-name/different-namespace scenario is not tested here because
+    update_collection_meta enforces global name uniqueness — it raises ValueError
+    if a name already exists under a different namespace.  The AND namespace clause
+    in delete_collection_meta is therefore purely defensive (belt-and-suspenders).
     """
     from archon_search.collection_meta import CollectionMeta
     from archon_search.constants import DEFAULT_NAMESPACE
@@ -2517,6 +2522,11 @@ async def test_update_collection_meta_replaces_existing_row(connected_store: Sea
     result = await connected_store.get_collection_meta("ucmr-col", namespace=DEFAULT_NAMESPACE)
     assert result is not None
     assert result.doc_count == 99, "second write should replace the first (upsert semantics)"
+    # Assert exactly one row survived — proves the delete-half of upsert ran
+    all_metas = await connected_store.get_all_collections_meta()
+    assert len([m for m in all_metas if m.name == "ucmr-col"]) == 1, (
+        "upsert must leave exactly one row; more means the delete-half did not run"
+    )
 
 
 @pytest.mark.asyncio

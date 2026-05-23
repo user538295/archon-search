@@ -7,19 +7,20 @@ own regex behaves correctly (prevents the guard becoming a silent no-op).
 from __future__ import annotations
 
 import re
+import textwrap
 from pathlib import Path
 
 import pytest
 
 # ---------------------------------------------------------------------------
 # Patterns the guard watches for — factored out so meta-tests use the same
-# compiled regexes as the real guard.
+# compiled regexes as the real guard.  re.DOTALL so \s* spans newlines.
 # ---------------------------------------------------------------------------
 
 _PATTERNS = [
-    re.compile(r"\.where\(\s*f[\"']"),
-    re.compile(r"\.delete\(\s*f[\"']"),
-    re.compile(r"\.count_rows\(\s*f[\"']"),
+    re.compile(r"\.where\(\s*f[\"']", re.DOTALL),
+    re.compile(r"\.delete\(\s*f[\"']", re.DOTALL),
+    re.compile(r"\.count_rows\(\s*f[\"']", re.DOTALL),
 ]
 
 # ---------------------------------------------------------------------------
@@ -41,6 +42,26 @@ def test_guard_detects_injected_violation() -> None:
     )
 
 
+def test_guard_detects_multiline_violation() -> None:
+    """The guard regex must fire when .where( and f" appear on separate lines.
+
+    Validates that the full-text scan (with re.DOTALL) closes the line-by-line
+    hole where \\s* would not cross a newline boundary.
+    """
+    content = textwrap.dedent(
+        """\
+        await table.where(
+                f"x = '{y}'"
+            )
+        """
+    )
+    matches = [p.search(content) for p in _PATTERNS]
+    assert any(m is not None for m in matches), (
+        "Guard regex failed to detect a multiline f-string SQL violation — "
+        "re.DOTALL flag may be missing from the pattern compilation"
+    )
+
+
 def test_guard_ignores_router_delete_decorator() -> None:
     """@router.delete('/{name}') must NOT match any guard pattern."""
     content = '@router.delete("/{name}")\n'
@@ -52,7 +73,7 @@ def test_guard_ignores_router_delete_decorator() -> None:
 
 def test_guard_ignores_helper_internals() -> None:
     """A bare f-string not preceded by .where(/.delete(/.count_rows( must not match."""
-    content = 'return f"{col} = {_quote_literal(value)}"\n'
+    content = 'return f"{col} = {_sql_quote_str(value)}"\n'
     for p in _PATTERNS:
         assert p.search(content) is None, (
             f"Pattern {p.pattern!r} falsely matched helper internals: {content!r}"
@@ -60,7 +81,8 @@ def test_guard_ignores_helper_internals() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Real guard — reads store.py and asserts zero violations
+# Real guard — reads store.py as a single string and asserts zero violations.
+# Line numbers are computed from match offsets so multiline spans are caught.
 # ---------------------------------------------------------------------------
 
 
@@ -72,13 +94,13 @@ def test_no_fstring_sql_in_store() -> None:
     """
     store_path = Path(__file__).parent.parent / "archon_search" / "store.py"
     source = store_path.read_text(encoding="utf-8")
-    lines = source.splitlines()
 
     violations: list[str] = []
     for pat in _PATTERNS:
-        for lineno, line in enumerate(lines, start=1):
-            if pat.search(line):
-                violations.append(f"  line {lineno}: {line.strip()}")
+        for m in pat.finditer(source):
+            lineno = source.count("\n", 0, m.start()) + 1
+            snippet = source.splitlines()[lineno - 1].strip()
+            violations.append(f"  line {lineno}: {snippet}")
 
     assert not violations, (
         "F-string SQL violations found in archon_search/store.py:\n"
