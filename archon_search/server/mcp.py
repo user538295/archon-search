@@ -351,12 +351,9 @@ def create_app(
         rerank: bool = True,
     ) -> dict[str, Any]:
         """Return ranked search results with full score provenance for debugging."""
-        from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
-        from archon_search.router import MultiCollectionRouter  # noqa: PLC0415
         from archon_search.server.routes_explain import (  # noqa: PLC0415
             ExplainResponse,
-            RoutingCandidate,
-            RoutingExplain,
+            _build_routing_explain,
         )
 
         start = monotonic()
@@ -364,6 +361,8 @@ def create_app(
             return McpErrorResponse(error="query must not be empty", code="validation_error")
         if not (1 <= top_k <= 100):
             return McpErrorResponse(error="top_k must be between 1 and 100", code="validation_error")
+
+        _cfg = config if config is not None else SearchConfig()
 
         try:
             if collection is not None:
@@ -379,46 +378,24 @@ def create_app(
                 routing_block = None
                 chosen_collection = collection
             else:
-                # Collectionless path
-                _cfg = config if config is not None else SearchConfig()
-                all_meta: list[CollectionMeta] = await pipeline.get_all_collections_meta(
-                    namespace=DEFAULT_NAMESPACE
+                # Collectionless path — use shared helper
+                routing_block, _chosen_metas, query_vector, error_response = await _build_routing_explain(
+                    pipeline=pipeline,
+                    query=query,
+                    ns=DEFAULT_NAMESPACE,
+                    config=_cfg,
+                    writer=writer,
+                    start=start,
                 )
-                if not all_meta:
-                    return McpErrorResponse(
-                        error="no collections available", code="not_found"
-                    )
-                query_vector = await pipeline._embedder.embed_one(query)
-                _confidence_threshold = _cfg.routing_confidence_threshold
-                inline_router = MultiCollectionRouter(
-                    search_url="",
-                    embedder=pipeline._embedder,
-                    shortlist_size=_cfg.routing_shortlist_size,
-                    confidence_threshold=_confidence_threshold,
-                    embedding_model=pipeline._embedder.model_name,
-                )
-                scored_pairs = inline_router.rank_with_scores(query_vector, all_meta)
-                scored_pairs = [(m, s) for m, s in scored_pairs if m.namespace == DEFAULT_NAMESPACE]  # defensive
-                if not scored_pairs:
-                    return McpErrorResponse(
-                        error="no collections available", code="not_found"
-                    )
-                chosen_meta, chosen_score = scored_pairs[0]
-                chosen_collection = chosen_meta.name
-                routing_candidates = [
-                    RoutingCandidate(collection=m.name, centroid_score=score)
-                    for m, score in scored_pairs
-                ]
-                _chosen_below_threshold = bool(
-                    chosen_score is not None and chosen_score < _confidence_threshold
-                )
-                routing_block = RoutingExplain(
-                    invoked=True,
-                    chosen_collection=chosen_collection,
-                    confidence_threshold=_confidence_threshold,
-                    chosen_below_threshold=_chosen_below_threshold,
-                    candidates=routing_candidates,
-                )
+                if error_response is not None:
+                    error_data = error_response.body
+                    import json  # noqa: PLC0415
+                    detail = json.loads(error_data).get("detail", "error")
+                    status_code = error_response.status_code
+                    code = "not_found" if status_code == 404 else "internal_error"
+                    return McpErrorResponse(error=detail, code=code)
+
+                chosen_collection = routing_block.chosen_collection  # type: ignore[union-attr]
                 pipeline_result = await pipeline.explain(
                     query,
                     chosen_collection,
@@ -444,8 +421,8 @@ def create_app(
                             latency_ms=(monotonic() - start) * 1000.0,
                         )
                     )
-                except Exception:
-                    logger.warning("telemetry: explain entry enqueue failed", exc_info=True)
+                except Exception as tel_exc:
+                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
 
             return response.model_dump(mode="json", exclude_none=False)
 
@@ -460,8 +437,8 @@ def create_app(
                             latency_ms=(monotonic() - start) * 1000.0,
                         )
                     )
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+                except Exception as tel_exc:
+                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
             logger.exception("explain failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
 

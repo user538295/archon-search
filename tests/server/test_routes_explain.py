@@ -434,3 +434,118 @@ def test_post_explain_collectionless_all_acl_filtered_returns_404(tmp_path: Path
 
     assert response.status_code == 404
     assert response.json()["detail"] == "no collections available"
+
+
+# ---------------------------------------------------------------------------
+# Fix 6: 503 tests for meta-lookup exception paths
+# ---------------------------------------------------------------------------
+
+
+def test_post_explain_pinned_meta_lookup_exception_returns_503(tmp_path: Path) -> None:
+    """When get_collection_meta raises an Exception, pinned path returns 503."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(
+        meta_raises=RuntimeError("database connection lost")
+    )
+
+    response = client.post("/explain", json={"query": "hello", "collection": "my-col"})
+    assert response.status_code == 503
+    assert response.json()["detail"] == "service unavailable"
+
+
+def test_post_explain_collectionless_router_failure_returns_503(tmp_path: Path) -> None:
+    """When get_all_collections_meta raises an Exception, collectionless path returns 503."""
+    app, client = _make_app(tmp_path)
+
+    pipeline = _make_pipeline_mock()
+    pipeline.get_all_collections_meta = AsyncMock(side_effect=RuntimeError("meta store down"))
+    app.state.pipeline = pipeline
+
+    response = client.post("/explain", json={"query": "hello"})
+    assert response.status_code == 503
+    assert response.json()["detail"] == "service unavailable"
+
+
+# ---------------------------------------------------------------------------
+# Fix 7: Embedding failure 500 test
+# ---------------------------------------------------------------------------
+
+
+def test_post_explain_collectionless_embedding_failure_returns_500(tmp_path: Path) -> None:
+    """When embed_one raises a non-ValueError Exception, collectionless path returns 500."""
+    app, client = _make_app(tmp_path)
+
+    meta = CollectionMeta(
+        name="my-col",
+        namespace="default",
+        centroid=[1.0, 0.0],
+        embedding_model="test-model",
+    )
+    pipeline = _make_pipeline_mock(all_meta_return=[meta])
+    pipeline._embedder.embed_one = AsyncMock(side_effect=RuntimeError("CUDA OOM"))
+    app.state.pipeline = pipeline
+
+    response = client.post("/explain", json={"query": "hello"})
+    assert response.status_code == 500
+    assert response.json()["detail"] == "internal server error"
+
+
+# ---------------------------------------------------------------------------
+# Fix 9: Verify chosen_below_threshold field
+# ---------------------------------------------------------------------------
+
+
+def test_post_explain_collectionless_routing_block_fields(tmp_path: Path) -> None:
+    """routing block includes confidence_threshold and chosen_below_threshold as bool."""
+    app, client = _make_app(tmp_path)
+    meta = CollectionMeta(
+        name="my-col",
+        namespace="default",
+        centroid=[1.0, 0.0],
+        embedding_model="test-model",
+    )
+    app.state.pipeline = _make_pipeline_mock(
+        all_meta_return=[meta],
+        explain_return=ExplainPipelineResult(
+            top_results=[_make_candidate()],
+            near_misses=[],
+            acl_filtered=False,
+        ),
+    )
+
+    response = client.post("/explain", json={"query": "what is archon?"})
+
+    assert response.status_code == 200
+    data = response.json()
+    routing = data["routing"]
+    assert routing is not None
+
+    # confidence_threshold equals the config default
+    from archon_search.config import SearchConfig
+    default_threshold = SearchConfig().routing_confidence_threshold
+    assert routing["confidence_threshold"] == pytest.approx(default_threshold)
+
+    # chosen_below_threshold is a boolean
+    assert isinstance(routing["chosen_below_threshold"], bool)
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: Timeout returns 504
+# ---------------------------------------------------------------------------
+
+
+def test_post_explain_pipeline_timeout_returns_504(tmp_path: Path) -> None:
+    """When pipeline.explain times out, the endpoint returns HTTP 504."""
+    import asyncio as _asyncio
+
+    app, client = _make_app(tmp_path)
+
+    async def _slow(*args: object, **kwargs: object) -> None:
+        raise _asyncio.TimeoutError()
+
+    pipeline = _make_pipeline_mock()
+    pipeline.explain = AsyncMock(side_effect=_asyncio.TimeoutError())
+    app.state.pipeline = pipeline
+
+    response = client.post("/explain", json={"query": "hello", "collection": "my-col"})
+    assert response.status_code == 504

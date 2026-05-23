@@ -198,3 +198,93 @@ async def test_mcp_explain_top_k_above_100_returns_validation_error() -> None:
         result = await explain_fn(query="hello", collection="my-col", top_k=101)
 
     assert result.get("code") == "validation_error"
+
+
+# ---------------------------------------------------------------------------
+# Fix 8: MCP explain happy-path test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_happy_path_returns_explain_response() -> None:
+    """explain tool with valid query + collection returns results list and expected fields."""
+    from archon_search.pipeline import ExplainPipelineResult
+
+    candidate = _make_candidate()
+    explain_result = ExplainPipelineResult(
+        top_results=[candidate],
+        near_misses=[],
+        acl_filtered=False,
+    )
+    pipeline = _make_pipeline(explain_return=explain_result)
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default")  # type: ignore[call-arg]
+        explain_fn = app.tools["explain"]  # type: ignore[attr-defined]
+        result = await explain_fn(query="what is archon?", collection="my-col")
+
+    assert isinstance(result, dict)
+    assert "code" not in result, f"Got error response: {result}"
+    assert "results" in result
+    assert isinstance(result["results"], list)
+    assert len(result["results"]) == 1
+    # Check expected fields in first result
+    first = result["results"][0]
+    assert "doc_id" in first
+    assert "score" in first
+    assert "text" in first
+    assert "breakdown" in first
+    # Routing should be None for pinned collection
+    assert result["routing"] is None
+    assert result["collection"] == "my-col"
+    assert result["acl_filtered"] is False
+
+
+# ---------------------------------------------------------------------------
+# Fix 11: MCP telemetry no-query test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_telemetry_emits_no_query() -> None:
+    """explain MCP tool: telemetry entries must not contain the query string."""
+    from unittest.mock import MagicMock
+
+    from archon_search.pipeline import ExplainPipelineResult
+    from archon_search.telemetry.entry import TelemetryEntry
+    from archon_search.telemetry.writer import TelemetryWriter
+
+    enqueued: list[TelemetryEntry] = []
+    mock_writer = MagicMock(spec=TelemetryWriter)
+    mock_writer.enqueue.side_effect = lambda e: enqueued.append(e)
+
+    candidate = _make_candidate()
+    explain_result = ExplainPipelineResult(
+        top_results=[candidate],
+        near_misses=[],
+        acl_filtered=False,
+    )
+    pipeline = _make_pipeline(explain_return=explain_result)
+
+    unique_query = "UNIQUE_SENTINEL_QUERY_MCP_XYZ_11"
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default", writer=mock_writer)  # type: ignore[call-arg]
+        explain_fn = app.tools["explain"]  # type: ignore[attr-defined]
+        result = await explain_fn(query=unique_query, collection="my-col")
+
+    # Should have succeeded
+    assert "results" in result
+    # Telemetry entry must have been enqueued
+    assert len(enqueued) >= 1
+    entry = enqueued[0]
+    entry_dict = entry.model_dump()
+    # The query string must not appear anywhere in the telemetry entry
+    assert "query" not in entry_dict
+    assert unique_query not in str(entry_dict)
+    assert entry.endpoint == "explain"
+    assert isinstance(entry.result_count, int)

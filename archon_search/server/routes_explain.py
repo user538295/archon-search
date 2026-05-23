@@ -5,6 +5,7 @@ public wire schema. Adding fields here is a public-contract change.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -15,11 +16,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if TYPE_CHECKING:
     from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
-    from archon_search.pipeline import ExplainPipelineResult
+    from archon_search.config import SearchConfig
+    from archon_search.pipeline import ExplainPipelineResult, SearchPipeline
+    from archon_search.telemetry.entry import TelemetryEntry
+    from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger("archon.search")
 
 router = APIRouter()
+
+# 30-second hard timeout for pipeline.explain(); surface as HTTP 504.
+_EXPLAIN_TIMEOUT_SECONDS = 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +227,142 @@ class ExplainResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Telemetry helpers (Fix 3 + Fix 4)
+# ---------------------------------------------------------------------------
+
+
+def _enqueue_explain_error(
+    writer: "TelemetryWriter | None",
+    start: float,
+    status: str,
+    kind: Any,
+) -> None:
+    """Enqueue an error telemetry entry for the explain endpoint.
+
+    Swallows all exceptions so telemetry failures never abort the response.
+    """
+    if writer is not None:
+        from archon_search.telemetry.entry import TelemetryEntry  # noqa: PLC0415
+
+        try:
+            writer.enqueue(
+                TelemetryEntry.from_error(
+                    endpoint="explain",
+                    status=status,
+                    error_kind=kind,
+                    latency_ms=(monotonic() - start) * 1000.0,
+                )
+            )
+        except Exception as tel_exc:
+            logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+
+
+def _enqueue_explain_success(
+    writer: "TelemetryWriter | None",
+    start: float,
+    entry: "TelemetryEntry",
+) -> None:
+    """Enqueue a success telemetry entry for the explain endpoint.
+
+    Swallows all exceptions so telemetry failures never abort the response.
+    """
+    if writer is not None:
+        try:
+            writer.enqueue(entry)
+        except Exception as tel_exc:
+            logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+
+
+# ---------------------------------------------------------------------------
+# Shared collectionless routing helper (Fix 5)
+# ---------------------------------------------------------------------------
+
+
+async def _build_routing_explain(
+    pipeline: "SearchPipeline",
+    query: str,
+    ns: str,
+    config: "SearchConfig",
+    writer: "TelemetryWriter | None",
+    start: float,
+) -> "tuple[RoutingExplain | None, list[Any], list[float], JSONResponse | None]":
+    """Build a RoutingExplain by embedding the query and ranking collections.
+
+    Returns:
+        (routing, chosen_metas, query_vector, error_response) where:
+        - On success: (RoutingExplain, list[CollectionMeta], query_vector, None)
+        - On error: (None, [], [], JSONResponse to return to caller)
+    """
+    from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
+    from archon_search.router import MultiCollectionRouter  # noqa: PLC0415
+    from archon_search.telemetry.entry import ErrorKind  # noqa: PLC0415
+
+    # 1. Load all collection metadata
+    try:
+        all_meta: list[CollectionMeta] = await pipeline.get_all_collections_meta(namespace=ns)
+    except Exception as exc:
+        logger.error("explain: meta lookup failed: %s", exc, exc_info=True)
+        _enqueue_explain_error(writer, start, "internal_error", ErrorKind.other)
+        return None, [], [], JSONResponse({"detail": "service unavailable"}, status_code=503)
+
+    if not all_meta:
+        _enqueue_explain_error(writer, start, "validation_error", ErrorKind.validation_error)
+        return None, [], [], JSONResponse({"detail": "no collections available"}, status_code=404)
+
+    # 2. Embed query
+    try:
+        query_vector = await pipeline._embedder.embed_one(query)
+    except ValueError as exc:
+        logger.error("explain: embedding validation failed: %s", exc, exc_info=True)
+        _enqueue_explain_error(writer, start, "validation_error", ErrorKind.validation_error)
+        return None, [], [], JSONResponse({"detail": "invalid query for embedding"}, status_code=422)
+    except Exception as exc:
+        logger.error("explain: embedding failed: %s", exc, exc_info=True)
+        _enqueue_explain_error(writer, start, "internal_error", ErrorKind.other)
+        return None, [], [], JSONResponse({"detail": "internal server error"}, status_code=500)
+
+    # 3. Build inline router and rank
+    inline_router = MultiCollectionRouter(
+        search_url="",
+        embedder=pipeline._embedder,
+        shortlist_size=config.routing_shortlist_size,
+        confidence_threshold=config.routing_confidence_threshold,
+        embedding_model=pipeline._embedder.model_name,
+    )
+    scored_pairs = inline_router.rank_with_scores(query_vector, all_meta)
+
+    # 4. ACL filter: only keep collections the caller's namespace is allowed to access
+    scored_pairs = [(m, s) for m, s in scored_pairs if m.namespace == ns]
+
+    if not scored_pairs:
+        _enqueue_explain_error(writer, start, "validation_error", ErrorKind.validation_error)
+        return None, [], [], JSONResponse({"detail": "no collections available"}, status_code=404)
+
+    # 5. Build routing explain
+    routing_candidates = [
+        RoutingCandidate(collection=m.name, centroid_score=score)
+        for m, score in scored_pairs
+    ]
+
+    chosen_meta, chosen_score = scored_pairs[0]
+
+    confidence_threshold = config.routing_confidence_threshold
+    chosen_below_threshold = bool(
+        chosen_score is not None and chosen_score < confidence_threshold
+    )
+
+    routing = RoutingExplain(
+        invoked=True,
+        chosen_collection=chosen_meta.name,
+        confidence_threshold=confidence_threshold,
+        chosen_below_threshold=chosen_below_threshold,
+        candidates=routing_candidates,
+    )
+
+    return routing, [chosen_meta], query_vector, None
+
+
+# ---------------------------------------------------------------------------
 # Route handler
 # ---------------------------------------------------------------------------
 
@@ -228,8 +371,6 @@ class ExplainResponse(BaseModel):
 async def explain(
     body: ExplainRequest, request: Request
 ) -> ExplainResponse | JSONResponse:
-    from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
-    from archon_search.router import MultiCollectionRouter  # noqa: PLC0415
     from archon_search.telemetry.entry import ErrorKind, TelemetryEntry  # noqa: PLC0415
 
     start = monotonic()
@@ -251,29 +392,33 @@ async def explain(
                 exc,
                 exc_info=True,
             )
-            if writer is not None:
-                try:
-                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="internal_error", error_kind=ErrorKind.other, latency_ms=(monotonic() - start) * 1000.0))
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+            _enqueue_explain_error(writer, start, "internal_error", ErrorKind.other)
             return JSONResponse({"detail": "service unavailable"}, status_code=503)
 
         if meta is None:
-            if writer is not None:
-                try:
-                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+            _enqueue_explain_error(writer, start, "validation_error", ErrorKind.validation_error)
             return JSONResponse({"detail": "collection not found"}, status_code=404)
 
         try:
-            pipeline_result = await pipeline.explain(
-                body.query,
-                body.collection,
-                top_k=body.top_k,
-                rerank=body.rerank,
-                namespace=ns,
+            pipeline_result = await asyncio.wait_for(
+                pipeline.explain(
+                    body.query,
+                    body.collection,
+                    top_k=body.top_k,
+                    rerank=body.rerank,
+                    namespace=ns,
+                ),
+                timeout=_EXPLAIN_TIMEOUT_SECONDS,
             )
+        except asyncio.TimeoutError:
+            _enqueue_explain_error(writer, start, "timeout", ErrorKind.timeout)
+            logger.error(
+                "explain timed out after %.1fs for collection %r",
+                _EXPLAIN_TIMEOUT_SECONDS,
+                body.collection,
+                extra={"event_type": "explain_timeout"},
+            )
+            return JSONResponse({"detail": "explain timed out"}, status_code=504)
         except Exception as exc:
             logger.error(
                 "explain: pipeline failed for collection %r: %s",
@@ -281,11 +426,7 @@ async def explain(
                 exc,
                 exc_info=True,
             )
-            if writer is not None:
-                try:
-                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="internal_error", error_kind=ErrorKind.other, latency_ms=(monotonic() - start) * 1000.0))
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+            _enqueue_explain_error(writer, start, "internal_error", ErrorKind.other)
             return JSONResponse({"detail": "internal server error"}, status_code=500)
 
         routing: RoutingExplain | None = None
@@ -295,90 +436,40 @@ async def explain(
         # ----------------------------------------------------------------
         # Collectionless path — build routing explain
         # ----------------------------------------------------------------
-        try:
-            all_meta: list[CollectionMeta] = await pipeline.get_all_collections_meta(namespace=ns)
-        except Exception as exc:
-            logger.error("explain: meta lookup failed: %s", exc, exc_info=True)
-            if writer is not None:
-                try:
-                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="internal_error", error_kind=ErrorKind.other, latency_ms=(monotonic() - start) * 1000.0))
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
-            return JSONResponse({"detail": "service unavailable"}, status_code=503)
-
-        if not all_meta:
-            if writer is not None:
-                try:
-                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
-            return JSONResponse({"detail": "no collections available"}, status_code=404)
-
-        # Embed query once for both routing and search
-        try:
-            query_vector = await pipeline._embedder.embed_one(body.query)
-        except Exception as exc:
-            logger.error("explain: embedding failed: %s", exc, exc_info=True)
-            if writer is not None:
-                try:
-                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="internal_error", error_kind=ErrorKind.other, latency_ms=(monotonic() - start) * 1000.0))
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
-            return JSONResponse({"detail": "internal server error"}, status_code=500)
-
-        # Build router inline
-        inline_router = MultiCollectionRouter(
-            search_url="",
-            embedder=pipeline._embedder,
-            shortlist_size=config.routing_shortlist_size,
-            confidence_threshold=config.routing_confidence_threshold,
-            embedding_model=pipeline._embedder.model_name,
+        routing, chosen_metas, query_vector, error_response = await _build_routing_explain(
+            pipeline=pipeline,
+            query=body.query,
+            ns=ns,
+            config=config,
+            writer=writer,
+            start=start,
         )
-        scored_pairs = inline_router.rank_with_scores(query_vector, all_meta)
+        if error_response is not None:
+            return error_response
 
-        # ACL filter: only keep collections the caller's namespace is allowed to access
-        scored_pairs = [(m, s) for m, s in scored_pairs if m.namespace == ns]
-
-        if not scored_pairs:
-            if writer is not None:
-                try:
-                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
-            return JSONResponse({"detail": "no collections available"}, status_code=404)
-
-        routing_candidates = [
-            RoutingCandidate(collection=m.name, centroid_score=score)
-            for m, score in scored_pairs
-        ]
-
-        # Determine chosen collection (first after building scored list)
-        chosen_meta, chosen_score = scored_pairs[0]
-        chosen_collection = chosen_meta.name
-
-        # Confidence gate
-        confidence_threshold = config.routing_confidence_threshold
-        chosen_below_threshold = bool(
-            chosen_score is not None and chosen_score < confidence_threshold
-        )
-
-        routing = RoutingExplain(
-            invoked=True,
-            chosen_collection=chosen_collection,
-            confidence_threshold=confidence_threshold,
-            chosen_below_threshold=chosen_below_threshold,
-            candidates=routing_candidates,
-        )
+        chosen_collection = routing.chosen_collection  # type: ignore[union-attr]
 
         try:
-            pipeline_result = await pipeline.explain(
-                body.query,
-                chosen_collection,
-                top_k=body.top_k,
-                rerank=body.rerank,
-                namespace=ns,
-                query_vector=query_vector,
+            pipeline_result = await asyncio.wait_for(
+                pipeline.explain(
+                    body.query,
+                    chosen_collection,
+                    top_k=body.top_k,
+                    rerank=body.rerank,
+                    namespace=ns,
+                    query_vector=query_vector,
+                ),
+                timeout=_EXPLAIN_TIMEOUT_SECONDS,
             )
+        except asyncio.TimeoutError:
+            _enqueue_explain_error(writer, start, "timeout", ErrorKind.timeout)
+            logger.error(
+                "explain timed out after %.1fs for collection %r",
+                _EXPLAIN_TIMEOUT_SECONDS,
+                chosen_collection,
+                extra={"event_type": "explain_timeout"},
+            )
+            return JSONResponse({"detail": "explain timed out"}, status_code=504)
         except Exception as exc:
             logger.error(
                 "explain: pipeline failed for collection %r: %s",
@@ -386,11 +477,7 @@ async def explain(
                 exc,
                 exc_info=True,
             )
-            if writer is not None:
-                try:
-                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="internal_error", error_kind=ErrorKind.other, latency_ms=(monotonic() - start) * 1000.0))
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+            _enqueue_explain_error(writer, start, "internal_error", ErrorKind.other)
             return JSONResponse({"detail": "internal server error"}, status_code=500)
 
     response = ExplainResponse.from_pipeline_result(
@@ -401,16 +488,14 @@ async def explain(
     )
 
     # Telemetry (non-blocking)
-    if writer is not None:
-        try:
-            writer.enqueue(
-                TelemetryEntry.from_explain_result(
-                    collection=chosen_collection,
-                    result_count=len(response.results),
-                    latency_ms=(monotonic() - start) * 1000.0,
-                )
-            )
-        except Exception:
-            logger.warning("telemetry: explain entry enqueue failed", exc_info=True)
+    _enqueue_explain_success(
+        writer,
+        start,
+        TelemetryEntry.from_explain_result(
+            collection=chosen_collection,
+            result_count=len(response.results),
+            latency_ms=(monotonic() - start) * 1000.0,
+        ),
+    )
 
     return response

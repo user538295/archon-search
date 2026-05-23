@@ -263,3 +263,55 @@ def test_explain_response_round_trips_brief_example() -> None:
     resp2 = ExplainResponse.model_validate(data)
     assert resp2.collection == resp.collection
     assert resp2.results[0].score == pytest.approx(resp.results[0].score)
+
+
+# ---------------------------------------------------------------------------
+# Fix 10: from_candidate metadata field mapping test
+# ---------------------------------------------------------------------------
+
+
+def test_explain_result_from_candidate_maps_metadata_fields() -> None:
+    """ExplainResult.from_candidate maps all A1/A2 metadata fields correctly."""
+    from archon_search._diagnostics import ScoredSearchCandidate
+
+    c = ScoredSearchCandidate(
+        doc_id="d" * 64,
+        chunk_id="d" * 64 + "-000001",
+        text="content text",
+        source_path="/docs/file.rst",
+        score_breakdown=_make_breakdown(rrf_score=0.3, reranker_score=0.7),
+        collection="col-x",
+        file_type="rst",
+        indexed_at="2024-01-15T10:00:00Z",
+        updated_at="2024-01-20T12:00:00Z",
+        ingested_by="http",
+        language="python",
+        metadata={"author": "alice", "version": "1.2"},
+    )
+
+    result = ExplainResult.from_candidate(c)
+    assert result.doc_id == "d" * 64
+    assert result.chunk_id == "d" * 64 + "-000001"
+    assert result.source_path == "/docs/file.rst"
+    assert result.text == "content text"
+    assert result.score == pytest.approx(0.7)  # reranker_score used
+    assert result.file_type == "rst"
+    assert result.indexed_at == "2024-01-15T10:00:00Z"
+    assert result.updated_at == "2024-01-20T12:00:00Z"
+    assert result.ingested_by == "http"
+    assert result.language == "python"
+    assert result.metadata == {"author": "alice", "version": "1.2"}
+
+    # ExplainNearMiss has same metadata fields but no text
+    near_miss = ExplainNearMiss.from_candidate(c)
+    assert near_miss.doc_id == "d" * 64
+    assert near_miss.chunk_id == "d" * 64 + "-000001"
+    assert near_miss.source_path == "/docs/file.rst"
+    assert near_miss.score == pytest.approx(0.7)
+    assert near_miss.file_type == "rst"
+    assert near_miss.indexed_at == "2024-01-15T10:00:00Z"
+    assert near_miss.updated_at == "2024-01-20T12:00:00Z"
+    assert near_miss.ingested_by == "http"
+    assert near_miss.language == "python"
+    assert near_miss.metadata == {"author": "alice", "version": "1.2"}
+    assert not hasattr(near_miss, "text") or "text" not in near_miss.model_fields
