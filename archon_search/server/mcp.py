@@ -354,38 +354,29 @@ def create_app(
         """Return ranked search results with full score provenance for debugging."""
         from archon_search.server.routes_explain import (  # noqa: PLC0415
             ExplainResponse,
+            _EXPLAIN_TIMEOUT_SECONDS,
             _build_routing_explain,
+            _enqueue_explain_error,
+            _enqueue_explain_success,
         )
+        import json  # noqa: PLC0415
 
         start = monotonic()
         if not query or not query.strip():
-            if writer is not None:
-                try:
-                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
-                except Exception as tel_exc:
-                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            _enqueue_explain_error(writer, start, "validation_error", ErrorKind.validation_error)
             return McpErrorResponse(error="query must not be empty", code="validation_error")
         if not (1 <= top_k <= 100):
-            if writer is not None:
-                try:
-                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
-                except Exception as tel_exc:
-                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            _enqueue_explain_error(writer, start, "validation_error", ErrorKind.validation_error)
             return McpErrorResponse(error="top_k must be between 1 and 100", code="validation_error")
 
         _cfg = config if config is not None else SearchConfig()
 
-        _TIMEOUT = 30.0
         try:
             if collection is not None:
                 # Pinned path
                 meta = await pipeline.get_collection_meta(collection, namespace=DEFAULT_NAMESPACE)
                 if meta is None:
-                    if writer is not None:
-                        try:
-                            writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
-                        except Exception as tel_exc:
-                            logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+                    _enqueue_explain_error(writer, start, "validation_error", ErrorKind.validation_error)
                     return McpErrorResponse(
                         error=f"Collection {collection!r} not found", code="not_found"
                     )
@@ -394,14 +385,15 @@ def create_app(
                         pipeline.explain(
                             query, collection, top_k=top_k, rerank=rerank, namespace=DEFAULT_NAMESPACE
                         ),
-                        timeout=_TIMEOUT,
+                        timeout=_EXPLAIN_TIMEOUT_SECONDS,
                     )
                 except asyncio.TimeoutError:
-                    if writer is not None:
-                        try:
-                            writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="timeout", error_kind=ErrorKind.timeout, latency_ms=(monotonic() - start) * 1000.0))
-                        except Exception as tel_exc:
-                            logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+                    logger.error(
+                        "explain timed out after %.1fs for collection %r (mcp)",
+                        _EXPLAIN_TIMEOUT_SECONDS,
+                        collection,
+                    )
+                    _enqueue_explain_error(writer, start, "timeout", ErrorKind.timeout)
                     return McpErrorResponse(error="explain timed out", code="timeout")
                 routing_block = None
                 chosen_collection = collection
@@ -416,7 +408,6 @@ def create_app(
                     start=start,
                 )
                 if error_response is not None:
-                    import json  # noqa: PLC0415
                     detail = json.loads(error_response.body).get("detail", "error")
                     status_code = error_response.status_code
                     if status_code == 404:
@@ -440,14 +431,15 @@ def create_app(
                             namespace=DEFAULT_NAMESPACE,
                             query_vector=query_vector,
                         ),
-                        timeout=_TIMEOUT,
+                        timeout=_EXPLAIN_TIMEOUT_SECONDS,
                     )
                 except asyncio.TimeoutError:
-                    if writer is not None:
-                        try:
-                            writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="timeout", error_kind=ErrorKind.timeout, latency_ms=(monotonic() - start) * 1000.0))
-                        except Exception as tel_exc:
-                            logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+                    logger.error(
+                        "explain timed out after %.1fs for collection %r (mcp)",
+                        _EXPLAIN_TIMEOUT_SECONDS,
+                        chosen_collection,
+                    )
+                    _enqueue_explain_error(writer, start, "timeout", ErrorKind.timeout)
                     return McpErrorResponse(error="explain timed out", code="timeout")
 
             response = ExplainResponse.from_pipeline_result(
@@ -457,33 +449,20 @@ def create_app(
                 routing=routing_block,
             )
 
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_explain_result(
-                            collection=chosen_collection,
-                            result_count=len(response.results),
-                            latency_ms=(monotonic() - start) * 1000.0,
-                        )
-                    )
-                except Exception as tel_exc:
-                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            _enqueue_explain_success(
+                writer,
+                start,
+                TelemetryEntry.from_explain_result(
+                    collection=chosen_collection,
+                    result_count=len(response.results),
+                    latency_ms=(monotonic() - start) * 1000.0,
+                ),
+            )
 
             return response.model_dump(mode="json", exclude_none=False)
 
         except Exception as exc:
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="explain",
-                            status="internal_error",
-                            error_kind=ErrorKind.other,
-                            latency_ms=(monotonic() - start) * 1000.0,
-                        )
-                    )
-                except Exception as tel_exc:
-                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            _enqueue_explain_error(writer, start, "internal_error", ErrorKind.other)
             logger.exception("explain failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
 

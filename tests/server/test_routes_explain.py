@@ -601,3 +601,29 @@ def test_post_explain_collectionless_chosen_below_threshold_true(tmp_path: Path)
     routing = response.json()["routing"]
     assert routing["chosen_below_threshold"] is True
     assert routing["confidence_threshold"] == pytest.approx(config.routing_confidence_threshold)
+
+
+def test_post_explain_collectionless_pipeline_timeout_returns_504(tmp_path: Path) -> None:
+    """Collectionless path: when pipeline.explain times out, endpoint returns HTTP 504."""
+    import asyncio as _asyncio
+
+    app, client = _make_app(tmp_path)
+    meta = CollectionMeta(name="my-col", namespace="default", centroid=[1.0, 0.0], embedding_model="test-model")
+    pipeline = _make_pipeline_mock(all_meta_return=[meta], embed_vector=[1.0, 0.0])
+    pipeline.explain = AsyncMock(side_effect=_asyncio.TimeoutError())
+    app.state.pipeline = pipeline
+
+    response = client.post("/explain", json={"query": "hello"})
+    assert response.status_code == 504
+
+
+def test_post_explain_collectionless_embedding_value_error_returns_422(tmp_path: Path) -> None:
+    """Collectionless path: embed_one raising ValueError returns HTTP 422."""
+    app, client = _make_app(tmp_path)
+    meta = CollectionMeta(name="my-col", namespace="default", centroid=[1.0, 0.0], embedding_model="test-model")
+    pipeline = _make_pipeline_mock(all_meta_return=[meta])
+    pipeline._embedder.embed_one = AsyncMock(side_effect=ValueError("empty input"))
+    app.state.pipeline = pipeline
+
+    response = client.post("/explain", json={"query": "hello"})
+    assert response.status_code == 422

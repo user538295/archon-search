@@ -342,3 +342,41 @@ async def test_mcp_explain_collectionless_chosen_below_threshold_true() -> None:
     routing = result["routing"]
     assert routing is not None
     assert routing["chosen_below_threshold"] is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_pipeline_failure_returns_internal_error() -> None:
+    """When pipeline.explain raises unexpectedly, MCP explain returns code='internal_error'."""
+    pipeline = _make_pipeline()
+    pipeline.explain = AsyncMock(side_effect=RuntimeError("unexpected db error"))
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default")  # type: ignore[call-arg]
+        explain_fn = app.tools["explain"]  # type: ignore[attr-defined]
+        result = await explain_fn(query="hello", collection="my-col")
+
+    assert result.get("code") == "internal_error"
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_collectionless_pipeline_timeout_returns_timeout_code() -> None:
+    """Collectionless path: pipeline.explain timeout → code='timeout'."""
+    import asyncio as _asyncio
+
+    meta = CollectionMeta(
+        name="my-col", namespace="default", centroid=[1.0, 0.0], embedding_model="test-model"
+    )
+    pipeline = _make_pipeline(all_meta_return=[meta])
+    pipeline._embedder.embed_one = AsyncMock(return_value=[1.0, 0.0])
+    pipeline.explain = AsyncMock(side_effect=_asyncio.TimeoutError())
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default")  # type: ignore[call-arg]
+        explain_fn = app.tools["explain"]  # type: ignore[attr-defined]
+        result = await explain_fn(query="hello")
+
+    assert result.get("code") == "timeout"
