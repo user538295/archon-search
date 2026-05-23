@@ -455,7 +455,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 > **Releasable**: when Task 2c.3 lands. Independent of A5a / A5b — can ship as its own PR or fold into A5b's PR. Closes the A1 deferral so the plan's "503 + Retry-After: 30" acceptance criterion is met from the HTTP response surface.
 
 #### Task 2c.1 — `SearchStore.ingest_chunks` accepts `_locked_by_caller`
-- [ ] **File**: `archon_search/store.py`, `tests/test_store_lock.py`
+- [x] **File**: `archon_search/store.py`, `tests/test_store_lock.py`
 - **Depends on**: nothing (independent of A5a / A5b).
 - **Description**:
   - Add private keyword-only parameter `_locked_by_caller: bool = False` to `ingest_chunks`.
@@ -467,7 +467,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: `uv run pytest tests/test_store_lock.py -v`.
 
 #### Task 2c.2 — Pre-acquire lock in `POST /ingest` and `POST /collections`
-- [ ] **File**: `archon_search/server/routes_jobs.py`, `archon_search/server/routes_collections.py`, `archon_search/server/_ingest_lock.py` (new helper module).
+- [x] **File**: `archon_search/server/routes_jobs.py`, `archon_search/server/routes_collections.py`, `archon_search/server/_ingest_lock.py` (new helper module).
 - **Depends on**: Task 2c.1.
 - **Description**:
   - New helper `acquire_collection_lock_or_503(store, collection_name) -> asyncio.Lock | JSONResponse | None`:
