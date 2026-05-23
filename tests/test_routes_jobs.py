@@ -384,7 +384,6 @@ def test_ingest_request_ignores_body_namespace(tmp_path: Path, auth_headers: dic
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 def test_ingest_rejects_dotdot_path(client: TestClient) -> None:
     """POST /ingest with a dotdot path returns 400 with 'path is unsafe:' detail."""
     response = client.post("/ingest", json={"collection": "c", "path": "/foo/../bar"})
@@ -392,7 +391,6 @@ def test_ingest_rejects_dotdot_path(client: TestClient) -> None:
     assert response.json()["detail"].startswith("path is unsafe:")
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 def test_ingest_uses_validator_returned_path(
     tmp_path: Path, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -428,7 +426,6 @@ def test_ingest_uses_validator_returned_path(
     assert captured == [str(Path("/sentinel/value"))]
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 def test_ingest_rejects_nul_byte_path(client: TestClient) -> None:
     """POST /ingest with a NUL byte in path returns 400 with 'nul_byte' in detail."""
     response = client.post("/ingest", json={"collection": "c", "path": "/tmp/x\x00.md"})
@@ -451,7 +448,6 @@ def test_ingest_accepts_legitimate_absolute_path(client: TestClient) -> None:
     assert "job_id" in data
 
 
-@pytest.mark.xfail(strict=True, reason="wiring pending")
 def test_ingest_openapi_lists_400_response(client: TestClient) -> None:
     """GET /openapi.json must expose 400 under POST /ingest responses."""
     response = client.get("/openapi.json")
