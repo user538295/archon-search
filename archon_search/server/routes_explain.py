@@ -88,12 +88,12 @@ class ExplainResult(BaseModel):
             text=c.text,
             score=score,
             breakdown=ExplainScoreBreakdown.from_breakdown(bd),
-            file_type=getattr(c, "file_type", ""),
-            indexed_at=getattr(c, "indexed_at", ""),
-            updated_at=getattr(c, "updated_at", ""),
-            ingested_by=getattr(c, "ingested_by", "cli"),
-            language=getattr(c, "language", None),
-            metadata=getattr(c, "metadata", {}),
+            file_type=c.file_type,
+            indexed_at=c.indexed_at,
+            updated_at=c.updated_at,
+            ingested_by=c.ingested_by,
+            language=c.language,
+            metadata=c.metadata,
         )
 
 
@@ -127,12 +127,12 @@ class ExplainNearMiss(BaseModel):
             source_path=c.source_path,
             score=score,
             breakdown=ExplainScoreBreakdown.from_breakdown(bd),
-            file_type=getattr(c, "file_type", ""),
-            indexed_at=getattr(c, "indexed_at", ""),
-            updated_at=getattr(c, "updated_at", ""),
-            ingested_by=getattr(c, "ingested_by", "cli"),
-            language=getattr(c, "language", None),
-            metadata=getattr(c, "metadata", {}),
+            file_type=c.file_type,
+            indexed_at=c.indexed_at,
+            updated_at=c.updated_at,
+            ingested_by=c.ingested_by,
+            language=c.language,
+            metadata=c.metadata,
         )
 
 
@@ -230,7 +230,7 @@ async def explain(
 ) -> ExplainResponse | JSONResponse:
     from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
     from archon_search.router import MultiCollectionRouter  # noqa: PLC0415
-    from archon_search.telemetry.entry import TelemetryEntry  # noqa: PLC0415
+    from archon_search.telemetry.entry import ErrorKind, TelemetryEntry  # noqa: PLC0415
 
     start = monotonic()
     pipeline = request.app.state.pipeline
@@ -251,9 +251,19 @@ async def explain(
                 exc,
                 exc_info=True,
             )
+            if writer is not None:
+                try:
+                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="internal_error", error_kind=ErrorKind.other, latency_ms=(monotonic() - start) * 1000.0))
+                except Exception:
+                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
             return JSONResponse({"detail": "service unavailable"}, status_code=503)
 
         if meta is None:
+            if writer is not None:
+                try:
+                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
+                except Exception:
+                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
             return JSONResponse({"detail": "collection not found"}, status_code=404)
 
         try:
@@ -271,6 +281,11 @@ async def explain(
                 exc,
                 exc_info=True,
             )
+            if writer is not None:
+                try:
+                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="internal_error", error_kind=ErrorKind.other, latency_ms=(monotonic() - start) * 1000.0))
+                except Exception:
+                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
             return JSONResponse({"detail": "internal server error"}, status_code=500)
 
         routing: RoutingExplain | None = None
@@ -284,9 +299,19 @@ async def explain(
             all_meta: list[CollectionMeta] = await pipeline.get_all_collections_meta(namespace=ns)
         except Exception as exc:
             logger.error("explain: meta lookup failed: %s", exc, exc_info=True)
+            if writer is not None:
+                try:
+                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="internal_error", error_kind=ErrorKind.other, latency_ms=(monotonic() - start) * 1000.0))
+                except Exception:
+                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
             return JSONResponse({"detail": "service unavailable"}, status_code=503)
 
         if not all_meta:
+            if writer is not None:
+                try:
+                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
+                except Exception:
+                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
             return JSONResponse({"detail": "no collections available"}, status_code=404)
 
         # Embed query once for both routing and search
@@ -294,6 +319,11 @@ async def explain(
             query_vector = await pipeline._embedder.embed_one(body.query)
         except Exception as exc:
             logger.error("explain: embedding failed: %s", exc, exc_info=True)
+            if writer is not None:
+                try:
+                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="internal_error", error_kind=ErrorKind.other, latency_ms=(monotonic() - start) * 1000.0))
+                except Exception:
+                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
             return JSONResponse({"detail": "internal server error"}, status_code=500)
 
         # Build router inline
@@ -310,6 +340,11 @@ async def explain(
         scored_pairs = [(m, s) for m, s in scored_pairs if m.namespace == ns]
 
         if not scored_pairs:
+            if writer is not None:
+                try:
+                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="validation_error", error_kind=ErrorKind.validation_error, latency_ms=(monotonic() - start) * 1000.0))
+                except Exception:
+                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
             return JSONResponse({"detail": "no collections available"}, status_code=404)
 
         routing_candidates = [
@@ -351,6 +386,11 @@ async def explain(
                 exc,
                 exc_info=True,
             )
+            if writer is not None:
+                try:
+                    writer.enqueue(TelemetryEntry.from_error(endpoint="explain", status="internal_error", error_kind=ErrorKind.other, latency_ms=(monotonic() - start) * 1000.0))
+                except Exception:
+                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
             return JSONResponse({"detail": "internal server error"}, status_code=500)
 
     response = ExplainResponse.from_pipeline_result(

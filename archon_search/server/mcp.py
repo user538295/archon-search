@@ -259,17 +259,19 @@ def create_app(
         start = monotonic()
         if not query or not query.strip():
             return McpErrorResponse(error="query must not be empty", code="validation_error")
+        if not (1 <= top_k <= 100):
+            return McpErrorResponse(error="top_k must be between 1 and 100", code="validation_error")
 
         try:
             if collection is not None:
                 # Pinned path
-                meta = await pipeline.get_collection_meta(collection)
+                meta = await pipeline.get_collection_meta(collection, namespace=DEFAULT_NAMESPACE)
                 if meta is None:
                     return McpErrorResponse(
                         error=f"Collection {collection!r} not found", code="not_found"
                     )
                 pipeline_result = await pipeline.explain(
-                    query, collection, top_k=top_k, rerank=rerank
+                    query, collection, top_k=top_k, rerank=rerank, namespace=DEFAULT_NAMESPACE
                 )
                 routing_block = None
                 chosen_collection = collection
@@ -319,6 +321,7 @@ def create_app(
                     chosen_collection,
                     top_k=top_k,
                     rerank=rerank,
+                    namespace=DEFAULT_NAMESPACE,
                     query_vector=query_vector,
                 )
 
