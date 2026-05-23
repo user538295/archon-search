@@ -4610,3 +4610,97 @@ class TestSyncCollectionMethod:
         _, kwargs = mock_check.call_args
         assert kwargs.get("indexed_embedding_model") == ""
         assert kwargs.get("indexed_chunk_size") == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 1.3 — _reset_stale_in_progress delegation tests
+# ---------------------------------------------------------------------------
+
+class TestResetStaleInProgressDelegation:
+    """Tests that _reset_stale_in_progress delegates to IndexingStateStore.reset_in_progress."""
+
+    def test_reset_stale_in_progress_delegates_to_store(self, tmp_path) -> None:
+        """reset_in_progress must be called once with a predicate that filters IN_PROGRESS."""
+        from unittest.mock import MagicMock, patch
+        from archon_search.progress import CollectionProgress, IndexingStatus
+        from archon_search.sync import SearchCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        mock_store = MagicMock()
+        mock_store.reset_in_progress = MagicMock()
+
+        syncer = SearchCollectionSync(pipeline, state_store=mock_store)
+        syncer._reset_stale_in_progress()
+
+        mock_store.reset_in_progress.assert_called_once()
+        predicate = mock_store.reset_in_progress.call_args[0][0]
+
+        # Verify predicate semantics
+        cp_in_progress = CollectionProgress(status=IndexingStatus.IN_PROGRESS)
+        cp_done = CollectionProgress(status=IndexingStatus.DONE)
+        cp_failed = CollectionProgress(status=IndexingStatus.FAILED)
+        cp_pending = CollectionProgress(status=IndexingStatus.PENDING)
+
+        assert predicate(cp_in_progress) is True
+        assert predicate(cp_done) is False
+        assert predicate(cp_failed) is False
+        assert predicate(cp_pending) is False
+
+    def test_reset_stale_in_progress_no_rmw_in_sync(self) -> None:
+        """_reset_stale_in_progress must not contain direct read()/write() calls."""
+        import re
+        import inspect
+        import textwrap
+        from archon_search.sync import SearchCollectionSync
+
+        source = textwrap.dedent(inspect.getsource(SearchCollectionSync._reset_stale_in_progress))
+        # Check for _state_store.read() and _state_store.write() patterns
+        has_direct_read = bool(re.search(r'_state_store\s*\.\s*read\s*\(', source))
+        has_direct_write = bool(re.search(r'_state_store\s*\.\s*write\s*\(', source))
+        assert not has_direct_read, "_reset_stale_in_progress must not call _state_store.read() directly"
+        assert not has_direct_write, "_reset_stale_in_progress must not call _state_store.write() directly"
+
+    def test_reset_stale_in_progress_noop_when_store_is_none(self, tmp_path) -> None:
+        """No exception when state_store is None."""
+        from archon_search.sync import SearchCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = SearchCollectionSync(pipeline, state_store=None)
+        # Must not raise
+        syncer._reset_stale_in_progress()
+
+    def test_reset_stale_in_progress_integration(self, tmp_path) -> None:
+        """Integration: real IndexingStateStore — IN_PROGRESS entries become PENDING."""
+        from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon_search.sync import SearchCollectionSync
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        state = IndexingState(collections={
+            "col-a": CollectionProgress(status=IndexingStatus.IN_PROGRESS, total_files=5),
+            "col-b": CollectionProgress(status=IndexingStatus.IN_PROGRESS, total_files=3),
+            "col-done": CollectionProgress(status=IndexingStatus.DONE, total_files=2),
+        })
+        state_store.write(state)
+
+        pipeline = make_mock_pipeline(tmp_path)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+        syncer._reset_stale_in_progress()
+
+        final = state_store.read()
+        assert final is not None
+        assert final.collections["col-a"].status == IndexingStatus.PENDING
+        assert final.collections["col-b"].status == IndexingStatus.PENDING
+        assert final.collections["col-done"].status == IndexingStatus.DONE
+
+    def test_reset_stale_in_progress_swallows_exception_from_store(self, tmp_path) -> None:
+        """Exception from reset_in_progress must be caught and logged, not re-raised."""
+        from unittest.mock import MagicMock
+        from archon_search.sync import SearchCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path)
+        mock_store = MagicMock()
+        mock_store.reset_in_progress.side_effect = OSError("simulated disk error")
+
+        syncer = SearchCollectionSync(pipeline, state_store=mock_store)
+        # Must not raise
+        syncer._reset_stale_in_progress()
