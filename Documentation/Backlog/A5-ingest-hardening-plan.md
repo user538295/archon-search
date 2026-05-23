@@ -501,7 +501,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 > Phase 3 must ship within one week of both feature PRs merging — it is not indefinitely deferrable. The roadmap checkmarks landing in Task 3.2 are part of A5's done-definition. (DA2-C2-I-3)
 
 #### Task 3.1 — Update `Documentation/Architecture/150_security_and_privacy_architecture.md`
-- [ ] **File**: `Documentation/Architecture/150_security_and_privacy_architecture.md`
+- [x] **File**: `Documentation/Architecture/150_security_and_privacy_architecture.md`
 - **Depends on**: Tasks 1.7, 2.4 (whichever ships second)
 - **Description**:
   - Add a short subsection noting that ingest paths are validated for `..` segments, empty/whitespace/NUL inputs, and absoluteness on the four HTTP/MCP entry points. Explicitly note what is NOT validated: symlinks, absolute-path scope (deferred to `allowed_dirs`).
@@ -511,7 +511,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: doc references `_path_safety.py` and `_where_eq` / `_where_in` (or native binds if Task 2.1 chose that path).
 
 #### Task 3.2 — Roadmap consolidation (VAL-1 / RP-5 cleanup + A5a / A5b / A5c checkmarks)
-- [ ] **File**: `Documentation/Backlog/03_world_class_roadmap.md`
+- [x] **File**: `Documentation/Backlog/03_world_class_roadmap.md`
 - **Depends on**: Task 1.7, Task 2.4, Task 2c.3
 - **Description (C1-I-DA2-4)**: This is the **sole** task that edits the roadmap. Tasks 1.7, 2.4, 2c.3 explicitly do NOT touch the roadmap, eliminating merge-conflict risk when the feature PRs land independently.
   - Remove or strike-through both `VAL-1` and `RP-5` forward IDs from the A5 line.
