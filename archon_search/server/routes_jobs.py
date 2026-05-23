@@ -52,7 +52,10 @@ async def _run_pipeline(
 ) -> None:
     """Run the ingest pipeline (real or stub). Raises on failure."""
     if pipeline_fn is not None:
-        await pipeline_fn(job_id, store, body, namespace=namespace, locked_by_caller=locked_by_caller)
+        kwargs: dict = {"namespace": namespace}
+        if locked_by_caller:
+            kwargs["locked_by_caller"] = True
+        await pipeline_fn(job_id, store, body, **kwargs)
     else:
         # Stub: succeed immediately
         await asyncio.sleep(0)

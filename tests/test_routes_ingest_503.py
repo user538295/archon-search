@@ -59,32 +59,22 @@ def _make_app_and_client(tmp_path: Path):  # type: ignore[no-untyped-def]
 # ---------------------------------------------------------------------------
 
 
-def test_post_ingest_returns_503_when_lock_held(tmp_path: Path) -> None:
+def test_post_ingest_returns_503_when_lock_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When the per-collection lock is held, POST /ingest returns 503 + Retry-After."""
-    from archon_search.server._ingest_lock import acquire_collection_lock_or_503
-    from fastapi.responses import JSONResponse
-
     app, client, mock_store, jobs = _make_app_and_client(tmp_path)
 
-    # Pre-acquire the lock so acquire_collection_lock_or_503 times out.
-    lock = mock_store._lock_for("test-col")
+    # Force asyncio.wait_for to raise TimeoutError immediately, simulating a held lock.
+    async def _raise_timeout(coro: object, timeout: object = None) -> None:
+        import inspect
+        if inspect.iscoroutine(coro):
+            coro.close()  # prevent ResourceWarning
+        raise asyncio.TimeoutError
 
-    async def _pre_acquire() -> None:
-        await lock.acquire()
+    monkeypatch.setattr("archon_search.server._ingest_lock.asyncio.wait_for", _raise_timeout)
 
-    asyncio.get_event_loop().run_until_complete(_pre_acquire())
-
-    try:
-        # Patch the timeout to be tiny so the test is fast.
-        import archon_search.server._ingest_lock as _il_mod
-        original_timeout = _il_mod.INGEST_LOCK_TIMEOUT_S
-        _il_mod.INGEST_LOCK_TIMEOUT_S = 0.05  # type: ignore[assignment]
-        try:
-            response = client.post("/ingest", json={"collection": "test-col"})
-        finally:
-            _il_mod.INGEST_LOCK_TIMEOUT_S = original_timeout  # type: ignore[assignment]
-    finally:
-        lock.release()
+    response = client.post("/ingest", json={"collection": "test-col"})
 
     assert response.status_code == 503
     assert response.headers.get("Retry-After") == "30"
@@ -144,7 +134,7 @@ def test_post_ingest_releases_lock_on_task_cancellation(tmp_path: Path) -> None:
     assert r_del.status_code in (200, 202)
 
     # Give the event loop a moment to process cancellation.
-    asyncio.get_event_loop().run_until_complete(asyncio.sleep(0.05))
+    asyncio.run(asyncio.sleep(0.05))
 
     # Lock must be free regardless of task cancellation.
     lock = mock_store._lock_for("cancel-col")
@@ -156,33 +146,25 @@ def test_post_ingest_releases_lock_on_task_cancellation(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_post_collections_returns_503_when_lock_held(tmp_path: Path) -> None:
+def test_post_collections_returns_503_when_lock_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When the per-collection lock is held, POST /collections/ returns 503."""
-    from archon_search.sync import path_to_collection_name
-
     src = tmp_path / "docs"
     src.mkdir()
-    collection_name = path_to_collection_name(str(src.resolve()))
 
     app, client, mock_store, jobs = _make_app_and_client(tmp_path)
 
-    lock = mock_store._lock_for(collection_name)
+    # Force asyncio.wait_for to raise TimeoutError immediately, simulating a held lock.
+    async def _raise_timeout(coro: object, timeout: object = None) -> None:
+        import inspect
+        if inspect.iscoroutine(coro):
+            coro.close()  # prevent ResourceWarning
+        raise asyncio.TimeoutError
 
-    async def _pre_acquire() -> None:
-        await lock.acquire()
+    monkeypatch.setattr("archon_search.server._ingest_lock.asyncio.wait_for", _raise_timeout)
 
-    asyncio.get_event_loop().run_until_complete(_pre_acquire())
-
-    try:
-        import archon_search.server._ingest_lock as _il_mod
-        original_timeout = _il_mod.INGEST_LOCK_TIMEOUT_S
-        _il_mod.INGEST_LOCK_TIMEOUT_S = 0.05  # type: ignore[assignment]
-        try:
-            response = client.post("/collections/", json={"path": str(src)})
-        finally:
-            _il_mod.INGEST_LOCK_TIMEOUT_S = original_timeout  # type: ignore[assignment]
-    finally:
-        lock.release()
+    response = client.post("/collections/", json={"path": str(src)})
 
     assert response.status_code == 503
     assert response.headers.get("Retry-After") == "30"

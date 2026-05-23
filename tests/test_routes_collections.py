@@ -98,6 +98,7 @@ def test_add_collection_persists_and_starts_ingest(
     tmp_path: Path, config: SearchConfig, tmp_store: JobStore
 ) -> None:
     """POST /collections/ persists the path and returns an IngestJob (202)."""
+    import asyncio as _asyncio
     src = tmp_path / "myproject"
     src.mkdir()
     app = create_app(config, tmp_store)
@@ -107,6 +108,7 @@ def test_add_collection_persists_and_starts_ingest(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
@@ -132,6 +134,7 @@ def test_add_duplicate_collection_returns_409(
     tmp_path: Path, config: SearchConfig, tmp_store: JobStore
 ) -> None:
     """POST /collections/ twice with same path returns 409 on second call."""
+    import asyncio as _asyncio
     src = tmp_path / "myproject"
     src.mkdir()
     app = create_app(config, tmp_store)
@@ -141,6 +144,7 @@ def test_add_duplicate_collection_returns_409(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
@@ -716,6 +720,7 @@ def test_add_collection_writes_stub_meta(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """Successful POST /collections/ writes a stub meta row before ingest completes."""
+    import asyncio as _asyncio
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "myproject"
@@ -729,6 +734,7 @@ def test_add_collection_writes_stub_meta(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -809,6 +815,7 @@ def test_add_collection_job_has_correct_namespace(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """Created job's namespace matches the caller's namespace."""
+    import asyncio as _asyncio
     src = tmp_path / "myproject"
     src.mkdir()
 
@@ -824,6 +831,7 @@ def test_add_collection_job_has_correct_namespace(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
@@ -1268,6 +1276,7 @@ def test_add_collection_uses_validator_returned_path(
     tmp_path: Path, tmp_store: JobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Handler must use the path returned by validate_ingest_path, not re-resolve body.path."""
+    import asyncio as _asyncio
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
     app = create_app(cfg, tmp_store)
@@ -1277,6 +1286,7 @@ def test_add_collection_uses_validator_returned_path(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
 
     # Patch the validator in the route module namespace to return a sentinel path.
@@ -1285,16 +1295,21 @@ def test_add_collection_uses_validator_returned_path(
         lambda raw: Path("/sentinel/value"),
     )
 
-    # Capture the IngestRequest passed to _default_ingest_task.
+    # Capture the IngestRequest passed to either ingest task variant.
+    # The handler branches to _default_ingest_task_with_lock when lock_result is not None.
     captured: list[str] = []
 
     # Must stay await-free: the assertion below relies on this completing in a single
     # event-loop step before the response is returned (no await point => no race).
-    async def _capturing_ingest_task(job_id, store, body, *, namespace="default"):  # type: ignore[no-untyped-def]
+    async def _capturing_ingest_task(job_id, store, body, **kwargs):  # type: ignore[no-untyped-def]
         captured.append(body.path)
 
     monkeypatch.setattr(
         "archon_search.server.routes_collections._default_ingest_task",
+        _capturing_ingest_task,
+    )
+    monkeypatch.setattr(
+        "archon_search.server.routes_collections._default_ingest_task_with_lock",
         _capturing_ingest_task,
     )
 
@@ -1303,7 +1318,7 @@ def test_add_collection_uses_validator_returned_path(
 
     # Do NOT patch asyncio.create_task here — the task must actually run so that
     # captured receives body.path.  TestClient drives a real event loop that will
-    # schedule and execute _capturing_ingest_task before the response is returned.
+    # schedule and execute the capturing task before the response is returned.
     response = c.post("/collections/", json={"path": "/some/legitimate/path"})
 
     assert response.status_code == 202
@@ -1378,6 +1393,7 @@ def test_add_collection_accepts_legitimate_absolute_path(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/ with a valid absolute path still returns 202 (regression guard)."""
+    import asyncio as _asyncio
     import uuid as _uuid
     src = tmp_path / f"legit-{_uuid.uuid4().hex}"
     src.mkdir()
@@ -1390,6 +1406,7 @@ def test_add_collection_accepts_legitimate_absolute_path(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})

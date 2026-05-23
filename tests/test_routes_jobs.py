@@ -394,7 +394,7 @@ def test_ingest_rejects_dotdot_path(client: TestClient) -> None:
 def test_ingest_uses_validator_returned_path(
     tmp_path: Path, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Handler must forward the Path returned by validate_ingest_path to _default_ingest_task."""
+    """Handler must forward the Path returned by validate_ingest_path to the ingest task."""
     store = JobStore(path=tmp_path / "jobs.json")
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
@@ -407,16 +407,21 @@ def test_ingest_uses_validator_returned_path(
         lambda raw: Path("/sentinel/value"),
     )
 
-    # Capture the IngestRequest passed to _default_ingest_task.
+    # Capture the IngestRequest passed to whichever ingest task variant the handler uses.
+    # The handler branches to _default_ingest_task_with_lock when search_store has _lock_for.
     # Must stay await-free: completes in a single event-loop step before the response
     # is returned (no await point => no race with asyncio.create_task).
     captured: list[str] = []
 
-    async def _capturing_ingest_task(job_id, store, body, *, namespace="default", pipeline_fn=None):  # type: ignore[no-untyped-def]
+    async def _capturing_ingest_task(job_id, store, body, **kwargs):  # type: ignore[no-untyped-def]
         captured.append(body.path)
 
     monkeypatch.setattr(
         "archon_search.server.routes_jobs._default_ingest_task",
+        _capturing_ingest_task,
+    )
+    monkeypatch.setattr(
+        "archon_search.server.routes_jobs._default_ingest_task_with_lock",
         _capturing_ingest_task,
     )
 
