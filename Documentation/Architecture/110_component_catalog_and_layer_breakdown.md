@@ -46,20 +46,21 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | Module | Purpose | Key public symbols |
 |---|---|---|
 | `archon_search/embedder.py` | Dense-embedding façade with a Protocol backend. Default backend is fastembed. | `Embedder`, `EmbedderBackend`, `ModelEmbedder`, `make_embedder` |
-| `archon_search/store.py` | LanceDB-backed store: vector ANN + FTS, RRF fusion in `hybrid_search`, document/chunk lifecycle, namespace + ACL migrations, collection metadata persistence. | `SearchStore`, `validate_metadata`, `parse_metadata` |
+| `archon_search/store.py` | LanceDB-backed store: vector ANN + FTS, RRF fusion in `hybrid_search`, document/chunk lifecycle, namespace + ACL migrations, collection metadata persistence. `hybrid_search_with_trace` is a thin instance-method delegate to the module-level `_hybrid_search_with_trace`, which returns `list[ScoredSearchCandidate]` with full score provenance — used by `SearchPipeline.explain`. | `SearchStore`, `SearchStore.hybrid_search_with_trace`, `validate_metadata`, `parse_metadata` |
 | `archon_search/reranker.py` | Cross-encoder second-stage rerank façade with a Protocol backend. | `Reranker`, `RerankerBackend`, `ModelReranker`, `make_reranker` |
 
 ## Query
 
 | Module | Purpose | Key public symbols |
 |---|---|---|
-| `archon_search/pipeline.py` | Orchestrates ingest (`ingest_file`, `ingest_directory`) and query (`search`, `search_with_context`). Computes per-collection centroid on directory ingest and may trigger description regeneration. | `SearchPipeline`, `SearchPipelineResult`, `create_pipeline` |
+| `archon_search/pipeline.py` | Orchestrates ingest (`ingest_file`, `ingest_directory`) and query (`search`, `search_with_context`, `explain`). Computes per-collection centroid on directory ingest and may trigger description regeneration. `explain` fetches an amplified candidate pool via `store.hybrid_search_with_trace`, ACL-filters, optionally reranks the entire pool via `_rerank_with_trace`, then splits top-k results from up to 20 near-misses. | `SearchPipeline`, `SearchPipelineResult`, `ExplainPipelineResult`, `ExplainStageError`, `create_pipeline` |
+| `archon_search/_diagnostics.py` | Internal diagnostics types used by the explain path. `ScoredSearchCandidate` carries per-candidate score provenance plus ACL token list (`acl: list[str] \| None`) and A1/A2 metadata fields (`file_type`, `indexed_at`, `updated_at`, `ingested_by`, `language`, `metadata`). Not part of the public import surface. | `ScoredSearchCandidate`, `SearchScoreBreakdown` |
 
 ## Routing
 
 | Module | Purpose | Key public symbols |
 |---|---|---|
-| `archon_search/router.py` | Fetch collection metadata over JSON-RPC, score each centroid against the query embedding, apply a confidence gate, build a three-tier shortlist for the decomposer. | `MultiCollectionRouter` |
+| `archon_search/router.py` | Fetch collection metadata over JSON-RPC, score each centroid against the query embedding, apply a confidence gate, build a three-tier shortlist for the decomposer. `_score_collections` is the shared scoring helper (extracted for A4); `rank_with_scores` returns every supplied collection paired with its centroid similarity, bypassing the confidence-threshold gate — used exclusively by `/explain`. | `MultiCollectionRouter`, `MultiCollectionRouter.rank`, `MultiCollectionRouter.rank_with_scores`, `MultiCollectionRouter._score_collections` |
 
 ## Metadata
 
@@ -82,6 +83,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/server/routes_route.py` | `POST /route` — driver for `MultiCollectionRouter`. Defines a route-local Pydantic `RouteResponse` distinct from the dataclass `RouteResponse` in `archon_search/types.py` (two public objects share the name). | `router`, `RouteRequest`, `RouteResponse` (Pydantic) |
 | `archon_search/server/routes_collections.py` | `GET/POST /collections/`, `GET/DELETE /collections/{name}`, `POST /collections/{name}/reindex`. Issues jobs for add, reindex, and delete (non-empty collections). | `router`, `AddCollectionRequest` |
 | `archon_search/server/routes_jobs.py` | `POST /ingest`, `GET /jobs/{id}`, `DELETE /jobs/{id}`. Spawns the ingest task against `SearchPipeline`. | `router`, `IngestRequest` |
+| `archon_search/server/routes_explain.py` | `POST /explain` (A4). All schemas use `extra="forbid"`. Public Pydantic models: `ExplainRequest`, `ExplainResponse`, `ExplainResult`, `ExplainNearMiss` (no `text` field — structurally absent), `ExplainScoreBreakdown`, `RoutingExplain`, `RoutingCandidate`. `ExplainResponse.from_pipeline_result` is the seam between private `ScoredSearchCandidate` and the public wire schema. | `router`, `ExplainRequest`, `ExplainResponse`, `ExplainResult`, `ExplainNearMiss`, `ExplainScoreBreakdown`, `RoutingExplain`, `RoutingCandidate` |
 | `archon_search/server/routes_telemetry.py` | `GET /telemetry/stats`, `GET /telemetry/entries`. | `router` |
 | `archon_search/server/schemas.py` | REST response models: `HealthResponse`, `StatusCollectionEntry`, `StatusResponse`, `IndexingStateCollectionEntry`, `IndexingStateResponse`, `CollectionSummary`, `CollectionDetail`, `JobResponse`, `DeleteResponse`, `ErrorDetail`. | (Pydantic models) |
 | `archon_search/server/schemas_telemetry.py` | Pydantic models for telemetry routes. | see source: `archon_search/server/schemas_telemetry.py` |
@@ -117,7 +119,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 
 | Module | Purpose | Key public symbols |
 |---|---|---|
-| `archon_search/telemetry/entry.py` | Structural model + factories. **Factories take no `query` parameter — raw queries are never logged.** | `TelemetryEntry`, `EndpointKind`, `Status`, `ErrorKind` |
+| `archon_search/telemetry/entry.py` | Structural model + factories. **Factories take no `query` parameter — raw queries are never logged.** `EndpointKind` includes `explain` (A4); `from_explain_result` records `collection` and `result_count` (scalar) with no query text or result doc IDs. | `TelemetryEntry`, `EndpointKind`, `Status`, `ErrorKind` |
 | `archon_search/telemetry/writer.py` | Background JSONL writer; one line per call into `~/.archon-search/search-logs/`. | `TelemetryWriter` |
 | `archon_search/telemetry/reader.py` | Reads logs for `/telemetry/stats` and `/telemetry/entries`. | `TelemetryReader` |
 | `archon_search/telemetry/pruner.py` | Enforces `retention_days` on the log directory. | `Pruner` |

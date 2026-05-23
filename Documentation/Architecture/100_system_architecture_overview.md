@@ -112,7 +112,7 @@ flowchart LR
     PL -.orchestrates.-> query
 ```
 
-`SearchPipeline.ingest_file` runs `parser -> chunker -> embedder -> store`, assigning sequential chunk IDs and propagating ACLs. `SearchPipeline.search` runs `embedder -> store.hybrid_search -> acl filter -> reranker`. `ingest_directory` additionally computes a centroid over all batch vectors and updates `CollectionMeta`, optionally regenerating the auto description (see [110_component_catalog_and_layer_breakdown.md](110_component_catalog_and_layer_breakdown.md) for module roles).
+`SearchPipeline.ingest_file` runs `parser -> chunker -> embedder -> store`, assigning sequential chunk IDs and propagating ACLs. `SearchPipeline.search` runs `embedder -> store.hybrid_search -> acl filter -> reranker`. `SearchPipeline.explain` (A4) runs `embedder -> store.hybrid_search_with_trace (amplified pool) -> acl filter -> reranker._rerank_with_trace -> sort -> split top-k / near-misses`, and returns `ExplainPipelineResult`. `ingest_directory` additionally computes a centroid over all batch vectors and updates `CollectionMeta`, optionally regenerating the auto description (see [110_component_catalog_and_layer_breakdown.md](110_component_catalog_and_layer_breakdown.md) for module roles).
 
 ## Architecture Patterns
 

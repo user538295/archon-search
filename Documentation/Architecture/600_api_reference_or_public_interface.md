@@ -80,6 +80,108 @@ All paths under `/collections`. Namespace gating: cross-namespace access surface
 | GET | `/jobs/{job_id}` | Read job status; `404` for cross-namespace IDs. | — | `JobResponse` |
 | DELETE | `/jobs/{job_id}` | Cancel a job. Terminal jobs (`DONE`/`FAILED`/`CANCELLED`) return `200` (idempotent); `RUNNING`/`PENDING` transition to `CANCELLING` and return `202`; already-`CANCELLING` jobs also return `202`. | — | `JobResponse` |
 
+### `routes_explain.py` (A4)
+
+| Method | Path | Purpose | Request schema | Response schema |
+| --- | --- | --- | --- | --- |
+| POST | `/explain` | Return the full per-stage retrieval/reranking score breakdown for a query, plus the routing decision when no collection is pinned. Debug endpoint for understanding why results appear (or don't). | `ExplainRequest` (`routes_explain.py`) — `{query, collection?, top_k(1-100, default 5), rerank(default true)}`. Extra fields are **rejected** (`extra="forbid"`). `query` must be non-empty. | `ExplainResponse` — see schema below. |
+
+All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce `422`.
+
+**Request fields:**
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `query` | `str` | required | Must be non-empty after stripping. |
+| `collection` | `str \| null` | `null` | Pin to a specific collection; omit to invoke routing. |
+| `top_k` | `int` | `5` | Results to return; `ge=1, le=100`. |
+| `rerank` | `bool` | `true` | Run cross-encoder reranker. `false` → scores sorted by `rrf_score`. |
+
+**Response schema (`ExplainResponse`):**
+
+```json
+{
+  "rerank": true,
+  "routing": {
+    "invoked": true,
+    "chosen_collection": "docs",
+    "confidence_threshold": 0.30,
+    "chosen_below_threshold": false,
+    "candidates": [
+      {"collection": "docs", "centroid_score": 0.83},
+      {"collection": "code", "centroid_score": 0.61}
+    ]
+  },
+  "collection": "docs",
+  "acl_filtered": false,
+  "results": [
+    {
+      "doc_id": "abc123...",
+      "chunk_id": "abc123...-000000",
+      "source_path": "/path/to/doc.md",
+      "text": "...",
+      "score": 0.91,
+      "breakdown": {
+        "vector_rank": 1,
+        "vector_score": 0.74,
+        "vector_score_kind": "distance",
+        "fts_rank": 3,
+        "fts_score": 4.2,
+        "fts_score_kind": "bm25",
+        "rrf_score": 0.032,
+        "reranker_score": 0.91
+      },
+      "file_type": "md",
+      "indexed_at": "2026-05-20T12:00:00Z",
+      "updated_at": "2026-05-20T11:00:00Z",
+      "ingested_by": "cli",
+      "language": null,
+      "metadata": {},
+      "acl": null
+    }
+  ],
+  "near_misses": [
+    {
+      "doc_id": "...",
+      "chunk_id": "...",
+      "source_path": "...",
+      "score": 0.42,
+      "breakdown": { "...same shape as results[].breakdown..." },
+      "file_type": "md",
+      "indexed_at": "...",
+      "updated_at": "...",
+      "ingested_by": "cli",
+      "language": null,
+      "metadata": {},
+      "acl": null
+    }
+  ]
+}
+```
+
+**Key schema notes:**
+
+- `routing` is `null` when `collection` is pinned in the request. When collectionless, it carries the full routing decision including all caller-namespace collections — the confidence-threshold gate is **bypassed** so every collection in the namespace appears in `candidates`, sorted by `centroid_score` descending with alphabetical tie-break. `centroid_score` is `null` for collections with a mismatched embedding model or no centroid.
+- `results[]` carry `text`; `near_misses[]` structurally **omit `text`** (the `ExplainNearMiss` Pydantic model has no `text` field). Near-misses are capped at 20.
+- `score` is `reranker_score` when `rerank=true`, otherwise `rrf_score`. `breakdown.reranker_score` is `null` when `rerank=false`.
+- `vector_score_kind` is `"distance"` (LanceDB cosine distance — lower is closer). `fts_score_kind` is `"bm25"` when the score is available; `null` when LanceDB omits `_score` from the row.
+- Metadata fields (`file_type`, `indexed_at`, `updated_at`, `ingested_by`, `language`, `metadata`, `acl`) are a **superset of `/search`** — they appear on both `results[]` and `near_misses[]`.
+- The input `query` is **never echoed** in the response body or in telemetry.
+- ACL filtering applies identically to `/search`; filtered results are excluded from both `results` and `near_misses`. Collection visibility in `routing.candidates` is bounded by the caller's namespace (the same ACL boundary that gates `results`).
+
+**Error taxonomy:**
+
+| Condition | Status | Body |
+|---|---|---|
+| Empty query / `top_k` out of `[1, 100]` / extra request fields | `422` | Pydantic validation detail |
+| Pinned `collection` not found | `404` | `{"detail": "collection not found"}` |
+| Collectionless + no collections in namespace | `404` | `{"detail": "no collections available"}` |
+| Meta-lookup or router failure | `503` | `{"detail": "service unavailable"}` |
+| Pipeline-stage failure (store / reranker) | `500` | `{"detail": "<stage> error: <ExceptionType>"}` |
+| Other unexpected failure | `500` | `{"detail": "explain failed"}` |
+
+503 is reserved for meta-lookup / router failures, consistent with A3's `/search` taxonomy. Pipeline-stage failures (store, reranker) surface as 500 with a stage-specific detail; the original exception message is sanitised server-side because FTS errors may echo the query.
+
 ### `routes_telemetry.py`
 
 When telemetry is disabled, both endpoints return `DisabledResponse` (`schemas_telemetry.py`) — `{enabled: false}`.
@@ -97,6 +199,7 @@ Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mount
 | --- | --- | --- | --- |
 | `search` | Hybrid vector + FTS search, rerank, ACL filter. | `query: str`, `collection: str \| None` | `{"results": [SearchResult...], "acl_filtered": bool}` — new shape per `BREAKING.md`. On error: `{error, code}`. |
 | `search_with_context` | Search plus surrounding chunks for each hit. | `query`, `collection?`, `context_window: int = 1` | `list[{result, context_before, context_after}]` |
+| `explain` | Return the per-stage retrieval/reranking trace for a query, plus the routing decision when no collection is pinned. Operates in the default namespace only. The query is never echoed in the response or telemetry. | `query: str`, `collection: str \| None`, `top_k: int = 5`, `rerank: bool = True` | `ExplainResponse` dict (same structure as REST `POST /explain`; serialised via `model_dump(mode="json", exclude_none=False)`). On error: `{error, code}`. When `config` is absent from `create_app`, collectionless calls fall back to `default_collection` (no routing). |
 | `ingest_file` | Ingest one file. | `path: str`, `collection?` | Ingest result dict |
 | `ingest_directory` | Ingest a directory tree (reports progress via `ctx`). | `path`, `glob_pattern = "**/*"`, `collection?` | `list[ingest result]` |
 | `list_collections` | List collections with counts (centroid omitted). | — | `list[dict]` — `asdict(CollectionMeta)` with `centroid` popped (not a typed `CollectionMeta`). |

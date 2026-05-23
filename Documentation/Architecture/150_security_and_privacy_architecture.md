@@ -110,9 +110,19 @@ The filter is applied in the pipeline after retrieval; see `acl.py::apply_acl_fi
 
 - `model_config = ConfigDict(extra="forbid", frozen=True)` — no extra fields can be added at runtime.
 - The documented schema field set (`DOCUMENTED_SCHEMA_FIELDS`) is a frozenset of exactly: `query_id`, `timestamp`, `endpoint`, `latency_ms`, `status`, `collection`, `result_count`, `result_doc_ids`, `truncated`, `collections`, `decomposer_invoked`, `error_kind`. There is no `query` field.
-- The three factories (`from_search_tool_result`, `from_route_response`, `from_error`) are keyword-only and **none of them accepts a `query` parameter**. There is no path by which a query string can be assigned to a telemetry entry without a code change to the model itself.
+- The four factories (`from_search_tool_result`, `from_route_response`, `from_explain_result`, `from_error`) are keyword-only and **none of them accepts a `query` parameter**. There is no path by which a query string can be assigned to a telemetry entry without a code change to the model itself.
 
 This is reinforced by `CLAUDE.md`'s "Structural invariant" note and is the privacy contract for v1.
+
+### `/explain` endpoint — no query echo, same privacy posture as `/search` (A4)
+
+`POST /explain` and the `explain` MCP tool preserve all existing privacy guarantees:
+
+- **No query in response**: the response body (`ExplainResponse`) has no `query` field. This matches the `SearchResponse` / `RouteResponse` pattern; callers already have the query.
+- **No query in telemetry**: `TelemetryEntry.from_explain_result` records only `collection`, `result_count`, and `latency_ms` — no query text and no `result_doc_ids` (scalar count only, to avoid any path-hash leakage on the explain surface).
+- **`source_path` exposure**: `source_path` appears on every `results[]` and `near_misses[]` item. This is the same exposure as `/search` today; it is not new surface introduced by A4. The accepted risk is documented in the `doc_id` leakage note above.
+- **`routing.candidates` scoped to caller's namespace**: when `collection` is omitted, the routing block lists every collection in the caller's namespace (the same ACL boundary that gates results). Collections outside the caller's namespace cannot appear in `routing.candidates`. The confidence-threshold gate is bypassed by `rank_with_scores`, but the namespace gate is not.
+- **Error message sanitisation**: pipeline-stage failures (`ExplainStageError`) surface as `{"detail": "<stage> error: <ExceptionType>"}` — the original exception message (which may contain the query, e.g. from an FTS error) is logged server-side only and never forwarded to the client.
 
 ### `doc_id` leakage risk — accepted
 

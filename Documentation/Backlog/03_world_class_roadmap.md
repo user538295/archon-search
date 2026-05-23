@@ -49,7 +49,7 @@ Goal: make the existing pipeline safe to extend, and ship two cheap features tha
 - [ ] **A1. Metadata schema v1 (item 3, minimum slice)** — add typed per-chunk and per-document metadata fields to the LanceDB schema, with system / filterable / ranking / audit partitions documented. Scope is intentionally narrow: only the fields needed for `A2` and item 13. Surfaced in search responses.
 - [ ] **A2. Metadata filters at search (item 7, minimum slice)** — source-path prefix/glob, `indexed-after`/`indexed-before`, file-type. Exposed on REST `/search`, MCP `search`, and the explain output (A4). Bounds-validated; uses the LanceDB `where()` API (no f-string SQL). A1 ships filterable fields populated; A2 only adds query-side wiring. **Language filtering deferred to C2** (real language detection) — A1's `language` field stays storage-only and is not exposed as a filter dimension here.
 - [ ] **A3. Hardening: search-failure semantics (`CON-5`)** — `/search` must propagate a 5xx with the standard error envelope on pipeline failure, not 200-with-empty-results. Add a regression test that injects a store failure.
-- [ ] **A4. Explain / debug endpoint (item 12)** — `/explain` (REST) + MCP tool returning vector rank, FTS rank, fused score, reranker score, matched filters, routing path, expansion-feature usage. Cheap to ship and unlocks every later ranking change.
+- [x] **A4. Explain / debug endpoint (item 12)** — `POST /explain` (REST) + `explain` MCP tool (10th tool) returning vector rank, FTS rank, fused (RRF) score, reranker score, and routing path. Shipped in A4. Two roadmap sub-fields deferred: `matched_filters` → A4.1 (additive, after A2 ships); `expansion-feature usage` → A4.2 (additive, after Phase B/C HyDE / RAG Fusion ships). Unlocks every later ranking change.
 - [ ] **A5. Hardening: input safety on ingest paths (`VAL-1`, `RP-5`)** — reject `..`-containing or symlink-escape paths in `/collections` and `/jobs/ingest`; replace all f-string `where()` builders in `store.py` with parameterised LanceDB calls.
 - [ ] **A6. Hardening: state-store + router cache locks (`CON-2`, `CON-3`)** — `asyncio.Lock` around `IndexingStateStore` mutations; router cache invalidates on ingest/reindex/description-regen. One PR, both bugs.
 - [ ] **A7. Hardening: stop writing without fsync (`PROG-1`, `TEL-2`, `SYN-1`)** — `IndexingStateStore`, telemetry writer, and sync manifest all `flush + fsync` before `os.replace`. Cheap durability win.
@@ -202,7 +202,7 @@ If only one ordering is used for planning, use this — each phase is a coherent
 1. ⬜ A1. Metadata schema v1 (item 3 minimum slice).
 2. ⬜ A2. Metadata filters at search (item 7).
 3. ⬜ A3. Search-failure semantics (`CON-5`).
-4. ⬜ A4. Explain / debug endpoint (item 12).
+4. ✅ A4. Explain / debug endpoint (item 12) — shipped; `matched_filters` deferred to A4.1 (after A2), `expansions` deferred to A4.2 (after Phase B/C).
 5. ⬜ A5. Ingest path safety + parameterised store queries (`VAL-1`, `RP-5`).
 6. ⬜ A6. State-store and router cache locks (`CON-2`, `CON-3`).
 7. ⬜ A7. fsync on durable writes (`PROG-1`, `TEL-2`, `SYN-1`).
