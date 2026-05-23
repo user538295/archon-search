@@ -239,7 +239,7 @@ router = MultiCollectionRouter(
   - Checkpoint: `uv run pytest tests/test_progress.py -v -k "reset_in_progress"`
 
 #### Task 1.3 — Refactor `sync._reset_stale_in_progress` to delegate to store
-- [ ] **File**: `archon_search/sync.py`
+- [x] **File**: `archon_search/sync.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Replace the entire `_reset_stale_in_progress` method body with a single delegation call:
