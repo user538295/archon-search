@@ -1235,3 +1235,194 @@ def test_add_collection_rollback_save_failure(
         response = c.post("/collections/", json={"path": str(src)})
 
     assert response.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# POST /collections/ — path safety validation (Task 1.2 / A5a)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="wiring pending")
+def test_add_collection_rejects_dotdot_path(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ with a dotdot path returns 400 with 'path is unsafe:' detail."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": "/foo/../bar"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"].startswith("path is unsafe:")
+
+
+@pytest.mark.xfail(strict=True, reason="wiring pending")
+def test_add_collection_uses_validator_returned_path(
+    tmp_path: Path, tmp_store: JobStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Handler must use the path returned by validate_ingest_path, not re-resolve body.path."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    # Patch the validator in the route module namespace to return a sentinel path.
+    monkeypatch.setattr(
+        "archon_search.server.routes_collections.validate_ingest_path",
+        lambda raw: Path("/sentinel/value"),
+    )
+
+    # Capture the IngestRequest passed to _default_ingest_task.
+    captured: list[str] = []
+
+    async def _capturing_ingest_task(job_id, store, body, *, namespace="default"):  # type: ignore[no-untyped-def]
+        captured.append(body.path)
+
+    monkeypatch.setattr(
+        "archon_search.server.routes_collections._default_ingest_task",
+        _capturing_ingest_task,
+    )
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post("/collections/", json={"path": "/some/legitimate/path"})
+
+    assert response.status_code == 202
+    assert captured == [str(Path("/sentinel/value"))]
+
+
+@pytest.mark.xfail(strict=True, reason="wiring pending")
+def test_add_collection_rejects_relative_path(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ with a relative path returns 400."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": "./foo"})
+
+    assert response.status_code == 400
+
+
+@pytest.mark.xfail(strict=True, reason="wiring pending")
+def test_add_collection_rejects_empty_path(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ with an empty path returns 400 with 'empty' in detail."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": ""})
+
+    assert response.status_code == 400
+    assert "empty" in response.json()["detail"]
+
+
+def test_add_collection_unauth_takes_precedence(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """Auth check fires before path validation: dotdot path WITHOUT auth → 401."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+    # No auth headers
+    c = TestClient(app)
+
+    response = c.post("/collections/", json={"path": "/foo/../bar"})
+
+    assert response.status_code == 401
+
+
+def test_add_collection_accepts_legitimate_absolute_path(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ with a valid absolute path still returns 202 (regression guard)."""
+    import uuid as _uuid
+    src = tmp_path / f"legit-{_uuid.uuid4().hex}"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+
+
+@pytest.mark.xfail(strict=True, reason="wiring pending")
+def test_add_collection_openapi_lists_400_response(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """OpenAPI spec for POST /collections/ includes a 400 response with ErrorDetail schema."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get("/openapi.json")
+    assert response.status_code == 200
+    spec = response.json()
+
+    post_responses = spec["paths"]["/collections/"]["post"]["responses"]
+    assert "400" in post_responses
+
+    # The 400 response schema must reference ErrorDetail
+    schema_ref = post_responses["400"]["content"]["application/json"]["schema"]["$ref"]
+    # $ref looks like "#/components/schemas/ErrorDetail"
+    assert schema_ref.endswith("ErrorDetail")

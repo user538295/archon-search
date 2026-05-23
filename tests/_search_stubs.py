@@ -79,4 +79,23 @@ def install_stubs() -> None:
     if "onnxruntime" not in sys.modules:
         sys.modules["onnxruntime"] = types.ModuleType("onnxruntime")
 
+    # Stub chonkie (RecursiveChunker tries to download gpt2 tokenizer) — not needed for tests.
+    if "chonkie" not in sys.modules:
+        _chonkie = types.ModuleType("chonkie")
+
+        class _FakeChunk:  # noqa: D101
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        class _FakeRecursiveChunker:  # noqa: D101
+            def __init__(self, tokenizer: str = "gpt2", chunk_size: int = 512, **kwargs: object) -> None:
+                self._chunk_size = chunk_size
+
+            def chunk(self, text: str) -> list:  # type: ignore[return]
+                """Return a single chunk with all text — sufficient for unit tests."""
+                return [_FakeChunk(text)] if text else []
+
+        _chonkie.RecursiveChunker = _FakeRecursiveChunker  # type: ignore[attr-defined]
+        sys.modules["chonkie"] = _chonkie
+
     _STUBS_INSTALLED = True
