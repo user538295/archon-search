@@ -15,8 +15,9 @@ from archon_search.config import SearchConfig, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
+from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
-from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
+from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse
 from archon_search.sync import path_to_collection_name
 
@@ -116,9 +117,15 @@ _ERROR_400_401_409 = {
     401: {"model": ErrorDetail},
     409: {"model": ErrorDetail},
 }
+_ERROR_400_401_409_503 = {
+    400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
+    401: {"model": ErrorDetail},
+    409: {"model": ErrorDetail},
+    503: {"description": "Store busy — reindex in progress"},
+}
 
 
-@router.post("/", status_code=202, response_model=JobResponse, responses=_ERROR_400_401_409)
+@router.post("/", status_code=202, response_model=JobResponse, responses=_ERROR_400_401_409_503)
 async def add_collection(body: AddCollectionRequest, request: Request) -> JobResponse | JSONResponse:
     """Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob."""
     config: SearchConfig = request.app.state.config
@@ -169,9 +176,22 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     ingest_body = IngestRequest(
         collection=collection_name, path=resolved, ingested_by=ingested_by
     )
-    task = asyncio.create_task(
-        _default_ingest_task(job.job_id, store, ingest_body, namespace=ns)
-    )
+
+    # Pre-acquire the per-collection lock to return 503 synchronously on contention.
+    lock_result = await acquire_collection_lock_or_503(search_store, collection_name)
+    if isinstance(lock_result, JSONResponse):
+        return lock_result
+
+    if lock_result is not None:
+        task = asyncio.create_task(
+            _default_ingest_task_with_lock(
+                job.job_id, store, ingest_body, namespace=ns, held_lock=lock_result
+            )
+        )
+    else:
+        task = asyncio.create_task(
+            _default_ingest_task(job.job_id, store, ingest_body, namespace=ns)
+        )
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
 
