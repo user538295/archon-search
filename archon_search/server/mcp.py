@@ -5,19 +5,31 @@ import logging
 from dataclasses import asdict
 from pathlib import Path
 from time import monotonic
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from fastmcp import Context, FastMCP
+from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.key_manager import load_or_generate_key
-from archon_search.pipeline import SearchPipeline
+from archon_search.pipeline import ExplainStageError, SearchPipeline
 from archon_search.progress import IndexingState, IndexingStatus
+from archon_search.router import MultiCollectionRouter
 from archon_search.server.middleware_auth import APIKeyMiddleware
+from archon_search.server.routes_explain import (
+    ExplainRequest,
+    ExplainResponse,
+    RoutingCandidate,
+    RoutingExplain,
+)
 from archon_search.telemetry.entry import TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
+
+if TYPE_CHECKING:
+    from archon_search.config import SearchConfig
 
 logger = logging.getLogger("archon.search")
 
@@ -40,8 +52,14 @@ def create_app(
     pipeline: SearchPipeline,
     default_collection: str,
     writer: TelemetryWriter | None = None,
+    config: SearchConfig | None = None,
 ) -> FastMCP:
-    """Create a FastMCP app with 9 RAG tools registered."""
+    """Create a FastMCP app with 10 RAG tools registered.
+
+    ``config`` is required only for the collectionless ``explain`` routing path;
+    when omitted, ``explain`` without a collection falls back to
+    ``default_collection`` (mirroring the ``search`` tool).
+    """
     app = FastMCP("archon-search")
 
     @app.tool()
@@ -129,6 +147,108 @@ def create_app(
                     logger.warning("telemetry: search_with_context error entry enqueue failed", exc_info=True)
             logger.exception("search_with_context failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
+
+    @app.tool()
+    async def explain(
+        query: str,
+        collection: str | None = None,
+        top_k: int = 5,
+        rerank: bool = True,
+    ) -> dict[str, Any]:
+        """Return the per-stage retrieval/reranking trace for a query, plus the
+        routing decision when no collection is pinned. Operates in the default
+        namespace only. The query is never echoed in the response or telemetry."""
+        start = monotonic()
+        try:
+            req = ExplainRequest(query=query, collection=collection, top_k=top_k, rerank=rerank)
+        except ValidationError as exc:
+            return McpErrorResponse(error=str(exc), code="validation_error")
+
+        ns = DEFAULT_NAMESPACE
+        routing: RoutingExplain | None = None
+        query_vector: list[float] | None = None
+        try:
+            if req.collection is not None:
+                meta = await pipeline.get_collection_meta(req.collection, namespace=ns)
+                if meta is None:
+                    return McpErrorResponse(error=f"Collection {req.collection!r} not found", code="not_found")
+                chosen = req.collection
+            elif config is None:
+                # No routing config — fall back to the default collection (like search).
+                chosen = default_collection
+            else:
+                all_meta = await pipeline.get_all_collections_meta(namespace=ns)
+                if not all_meta:
+                    return McpErrorResponse(error="no collections available", code="not_found")
+                query_vector = await pipeline._embedder.embed_one(req.query)
+                col_router = MultiCollectionRouter(
+                    search_url="http://mcp",
+                    embedder=pipeline._embedder,
+                    shortlist_size=config.routing_shortlist_size,
+                    confidence_threshold=config.routing_confidence_threshold,
+                    embedding_model=config.embedding_model,
+                )
+                ranked = col_router.rank_with_scores(query_vector, all_meta)
+                chosen_meta, chosen_score = ranked[0]
+                chosen = chosen_meta.name
+                threshold = config.routing_confidence_threshold
+                routing = RoutingExplain(
+                    invoked=True,
+                    chosen_collection=chosen,
+                    confidence_threshold=threshold,
+                    chosen_below_threshold=(chosen_score is not None and chosen_score < threshold),
+                    candidates=[RoutingCandidate(collection=m.name, centroid_score=s) for m, s in ranked],
+                )
+
+            result = await pipeline.explain(
+                req.query, chosen, top_k=req.top_k, rerank=req.rerank, namespace=ns, query_vector=query_vector
+            )
+            response = ExplainResponse.from_pipeline_result(
+                rerank=req.rerank, collection=chosen, routing=routing, result=result
+            )
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_explain_result(
+                            collection=chosen,
+                            result_count=len(response.results),
+                            latency_ms=(monotonic() - start) * 1000.0,
+                        )
+                    )
+                except Exception:
+                    logger.warning("telemetry: explain entry enqueue failed", exc_info=True)
+            return response.model_dump(mode="json", exclude_none=False)
+        except ExplainStageError as exc:
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_error(
+                            endpoint="explain",
+                            status="internal_error",
+                            error_kind="other",
+                            latency_ms=(monotonic() - start) * 1000.0,
+                        )
+                    )
+                except Exception:
+                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+            # Sanitize: the original message could echo the query (e.g. an FTS error).
+            logger.warning("explain stage %s failed: %s", exc.stage, exc.original, exc_info=exc.original)
+            return McpErrorResponse(error=f"{exc.stage} error: {type(exc.original).__name__}", code="internal_error")
+        except Exception:
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_error(
+                            endpoint="explain",
+                            status="internal_error",
+                            error_kind="other",
+                            latency_ms=(monotonic() - start) * 1000.0,
+                        )
+                    )
+                except Exception:
+                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+            logger.exception("explain failed")
+            return McpErrorResponse(error="explain failed", code="internal_error")
 
     @app.tool()
     async def ingest_file(
@@ -248,6 +368,7 @@ def create_mcp_http_app(
     pipeline: SearchPipeline,
     default_collection: str,
     writer: TelemetryWriter | None = None,
+    config: SearchConfig | None = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
@@ -255,7 +376,7 @@ def create_mcp_http_app(
     (endpoint: /mcp).  APIKeyMiddleware is added so every request to /mcp
     requires a valid Bearer token; /health remains exempt per _EXEMPT_PATHS.
     """
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer)
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config)
     starlette_app: Starlette = fastmcp_app.streamable_http_app()
     api_key, _ = load_or_generate_key()
     starlette_app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces={})

@@ -514,7 +514,7 @@ POST /explain {query, top_k, rerank}
 > **Releasable**: after Task 3.1 `POST /explain` is callable end-to-end against a running server with a real collection.
 
 #### Task 3.1 — `POST /explain` route handler
-- [ ] **Files**: `archon_search/server/routes_explain.py` (extend with handler), `archon_search/server/app.py` (register router)
+- [x] **Files**: `archon_search/server/routes_explain.py` (extend with handler), `archon_search/server/app.py` (register router)
 - **Depends on**: Task 1.1, Task 1.2, Task 2.1, Task 2.2, Task 2.3
 - **Description**:
   - Add `POST /explain` handler in `routes_explain.py`, bearer-auth-protected by the existing middleware (no per-route hook needed).
@@ -583,7 +583,7 @@ POST /explain {query, top_k, rerank}
 > **Releasable**: after Task 4.1 MCP clients can invoke `explain` and get equivalent output to REST.
 
 #### Task 4.1 — `explain` MCP tool registration
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 3.1 (route handler defines the reference shape)
 - **Description**:
   - Add a 10th `@app.tool()` function `explain(query: str, collection: str | None = None, top_k: int = 5, rerank: bool = True) -> dict[str, Any]`.
