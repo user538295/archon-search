@@ -428,3 +428,82 @@ def test_route_no_pinned_for_namespace(tmp_path: Path) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["pinned_names"] == []
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3 — FastAPI per-request router lifecycle regression guard
+# ---------------------------------------------------------------------------
+# Uses a bare FastAPI app (NOT create_app) to avoid the chonkie tokenizer issue.
+# Pattern mirrors tests/server/test_routes_route_telemetry.py.
+
+
+def _make_bare_route_app() -> "FastAPI":
+    """Minimal FastAPI app with only the /route router — no chonkie dependency."""
+    from fastapi import FastAPI, Request
+    from archon_search.config import SearchConfig
+    from archon_search.constants import DEFAULT_NAMESPACE
+    from archon_search.server.routes_route import router as route_router
+
+    app = FastAPI()
+    app.state.config = SearchConfig()
+    app.state.telemetry_writer = None
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    app.state.search_store = mock_store
+
+    @app.middleware("http")
+    async def _inject_namespace(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.namespace = DEFAULT_NAMESPACE
+        return await call_next(request)
+
+    app.include_router(route_router)
+    return app
+
+
+def test_build_router_called_once_per_request() -> None:
+    """_build_router must be called exactly once per POST /route request (not cached)."""
+    from fastapi.testclient import TestClient
+    from archon_search.server.routes_route import _build_router
+    import archon_search.server.routes_route as routes_route_module
+
+    app = _make_bare_route_app()
+
+    fake_router = _patch_router(pre_context=None, routable_names=[], decomposer_invoked=False)
+    call_count = [0]
+
+    original_build = routes_route_module._build_router
+
+    def spy_build_router(config, shortlist_size, embedder=None):
+        call_count[0] += 1
+        return fake_router
+
+    with patch("archon_search.server.routes_route._build_router", side_effect=spy_build_router):
+        client = TestClient(app, headers={"Authorization": "Bearer "})
+        client.post("/route", json={"query": "first request"})
+        client.post("/route", json={"query": "second request"})
+
+    assert call_count[0] == 2, (
+        f"Expected _build_router to be called once per request (2 total), "
+        f"got {call_count[0]}"
+    )
+
+
+def test_app_state_has_no_router_attribute() -> None:
+    """After POST /route, app.state must NOT gain a router or multi_collection_router attribute."""
+    from fastapi.testclient import TestClient
+
+    app = _make_bare_route_app()
+
+    fake_router = _patch_router(pre_context=None, routable_names=[], decomposer_invoked=False)
+
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
+        client = TestClient(app, headers={"Authorization": "Bearer "})
+        client.post("/route", json={"query": "anything"})
+
+    assert not hasattr(app.state, "router"), (
+        "app.state must not gain a 'router' attribute — per-request lifecycle must be preserved"
+    )
+    assert not hasattr(app.state, "multi_collection_router"), (
+        "app.state must not gain a 'multi_collection_router' attribute"
+    )
