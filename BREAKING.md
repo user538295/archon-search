@@ -38,6 +38,17 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 
 **Announced in**: this release. No prior deprecation — the impacted MCP shape was never documented as stable.
 
+### [next release] — A5a ingest path safety
+
+**Surface**: MCP (behaviour change), REST (additive).
+
+- MCP `ingest_file` and `ingest_directory` previously accepted paths containing `..` segments, empty strings, whitespace-only strings, NUL bytes, and non-absolute paths, and silently followed/resolved them. They now reject those inputs and return `McpErrorResponse(error=..., code="path_unsafe")` with an LLM-readable reason.
+- HTTP `POST /collections` and `POST /jobs/ingest` gain a new `400` response (`ErrorDetail`, `detail` prefixed `"path is unsafe:"`) for the same input classes — additive (the `400` was not previously in the OpenAPI schema).
+
+**Migration**: callers must pass absolute paths without `..` traversal. `path: null` (documents-only) ingest on `POST /jobs/ingest` is unaffected. Symlinks and absolute-path scope are intentionally NOT validated (deferred to a future `allowed_dirs` feature).
+
+**Announced in**: this release. No prior deprecation — the silent-acceptance behaviour was never documented as stable.
+
 ### [next release] — MCP `search` tool response shape
 
 **Surface**: MCP (`mcp.py` `search` tool)

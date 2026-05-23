@@ -328,7 +328,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/server/test_mcp.py -v -k "ingest_directory and (dotdot or sentinel or legitimate or reuses_path_unsafe_message)"`
 
 #### Task 1.6 — `BREAKING.md` Changelog entry for MCP behaviour change
-- [ ] **File**: `BREAKING.md`
+- [x] **File**: `BREAKING.md`
 - **Depends on**: Task 1.4, Task 1.5
 - **Description**:
   - Append under the existing `### [next release]` heading (match the file's existing format — no new top-level section).
