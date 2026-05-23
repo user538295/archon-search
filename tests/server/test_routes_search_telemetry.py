@@ -327,8 +327,8 @@ def test_serialization_error_in_response_construction_enqueues_telemetry() -> No
 # ---------------------------------------------------------------------------
 
 
-def test_healthy_search_does_not_enqueue_telemetry() -> None:
-    """Successful pipeline.search() → 200, enqueue NOT called for error entry."""
+def test_healthy_search_does_not_enqueue_error_telemetry() -> None:
+    """Successful pipeline.search() → 200, success entry enqueued with status='ok', no error entry."""
     writer = _make_mock_writer()
     pipeline = _make_mock_pipeline()
     app = _make_telemetry_app(writer=writer, pipeline=pipeline)
@@ -337,9 +337,8 @@ def test_healthy_search_does_not_enqueue_telemetry() -> None:
         resp = client.post("/search", json=_SEARCH_PAYLOAD)
 
     assert resp.status_code == 200
-    # enqueue may be called for success telemetry but NOT for error telemetry
-    # (success telemetry uses from_search_tool_result, not from_error)
-    # We verify no from_error call: check that no entry has a non-"ok" status
+    # Success path must enqueue exactly one entry with status="ok"
+    assert writer.enqueue.call_count >= 1, "Expected success telemetry to be enqueued"
     for call in writer.enqueue.call_args_list:
         entry: TelemetryEntry = call[0][0]
         assert entry.status == "ok", f"Expected ok status but got {entry.status}"

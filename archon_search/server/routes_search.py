@@ -123,8 +123,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                         filter_flags=_ff,
                     )
                 )
-            except Exception:
-                logger.warning("telemetry: search entry enqueue failed", exc_info=True)
+            except Exception as tel_exc:
+                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
         return SearchResponse(
             results=[
                 SearchResultSchema.from_result(r, include_metadata=include_metadata)
@@ -143,8 +143,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                         latency_ms=(monotonic() - start) * 1000.0,
                     )
                 )
-            except Exception:
-                logger.warning("telemetry: search timeout entry enqueue failed", exc_info=True)
+            except Exception as tel_exc:
+                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
         logger.error(
             "search timed out after %.1fs",
             _SEARCH_TIMEOUT_SECONDS,
@@ -163,8 +163,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                         latency_ms=(monotonic() - start) * 1000.0,
                     )
                 )
-            except Exception:
-                logger.warning("telemetry: search error entry enqueue failed", exc_info=True)
+            except Exception as tel_exc:
+                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
         logger.error(
             "search pipeline failed: %s",
             type(exc).__name__,
