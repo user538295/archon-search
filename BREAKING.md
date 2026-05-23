@@ -22,8 +22,8 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 **REST — additive (non-breaking)**:
 - `/search` and `/search/context` result items gain the same six keys. Tolerant JSON consumers see new fields appear; strict-schema consumers (e.g., generated clients pinned to the older OpenAPI snapshot) must regenerate.
 
-**New 503 contract on `/ingest`**:
-- During an active reindex of the same collection, the store may raise `StoreBusyError` after a 30s lock-acquisition timeout. The lifecycle wrapper surfaces this in job state today (REST 202 + background task model); a synchronous 503 + `Retry-After: 30` response is a follow-up tied to a request-lifecycle refactor.
+**New 503 contract on `/ingest` and `/collections` (A5c)**:
+- During an active reindex of the same collection, the store may raise `StoreBusyError` after a 30s lock-acquisition timeout. HTTP `POST /ingest` and `POST /collections` now return HTTP 503 with `Retry-After: 30` and `{"error": "store_busy", ...}` synchronously; ingest into a different collection succeeds normally. MCP `ingest_file` and `ingest_directory` surface `StoreBusyError` synchronously as `McpErrorResponse(code="store_busy")`. (A5c closes A1's deferred 503 surface.)
 
 **`X-Ingested-By` header normalization**:
 - Missing/empty → `"http"`.
