@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,13 +17,22 @@ from archon_search.server.app import create_app
 
 
 def _make_app(tmp_path: Path) -> tuple:
-    """Create app and return (app, client) with pipeline mock on app.state."""
+    """Create app and return (app, client) with pipeline mock on app.state.
+
+    DocumentChunker.__init__ is patched to skip gpt2 tokenizer download so
+    tests pass in network-restricted environments.  Tests that replace
+    app.state.pipeline immediately after this call are unaffected; tests that
+    inspect the real pipeline (isinstance, store identity) still work because
+    SearchPipeline is constructed normally — only the embedded chunker is a
+    stub that must not be invoked.
+    """
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     job_store = JobStore(path=tmp_path / "jobs.json")
-    app = create_app(config, job_store)
+    with patch("archon_search.chunker.DocumentChunker.__init__", return_value=None):
+        app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    client = TestClient(app, raise_server_exceptions=False, headers={"Authorization": f"Bearer {key}"})
     return app, client
 
 
@@ -137,17 +146,14 @@ def test_search_collection_not_found_returns_404(tmp_path: Path) -> None:
     assert response.status_code == 404
 
 
-def test_search_pipeline_error_returns_empty(tmp_path: Path) -> None:
-    """When pipeline.search() raises, returns SearchResponse(results=[], acl_filtered=False)."""
+def test_search_pipeline_error_returns_500(tmp_path: Path) -> None:
+    """When pipeline.search() raises → HTTP 500 (bare re-raise; plain text body from ServerErrorMiddleware)."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=RuntimeError("search boom"))
 
     response = client.post("/search", json={"collection": "col", "query": "q"})
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["results"] == []
-    assert data["acl_filtered"] is False
+    assert response.status_code == 500
 
 
 # ---------------------------------------------------------------------------
@@ -255,22 +261,20 @@ def test_search_whitespace_collection(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Exception in pipeline.search() → log WARNING + return []
+# 5. Exception in pipeline.search() → HTTP 500 with structured error log
 # ---------------------------------------------------------------------------
 
 
-def test_search_store_exception_returns_empty(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """Exception in pipeline.search() (after successful meta lookup) → log WARNING + return []."""
+def test_search_store_exception_returns_500(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Exception in pipeline.search() (after successful meta lookup) → HTTP 500 with standard error envelope."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=RuntimeError("db failure"))
 
-    with caplog.at_level(logging.WARNING, logger="archon.search"):
+    with caplog.at_level(logging.ERROR, logger="archon.search"):
         response = client.post("/search", json={"collection": "col", "query": "test"})
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["results"] == []
-    assert any("search failed" in record.message for record in caplog.records)
+    assert response.status_code == 500
+    assert any("search pipeline failed" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -292,35 +296,33 @@ def test_search_top_k_accepted_but_ignored_by_pipeline(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Pipeline search failure → 200 + []
+# 7. Pipeline search failure → HTTP 500
 # ---------------------------------------------------------------------------
 
 
-def test_search_embedder_failure_returns_empty(tmp_path: Path) -> None:
-    """pipeline.search() failure → 200 + [] (pipeline encapsulates embed+rerank)."""
+def test_search_embedder_failure_returns_500(tmp_path: Path) -> None:
+    """pipeline.search() failure → HTTP 500 (bare re-raise; plain text body from ServerErrorMiddleware)."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=RuntimeError("model error"))
 
     response = client.post("/search", json={"collection": "col", "query": "test"})
 
-    assert response.status_code == 200
-    assert response.json()["results"] == []
+    assert response.status_code == 500
 
 
 # ---------------------------------------------------------------------------
-# 8. Reranker failure inside pipeline → 200 + []
+# 8. Reranker failure inside pipeline → HTTP 500
 # ---------------------------------------------------------------------------
 
 
-def test_search_reranker_failure_returns_empty(tmp_path: Path) -> None:
-    """Any exception from pipeline.search() → 200 + [] (reranker failure path)."""
+def test_search_reranker_failure_returns_500(tmp_path: Path) -> None:
+    """Any exception from pipeline.search() → HTTP 500 (bare re-raise; plain text body from ServerErrorMiddleware)."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=ValueError("score count mismatch"))
 
     response = client.post("/search", json={"collection": "col", "query": "test"})
 
-    assert response.status_code == 200
-    assert response.json()["results"] == []
+    assert response.status_code == 500
 
 
 # ---------------------------------------------------------------------------
@@ -384,9 +386,17 @@ def test_search_cross_namespace_404(tmp_path: Path) -> None:
 
 
 def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """When get_collection_meta raises (LanceDB error), response is 503, not 404 or 200."""
+    """When get_collection_meta raises (LanceDB error), response is 503, not 404 or 200.
+
+    Also verifies that the 503 meta-lookup failure path does NOT enqueue a telemetry
+    entry (telemetry is reserved for the search-execution failure paths).
+    """
+    from archon_search.telemetry.writer import TelemetryWriter
+
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(meta_raises=RuntimeError("lancedb failure"))
+    writer_mock = MagicMock(spec=TelemetryWriter)
+    app.state.telemetry_writer = writer_mock
 
     with caplog.at_level(logging.ERROR, logger="archon.search"):
         response = client.post("/search", json={"collection": "col", "query": "test"})
@@ -394,6 +404,164 @@ def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCa
     assert response.status_code == 503
     app.state.pipeline.search.assert_not_called()
     assert any("service unavailable" in record.message.lower() or "lancedb" in record.message.lower() or "col" in record.message for record in caplog.records)
+    # 503 meta-lookup path must not enqueue telemetry.
+    assert writer_mock.enqueue.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# 13. Pipeline failure 500 body is plain-text (not JSON) — A3/CON-5
+# ---------------------------------------------------------------------------
+
+
+def test_search_pipeline_failure_500_body_is_plain_text(tmp_path: Path) -> None:
+    """POST /search pipeline failure → HTTP 500 with plain-text body from Starlette
+    ServerErrorMiddleware (bare re-raise).  Callers must NOT call .json() on the
+    500 body; it is not a JSON envelope.
+    """
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(search_raises=RuntimeError("store down"))
+
+    response = client.post("/search", json={"collection": "col", "query": "q"})
+
+    assert response.status_code == 500
+    # Body must be plain-text "Internal Server Error" — NOT a JSON envelope.
+    assert response.text == "Internal Server Error"
+    assert "text/plain" in response.headers.get("content-type", "")
+
+
+def test_search_pipeline_failure_500_body_is_not_json_parseable(tmp_path: Path) -> None:
+    """Calling response.json() on a pipeline-failure 500 raises JSONDecodeError.
+    Documents the key breaking-change behavior introduced in A3.
+    """
+    import json
+
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(search_raises=ValueError("embedder crash"))
+
+    response = client.post("/search", json={"collection": "col", "query": "q"})
+
+    assert response.status_code == 500
+    with pytest.raises((json.JSONDecodeError, Exception)):
+        response.json()
+
+
+# ---------------------------------------------------------------------------
+# 14. Timeout 504 body contains JSON detail — A3/CON-5
+# ---------------------------------------------------------------------------
+
+
+def test_search_timeout_504_body_has_search_timed_out_detail(tmp_path: Path) -> None:
+    """POST /search timeout → HTTP 504 with JSON body {"detail": "Search timed out"}.
+    Unlike the 500 bare-re-raise, the 504 is raised via HTTPException which FastAPI
+    serialises as a JSON envelope — safe to call .json() on.
+    """
+    import archon_search.server.routes_search as routes_search_module
+
+    app, client = _make_app(tmp_path)
+
+    # Patch the timeout constant to a near-zero value so the test is fast.
+    original_timeout = routes_search_module._SEARCH_TIMEOUT_SECONDS
+    routes_search_module._SEARCH_TIMEOUT_SECONDS = 0.01
+
+    import asyncio
+
+    async def _slow_search(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    app.state.pipeline = _make_pipeline_mock()
+    app.state.pipeline.search = _slow_search  # type: ignore[assignment]
+
+    try:
+        response = client.post("/search", json={"collection": "col", "query": "q"})
+    finally:
+        routes_search_module._SEARCH_TIMEOUT_SECONDS = original_timeout
+
+    assert response.status_code == 504
+    body = response.json()
+    assert body["detail"] == "Search timed out"
+
+
+def test_search_timeout_detail_differs_from_route_timeout_detail(tmp_path: Path) -> None:
+    """The /search 504 detail string 'Search timed out' is distinct from /route's
+    'routing timed out' — both endpoints are tested to have their own detail string.
+    Regression guard: they must never accidentally share the same string.
+    """
+    import archon_search.server.routes_search as routes_search_module
+    import asyncio
+
+    app, client = _make_app(tmp_path)
+    original_timeout = routes_search_module._SEARCH_TIMEOUT_SECONDS
+    routes_search_module._SEARCH_TIMEOUT_SECONDS = 0.01
+
+    async def _slow_search(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    app.state.pipeline = _make_pipeline_mock()
+    app.state.pipeline.search = _slow_search  # type: ignore[assignment]
+
+    try:
+        response = client.post("/search", json={"collection": "col", "query": "q"})
+    finally:
+        routes_search_module._SEARCH_TIMEOUT_SECONDS = original_timeout
+
+    assert response.status_code == 504
+    body = response.json()
+    # Must be the /search-specific string, NOT the /route string.
+    assert body["detail"] == "Search timed out"
+    assert body["detail"] != "routing timed out"
+
+
+# ---------------------------------------------------------------------------
+# 15. 503 and 404 response body formats — A3/CON-5
+# ---------------------------------------------------------------------------
+
+
+def test_search_meta_lookup_failure_503_body_format(tmp_path: Path) -> None:
+    """503 from meta-lookup failure → JSON body {"detail": "service unavailable"}."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(meta_raises=RuntimeError("lancedb gone"))
+
+    response = client.post("/search", json={"collection": "col", "query": "test"})
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["detail"] == "service unavailable"
+
+
+def test_search_collection_not_found_404_body_format(tmp_path: Path) -> None:
+    """404 from cross-namespace / missing collection → JSON body {"detail": "collection not found"}."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(meta_return=None)
+
+    response = client.post("/search", json={"collection": "missing", "query": "test"})
+
+    assert response.status_code == 404
+    body = response.json()
+    assert body["detail"] == "collection not found"
+
+
+# ---------------------------------------------------------------------------
+# 16. Regression: empty results (200) is a healthy pipeline signal — A3/CON-5
+# ---------------------------------------------------------------------------
+
+
+def test_search_empty_results_200_is_success_not_error(tmp_path: Path) -> None:
+    """HTTP 200 with results=[] means the pipeline ran successfully but found no
+    matching documents — it is NOT a failure signal.  Regression guard for CON-5:
+    pre-A3 this was the failure-downgrade path; post-A3 it is purely a success path.
+    """
+    app, client = _make_app(tmp_path)
+    # Pipeline succeeds but returns no hits.
+    app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=False)
+
+    response = client.post("/search", json={"collection": "col", "query": "no matches"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["results"] == []
+    assert body["acl_filtered"] is False
+    # pipeline.search must have been called (not short-circuited by an error handler)
+    app.state.pipeline.search.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
