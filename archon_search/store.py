@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, _validate_namespace
+from archon_search.store_filters import build_where, _compute_fetch
 
 
 from dataclasses import dataclass, field
@@ -47,6 +48,7 @@ class StoreBusyError(Exception):
 if TYPE_CHECKING:
     import lancedb
     import pyarrow as pa
+    from archon_search.filters import SearchFilters
 
 logger = logging.getLogger("archon")
 
@@ -641,6 +643,7 @@ class SearchStore:
         query_vector: list[float],
         query_text: str,
         top_k: int,
+        filters: "SearchFilters | None" = None,
     ) -> list[SearchResult]:
         self._validate_collection(collection)
         db = self._require_connected()
@@ -649,10 +652,15 @@ class SearchStore:
         except ValueError:
             return []
 
-        fetch = max(top_k * 3, 20)
+        has_glob = bool(filters and filters.source_path_glob)
+        fetch = _compute_fetch(top_k, has_glob=has_glob)
+        pred = build_where(filters) if filters else ""
 
         # Vector search
-        vec_rows = await table.vector_search(query_vector).limit(fetch).to_list()
+        vec_q = table.vector_search(query_vector)
+        if pred:
+            vec_q = vec_q.where(pred)
+        vec_rows = await vec_q.limit(fetch).to_list()
         vec_rank: dict[str, int] = {r["chunk_id"]: i for i, r in enumerate(vec_rows)}
 
         # FTS search (may fail if no index)
@@ -660,6 +668,8 @@ class SearchStore:
         fts_rank: dict[str, int] = {}
         try:
             fts_q = await table.search(query_text, query_type="fts")
+            if pred:
+                fts_q = fts_q.where(pred)
             fts_rows = await fts_q.limit(fetch).to_list()
             fts_rank = {r["chunk_id"]: i for i, r in enumerate(fts_rows)}
         except Exception as exc:

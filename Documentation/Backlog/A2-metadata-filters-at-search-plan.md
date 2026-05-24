@@ -340,7 +340,7 @@ class FilterFlags(BaseModel):
 > **Releasable**: when Task 3.4 is complete, calling `LanceStore.hybrid_search(filters=...)` or `SearchPipeline.search(filters=...)` returns correctly filtered results end-to-end. REST/MCP surface still not wired.
 
 #### Task 3.1 — `hybrid_search` accepts filters; `.where()` on both branches; `.postfilter()` never called
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.2, Task 2.3
 - **Description**:
   - Add `filters: SearchFilters | None = None` to `LanceStore.hybrid_search`.
