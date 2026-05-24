@@ -1,0 +1,186 @@
+# Feature Brief: Observability and Stage-Level Latency (B1 — Roadmap Item 24)
+
+> **Order**: First item of Phase B. Ships AFTER Phase A (A1–A7). The response-surface piece (per-stage timings on `/explain`) **depends on A4** — it lands the `stage_timings_ms` field that A4 explicitly deferred to "A4.3" (`A4-explain-endpoint-brief.md:124`, `:201`). The other three deliverables — correlation IDs (`ARCH-3`), stage-timing instrumentation, and structured-log emission — are **independent of A4** and can land first. Resolves `ARCH-3` (`Architecture/530_technical_debt_refactoring_roadmap.md:79`).
+
+## Problem
+Today the retrieval pipeline runs six distinct stages — query embed, vector search, FTS search, RRF fusion, ACL filter, rerank — and the ingest path adds parse and persist, but **none of them are individually timed in production**. The only latency numbers that exist are: (a) the eval-harness p50/p95 (`tests/eval/`, report-only, deterministic stubs, explicitly *not* a production SLA per `Architecture/210_performance_and_scalability.md:13`), and (b) the per-endpoint end-to-end `latency_ms` recorded in telemetry (`routes_route.py:115`). When `/search` is slow there is no way to tell whether the embedder, the vector leg, FTS, or the cross-encoder is responsible without attaching a profiler.
+
+Worse, **there is no request-correlation ID**. `APIKeyMiddleware.dispatch` (`middleware_auth.py:25`) sets `request.state.namespace` and nothing else; loggers across `store.py` (`"archon"`), `routes_route.py` (`"archon.search"`), and `app.py` (`"archon-search"`) emit unstructured lines with no shared key. A single failing request cannot be traced across the auth middleware → pipeline → store → telemetry boundary post-hoc. This is `ARCH-3` in the debt register (`530_technical_debt_refactoring_roadmap.md:79`): *"Concurrent failures across `/search`, `/ingest`, and the watcher cannot be tied together."*
+
+## Goal
+Every request carries a correlation ID minted at the edge and propagated through the pipeline into telemetry and logs. Every retrieval and ingest stage is timed with a monotonic clock. The per-stage breakdown is **emitted as a structured log record** for `/search`, `/route`, `/explain`, and ingest, and is **surfaced on the `/explain` response** as `stage_timings_ms` (delivering A4's deferred A4.3 field). Instrumentation is a **no-op when unbound** so library callers, the eval harness, and unit tests pay nothing and break nothing. The telemetry no-raw-query invariant is preserved — a correlation ID is a random UUID, never query-derived.
+
+## Users & Context
+- **Operators** triaging a latency regression or a production incident. They need to answer "which stage got slow?" and "show me every log line for the request that 500'd" without a profiler or a code read.
+- **Maintainers** tuning the router, reranker, or hybrid scoring. Stage timings turn "the pipeline feels slow" into "rerank is 80% of the budget," and the eval harness can trend it.
+- **Integrators** building on REST/MCP who hit a slow query and want a self-service breakdown via `/explain` before filing an issue.
+
+Triggered during latency investigation, incident response, and routing/rerank tuning — the same audience and moments as A4's `/explain`, which is why B1 is co-designed with it. `archon-search` remains a single-process local service (`210_performance_and_scalability.md:9`); these are diagnostics, **not** a production SLA, and the brief does not promise one.
+
+## Relationship to Sibling Items (intentional seams)
+
+| Item | Overlap | B1's boundary |
+|---|---|---|
+| **A4** (explain endpoint) | A4 builds `/explain`, `SearchPipeline.explain()`, `_hybrid_search_with_trace` usage; A4 defers `stage_timings_ms` to "A4.3". | B1 **adds** `stage_timings_ms` to `ExplainResponse`. Purely additive over A4's schema. If A4 is unmerged, the response-surface piece is gated on it; the rest ships independently. |
+| **A3** (search-failure semantics) | A3 introduces the first `logger.error(..., extra={"event_type": ...})` structured-field pattern (`A3-...-brief.md:71`). | B1 **reuses** the same `extra={}` mechanism for a new `event_type="stage_timings"` record. No conflict; same idiom. |
+| **B7** (structured logs + rotation, item 25) | B7 owns the JSON **log formatter** and **rotation policy**. | B1 emits structured log **records** via `extra={}` on the stock `logging` module; it does **not** add a JSON formatter, handler chain, or rotation. Those fields become first-class JSON keys once B7's formatter lands. Clean record-vs-format split. |
+| **B2** (deeper health/readiness) | Both are "observability." | B2 is liveness/readiness probes; B1 is per-request tracing + stage latency. Disjoint. |
+
+## Core Flow
+1. A request arrives. A new **pure-ASGI** `RequestContextMiddleware` (added **outermost** — see Key Decisions for why it must not be `BaseHTTPMiddleware`) reads an inbound `X-Request-ID` header if present and valid, otherwise mints `uuid4().hex`. It sets the `correlation_id` ContextVar, stores `request.state.request_id`, and echoes `X-Request-ID` on the response. This runs for **every** path including `/health` and `401`s.
+2. The `/search`, `/route`, or `/explain` handler enters a `bind_stage_recorder()` context that installs a fresh `StageRecorder` in a ContextVar for the duration of the request. (MCP tool handlers in `mcp.py` do the same.)
+3. As the pipeline runs, each stage wraps its work in `record_stage("<name>")`:
+   - `record_stage("embed")` around `Embedder.embed_one` (`pipeline.py:320`),
+   - `record_stage("route")` around centroid scoring in `MultiCollectionRouter.rank` (`router.py:141-146`) when collectionless,
+   - `record_stage("vector")`, `record_stage("fts")`, `record_stage("fuse")` inside `store.hybrid_search` (`store.py:655`, `:662`, `:677-687`) **and** the trace twin `_hybrid_search_with_trace` (`store.py:946-948`, `:962-969`, `:1000-1004`),
+   - `record_stage("rerank")` around `Reranker.rerank` (`reranker.py:56`).
+   `record_stage` is a **no-op when no recorder is bound** (ContextVar is `None`) — so direct `SearchPipeline.search()` callers and the eval backends record nothing and incur a single `ContextVar.get()` per stage.
+4. After the pipeline returns, the handler records `total` (monotonic e2e, reusing the existing `monotonic()` pattern at `routes_route.py:71`), then emits one structured log record: `logger.info("stage timings", extra={"event_type": "stage_timings", "correlation_id": ..., "endpoint": ..., "collection": ..., "stage_timings_ms": {...}})`.
+5. The telemetry enqueue (`routes_route.py:111`, `mcp.py`) passes the `correlation_id` into the `TelemetryEntry.from_*` factory via a new optional kwarg, so the JSONL line and the log records share a join key. **Stage timings are not written to telemetry** — only the correlation ID (see Key Decisions).
+6. For `/explain` only, the route maps the recorder's collected timings into the new `ExplainResponse.stage_timings_ms` field. `/search` and `/route` do **not** gain a response field — their timings live only in the structured log.
+
+## Public Contract
+
+### Correlation ID
+- Response header `X-Request-ID` on every response (including `/health`, `401`, `5xx`).
+- Inbound `X-Request-ID` is honored when it matches `^[A-Za-z0-9._-]{1,128}$`; otherwise it is **discarded and regenerated** (log-injection / forgery guard — see Edge Cases).
+- New additive field on `TelemetryEntry` (`telemetry/entry.py:57`): `correlation_id: str | None = None`, added to `DOCUMENTED_SCHEMA_FIELDS` (`entry.py:39-54`). All three factories (`from_search_tool_result`, `from_route_response`, `from_error`) gain an optional `correlation_id` keyword. **No `query` parameter is added** — the structural no-raw-query invariant is untouched.
+
+### `stage_timings_ms` on `/explain` (delivers A4.3)
+Additive field on `ExplainResponse` (the A4 schema in `routes_explain.py`):
+
+```json
+{
+  "rerank": true,
+  "routing": { "...": "as A4" },
+  "collection": "docs",
+  "acl_filtered": false,
+  "results": [ { "...": "as A4" } ],
+  "near_misses": [ { "...": "as A4" } ],
+  "stage_timings_ms": {
+    "embed": 4.1,
+    "route": 1.8,
+    "vector": 6.2,
+    "fts": 3.0,
+    "fuse": 0.4,
+    "rerank": 88.5,
+    "total": 104.7
+  }
+}
+```
+
+- `stage_timings_ms: dict[str, float]`. Keys are present only for stages that **actually ran**: `route` appears only when `collection` was omitted; `rerank` is absent when `rerank=false`; `fts` is omitted when no FTS index exists (the leg degrades gracefully — `store.py:665-670`). `total` is always present.
+- Values are wall-elapsed milliseconds from `time.perf_counter()` deltas — **non-deterministic**. Tests assert on key *presence*, never on numeric values (see Acceptance Criteria #5).
+- MCP `explain` returns the identical structure (A4's REST↔MCP parity extends to this field).
+- Field is **omitted entirely** (not `null`) when stage timing is disabled via config (see below), keeping the A4 baseline response byte-identical for operators who turn it off.
+
+### Structured log record
+One record per instrumented request, emitted via the stock `logging` module (logger `"archon.search"`):
+```python
+logger.info("stage timings", extra={
+    "event_type": "stage_timings",
+    "correlation_id": "<uuid4hex>",
+    "endpoint": "search" | "route" | "explain" | "ingest",
+    "collection": "<name or None>",
+    "stage_timings_ms": {"embed": ..., "vector": ..., ..., "total": ...},
+})
+```
+Asserted via captured `LogRecord` attributes (`record.event_type`, `record.correlation_id`), **not** message substring — same mechanism A3 prescribes (`A3-...-brief.md:71`). Rendering these fields as JSON is **B7's** job, not B1's.
+
+## In Scope
+- New module `archon_search/observability.py` containing:
+  - `correlation_id: ContextVar[str | None]` and `new_correlation_id() -> str`.
+  - `StageRecorder` — accumulates `{stage_name: elapsed_ms}` using `time.perf_counter()`; repeated calls to the same stage **sum** (defensive; stages run once in practice).
+  - `_stage_recorder: ContextVar[StageRecorder | None]` and `@contextmanager record_stage(name)` that is a **no-op when the ContextVar is unset** (single `.get()` + early return).
+  - `@contextmanager bind_stage_recorder()` that installs a fresh recorder and resets the ContextVar in `finally`.
+  - `sanitize_request_id(raw: str | None) -> str | None` enforcing the charset/length rule.
+- New **pure-ASGI** `RequestContextMiddleware` in `archon_search/server/middleware_context.py` (implements `async def __call__(self, scope, receive, send)`, **not** `BaseHTTPMiddleware`). Mints/propagates the correlation ID, sets the ContextVar, sets `request.state.request_id`, and injects the `X-Request-ID` response header by wrapping `send`. Registered in `create_app` **after** the existing `add_middleware` calls (`app.py:121-122`) so it is outermost.
+- Stage instrumentation (additive `record_stage(...)` wrappers only — **no signature changes**) in: `Embedder.embed`/`embed_one` (`embedder.py:59-68`), `MultiCollectionRouter.rank` centroid loop (`router.py:141-146`), `SearchStore.hybrid_search` (`store.py:655`, `:662`, `:677-687`), `_hybrid_search_with_trace` (`store.py:946-948`, `:962-969`, `:1000-1004`), `Reranker.rerank` (`reranker.py:56`), and the ingest path `SearchPipeline.ingest_file` (`pipeline.py:150` parse, `:195` embed, `:202-204` persist).
+- `bind_stage_recorder()` + post-call structured-log emission in REST handlers `/search` (`routes_search.py`), `/route` (`routes_route.py`), `/explain` (`routes_explain.py`, from A4), and the three MCP tools in `mcp.py` (`search`, `search_with_context`, and A4's `explain`).
+- `correlation_id` field on `TelemetryEntry` + `DOCUMENTED_SCHEMA_FIELDS` + the three factories; threaded from the ContextVar at every existing enqueue site (`routes_route.py:111-161`, `mcp.py`, plus A3's `/search` error enqueue and A4's `/explain` enqueue).
+- `stage_timings_ms` field on `ExplainResponse` + population in the `/explain` route (depends on A4).
+- New `[observability]` config section parsed in `config.py` (mirroring the `[telemetry]` block at `config.py:200-223`): `stage_timings_enabled: bool = True`, `request_id_header: str = "X-Request-ID"`. Surfaced on the `SearchConfig` dataclass (`config.py:27-55`) and `archon-search config`.
+- OpenAPI: `stage_timings_ms` documented on the `/explain` response model.
+- Docs: `Architecture/160_operational_readiness_monitoring_and_reliability.md` (correlation-ID + stage-timing surface), `Architecture/210_performance_and_scalability.md` (new in-process measurement surface, still report-only — not an SLA), and `530_technical_debt_refactoring_roadmap.md:79` (mark `ARCH-3` resolved).
+
+## Out of Scope
+- **JSON log formatter, handler wiring, and log rotation** — owned by **B7** (item 25). B1 emits `extra={}` records on the stock logger; it does not touch `config.log_file` (`config.py:51`) handler setup. The `log_file` path is configured but unwired today (verified — no `dictConfig`/`basicConfig` in the tree); B1 does not fix that.
+- **Stage timings inside the telemetry JSONL.** Only `correlation_id` is added. Telemetry stays minimal (`entry.py`'s deliberately small surface); per-stage breakdown lives in logs and on `/explain`. Avoids inflating `MAX_ENTRY_BYTES` budgets (`writer.py:33`).
+- **`stage_timings_ms` on `/search` or `/route` responses.** Keeps the hot endpoints' response shape unchanged (same lean-response philosophy A4 applies to `/search`). Their timings are log-only.
+- **OpenTelemetry / OTLP spans / distributed tracing exporters** — future (B1.1). B1 is in-process timing + a correlation ID, not a tracing backend.
+- **A `/metrics` Prometheus endpoint or histograms** — future; B1 records per-request point values, not aggregates.
+- **Eval-harness latency *gating* on per-stage numbers.** Latency ceilings stay report-only (`210_performance_and_scalability.md:23`, `tests/eval/thresholds.toml`). B1 does not add a per-stage threshold gate.
+- **Timing the watcher/sync background paths** (`watcher.py`, `sync.py`) — request-path and ingest-job instrumentation only in v1.
+- **Sampling / rate-limiting of timing logs** — single record per request; high-QPS sampling deferred (single-process local service, low volume).
+- **Renaming the inconsistent logger names** (`"archon"` / `"archon.search"` / `"archon-search"`) — orthogonal cleanup; B1 adds fields, not a logging-namespace refactor.
+
+## Key Decisions
+- **Pure-ASGI middleware, not `BaseHTTPMiddleware`.** The existing `APIKeyMiddleware` is a `BaseHTTPMiddleware` (`middleware_auth.py:19`) and works only because it mutates `request.state` (which is the request object, shared across the call). `BaseHTTPMiddleware` runs the downstream app in a **separate anyio task**, so a `ContextVar` set inside `dispatch` before `call_next` does **not** propagate to the endpoint. Because B1's whole point is ContextVar propagation into the pipeline, `RequestContextMiddleware` MUST be a pure-ASGI middleware (set the ContextVar in `__call__` before awaiting the inner app, in the same task/context). This is the single most important correctness constraint in the brief.
+- **ContextVar propagation, not signature threading.** Adding a `correlation_id`/`recorder` parameter to `search`, `hybrid_search`, `rerank`, `rank`, `embed`, … would touch a dozen signatures and ripple into every caller and test. A ContextVar bound at the route layer reaches the awaited pipeline because they share the request task's context. The embed/rerank legs await `asyncio.to_thread(...)` (`embedder.py`, `reranker.py:56`) — but B1 times *around* the `await` in the event loop, never inside the worker thread, so thread-context copying is irrelevant.
+- **No-op-when-unbound is non-negotiable.** `record_stage` checks the ContextVar and returns immediately when unset. This guarantees: (a) the eval harness and its deterministic backends record nothing and stay byte-stable, (b) unit tests calling `SearchPipeline.search()` directly need no fixture, (c) library/import users pay one `ContextVar.get()` per stage. The instrumentation is invisible unless a server (or a test) explicitly binds a recorder.
+- **`perf_counter`, not `monotonic`/wall clock, for durations.** `time.perf_counter()` is the highest-resolution monotonic timer and is the correct primitive for elapsed-time measurement; the existing endpoints already use `monotonic()` for e2e (`routes_route.py:71`) and B1 keeps that for the `total` stage to avoid churn, while sub-stages use `perf_counter`.
+- **Correlation ID added to telemetry; raw query never is.** A `correlation_id` is a server-minted random token with no user content, so it satisfies the structural no-raw-query invariant by construction. The factories keep rejecting a `query` kwarg (`extra="forbid"`, `frozen=True` on the model, `entry.py:58`). This is verified by a structural test (Acceptance Criteria #7).
+- **Timings on `/explain` only, logs everywhere.** `/explain` is the sanctioned debug surface (A4); a response field there is expected. `/search`/`/route` stay lean — operators read their timings from the structured log keyed by the same correlation ID. This mirrors A4's refusal to add `?explain=true` polymorphism to `/search`.
+- **B1 owns records, B7 owns format.** Emitting `extra={}` fields is additive and harmless without a JSON formatter (they're just ignored by the default formatter). This lets B1 ship before B7 and lets B7 light them up later with zero B1 rework.
+- **Config default-on, cheaply disableable.** `stage_timings_enabled` defaults to `True` because overhead is sub-microsecond per stage, but operators on a hot single-core host can disable it; when off, `bind_stage_recorder()` installs nothing, `record_stage` no-ops, and `/explain` omits the field.
+
+## Edge Cases & Constraints
+
+| Scenario | Behavior |
+|---|---|
+| No recorder bound (library call, eval backend, unit test) | `record_stage` no-ops; zero timings collected; no error. |
+| `rerank=false` on `/explain` | `rerank` key absent from `stage_timings_ms`; results sorted by `rrf_score` (A4 contract unchanged). |
+| Collection pinned on `/explain` | `route` key absent (router never ran), consistent with A4's `routing: null`. |
+| No FTS index (`store.py:665-670` degradation) | `fts` key omitted; `vector`, `fuse`, `total` still present; no crash. |
+| Inbound `X-Request-ID` with newlines / control chars / >128 chars | Rejected by `sanitize_request_id`; a fresh UUID is minted. **Prevents log-injection and cross-request ID forgery.** |
+| Inbound `X-Request-ID` valid | Honored verbatim (supports tracing across an upstream gateway). |
+| Stage raises mid-timing (e.g. embedder throws) | The `record_stage` context manager records elapsed time in `finally` and re-raises; the partial timing is still logged on the error path (pairs with A3's error telemetry). |
+| `stage_timings_enabled=false` | No recorder bound; `/explain` omits `stage_timings_ms`; structured-log record not emitted; correlation ID still minted and still added to telemetry. |
+| Telemetry disabled (`telemetry_writer is None`, `app.py:105`) | Correlation ID still on logs + response header; no telemetry write (existing guard). |
+| MCP request | Correlation ID set by the shared ASGI middleware (MCP mounts on the same app — verify, see Open Questions); recorder bound inside the MCP tool handler. |
+| Concurrent requests | Each runs in its own task with its own ContextVar context; recorders and IDs do not leak across requests. |
+
+**Privacy / leakage:**
+- `correlation_id` is a random UUID — no path, no query, no principal. Safe in logs, telemetry, and the response header.
+- Stage timings are pure floats — no content. `source_path` already appears in `/explain` results per A4; B1 adds no new content exposure.
+- The no-raw-query invariant is preserved structurally; enforced by test (#7).
+
+## Open Questions
+- **Does FastMCP traffic pass through the ASGI `RequestContextMiddleware`?** CLAUDE.md states MCP "shares the same auth middleware," implying the ASGI stack wraps it. **Verify during planning.** Fallback: mint the correlation ID inside the MCP tool handlers if the middleware does not see MCP requests.
+- **Field name: `correlation_id` vs `request_id`?** Default to `correlation_id` on the telemetry entry (distinct from the existing per-entry `query_id`, `entry.py:60`) and `X-Request-ID` on the wire header (industry-standard header name). Confirm no operator-facing naming clash during planning.
+- **Should `/explain` also echo `correlation_id` in its JSON body?** Default **no** — operators read it from the `X-Request-ID` response header, matching A4's choice not to echo the query. Revisit only if integrators ask.
+- **Per-leg timing inside `hybrid_search` on the hot path** — confirm the `record_stage` no-op overhead is acceptable when bound (three extra `perf_counter` pairs per search). Expected negligible vs. model inference; validated by Acceptance Criteria #4's overhead note rather than a hard latency assertion.
+
+## Acceptance Criteria
+
+Concrete assertions a planner can convert to tests. Marker in brackets (`default` = unrestricted, `eval` = marker-gated).
+
+1. **Correlation ID on every response** [default] — `X-Request-ID` header present on `200`, on `401` (bad/no token), and on `/health` (exempt path). Header value matches the sanitize charset.
+2. **ID propagates to log + telemetry** [default] — a single `/route` call with telemetry enabled (writer → tmp dir) produces a JSONL line whose `correlation_id` equals the `stage_timings` log record's `correlation_id` equals the response `X-Request-ID`.
+3. **Inbound ID honored / sanitized** [default] — valid inbound `X-Request-ID` is echoed back unchanged; an inbound value containing `\n` or exceeding 128 chars is replaced by a fresh UUID (assert the response header differs from the malicious input and matches the charset).
+4. **No-op when unbound** [default] — call `SearchPipeline.search(...)` directly (no server, no `bind_stage_recorder`); assert it returns normally and that `_stage_recorder.get()` is `None` throughout (no timings recorded, no exception). Note overhead: one `ContextVar.get()` per stage.
+5. **`stage_timings_ms` keys on `/explain`** [default] — against A4's pre-built fixture (`tests/fixtures/explain_corpus/`): pinned collection + `rerank=true` → keys `== {embed, vector, fts, fuse, rerank, total}`; collectionless → adds `route`; `rerank=false` → `rerank` absent. **Assert keys only, never values** (timings are non-deterministic). Each value is a non-negative float.
+6. **Structured log record shape** [default] — `/search`, `/route`, `/explain` each emit exactly one `LogRecord` with `record.event_type == "stage_timings"`, a `record.correlation_id`, and a `record.stage_timings_ms` dict with a `total` key. Asserted via captured-record attributes, not message text.
+7. **Telemetry correlation_id (positive + structural)** [default] — (a) the JSONL line for a `/route` call contains `correlation_id` and not `query`; (b) structural: `"correlation_id" in inspect.signature(TelemetryEntry.from_route_response).parameters` and `"query" not in` it; (c) constructing `TelemetryEntry(query="x", ...)` still raises (model `extra="forbid"`).
+8. **FTS-absent degradation** [default] — corpus with no FTS index → `/explain` `stage_timings_ms` omits `fts`, includes `vector`/`fuse`/`total`; no error; `fts_score: null` still honored per A4.
+9. **REST↔MCP key parity** [default] — for identical inputs, `set(rest.stage_timings_ms) == set(mcp_explain.stage_timings_ms)` (values differ, keys match).
+10. **Disabled path** [default] — with `[observability].stage_timings_enabled=false`: `/explain` response has no `stage_timings_ms` key (A4 baseline response byte-shape restored); no `stage_timings` log record; `X-Request-ID` header and telemetry `correlation_id` still present.
+11. **Concurrency isolation** [default] — fire two concurrent `/search` requests with distinct inbound `X-Request-ID`s; assert each response echoes its own ID and neither recorder's timings leak into the other (distinct correlation IDs in the two log records).
+12. **Eval stability** [eval] — running `uv run pytest -m eval` with B1 merged produces the same `routing_accuracy` / retrieval metrics as baseline; instrumentation does not perturb ranking. (The eval backends bind no recorder, so this is a regression guard on the no-op path.)
+13. **Coverage** [default] — default `--cov-fail-under=85` stays green without amendment. Focused unit tests on `StageRecorder`, `sanitize_request_id`, and the middleware cover the new branches.
+
+### Test fixtures
+- **`/explain` timing tests (#5, #8, #9)** reuse A4's committed `tests/fixtures/explain_corpus/` (5–6 docs, ~30 chunks) and deterministic backends — determinism applies to *keys and ordering*, not to timing values.
+- **Telemetry / log tests (#2, #6, #7)** follow the `tests/server/test_routes_route_telemetry.py` pattern (minimal app with `app.state.telemetry_writer = writer_mock`) that A3 also builds on.
+- **Middleware tests (#1, #3, #11)** use a bare `create_app()` instance; ContextVar isolation is asserted with `asyncio.gather` of two requests.
+
+## Future Iterations
+- **B1.1**: OpenTelemetry / OTLP span export — turn the `StageRecorder` into spans on a configured exporter. Additive.
+- **B1.2**: `/metrics` (Prometheus) with per-stage latency histograms. Additive.
+- **B7** (sibling): JSON log formatter + rotation lights up the `extra={}` fields B1 emits.
+- **A4.1 / A4.2** (from A4): `matched_filters` / `expansions` fields land independently; `stage_timings_ms` composes with them on `ExplainResponse`.
+- **CLI**: `archon-search explain "query" --timings` pretty-print, and a `--trace` flag on `archon-search search`. Defer until requested.
+- **Sampling**: probabilistic timing-log emission if a high-QPS deployment ever makes per-request logging noisy.
+
+## Recommendation
+Ship this as Phase B's opener, **after** A1–A7 and **co-sequenced with A4** — the correlation-ID, instrumentation, and structured-log pieces are independent and can land first; the `stage_timings_ms` response field is a thin additive layer on A4's `/explain` once A4 merges. The work is bounded (~150–220 LOC of production code — one new module, one pure-ASGI middleware, ~8 `record_stage` wrappers, one telemetry field, one schema field — plus ~350–500 LOC of tests), but it is **not** "just timing calls." The three things that must not be compromised: **(1)** the middleware must be pure-ASGI so the ContextVar actually propagates (a `BaseHTTPMiddleware` here silently produces empty timings and is the most likely way to ship a broken version); **(2)** `record_stage` must be a true no-op when unbound, or the eval harness and the library-import contract break; **(3)** the correlation ID must reach telemetry **without** opening any door for raw query text — verify in review that the factories still forbid a `query` kwarg. Get those right and B1 turns every later ranking change (B3, B4, the Phase C HyDE/RAG-Fusion work) from "feels faster" into a number with a story.
