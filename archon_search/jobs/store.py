@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from archon_search._durable_io import atomic_write_json
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import JOBS_FILE, IngestJob, JobStatus
 
@@ -112,13 +113,11 @@ class JobStore:
     def _write_atomic(self) -> None:
         self._evict_old()  # evict BEFORE serializing so stale jobs are never written
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".tmp")
         data = [dataclasses.asdict(job) for job in self._jobs.values()]
         # Convert JobStatus enum values to strings for JSON serialisation
         for item in data:
             item["status"] = item["status"].value if hasattr(item["status"], "value") else item["status"]
-        tmp.write_text(json.dumps(data, indent=2))
-        tmp.rename(self._path)
+        atomic_write_json(self._path, data)
 
     def _evict_old(self) -> None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=_EVICTION_DAYS)

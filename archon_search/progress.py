@@ -4,10 +4,11 @@ from __future__ import annotations
 import enum
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+
+from archon_search._durable_io import atomic_write_json
 
 logger = logging.getLogger("archon")
 
@@ -107,17 +108,7 @@ class IndexingStateStore:
     def write(self, state: IndexingState) -> None:
         """Serialize and atomically write state to disk. Re-raises on failure."""
         self._state_dir.mkdir(parents=True, exist_ok=True)
-        tmp_path = self._state_file.with_suffix(".json.tmp")
-        try:
-            tmp_path.write_text(json.dumps(to_dict(state), indent=2), encoding="utf-8")
-            os.replace(tmp_path, self._state_file)
-        except Exception as exc:
-            logger.error("IndexingStateStore: failed to write state file: %s", exc)
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+        atomic_write_json(self._state_file, to_dict(state))
 
     def update_collection(self, name: str, progress: CollectionProgress) -> None:
         """Update a single collection entry, creating state if absent."""

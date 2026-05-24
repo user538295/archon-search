@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+from archon_search._durable_io import atomic_write_bytes
+
 logger = logging.getLogger("archon-search")
 
 _key_file_env = os.environ.get("ARCHON_SEARCH_KEY_FILE") or ""
@@ -81,55 +83,30 @@ def _validate_key(value: str) -> bool:
 
 def _generate_and_write() -> str:
     os.makedirs(KEY_FILE.parent, exist_ok=True)
-    tmp = KEY_FILE.parent / ".search.env.tmp"
     key = secrets.token_hex(32)  # 64 hex chars
+    payload = f"{ENV_VAR}={key}\n".encode()
+    tmp = KEY_FILE.with_suffix(KEY_FILE.suffix + ".tmp")
 
     for attempt in range(2):
         try:
-            fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            atomic_write_bytes(KEY_FILE, payload, mode=0o600)
+            return key
         except FileExistsError:
             if attempt == 0:
                 time.sleep(0.1)
                 existing = _load_from_file()
                 if existing is not None:
                     return existing
-                # Delete orphaned tmp and retry
                 try:
                     os.unlink(str(tmp))
                 except OSError:
                     pass
                 continue
-            else:
-                # Second attempt also failed
-                existing = _load_from_file()
-                if existing is not None:
-                    return existing
-                raise RuntimeError("key generation failed: concurrent write conflict")
-        else:
-            break
-    else:
-        existing = _load_from_file()
-        if existing is not None:
-            return existing
-        raise RuntimeError("key generation failed: concurrent write conflict")
-
-    try:
-        os.write(fd, f"{ENV_VAR}={key}\n".encode())
-    finally:
-        os.close(fd)
-
-    try:
-        os.replace(str(tmp), str(KEY_FILE))
-    except Exception as exc:
-        logger.error("key generation failed: %s: %s", type(exc).__name__, exc)
-        try:
-            os.unlink(str(tmp))
-        except OSError:
-            pass
-        raise
-
-    _chmod_600(KEY_FILE)
-    return key
+            existing = _load_from_file()
+            if existing is not None:
+                return existing
+            raise RuntimeError("key generation failed: concurrent write conflict")
+    raise RuntimeError("key generation failed: concurrent write conflict")
 
 
 def _chmod_600(path: Path) -> None:

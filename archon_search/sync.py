@@ -5,13 +5,14 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Callable
+
+from archon_search._durable_io import atomic_write_json
 
 if TYPE_CHECKING:
     from archon_search.pipeline import SearchPipeline
@@ -77,7 +78,7 @@ def manifest_remove_entry(manifest_path: Path, col_name: str) -> None:
     try:
         data = json.loads(manifest_path.read_text())
         data.pop(col_name, None)
-        manifest_path.write_text(json.dumps(data, indent=2))
+        atomic_write_json(manifest_path, data)
     except (json.JSONDecodeError, OSError):
         pass
 
@@ -883,8 +884,5 @@ class SearchCollectionSync:
             return set()
 
     def _write_manifest(self, manifest_path: Path, manifest: dict[str, str]) -> None:
-        """Write manifest atomically via a .tmp file."""
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = manifest_path.with_suffix(".json.tmp")
-        tmp_path.write_text(json.dumps(manifest, indent=2))
-        os.replace(tmp_path, manifest_path)
+        atomic_write_json(manifest_path, manifest)

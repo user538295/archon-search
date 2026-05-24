@@ -831,6 +831,31 @@ class TestSyncLocking:
         assert len(started) == 2
 
 
+class TestWriteManifest:
+    def test_write_manifest_delegates_to_atomic_write_json(self, tmp_path: Path) -> None:
+        from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+
+        syncer = SearchCollectionSync(pipeline=object())
+        manifest_path = tmp_path / "sync_manifest.json"
+        manifest = {"sessions": "/home/user/.archon/sessions"}
+
+        with patch("archon_search.sync.atomic_write_json") as mock_write:
+            syncer._write_manifest(manifest_path, manifest)
+
+        mock_write.assert_called_once_with(manifest_path, manifest)
+
+    def test_write_manifest_oserror_swallowed_by_safe_state_update(self, tmp_path: Path) -> None:
+        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus  # noqa: PLC0415
+        from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+
+        store = IndexingStateStore(tmp_path)
+        syncer = SearchCollectionSync(pipeline=object(), state_store=store)
+        progress = CollectionProgress(status=IndexingStatus.PENDING, total_files=1)
+
+        with patch("archon_search.progress.atomic_write_json", side_effect=OSError("disk full")):
+            syncer._safe_state_update("col", progress)
+
+
 class TestManifestRemoveEntry:
     def test_manifest_remove_entry_removes_key(self, tmp_path: Path) -> None:
         from archon_search.sync import manifest_remove_entry  # noqa: PLC0415
@@ -838,11 +863,10 @@ class TestManifestRemoveEntry:
         manifest_path = tmp_path / "sync_manifest.json"
         manifest_path.write_text(json.dumps({"sessions": "/home/user/.archon/sessions", "other": "/data"}))
 
-        manifest_remove_entry(manifest_path, "sessions")
+        with patch("archon_search.sync.atomic_write_json") as mock_write:
+            manifest_remove_entry(manifest_path, "sessions")
 
-        data = json.loads(manifest_path.read_text())
-        assert "sessions" not in data
-        assert "other" in data
+        mock_write.assert_called_once_with(manifest_path, {"other": "/data"})
 
     def test_manifest_remove_entry_noop_if_missing(self, tmp_path: Path) -> None:
         from archon_search.sync import manifest_remove_entry  # noqa: PLC0415
@@ -850,6 +874,16 @@ class TestManifestRemoveEntry:
         nonexistent = tmp_path / "no_such_manifest.json"
         # Must not raise
         manifest_remove_entry(nonexistent, "sessions")
+
+    def test_manifest_remove_entry_swallows_oserror(self, tmp_path: Path) -> None:
+        from archon_search.sync import manifest_remove_entry  # noqa: PLC0415
+
+        manifest_path = tmp_path / "sync_manifest.json"
+        manifest_path.write_text(json.dumps({"sessions": "/home/user/.archon/sessions"}))
+
+        with patch("archon_search.sync.atomic_write_json", side_effect=OSError("disk full")):
+            # Must return normally — best-effort
+            manifest_remove_entry(manifest_path, "sessions")
 
 
 # ---------------------------------------------------------------------------
