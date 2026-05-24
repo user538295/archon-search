@@ -523,7 +523,7 @@ class FilterFlags(BaseModel):
   - Checkpoint: `uv run pytest -m integration tests/test_store.py -k "backfill or mixed_format" -x`
 
 #### Task 6.2 — Benchmark threshold + baseline comparison
-- [ ] **File**: `tests/eval/thresholds.toml`, `tests/test_search_filtered_benchmark.py` (new, `-m benchmark`)
+- [x] **File**: `tests/eval/thresholds.toml`, `tests/test_search_filtered_benchmark.py` (new, `-m benchmark`)
 - **Depends on**: Task 4.1
 - **Description**:
   - Two-step threshold setting (no cargo-culted numbers):
