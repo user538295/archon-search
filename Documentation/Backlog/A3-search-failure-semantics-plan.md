@@ -3,7 +3,9 @@
 
 **Purpose**: Replace the silent `except: return empty` block in `archon_search/server/routes_search.py:76-84` with a re-raise-plus-telemetry pattern patterned after `routes_route.py:152-166` (with two deliberate additions: `exc_info=True` for traceback capture and `extra={"event_type": ...}` for structured filtering), so `/search` pipeline failures surface as HTTP 500 with structured logs and a telemetry entry.
 **Audience**: archon-search contributors implementing A3/CON-5 and reviewers of the resulting PR.
-**Status**: Draft
+**Status**: Implemented (2026-05-24)
+
+> **⚠️ Post-implementation deviation:** This plan originally stated that bare `raise` yields FastAPI's default `{"detail": "Internal Server Error"}` JSON envelope. During implementation it was discovered that bare `raise` in a FastAPI handler is caught by Starlette's `ServerErrorMiddleware` (not FastAPI's exception handler), which returns a **plain-text** body `Internal Server Error` with `Content-Type: text/plain` — not a JSON envelope. The bare re-raise is still the correct implementation. All operational docs were updated to describe the actual plain-text body. The inline references in this plan to `{"detail": "Internal Server Error"}` are stale planning text — see `BREAKING.md` and `Documentation/Architecture/140_error_handling_strategy.md` for the authoritative contract.
 
 ---
 
@@ -11,13 +13,13 @@
 
 `archon_search/server/routes_search.py:82-84` currently catches every `Exception` from `pipeline.search(...)`, logs at WARNING, and returns HTTP 200 with `results=[]` and `acl_filtered=False`. Clients (REST consumers, the CLI, IDE plugins wrapping `/search`) cannot distinguish "the corpus genuinely contains no hits" from "the embedder/store/reranker just crashed." Operators lose the failure entirely — no telemetry entry is emitted on this path, so `/telemetry/stats` and `/telemetry/entries` show clean output during an actual outage.
 
-`routes_route.py:152-166` already implements the correct pattern: enqueue a `TelemetryEntry.from_error(...)` (wrapped in its own try/except so a telemetry failure cannot break the route), log at ERROR with the exception type, and bare-re-raise. FastAPI converts the re-raised exception to HTTP 500 with its default `{"detail": "Internal Server Error"}` envelope. This plan applies that exact pattern to `/search`.
+`routes_route.py:152-166` already implements the correct pattern: enqueue a `TelemetryEntry.from_error(...)` (wrapped in its own try/except so a telemetry failure cannot break the route), log at ERROR with the exception type, and bare-re-raise. Starlette's `ServerErrorMiddleware` intercepts the unhandled exception and returns HTTP 500 with a **plain-text** body `Internal Server Error` (Content-Type: `text/plain`) — not a JSON envelope. *(This plan originally stated a JSON envelope; see implementation deviation note above.)* This plan applies that exact pattern to `/search`.
 
 The technical-debt roadmap tracks this as **CON-5** in `Documentation/Architecture/530_technical_debt_refactoring_roadmap.md`. The full design rationale, MCP scope decision, blast-radius analysis, and test-scope detail live in `Documentation/Backlog/search-failure-semantics-brief.md` — this plan is the implementation decomposition only.
 
 ## Goal
 
-After this plan ships, a failing search pipeline returns HTTP 500 with FastAPI's default `{"detail": "Internal Server Error"}` envelope, emits exactly one `TelemetryEntry` per failure with `endpoint="search"`, `status="internal_error"`, `error_kind="other"`, and `latency_ms > 0`, and logs at ERROR with a structured `event_type="search_pipeline_failure"` field. The 503 meta-lookup path at `routes_search.py:68-71` is unchanged. MCP `search` / `search_with_context` are unchanged (already return `McpErrorResponse`, distinguishable by payload shape — see brief §Out of Scope for caveat).
+After this plan ships, a failing search pipeline returns HTTP 500 with a **plain-text** body `Internal Server Error` from Starlette's `ServerErrorMiddleware` (not a JSON envelope — callers must NOT call `.json()` on this response), emits exactly one `TelemetryEntry` per failure with `endpoint="search"`, `status="internal_error"`, `error_kind="other"`, and `latency_ms > 0`, and logs at ERROR with a structured `event_type="search_pipeline_failure"` field. The 503 meta-lookup path at `routes_search.py:86-90` is unchanged. MCP `search` / `search_with_context` are unchanged (already return `McpErrorResponse`, distinguishable by payload shape — see brief §Out of Scope for caveat).
 
 ---
 
@@ -25,7 +27,7 @@ After this plan ships, a failing search pipeline returns HTTP 500 with FastAPI's
 
 ### In Scope
 - Replace the silent `except` block in `archon_search/server/routes_search.py:82-84` with a `routes_route.py:152-166`-shaped block: ERROR log with structured `event_type`, telemetry enqueue (wrapped in its own try/except), bare `raise`.
-- Flip the four existing tests in `tests/server/test_routes_search.py` (lines 140, 262, 299, 315) from asserting `status_code == 200` + empty results to asserting `status_code == 500` + `"detail" in response.json()`. Line 386 (`test_search_store_exception_returns_503`) is **untouched** — it covers the meta-lookup path.
+- Flip the four existing tests in `tests/server/test_routes_search.py` (lines 140, 262, 299, 315) from asserting `status_code == 200` + empty results to asserting `status_code == 500` only (**no** `response.json()` — the body is plain-text from Starlette's `ServerErrorMiddleware`). Line 386 (`test_search_store_exception_returns_503`) is **untouched** — it covers the meta-lookup path.
 - Create a new file `tests/server/test_routes_search_telemetry.py` mirroring `tests/server/test_routes_route_telemetry.py` for telemetry, log-record, enqueue-resilience, and sequential-state assertions.
 - Add a `BREAKING.md` entry describing the contract change.
 - Update `Documentation/Architecture/140_error_handling_strategy.md` to remove the "silent failure masking" caveat.
@@ -68,7 +70,7 @@ After this plan ships, a failing search pipeline returns HTTP 500 with FastAPI's
 - **Telemetry asymmetry post-fix**: the new 500 (pipeline) path emits telemetry but the existing 503 (meta-lookup) path still does not — operators filtering `/telemetry/entries` by `endpoint="search"` see pipeline failures but not meta-lookup failures until the 503 path is also instrumented.
 - **`error_kind="other"` is symmetric, not precise**: a more specific `search_failure` value would be cleaner but expands the public telemetry enum surface; deferred.
 - **WARNING → ERROR log-level bump**: operators with alert rules on ERROR-level logs from `archon.search` will start seeing transient pipeline blips. The structured `event_type="search_pipeline_failure"` field lets them filter precisely if needed.
-- **Bare re-raise yields a generic envelope**: clients see `{"detail": "Internal Server Error"}`, not a typed error code. Matches `routes_route.py` exactly.
+- **Bare re-raise yields a generic plain-text body**: clients see plain-text `Internal Server Error` from Starlette's `ServerErrorMiddleware` (not a JSON envelope — callers must use `response.text`, not `response.json()`). Matches `routes_route.py` exactly. *(This plan originally stated a JSON envelope; see implementation deviation note above.)*
 - **Log/log-extra asymmetry vs `/route`**: this implementation adds `exc_info=True` and `extra={"event_type": "search_pipeline_failure"}` that `routes_route.py:152-166` does not have; `/route` may be retrofitted later for parity.
 - **OpenAPI `responses=` omitted for symmetry with `routes_route.py`**: the `@router.post("/search", ...)` decorator does NOT advertise the new 500 in `responses={...}`, mirroring the existing `/route` decorator. Deliberate omission; revisit if/when both routes gain typed response docs.
 - **MCP `/search` asymmetry (pre-existing)**: `mcp.py:46` is missing TWO things vs the REST `/search` handler — (a) no `namespace=` kwarg is passed to `pipeline.search`, so MCP has no ACL filtering, AND (b) no `get_collection_meta` pre-lookup, so MCP has no collection-existence 404/503 gating. Not addressed by this plan.
@@ -146,7 +148,7 @@ except Exception as exc:
     - Line 315 — `test_search_reranker_failure_returns_empty` (rename to `test_search_reranker_failure_returns_500`).
   - Each test must assert:
     - `response.status_code == 500`
-    - `"detail" in response.json()`
+    - **Do NOT assert `"detail" in response.json()`** — the body is plain-text `Internal Server Error` from Starlette's `ServerErrorMiddleware`, not JSON. *(The plan originally required a JSON assertion; the implementation delivers plain text — see implementation deviation note above.)*
   - **Do NOT modify** the test at line 386 (`test_search_store_exception_returns_503`) — that is the meta-lookup failure path and stays 503.
   - **Do NOT add** telemetry-writer or log-record assertions to this file — those live in Task 1.3's new file.
   - **Modify the `_make_app` helper** in `tests/server/test_routes_search.py` so that the `TestClient(...)` constructor *inside* `_make_app` receives `raise_server_exceptions=False`. (`_make_app` constructs the `TestClient` internally and returns it — the flag is set at the constructor call site within `_make_app`, NOT on a separately instantiated `TestClient`.) This is a global change affecting every test in the file, which is safe: 200, 404, and 503 responses are unaffected by the flag — it only changes behavior on unhandled exceptions, converting them to 500 responses instead of propagating as `RuntimeError`. Without this, the bare `raise` introduced in Task 1.2 propagates as an unhandled exception in the four flipped tests. Precedent: `tests/server/test_routes_route_telemetry.py:195`.
@@ -157,7 +159,7 @@ except Exception as exc:
   - The four renamed tests are themselves the deliverable. They must each:
     - Use the existing pipeline-mock helper to make `pipeline.search(...)` raise `RuntimeError("boom")` (or the per-stage equivalent already in the file).
     - Make a `POST /search` request through `_make_app`.
-    - Assert `response.status_code == 500` and `"detail" in response.json()`.
+    - Assert `response.status_code == 500` only — **do NOT call `response.json()`**, the body is plain-text.
     - Use a `TestClient` constructed with `raise_server_exceptions=False` (via the updated `_make_app` helper).
   - Checkpoint: `uv run pytest tests/server/test_routes_search.py -v` — the four renamed tests fail; all other tests in the file still pass (line-386 503 test, healthy-path tests, validation tests).
 
@@ -171,7 +173,7 @@ except Exception as exc:
     - On exception: fetch `writer = getattr(request.app.state, "telemetry_writer", None)`; if non-None, enqueue a `TelemetryEntry.from_error(endpoint="search", status="internal_error", error_kind="other", latency_ms=...)` wrapped in its own `try / except Exception as tel_exc` that only emits a `logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)`.
     - Log the original exception via `logger.error("search pipeline failed: %s", type(exc).__name__, extra={"event_type": "search_pipeline_failure"}, exc_info=True)`.
     - Bare `raise` (no `HTTPException(500)`, no `JSONResponse`).
-  - The 503 meta-lookup path at lines 67-71 and the 404 path at lines 73-74 are unchanged.
+  - The 503 meta-lookup path at lines 86-90 and the 404 path at lines 92-93 are unchanged.
   - This task is the GREEN step: the four flipped tests from Task 1.1 now pass.
 - **Releasable**: after this task, `/search` returns HTTP 500 on pipeline exceptions and the route compiles into the existing FastAPI app without further wiring. The telemetry enqueue is a no-op when `app.state.telemetry_writer` is unset (preserves test-app behavior in `test_routes_search.py`).
 - **Tests (TDD)**:
@@ -254,7 +256,7 @@ except Exception as exc:
 - **Depends on**: Task 1.2
 - **Description**:
   - Append a new bullet under the existing `[next release]` heading in `BREAKING.md` — do NOT create a new heading. Match the existing entry style in the file.
-  - Content: one sentence describing the change — `/search` pipeline exceptions now return HTTP 500 with `{"detail": "Internal Server Error"}` instead of HTTP 200 with `results=[]`. The 503 meta-lookup path is unchanged. MCP `search` / `search_with_context` are unchanged.
+  - Content: one sentence describing the change — `/search` pipeline exceptions now return HTTP 500 with a **plain-text** body `Internal Server Error` (Content-Type: `text/plain`, not JSON — do not call `.json()`) instead of HTTP 200 with `results=[]`. The 503 meta-lookup path is unchanged. MCP `search` / `search_with_context` are unchanged.
   - Reference: `routes_search.py` exception path; this is CON-5 / A3.
 - **Releasable**: after this task, downstream consumers reading `BREAKING.md` see the contract change before upgrading.
 - **Tests (TDD)**: N/A — documentation. Checkpoint: `git diff BREAKING.md` shows the new entry; manual read confirms it follows the file's existing format.
@@ -274,7 +276,7 @@ except Exception as exc:
 - [ ] **File**: `Documentation/Architecture/600_api_reference_or_public_interface.md`
 - **Depends on**: Task 1.2
 - **Description**:
-  - Line 53 of this file currently states that `/search` returns HTTP 200 with empty results on pipeline failure. Rewrite that line (and any surrounding prose) to state that `/search` now returns HTTP 500 with `{"detail": "Internal Server Error"}` on pipeline failure; HTTP 200 with `results=[]` is reserved for genuine no-match results on a healthy pipeline. The 503 meta-lookup path is unchanged.
+  - Line 53 of this file currently states that `/search` returns HTTP 200 with empty results on pipeline failure. Rewrite that line (and any surrounding prose) to state that `/search` now returns HTTP 500 with a **plain-text** body `Internal Server Error` (not a JSON envelope) on pipeline failure; HTTP 200 with `results=[]` is reserved for genuine no-match results on a healthy pipeline. The 503 meta-lookup path is unchanged.
   - This is explicit because the Task 2.5 sweep should not be relied on to catch this canonical-API doc.
 - **Releasable**: after this task, the authoritative API-reference doc reflects the shipped behavior.
 - **Tests (TDD)**: N/A — documentation. Checkpoint: `git diff Documentation/Architecture/600_api_reference_or_public_interface.md` — only the `/search` status-code prose changed.
@@ -309,12 +311,12 @@ except Exception as exc:
 - **Releasable**: after this task, the feature is fully verified and all project documentation reflects the delivered behavior.
 - **Acceptance criteria** (must all pass):
   - `archon_search/server/routes_search.py` inner exception block matches the §Architecture snippet — bare `raise`, telemetry enqueue wrapped in its own try/except, ERROR log with `extra={"event_type": "search_pipeline_failure"}`.
-  - The 503 meta-lookup path at `routes_search.py:67-71` is functionally unchanged from the pre-change version.
+  - The 503 meta-lookup path at `routes_search.py:86-90` is functionally unchanged from the pre-change version.
   - `uv run pytest tests/server/test_routes_search.py -v` — all tests pass, including the unchanged line-386 503 test.
   - `uv run pytest tests/server/test_routes_search_telemetry.py -v` — all ten tests pass.
   - `uv run pytest tests/server/test_telemetry_e2e.py -v` — the two tests extended in Task 1.4 pass with the new `/search` REST error blocks.
   - `uv run pytest` — full default suite passes with `--cov-fail-under=85` still satisfied.
-  - `POST /search` against a deliberately broken pipeline (manual or scripted) returns HTTP 500 with body `{"detail": "Internal Server Error"}`.
+  - `POST /search` against a deliberately broken pipeline (manual or scripted) returns HTTP 500 with **plain-text** body `Internal Server Error` (Content-Type: `text/plain`). **Do NOT call `.json()` on this response** — it is not a JSON envelope. *(The plan originally stated a JSON body; the shipped implementation delivers plain text — see implementation deviation note above.)*
   - `/telemetry/entries` shows exactly one new entry per failed `/search` call with `endpoint="search"`, `status="internal_error"`, `error_kind="other"`, `latency_ms > 0`.
   - Server log on the failure path contains exactly one ERROR record from logger `archon.search` carrying attribute `event_type="search_pipeline_failure"`.
   - `BREAKING.md` contains the new entry from Task 2.1.

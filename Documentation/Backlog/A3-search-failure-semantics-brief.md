@@ -2,6 +2,8 @@
 
 > Ships BEFORE A4 (explain endpoint). A3 establishes the canonical pipeline-failure taxonomy (HTTP 500 for pipeline-stage exceptions, 503 reserved for meta-lookup); A4 will inherit it.
 
+> **⚠️ Post-implementation deviation (2026-05-24):** This brief originally stated that bare re-raise yields FastAPI's default `{"detail": "Internal Server Error"}` JSON envelope. During implementation it was discovered that bare `raise` in a FastAPI handler is caught by Starlette's `ServerErrorMiddleware` (not FastAPI's exception handler), which returns a **plain-text** body `Internal Server Error` with `Content-Type: text/plain` — not a JSON envelope. The bare re-raise is still the correct implementation; only the description of the resulting HTTP body was wrong. All operational docs (`BREAKING.md`, `140_error_handling_strategy.md`, `600_api_reference_or_public_interface.md`, both DeveloperGuides) were updated to describe the actual plain-text body. The inline claims in this brief and the plan that mention `{"detail": "Internal Server Error"}` are stale planning text and should not be relied upon — see `BREAKING.md` for the authoritative contract.
+
 ## Problem
 When `/search` pipeline stages (embedder, store, reranker) raise an exception, the route handler at `archon_search/server/routes_search.py:76-84` swallows the error, logs at WARNING, and returns HTTP 200 with `results=[]`. Clients and operators cannot distinguish "no hits" from "search is broken," which masks outages and corrupts downstream telemetry.
 
@@ -18,7 +20,7 @@ A failing search pipeline returns HTTP 500 with the standard error envelope, emi
 1. Client sends `POST /search` with a valid query and collection.
 2. Pipeline stage (embedder, LanceDB hybrid search, ACL filter, or reranker) raises an exception.
 3. Route handler logs the failure at ERROR (not WARNING) with a structured `event_type="search_pipeline_failure"` field so operators can alert precisely, then enqueues a `TelemetryEntry.from_error(...)` with `endpoint="search"`, `status="internal_error"` (the `Status` StrEnum value — there is no integer status member), `error_kind="other"` (matching `routes_route.py:159` for symmetry), and the measured latency.
-4. Route handler bare-re-raises the exception (matching `routes_route.py:166`); FastAPI converts it to HTTP 500 with its default `{"detail": "Internal Server Error"}` envelope.
+4. Route handler bare-re-raises the exception (matching `routes_route.py:166`); Starlette's `ServerErrorMiddleware` intercepts the unhandled exception and returns HTTP 500 with a **plain-text** body `Internal Server Error` (Content-Type: `text/plain`) — not a JSON envelope. *(The brief originally claimed a JSON envelope; see implementation note above.)*
 5. Client observes 5xx and applies its own retry/escalation policy.
 6. Operator sees the failure in `/telemetry/entries` and in the structured log.
 
@@ -41,14 +43,14 @@ A failing search pipeline returns HTTP 500 with the standard error envelope, emi
 - **Changing `SearchResponse` schema.** Reason: failure is signalled by HTTP status alone; no field changes needed.
 
 ## Key Decisions
-- **HTTP 500 via bare re-raise, not explicit `HTTPException(500, detail=...)`**: Matches `routes_route.py:166` exactly and yields FastAPI's default `{"detail": "Internal Server Error"}`. Symmetric pattern across both endpoints; no custom envelope to maintain.
+- **HTTP 500 via bare re-raise, not explicit `HTTPException(500, detail=...)`**: Matches `routes_route.py:166` exactly. Produces plain-text `Internal Server Error` from Starlette's `ServerErrorMiddleware` (not a JSON envelope — see implementation note above). Symmetric pattern across both endpoints; no custom envelope to maintain.
 - **`status="internal_error"`, `error_kind="other"`**: Matches `routes_route.py:159` (the `error_kind` reference) for symmetry. Telemetry consumers filtering on `status="internal_error"` already get both endpoints. (`status` is the `Status` StrEnum — `ok`/`validation_error`/`timeout`/`internal_error`; there is no integer member.)
 - **Avoid 503 for pipeline errors**: Reserved for the existing meta-lookup failure path at `routes_search.py:68-71`. Keeping 500 vs 503 distinct preserves the "metadata unreachable" vs "pipeline broke" distinction for operators.
 - **Three-stage test coverage (store + embedder + reranker)**: Spec asks for a store-failure test; we extend by symmetry to all three pipeline stages currently unguarded. Timeout and ACL paths deferred (no current evidence they're load-bearing failure modes).
 - **BREAKING.md + release-notes announcement**: Project convention per `CLAUDE.md`; no feature flag (would leave dead config behind).
 
 ## Edge Cases & Constraints
-- **Meta lookup failure still returns 503** (existing behavior at `routes_search.py:68-71`) — unchanged. Clients see 503 for "collection metadata unreachable" and 500 for "pipeline broke." Note: that 503 path currently still lacks a telemetry enqueue; tracked separately, out of scope here. **Telemetry asymmetry post-fix**: after this change the 500 (pipeline) path emits telemetry but the 503 (meta-lookup) path still does not — operators filtering search-endpoint errors via `/telemetry/entries` will see pipeline failures but not meta-lookup failures until the 503 path is also instrumented.
+- **Meta lookup failure still returns 503** (existing behavior at `routes_search.py:86-90`) — unchanged. Clients see 503 for "collection metadata unreachable" and 500 for "pipeline broke." Note: that 503 path currently still lacks a telemetry enqueue; tracked separately, out of scope here. **Telemetry asymmetry post-fix**: after this change the 500 (pipeline) path emits telemetry but the 503 (meta-lookup) path still does not — operators filtering search-endpoint errors via `/telemetry/entries` will see pipeline failures but not meta-lookup failures until the 503 path is also instrumented.
 - **Empty result with a healthy pipeline** still returns HTTP 200 with `results=[]`. The fix only affects the *exception* path.
 - **ACL filter failure → 500 (fail-closed)**: if ACL filtering raises, returning 500 rather than potentially leaking unfiltered results is the conservative, correct choice.
 - **`asyncio.CancelledError` is a `BaseException`**, not `Exception`. The new `except Exception` block does not catch it — cancellation behavior is unchanged.
@@ -64,7 +66,7 @@ A failing search pipeline returns HTTP 500 with the standard error envelope, emi
 **File split**: the existing `tests/server/test_routes_search.py` uses `_make_app` via `create_app()` and has no telemetry-writer plumbing, while `tests/server/test_routes_route_telemetry.py` builds a separate minimal app with `app.state.telemetry_writer = writer_mock`. Mirror that pattern: the four flipped tests in `tests/server/test_routes_search.py` assert **status code + envelope only** (no telemetry/log assertions), and all telemetry / log-record assertions live in a **new file** `tests/server/test_routes_search_telemetry.py` patterned after `test_routes_route_telemetry.py`.
 
 Flipped tests in `tests/server/test_routes_search.py` must assert:
-- `response.status_code == 500` and `"detail" in response.json()` (FastAPI default envelope).
+- `response.status_code == 500` only. **Do not call `response.json()`** — the body is plain-text `Internal Server Error` from Starlette's `ServerErrorMiddleware`, not a JSON envelope. *(The brief originally required a JSON assertion; the implementation delivers plain text — see implementation note above.)*
 
 New `tests/server/test_routes_search_telemetry.py` must assert (approximately 10 telemetry tests in total, covering per-stage failures plus serialization error, writer=None, and privacy-sentinel cases — see the A3 plan for the full enumerated list). Per failure stage — store, embedder, reranker:
 - The telemetry writer was called once with `endpoint="search"`, `status="internal_error"`, `error_kind="other"`, and `latency_ms > 0`.
