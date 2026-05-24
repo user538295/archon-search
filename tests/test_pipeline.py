@@ -2127,3 +2127,425 @@ async def test_delete_document_correct_namespace_succeeds() -> None:
 
     assert deleted == 3
     store.delete_document.assert_awaited_once_with("col-a", doc_id)
+
+
+# ===========================================================================
+# Task 3.3: filters kwarg forwarding + attrition WARNING
+# ===========================================================================
+
+
+def _make_search_result(n: int, acl: list[str] | None = None) -> "SearchResult":
+    """Build a minimal SearchResult for filter/ACL tests."""
+    doc_id = f"{'a' * 63}{n % 10}"
+    return SearchResult(
+        doc_id=doc_id,
+        chunk_id=f"{doc_id}-000000",
+        text=f"result {n}",
+        score=0.5,
+        source_path=f"/path/{n}.md",
+        acl=acl,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_search_forwards_filters_to_store() -> None:
+    """filters kwarg is forwarded to store.hybrid_search."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.filters import SearchFilters
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    store.hybrid_search = AsyncMock(return_value=[])
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    filters = SearchFilters(file_type="md")
+    await pipeline.search("test query", "col", filters=filters)
+
+    store.hybrid_search.assert_awaited_once()
+    call_kwargs = store.hybrid_search.call_args.kwargs
+    assert call_kwargs.get("filters") is filters
+
+
+@pytest.mark.asyncio
+async def test_pipeline_warns_on_filter_plus_acl_under_delivery(caplog) -> None:
+    """WARNING emitted when filters set + ACL drops results below top_k_return."""
+    import logging
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.filters import SearchFilters
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    # Store returns top_k_retrieve=10 results; 8 have ACL that denies default namespace
+    restricted_results = [_make_search_result(i, acl=["tenantX"]) for i in range(8)]
+    open_results = [_make_search_result(i + 100, acl=None) for i in range(2)]
+    all_results = open_results + restricted_results  # 2 pass, 8 denied
+
+    class StubStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+            return all_results
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,  # survivors (2) < top_k_return (5) → warning
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    filters = SearchFilters(file_type="md")
+
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        await pipeline.search("query", "col", filters=filters)
+
+    warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("filter+ACL combined attrition" in m for m in warning_messages), (
+        f"Expected attrition warning. Got: {warning_messages}"
+    )
+    # filter_flags must mention file_type
+    attrition_msg = next(m for m in warning_messages if "filter+ACL combined attrition" in m)
+    assert "file_type" in attrition_msg
+    # acl_denied count (8) must appear
+    assert "acl_denied=8" in attrition_msg
+
+
+@pytest.mark.asyncio
+async def test_pipeline_no_warning_when_no_filter_set(caplog) -> None:
+    """No WARNING when filters=None even if ACL drops results below top_k_return."""
+    import logging
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    restricted_results = [_make_search_result(i, acl=["tenantX"]) for i in range(8)]
+    open_results = [_make_search_result(i + 100, acl=None) for i in range(2)]
+
+    class StubStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+            return open_results + restricted_results
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        await pipeline.search("query", "col", filters=None)
+
+    attrition_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and "filter+ACL combined attrition" in r.message
+    ]
+    assert attrition_warnings == [], "No attrition warning should be emitted when filters=None"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_no_warning_when_pool_above_top_k(caplog) -> None:
+    """No WARNING when survivors after ACL meet or exceed top_k_return."""
+    import logging
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.filters import SearchFilters
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    # 6 open results — all pass ACL; 6 >= top_k_return(5) → no warning
+    open_results = [_make_search_result(i, acl=None) for i in range(6)]
+
+    class StubStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+            return open_results
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    filters = SearchFilters(file_type="md")
+
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        await pipeline.search("query", "col", filters=filters)
+
+    attrition_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and "filter+ACL combined attrition" in r.message
+    ]
+    assert attrition_warnings == [], "No warning when survivors >= top_k_return"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_pipeline_search_filter_then_acl_order() -> None:
+    """Rows excluded by filter are never seen by apply_acl_filter (spy on input count)."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.filters import SearchFilters
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    # Store returns 5 results; filter reduces to 3 (store is responsible for pre-filter)
+    filtered_results = [_make_search_result(i, acl=None) for i in range(3)]
+
+    store = MagicMock()
+    store.hybrid_search = AsyncMock(return_value=filtered_results)
+
+    acl_inputs: list[int] = []
+
+    import archon_search.pipeline as _pipeline_mod
+
+    original_apply_acl = _pipeline_mod.apply_acl_filter
+
+    def spy_acl_filter(items, get_acl, namespace):
+        acl_inputs.append(len(items))
+        return original_apply_acl(items, get_acl, namespace)
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    filters = SearchFilters(file_type="md")
+
+    with patch.object(_pipeline_mod, "apply_acl_filter", side_effect=spy_acl_filter):
+        await pipeline.search("query", "col", filters=filters)
+
+    # ACL filter received exactly the 3 store results (filter already applied by store)
+    assert acl_inputs[0] == 3, (
+        f"apply_acl_filter should see store-filtered results (3), got {acl_inputs[0]}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_pipeline_search_filter_then_reranker_order() -> None:
+    """Reranker sees only the filter+ACL survivors."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.filters import SearchFilters
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.reranker import Reranker
+
+    # 4 results from store: 2 pass ACL, 2 are restricted
+    open_results = [_make_search_result(i, acl=None) for i in range(2)]
+    restricted_results = [_make_search_result(i + 10, acl=["tenantX"]) for i in range(2)]
+
+    store = MagicMock()
+    store.hybrid_search = AsyncMock(return_value=open_results + restricted_results)
+
+    reranker_inputs: list[list] = []
+
+    class SpyRerankerBackend:
+        def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+            reranker_inputs.append([p[1] for p in pairs])
+            return [0.5] * len(pairs)
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=Reranker(SpyRerankerBackend()),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    filters = SearchFilters(file_type="md")
+    await pipeline.search("query", "col", filters=filters)
+
+    # Reranker must receive only the 2 open results
+    assert len(reranker_inputs) == 1
+    assert len(reranker_inputs[0]) == 2, (
+        f"Reranker should see 2 survivors, got {len(reranker_inputs[0])}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_no_warning_when_filters_has_no_active_fields(caplog) -> None:
+    """No WARNING when SearchFilters() is passed with all fields at defaults (no real filter set)."""
+    import logging
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.filters import SearchFilters
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    # 8 restricted + 2 open -- survivors (2) < top_k_return (5)
+    restricted = [_make_search_result(i, acl=["tenantX"]) for i in range(8)]
+    open_results = [_make_search_result(i + 100, acl=None) for i in range(2)]
+
+    class StubStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+            return open_results + restricted
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    # SearchFilters() with all defaults — filter_flags will be empty, warning must NOT fire
+    filters = SearchFilters()
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        await pipeline.search("query", "col", filters=filters)
+
+    assert not any(
+        "filter+ACL combined attrition" in r.message
+        for r in caplog.records
+    ), f"No attrition warning expected for empty filter. Got: {[r.message for r in caplog.records]}"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_search_with_context_forwards_filters_to_store() -> None:
+    """search_with_context forwards filters kwarg to the inner search -> store.hybrid_search call."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.filters import SearchFilters
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    store.hybrid_search = AsyncMock(return_value=[])
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    filters = SearchFilters(file_type="md")
+    await pipeline.search_with_context("test query", "col", filters=filters)
+
+    store.hybrid_search.assert_awaited_once()
+    call_kwargs = store.hybrid_search.call_args.kwargs
+    assert call_kwargs.get("filters") is filters, (
+        f"Expected filters to be forwarded; got: {call_kwargs}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_warns_when_filter_alone_causes_under_delivery(caplog) -> None:
+    """WARNING fires when filters cause under-delivery even with acl_denied=0."""
+    import logging
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.filters import SearchFilters
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    # Store returns only 3 results (filter was restrictive), all pass ACL
+    open_results = [_make_search_result(i, acl=None) for i in range(3)]
+
+    class StubStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+            return open_results  # only 3, all open
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,  # 3 < 5 → warning should fire
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    filters = SearchFilters(file_type="md")
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        await pipeline.search("query", "col", filters=filters)
+
+    warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("filter+ACL combined attrition" in m for m in warning_messages), (
+        f"Expected attrition warning when filters cause under-delivery. Got: {warning_messages}"
+    )
+    attrition_msg = next(m for m in warning_messages if "filter+ACL combined attrition" in m)
+    assert "acl_denied=0" in attrition_msg, f"Expected acl_denied=0 in: {attrition_msg}"
+    assert "file_type" in attrition_msg
+
+
+@pytest.mark.asyncio
+async def test_pipeline_warns_when_store_returns_zero_results_with_filters(caplog) -> None:
+    """WARNING fires when store returns 0 results with active filters (zero-result boundary)."""
+    import logging
+    from archon_search.chunker import DocumentChunker
+    from archon_search.filters import SearchFilters
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    class StubStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+            return []  # zero results — filter was very restrictive
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    filters = SearchFilters(file_type="md")
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        result = await pipeline.search("query", "col", filters=filters)
+
+    assert result.results == []
+    warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("filter+ACL combined attrition" in m for m in warning_messages), (
+        f"Expected attrition warning for zero results. Got: {warning_messages}"
+    )
+    attrition_msg = next(m for m in warning_messages if "filter+ACL combined attrition" in m)
+    assert "0/" in attrition_msg, f"Expected '0/' in: {attrition_msg}"
+    assert "acl_denied=0" in attrition_msg

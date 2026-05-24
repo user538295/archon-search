@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestedBy, IngestResult, SearchResult
 from archon_search.acl import apply_acl_filter, resolve_acl
+from archon_search.filters import SearchFilters
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.collection_meta import CollectionMeta
 from archon_search.description_generator import _should_regenerate, generate_description
@@ -315,18 +316,48 @@ class SearchPipeline:
     # ------------------------------------------------------------------
 
     async def search(
-        self, query: str, collection: str, namespace: str = DEFAULT_NAMESPACE
+        self,
+        query: str,
+        collection: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        *,
+        filters: SearchFilters | None = None,
     ) -> SearchPipelineResult:
         vector = await self._embedder.embed_one(query)
-        candidates = await self.store.hybrid_search(collection, vector, query, top_k=self._top_k_retrieve)
+        candidates = await self.store.hybrid_search(
+            collection, vector, query, top_k=self._top_k_retrieve, filters=filters
+        )
+        candidates_before_acl = len(candidates)
         candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, namespace)
+        acl_denied = candidates_before_acl - len(candidates)
+        if filters is not None and len(candidates) < self._top_k_return:
+            filter_flags = {
+                k: v
+                for k, v in filters.model_dump().items()
+                if k != "include_metadata" and v is not None and v is not False
+            }
+            if filter_flags:
+                logger.warning(
+                    "filter+ACL combined attrition: only %d/%d candidates reached reranker"
+                    " (filter_flags=%r, acl_denied=%d)",
+                    len(candidates),
+                    self._top_k_return,
+                    filter_flags,
+                    acl_denied,
+                )
         results = await self._reranker.rerank(query, candidates, top_k=self._top_k_return)
         return SearchPipelineResult(results=results, acl_filtered=acl_filtered)
 
     async def search_with_context(
-        self, query: str, collection: str, context_window: int = 1, namespace: str = DEFAULT_NAMESPACE
+        self,
+        query: str,
+        collection: str,
+        context_window: int = 1,
+        namespace: str = DEFAULT_NAMESPACE,
+        *,
+        filters: SearchFilters | None = None,
     ) -> list[dict[str, Any]]:
-        result_obj = await self.search(query, collection, namespace=namespace)
+        result_obj = await self.search(query, collection, namespace=namespace, filters=filters)
         output: list[dict[str, Any]] = []
 
         for result in result_obj.results:

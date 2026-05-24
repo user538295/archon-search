@@ -384,7 +384,7 @@ class FilterFlags(BaseModel):
   - Checkpoint: `uv run pytest tests/test_store.py -k "glob or mixed_format" -x`
 
 #### Task 3.3 — `SearchPipeline.search` / `search_with_context` forward filters + attrition WARNING
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 3.2
 - **Description**:
   - Add `filters: SearchFilters | None = None` to `SearchPipeline.search` and `SearchPipeline.search_with_context` (keyword-only).
