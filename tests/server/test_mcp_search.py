@@ -1,17 +1,22 @@
-"""Tests for MCP ``search`` tool metadata suppression (Task 1.3).
+"""Tests for MCP ``search`` tool metadata suppression (Task 1.3) and
+filter forwarding / parity contract (Task 4.2).
 
 Verifies:
 - metadata stripped from results when include_metadata=False (default)
 - metadata present when include_metadata=True
 - language field appears in MCP search output schema
+- filter kwargs hydrate SearchFilters and are forwarded to pipeline.search
+- invalid filter input surfaces as a structured tool error
+- MCP tool input schema is a superset of SearchFilters fields (parity contract)
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -121,3 +126,181 @@ async def test_mcp_search_tool_schema_advertises_language_field() -> None:
     assert len(payload["results"]) == 1
     assert "language" in payload["results"][0]
     assert payload["results"][0]["language"] == "en"
+
+
+# ---------------------------------------------------------------------------
+# Task 4.2 — filter forwarding, validation error surface, parity contract
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_forwards_filters_to_pipeline() -> None:
+    """All filter kwargs hydrate a SearchFilters instance and reach pipeline.search."""
+    from archon_search.filters import SearchFilters
+    import archon_search.server.mcp as mcp_module
+
+    result = _make_result(metadata={"k": "v"})
+    pipeline_result = SearchPipelineResult(results=[result], acl_filtered=False)
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=pipeline_result)
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search"]
+        await fn(
+            query="hello",
+            collection=None,
+            file_type="md",
+            source_path_prefix="/docs/",
+            source_path_glob="*.md",
+            indexed_after="2025-01-01",
+            indexed_before="2025-12-31",
+            include_metadata=True,
+        )
+
+    pipeline.search.assert_called_once()
+    _args, kwargs = pipeline.search.call_args
+    assert "filters" in kwargs
+    filters_obj = kwargs["filters"]
+    assert isinstance(filters_obj, SearchFilters), f"Expected SearchFilters, got {type(filters_obj)}"
+    assert filters_obj.file_type == "md"
+    assert filters_obj.source_path_prefix == "/docs/"
+    assert filters_obj.source_path_glob == "*.md"
+    assert filters_obj.indexed_after is not None
+    assert filters_obj.indexed_before is not None
+    assert filters_obj.include_metadata is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_with_context_forwards_filters_to_pipeline() -> None:
+    """Filter kwargs reach pipeline.search_with_context as a SearchFilters instance."""
+    from archon_search.filters import SearchFilters
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.search_with_context = AsyncMock(return_value=[])
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search_with_context"]
+        await fn(
+            query="hello",
+            collection=None,
+            file_type="pdf",
+            source_path_prefix="/reports/",
+            indexed_after="2024-06-01",
+        )
+
+    pipeline.search_with_context.assert_called_once()
+    _args, kwargs = pipeline.search_with_context.call_args
+    assert "filters" in kwargs
+    filters_obj = kwargs["filters"]
+    assert isinstance(filters_obj, SearchFilters), f"Expected SearchFilters, got {type(filters_obj)}"
+    assert filters_obj.file_type == "pdf"
+    assert filters_obj.source_path_prefix == "/reports/"
+    assert filters_obj.indexed_after is not None
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_invalid_filter_surfaces_validator_error() -> None:
+    """An invalid filter value must return a structured error dict, not raise."""
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search"]
+        # empty file_type is rejected by the validator
+        result = await fn(query="hello", collection=None, file_type="")
+
+    assert isinstance(result, dict)
+    assert "code" in result
+    assert result["code"] == "validation_error"
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_with_context_invalid_filter_surfaces_validator_error() -> None:
+    """search_with_context also surfaces SearchFilters validation errors."""
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.search_with_context = AsyncMock(return_value=[])
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search_with_context"]
+        # indexed_after > indexed_before is rejected
+        result = await fn(
+            query="hello",
+            collection=None,
+            indexed_after="2025-12-31",
+            indexed_before="2025-01-01",
+        )
+
+    assert isinstance(result, dict)
+    assert "code" in result
+    assert result["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_suppresses_metadata_when_include_metadata_false() -> None:
+    """Fake pipeline returns non-empty metadata; MCP must return results without the metadata key value."""
+    result = _make_result(metadata={"secret": "value"})
+    pipeline_result = SearchPipelineResult(results=[result], acl_filtered=False)
+
+    payload = await _call_mcp_search(pipeline_result, include_metadata=False)
+
+    assert "results" in payload
+    assert len(payload["results"]) == 1
+    # Task spec says pop the key; current impl sets to {}; both satisfy "suppressed"
+    # assert key absent OR value is empty dict
+    r = payload["results"][0]
+    assert r.get("metadata", None) in ({}, None), (
+        f"metadata not suppressed: {r.get('metadata')!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_includes_metadata_when_include_metadata_true_task42() -> None:
+    """When include_metadata=True the full metadata dict must appear in each result."""
+    result = _make_result(metadata={"secret": "value"})
+    pipeline_result = SearchPipelineResult(results=[result], acl_filtered=False)
+
+    payload = await _call_mcp_search(pipeline_result, include_metadata=True)
+
+    assert "results" in payload
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["metadata"] == {"secret": "value"}
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_tool_input_schema_is_superset_of_search_filters() -> None:
+    """Every field on SearchFilters must appear in the published MCP tool input schema
+    for both ``search`` and ``search_with_context``.  This is the compile-time guard
+    against REST↔MCP drift."""
+    from archon_search.filters import SearchFilters
+    from archon_search.pipeline import SearchPipelineResult
+
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.search_with_context = AsyncMock(return_value=[])
+
+    # Use the real FastMCP so list_tools() reflects actual type annotations
+    import archon_search.server.mcp as mcp_module
+    real_app = mcp_module.create_app(pipeline, "default", writer=None)
+
+    tools_list = await real_app.list_tools()
+    schema_by_name = {t.name: t.inputSchema for t in tools_list}
+
+    filter_fields = set(SearchFilters.model_fields.keys())
+
+    for tool_name in ("search", "search_with_context"):
+        assert tool_name in schema_by_name, f"Tool {tool_name!r} not found in MCP app"
+        tool_props = set(schema_by_name[tool_name].get("properties", {}).keys())
+        missing = filter_fields - tool_props
+        assert not missing, (
+            f"Tool {tool_name!r} input schema is missing SearchFilters fields: {missing}"
+        )

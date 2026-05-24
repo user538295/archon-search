@@ -12,6 +12,9 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from pydantic import ValidationError
+
+from archon_search.filters import SearchFilters
 from archon_search.key_manager import load_or_generate_key
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingState, IndexingStatus
@@ -52,11 +55,29 @@ def create_app(
         query: str,
         collection: str | None = None,
         include_metadata: bool = False,
+        file_type: str | None = None,
+        source_path_prefix: str | None = None,
+        source_path_glob: str | None = None,
+        indexed_after: str | None = None,
+        indexed_before: str | None = None,
+        language: str | None = None,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search."""
         start = monotonic()
         try:
-            result_obj = await pipeline.search(query, collection or default_collection)
+            try:
+                filters = SearchFilters(
+                    file_type=file_type,
+                    source_path_prefix=source_path_prefix,
+                    source_path_glob=source_path_glob,
+                    indexed_after=indexed_after,
+                    indexed_before=indexed_before,
+                    language=language,
+                    include_metadata=include_metadata,
+                )
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code="validation_error")
+            result_obj = await pipeline.search(query, collection or default_collection, filters=filters)
             if writer is not None:
                 try:
                     writer.enqueue(
@@ -100,12 +121,30 @@ def create_app(
         collection: str | None = None,
         context_window: int = 1,
         include_metadata: bool = False,
+        file_type: str | None = None,
+        source_path_prefix: str | None = None,
+        source_path_glob: str | None = None,
+        indexed_after: str | None = None,
+        indexed_before: str | None = None,
+        language: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search and return surrounding chunks for richer context."""
         start = monotonic()
         try:
+            try:
+                filters = SearchFilters(
+                    file_type=file_type,
+                    source_path_prefix=source_path_prefix,
+                    source_path_glob=source_path_glob,
+                    indexed_after=indexed_after,
+                    indexed_before=indexed_before,
+                    language=language,
+                    include_metadata=include_metadata,
+                )
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code="validation_error")
             results = await pipeline.search_with_context(
-                query, collection or default_collection, context_window
+                query, collection or default_collection, context_window, filters=filters
             )
             if writer is not None:
                 try:
@@ -122,6 +161,7 @@ def create_app(
             output = []
             for r in results:
                 result_dict = asdict(r["result"])
+                result_dict.pop("vector", None)
                 if not include_metadata:
                     # empty dict not key-absent, consistent with REST surface
                     result_dict["metadata"] = {}

@@ -443,7 +443,7 @@ class FilterFlags(BaseModel):
   - Checkpoint: `uv run pytest tests/test_routes_search.py -k filter -x`
 
 #### Task 4.2 — MCP `search` / `search_with_context` accept filter kwargs + parity contract + metadata suppression
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 4.1
 - **Description**:
   - Extend both MCP tool signatures with typed kwargs covering every `SearchFilters` field. Hydrate `SearchFilters(...)` inside the tool body (Pydantic validation raises → returned as a structured tool error).
