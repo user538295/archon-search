@@ -459,7 +459,7 @@ class FilterFlags(BaseModel):
   - Checkpoint: `uv run pytest tests/server/test_mcp_search.py -k filter -x`
 
 #### Task 4.3 — Telemetry `FilterFlags` (typed submodel)
-- [ ] **File**: `archon_search/telemetry/entry.py`, callers in `routes_search.py` / `mcp.py`
+- [x] **File**: `archon_search/telemetry/entry.py`, callers in `routes_search.py` / `mcp.py`
 - **Depends on**: Task 4.2
 - **Description**:
   - Add a typed `FilterFlags(BaseModel)` submodel with `model_config = ConfigDict(extra="forbid", frozen=True)` and explicit boolean fields (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `include_metadata`). `language` is deliberately omitted — rejected at validation, never reaches telemetry.

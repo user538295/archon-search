@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from time import monotonic
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
 from archon_search.filters import SearchFilters
+from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
 logger = logging.getLogger("archon.search")
 
@@ -79,6 +81,8 @@ class SearchResponse(BaseModel):
 async def search(body: SearchRequest, request: Request) -> SearchResponse | JSONResponse:
     pipeline = request.app.state.pipeline
     ns = request.state.namespace
+    writer = getattr(request.app.state, "telemetry_writer", None)
+    start = monotonic()
 
     try:
         meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
@@ -96,6 +100,20 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         if not include_metadata:
             for schema in schemas:
                 schema.metadata = {}
+        if writer is not None:
+            try:
+                flags = FilterFlags.from_search_filters(body.filters) if body.filters is not None else FilterFlags()
+                writer.enqueue(
+                    TelemetryEntry.from_search_tool_result(
+                        endpoint="search",
+                        collection=body.collection,
+                        result_doc_ids=[r.doc_id for r in result.results],
+                        latency_ms=(monotonic() - start) * 1000.0,
+                        filter_flags=flags,
+                    )
+                )
+            except Exception:
+                logger.warning("telemetry: search entry enqueue failed", exc_info=True)
         return SearchResponse(
             results=schemas,
             acl_filtered=result.acl_filtered,

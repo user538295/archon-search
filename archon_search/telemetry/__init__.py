@@ -4,6 +4,7 @@ from archon_search.telemetry.entry import (
     DOCUMENTED_SCHEMA_FIELDS,
     EndpointKind,
     ErrorKind,
+    FilterFlags,
     Status,
     TelemetryEntry,
 )
@@ -13,6 +14,7 @@ __all__ = [
     "DOCUMENTED_SCHEMA_FIELDS",
     "EndpointKind",
     "ErrorKind",
+    "FilterFlags",
     "Status",
     "TelemetryEntry",
     "TelemetryReader",

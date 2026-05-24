@@ -10,9 +10,52 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.functional_validators import BeforeValidator
+
+if TYPE_CHECKING:
+    from archon_search.filters import SearchFilters
+
+
+def _strict_bool(v: object) -> bool:
+    if not isinstance(v, bool):
+        raise ValueError(f"Expected bool, got {type(v).__name__!r}")
+    return v
+
+
+StrictBool = Annotated[bool, BeforeValidator(_strict_bool)]
+
+
+class FilterFlags(BaseModel):
+    """Privacy-safe boolean flags indicating which filters were active.
+
+    Only records whether each filter was used — never the raw filter values.
+    ``language`` is deliberately omitted: it is rejected at validation and never
+    reaches telemetry.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    file_type: StrictBool = False
+    source_path_prefix: StrictBool = False
+    source_path_glob: StrictBool = False
+    indexed_after: StrictBool = False
+    indexed_before: StrictBool = False
+    include_metadata: StrictBool = False
+
+    @classmethod
+    def from_search_filters(cls, filters: "SearchFilters") -> "FilterFlags":
+        """Build FilterFlags from a SearchFilters — booleans only, no raw values."""
+        return cls(
+            file_type=filters.file_type is not None,
+            source_path_prefix=filters.source_path_prefix is not None,
+            source_path_glob=filters.source_path_glob is not None,
+            indexed_after=filters.indexed_after is not None,
+            indexed_before=filters.indexed_before is not None,
+            include_metadata=filters.include_metadata,  # mirrors value directly: already a bool
+        )
 
 
 class EndpointKind(StrEnum):
@@ -50,6 +93,7 @@ DOCUMENTED_SCHEMA_FIELDS: frozenset[str] = frozenset(
         "collections",
         "decomposer_invoked",
         "error_kind",
+        "filter_flags",
     }
 )
 
@@ -73,6 +117,8 @@ class TelemetryEntry(BaseModel):
 
     error_kind: ErrorKind | None = None
 
+    filter_flags: FilterFlags = Field(default_factory=FilterFlags)
+
     @staticmethod
     def _new_query_id() -> str:
         return uuid.uuid4().hex
@@ -89,6 +135,7 @@ class TelemetryEntry(BaseModel):
         collection: str,
         result_doc_ids: list[str],
         latency_ms: float,
+        filter_flags: FilterFlags | None = None,
     ) -> TelemetryEntry:
         if endpoint not in ("search", "search_with_context"):
             raise ValueError(
@@ -104,6 +151,7 @@ class TelemetryEntry(BaseModel):
             collection=collection,
             result_count=len(result_doc_ids),
             result_doc_ids=result_doc_ids,
+            filter_flags=filter_flags if filter_flags is not None else FilterFlags(),
         )
 
     @classmethod

@@ -19,7 +19,7 @@ from archon_search.key_manager import load_or_generate_key
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingState, IndexingStatus
 from archon_search.server.middleware_auth import APIKeyMiddleware
-from archon_search.telemetry.entry import TelemetryEntry
+from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger("archon.search")
@@ -86,6 +86,7 @@ def create_app(
                             collection=collection or default_collection,
                             result_doc_ids=[r.doc_id for r in result_obj.results],
                             latency_ms=(monotonic() - start) * 1000.0,
+                            filter_flags=FilterFlags.from_search_filters(filters),
                         )
                     )
                 except Exception:
@@ -154,6 +155,7 @@ def create_app(
                             collection=collection or default_collection,
                             result_doc_ids=[r["result"].doc_id for r in results],
                             latency_ms=(monotonic() - start) * 1000.0,
+                            filter_flags=FilterFlags.from_search_filters(filters),
                         )
                     )
                 except Exception:
