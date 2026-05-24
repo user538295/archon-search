@@ -402,7 +402,7 @@ class FilterFlags(BaseModel):
   - Checkpoint: `uv run pytest tests/test_pipeline.py -k filter -x`
 
 #### Task 3.4 — 12-cell ACL × filter integration matrix
-- [ ] **File**: `tests/test_pipeline_acl_filter_matrix.py` (new)
+- [x] **File**: `tests/test_pipeline_acl_filter_matrix.py` (new)
 - **Depends on**: Task 3.3
 - **Description**:
   - Enumerate all 12 cells: `{no_filter, source_path_prefix, source_path_glob, date_range} × {no_acl, acl_match, acl_deny}`. Each cell is its own `@pytest.mark.integration` test function.
