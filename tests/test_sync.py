@@ -617,7 +617,16 @@ class TestSearchCollectionSyncIntegration:
 
         # Stub chunker that doesn't require chonkie
         class StubChunker:
-            def chunk(self, text: str, doc_id: str, source_path: str) -> list[ChunkRecord]:
+            def chunk(
+                self,
+                text: str,
+                doc_id: str,
+                source_path: str,
+                *,
+                file_type: str,
+                updated_at: str,
+                ingested_by: str,
+            ) -> list[ChunkRecord]:
                 from datetime import datetime, timezone
                 if not text or not text.strip():
                     return []
@@ -628,6 +637,9 @@ class TestSearchCollectionSyncIntegration:
                     vector=[],
                     source_path=source_path,
                     indexed_at=datetime.now(timezone.utc).isoformat(),
+                    file_type=file_type,
+                    updated_at=updated_at,
+                    ingested_by=ingested_by,
                 )]
 
         db_path = tmp_path / "lancedb"
