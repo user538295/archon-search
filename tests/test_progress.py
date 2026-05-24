@@ -1098,6 +1098,7 @@ class TestIndexingStateStoreThreadSafety(_ThreadSafetyHarness):
         store = IndexingStateStore(tmp_path)
         n = self._N_WRITERS
         self._slow_read_patch(monkeypatch)
+        self._atomic_write_patch(monkeypatch)  # final file always valid JSON
         start = threading.Barrier(n)  # start all threads simultaneously
 
         def worker(idx: int) -> None:
