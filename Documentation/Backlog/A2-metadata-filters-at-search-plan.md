@@ -506,7 +506,7 @@ class FilterFlags(BaseModel):
 > **Releasable**: when Task 6.3 is complete, the deploy/backfill window has a search-path regression test, the filtered-search latency ceiling is enforced, and the eval baseline-unchanged invariant is automated.
 
 #### Task 6.1 — Search-path backfill regression test (fail-then-pass)
-- [ ] **File**: `tests/test_store.py` (or `tests/test_search_backfill_regression.py` if cleaner)
+- [x] **File**: `tests/test_search_backfill_regression.py`
 - **Depends on**: Task 5.1, Task 3.2
 - **Description**:
   - Integration test that demonstrates the SEARCH path (not just the CLI) transitions from wrong to correct after backfill:
