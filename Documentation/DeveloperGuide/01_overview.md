@@ -26,7 +26,7 @@ The authoritative contract is `GET /openapi.json` on the running server. Everyth
 | Schema validation on response | Pydantic (`response_model=`) | None today — raw `dataclasses.asdict(...)` (debt item `API-4` referenced in `Documentation/Architecture/530_technical_debt_refactoring_roadmap.md` #Unverified) |
 | Error envelope | `{"detail": "..."}` with HTTP status | `{"error": "...", "code": "..."}` (`McpErrorResponse` TypedDict, `mcp.py:25–27`) returned as the tool result; the HTTP-200 framing is the FastMCP transport's behavior rather than something archon-search controls #Unverified |
 | Long-running operations | Job model (`POST /ingest` → 202 + `JobResponse`, poll `GET /jobs/{id}`) | Synchronous within the tool call; progress reported via `ctx.report_progress` for `ingest_directory` |
-| Surface | `/search`, `/route`, `/collections/*` (including `POST /collections/{name}/reindex`), `/ingest`, `/jobs/{id}` (incl. `DELETE /jobs/{job_id}`), `/telemetry/*`, `/health`, `/status`, `/indexing-state` | 9 tools (see `05_mcp_integration.md`) |
+| Surface | `/search`, `/route`, `/collections/*` (including `POST /collections/{name}/reindex`), `/ingest`, `/jobs/{id}` (incl. `DELETE /jobs/{job_id}`), `/telemetry/*`, `/health`, `/status`, `/indexing-state` | 10 tools (see `05_mcp_integration.md`) |
 
 ## What is not in scope
 

@@ -45,6 +45,7 @@ Tools registered in `server/mcp.py` (verified against source):
 |---|---|---|
 | `search` | `SearchPipeline.search` | Returns `{results, acl_filtered}`. |
 | `search_with_context` | `SearchPipeline.search_with_context` | Returns each hit plus `context_before` / `context_after`. |
+| `explain` | `SearchPipeline.explain` | Per-stage score breakdown (`results` + `near_misses`) plus the routing decision; mirrors REST `POST /explain`. |
 | `ingest_file` | `SearchPipeline.ingest_file` | Synchronous from the client's view. |
 | `ingest_directory` | `SearchPipeline.ingest_directory` | Streams progress via an inner `progress_cb`. |
 | `list_collections` | `SearchPipeline.list_collections` | |

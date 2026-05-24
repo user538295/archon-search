@@ -80,10 +80,11 @@ Breaking changes to the REST or MCP surface are recorded in [`BREAKING.md`](BREA
 
 ## MCP tools
 
-The MCP server registers 9 tools (see `archon_search/server/mcp.py`), sharing the REST API's auth layer:
+The MCP server registers 10 tools (see `archon_search/server/mcp.py`), sharing the REST API's auth layer:
 
 - `search` — hybrid vector + FTS search; returns `{"results": [...], "acl_filtered": bool}`
 - `search_with_context` — same as `search` with adjacent-chunk context
+- `explain` — per-stage retrieval/reranking trace plus routing decision (mirrors `POST /explain`)
 - `ingest_file` — index a single file into a collection
 - `ingest_directory` — recursively index a directory
 - `list_collections` — list collection names
