@@ -513,3 +513,42 @@ async def test_background_ingest_double_oserror_suppressed(
     assert any(
         "could not persist FAILED status" in r.message for r in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_background_ingest_cancelled_oserror_suppressed_and_reraises_cancelled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If persisting CANCELLED status raises OSError during cancellation, the OSError
+    is logged and suppressed, and CancelledError is still re-raised (not OSError)."""
+
+    def update_side_effect(job_id: str, **kwargs: object) -> None:
+        # RUNNING update (before cancel) is benign; CANCELLED update fails durably.
+        if kwargs.get("status") == JobStatus.CANCELLED:
+            raise OSError("disk full")
+
+    store = MagicMock(spec=JobStore)
+    store.update.side_effect = update_side_effect
+    store.get.return_value = MagicMock()
+
+    async def pipeline_fn(*a: object, **k: object) -> None:
+        await asyncio.Event().wait()  # block forever until cancelled
+
+    body = IngestRequest(collection="docs")
+    with caplog.at_level("ERROR"):
+        task = asyncio.create_task(
+            _default_ingest_task("job-1", store, body, pipeline_fn=pipeline_fn)
+        )
+        # Let the task start and reach the cancellable await point.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        task.cancel()
+
+        # The task surfaces CancelledError, NOT the OSError.
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    # The OSError from the CANCELLED persist was logged.
+    assert any(
+        "could not persist CANCELLED status" in r.message for r in caplog.records
+    )

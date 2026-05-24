@@ -75,8 +75,8 @@ async def _default_ingest_task(
     except asyncio.CancelledError:
         try:
             store.update(job_id, status=JobStatus.CANCELLED)
-        except KeyError:
-            pass
+        except (KeyError, OSError):
+            logger.error("background ingest: could not persist CANCELLED status for job %s", job_id)
         raise
     except Exception as exc:  # noqa: BLE001
         logger.exception("Ingest task %s failed", job_id)
