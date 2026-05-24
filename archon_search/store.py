@@ -13,13 +13,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
-from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult
+from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult, normalize_iso_utc
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, _validate_namespace
 from archon_search.store_filters import build_where, _compute_fetch
 
 
 from dataclasses import dataclass, field
 from typing import Callable
+
+# Fixed-width UTC timestamp regex: YYYY-MM-DDTHH:MM:SS.ffffffZ
+_FIXED_WIDTH_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 
 
 @dataclass
@@ -30,6 +33,7 @@ class ReindexResult:
     updated: int = 0
     skipped: int = 0
     warnings: list[str] = field(default_factory=list)
+    ts_normalized: int = 0
 
 
 class StoreBusyError(Exception):
@@ -541,6 +545,7 @@ class SearchStore:
         collection: str,
         *,
         dry_run: bool = False,
+        normalize_timestamps: bool = True,
         progress_cb: Callable[[int, int], None] | None = None,
     ) -> ReindexResult:
         """Refresh metadata fields on every row in *collection*.
@@ -586,9 +591,12 @@ class SearchStore:
                 if source_path:
                     try:
                         mtime = Path(source_path).stat().st_mtime
-                        new_updated_at = datetime.fromtimestamp(
-                            mtime, tz=timezone.utc
-                        ).isoformat()
+                        mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+                        new_updated_at = (
+                            normalize_iso_utc(mtime_dt)
+                            if normalize_timestamps
+                            else mtime_dt.isoformat()
+                        )
                     except OSError:
                         result.warnings.append(f"missing-source: {source_path}")
 
@@ -597,10 +605,31 @@ class SearchStore:
                 else:
                     new_ingested_by = stored_ingested_by
 
+                # Timestamp normalization pass
+                stored_indexed_at = row.get("indexed_at") or ""
+                new_indexed_at = stored_indexed_at
+                ts_row_changed = False
+                if normalize_timestamps:
+                    if stored_indexed_at and not _FIXED_WIDTH_TS_RE.match(stored_indexed_at):
+                        try:
+                            new_indexed_at = normalize_iso_utc(stored_indexed_at)
+                            ts_row_changed = True
+                        except Exception:  # noqa: BLE001
+                            result.warnings.append(f"bad-indexed_at: {stored_indexed_at}")
+                    if new_updated_at and not _FIXED_WIDTH_TS_RE.match(new_updated_at):
+                        try:
+                            new_updated_at = normalize_iso_utc(new_updated_at)
+                            ts_row_changed = True
+                        except Exception:  # noqa: BLE001
+                            result.warnings.append(f"bad-updated_at: {new_updated_at}")
+                if ts_row_changed:
+                    result.ts_normalized += 1
+
                 differs = (
                     new_file_type != stored_file_type
                     or new_updated_at != stored_updated_at
                     or new_ingested_by != stored_ingested_by
+                    or new_indexed_at != stored_indexed_at
                 )
                 if not differs:
                     continue
@@ -611,6 +640,7 @@ class SearchStore:
                         "file_type": new_file_type,
                         "updated_at": new_updated_at,
                         "ingested_by": new_ingested_by,
+                        "indexed_at": new_indexed_at,
                     },
                 ))
 

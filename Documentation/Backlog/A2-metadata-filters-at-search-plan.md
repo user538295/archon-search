@@ -485,7 +485,7 @@ class FilterFlags(BaseModel):
 > **Releasable**: when Task 5.1 is complete, operators have a single CLI primitive to migrate legacy timestamps to the fixed-width form.
 
 #### Task 5.1 — `reindex-metadata --normalize-timestamps`
-- [ ] **File**: `archon_search/cli/collection.py` (and the underlying `SearchStore.reindex_metadata` from A1)
+- [x] **File**: `archon_search/cli/collection.py` (and the underlying `SearchStore.reindex_metadata` from A1)
 - **Depends on**: Task 2.2 (normalization helper); **A1 must have shipped `reindex-metadata` CLI and `SearchStore.reindex_metadata`**.
 - **Description**:
   - Add `--normalize-timestamps / --no-normalize-timestamps` flag. Default ON when A2 ships.

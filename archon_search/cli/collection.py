@@ -196,14 +196,26 @@ def info(collection_name: str, config_path: Path | None) -> None:
 @collection.command("reindex-metadata")
 @click.argument("collection_name")
 @click.option("--dry-run", is_flag=True, default=False, help="Report counts without writing")
+@click.option(
+    "--normalize-timestamps/--no-normalize-timestamps",
+    default=True,
+    help="Rewrite indexed_at/updated_at to fixed-width UTC (YYYY-MM-DDTHH:MM:SS.ffffffZ)",
+)
 @click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
-def reindex_metadata_cmd(collection_name: str, dry_run: bool, config_path: Path | None) -> None:
+def reindex_metadata_cmd(
+    collection_name: str,
+    dry_run: bool,
+    normalize_timestamps: bool,
+    config_path: Path | None,
+) -> None:
     """Backfill metadata fields (file_type, updated_at, ingested_by) on an existing collection.
 
     Reads each row, refreshes file_type from source_path extension and
     updated_at from mtime, and rewrites legacy ``"archon-search-cli"`` ->
-    ``"reindex"``. Holds a per-collection lock for the duration; ingest into
-    the same collection is blocked until reindex finishes.
+    ``"reindex"``. When --normalize-timestamps is on (default), indexed_at and
+    updated_at are also rewritten to fixed-width UTC where they do not already
+    conform. Holds a per-collection lock for the duration; ingest into the same
+    collection is blocked until reindex finishes.
     """
     try:
         cfg = load_config(config_path)
@@ -222,11 +234,13 @@ def reindex_metadata_cmd(collection_name: str, dry_run: bool, config_path: Path 
             result = await pipeline.store.reindex_metadata(
                 collection_name,
                 dry_run=dry_run,
+                normalize_timestamps=normalize_timestamps,
                 progress_cb=_on_progress,
             )
             click.echo(
                 f"reindex-metadata: {collection_name} - done. "
                 f"processed={result.processed}, updated={result.updated}, "
+                f"ts_normalized={result.ts_normalized}, "
                 f"warnings={len(result.warnings)}"
             )
             if result.warnings:
