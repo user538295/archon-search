@@ -3038,3 +3038,570 @@ async def test_hybrid_search_filter_applies_to_fts_branch_via_where(
     assert all(r.file_type == "md" for r in results), (
         f"py chunks leaked: {[(r.file_type, r.text) for r in results if r.file_type != 'md']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 3.2 — glob post-filter and mixed-format timestamp warning (unit tests)
+# ---------------------------------------------------------------------------
+
+
+def _make_search_result(source_path: str, indexed_at: str = "2026-01-01T00:00:00.000000Z") -> "SearchResult":
+    """Build a minimal SearchResult for filter tests."""
+    from archon_search._types import SearchResult
+
+    doc_id = _doc_id()
+    return SearchResult(
+        doc_id=doc_id,
+        chunk_id=f"{doc_id}-000000",
+        text="test text",
+        score=0.5,
+        source_path=source_path,
+        indexed_at=indexed_at,
+    )
+
+
+def test_glob_post_filter_keeps_matching_rows(tmp_path: Path) -> None:
+    """Glob filter keeps only rows whose source_path matches the pattern."""
+    import asyncio
+    from archon_search.filters import SearchFilters
+
+    doc_id = _doc_id()
+    rows = [
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-{i:06d}",
+            "text": f"chunk {i}",
+            "source_path": path,
+            "indexed_at": "2026-01-01T00:00:00.000000Z",
+        }
+        for i, path in enumerate([
+            "/docs/api/foo.md",
+            "/docs/api/bar.md",
+            "/src/main.py",
+            "/README.md",
+        ])
+    ]
+
+    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
+
+    filters = SearchFilters(source_path_glob="*.md")
+    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
+
+    # All results must match *.md (fnmatch, * crosses slashes)
+    assert len(results) > 0, "expected at least one .md result"
+    assert all(r.source_path.endswith(".md") for r in results), (
+        f"non-.md paths returned: {[r.source_path for r in results]}"
+    )
+    # 3 of 4 rows are .md files — verify all are returned
+    assert len(results) == 3, f"Expected 3 .md results, got {len(results)}: {[r.source_path for r in results]}"
+    # .py file must be excluded
+    py_paths = [r.source_path for r in results if r.source_path.endswith(".py")]
+    assert py_paths == [], f"Python file should have been filtered out: {py_paths}"
+
+
+def test_glob_under_delivery_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Glob filtering fewer than top_k results emits 'glob post-filter shrank pool' warning."""
+    import asyncio
+    import logging
+    from archon_search.filters import SearchFilters
+
+    doc_id = _doc_id()
+    # Only one row matches "*.md" but we ask for top_k=5
+    rows = [
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-{i:06d}",
+            "text": f"chunk {i}",
+            "source_path": path,
+            "indexed_at": "2026-01-01T00:00:00.000000Z",
+        }
+        for i, path in enumerate(["/only/one.md", "/src/a.py", "/src/b.py", "/src/c.py"])
+    ]
+
+    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
+
+    filters = SearchFilters(source_path_glob="*.md")
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=filters))
+
+    assert any(
+        "glob post-filter shrank pool below top_k" in record.message
+        for record in caplog.records
+    ), f"Expected under-delivery warning. Got: {[r.message for r in caplog.records]}"
+
+
+def test_star_matches_across_slashes(tmp_path: Path) -> None:
+    """fnmatch semantics: '*.md' matches 'docs/api/foo.md' (star crosses slashes)."""
+    import fnmatch
+
+    assert fnmatch.fnmatchcase("docs/api/foo.md", "*.md"), (
+        "fnmatch.fnmatchcase: * must cross directory separators"
+    )
+    assert fnmatch.fnmatchcase("/absolute/path/file.md", "*.md"), (
+        "fnmatch.fnmatchcase: * crosses slashes in absolute paths too"
+    )
+    assert not fnmatch.fnmatchcase("docs/api/foo.py", "*.md"), (
+        "fnmatch.fnmatchcase: *.md must not match .py files"
+    )
+
+
+def test_double_star_equivalent_to_single_star(tmp_path: Path) -> None:
+    """** and * produce identical match results in fnmatch (no path semantics)."""
+    import fnmatch
+
+    paths = [
+        "docs/api/foo.md",
+        "/abs/path/bar.py",
+        "README.md",
+        "a/b/c/d/e.txt",
+    ]
+    for path in paths:
+        single = fnmatch.fnmatchcase(path, "*.md")
+        double = fnmatch.fnmatchcase(path, "**.md")
+        assert single == double, (
+            f"fnmatch: * and ** produced different results for {path!r}: "
+            f"single={single}, double={double}"
+        )
+
+    # Both match everything
+    for path in paths:
+        assert fnmatch.fnmatchcase(path, "*") == fnmatch.fnmatchcase(path, "**"), (
+            f"fnmatch: * and ** differ for {path!r}"
+        )
+
+
+def test_mixed_format_indexed_at_triggers_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Rows with legacy indexed_at format (no microseconds) trigger the mixed-format warning."""
+    import asyncio
+    import logging
+    from datetime import date
+    from archon_search.filters import SearchFilters
+
+    doc_id = _doc_id()
+    # Mix of: fixed-width (good), legacy no-microseconds, legacy +00:00 suffix
+    rows = [
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-000000",
+            "text": "good row",
+            "source_path": "/docs/a.md",
+            "indexed_at": "2026-05-21T10:00:00.000000Z",  # fixed-width — OK
+        },
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-000001",
+            "text": "legacy no microseconds",
+            "source_path": "/docs/b.md",
+            "indexed_at": "2026-05-21T10:00:00Z",  # legacy — no microseconds
+        },
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-000002",
+            "text": "legacy plus offset",
+            "source_path": "/docs/c.md",
+            "indexed_at": "2026-05-21T10:00:00+00:00",  # legacy — +00:00 suffix
+        },
+    ]
+
+    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
+
+    filters = SearchFilters(indexed_after=date(2026, 1, 1))
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
+
+    warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    matching = [msg for msg in warning_msgs if "legacy-format rows" in msg]
+    assert matching, f"Expected legacy-format warning. Got warnings: {warning_msgs}"
+    # 2 of 3 rows are legacy format — verify count is reflected in the message
+    assert any("2 legacy-format" in msg for msg in matching), (
+        f"Expected '2 legacy-format' in warning message. Got: {matching}"
+    )
+
+
+def test_normalized_indexed_at_does_not_trigger_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """All rows with fixed-width indexed_at emit no mixed-format warning."""
+    import asyncio
+    import logging
+    from datetime import date
+    from archon_search.filters import SearchFilters
+
+    doc_id = _doc_id()
+    rows = [
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-{i:06d}",
+            "text": f"row {i}",
+            "source_path": f"/docs/{i}.md",
+            "indexed_at": f"2026-05-21T10:00:00.00000{i}Z",  # fixed-width
+        }
+        for i in range(3)
+    ]
+
+    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
+
+    filters = SearchFilters(indexed_after=date(2026, 1, 1))
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
+
+    legacy_warnings = [
+        r.message for r in caplog.records
+        if r.levelno == logging.WARNING and "legacy-format rows" in r.message
+    ]
+    assert legacy_warnings == [], (
+        f"No legacy-format warning expected for fixed-width timestamps, got: {legacy_warnings}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 3.2 — glob post-filter (integration tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_hybrid_search_source_path_glob_matches(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Integration: glob filter returns only matching paths."""
+    from archon_search.filters import SearchFilters
+
+    doc_md = _doc_id()
+    doc_py = _doc_id()
+
+    chunks = [
+        ChunkRecord(
+            doc_id=doc_md,
+            chunk_id=f"{doc_md}-000000",
+            text="markdown content",
+            vector=[1.0] * _DIM,
+            source_path="/docs/guide.md",
+            indexed_at=datetime.now(timezone.utc).isoformat(),
+            file_type="md",
+        ),
+        ChunkRecord(
+            doc_id=doc_py,
+            chunk_id=f"{doc_py}-000000",
+            text="python content",
+            vector=[2.0] * _DIM,
+            source_path="/src/module.py",
+            indexed_at=datetime.now(timezone.utc).isoformat(),
+            file_type="py",
+        ),
+    ]
+
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    results = await connected_store.hybrid_search(
+        col_name, [0.0] * _DIM, "content", top_k=10,
+        filters=SearchFilters(source_path_glob="*.md"),
+    )
+
+    assert len(results) > 0, "expected at least one .md result"
+    assert all(r.source_path.endswith(".md") for r in results), (
+        f"non-md paths found: {[r.source_path for r in results]}"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_hybrid_search_source_path_glob_character_class(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Integration: character class glob 'docs/[ab]/*' matches only a/ and b/ subdirs."""
+    from archon_search.filters import SearchFilters
+
+    docs = {
+        "a": ("/docs/a/file.md", _doc_id()),
+        "b": ("/docs/b/file.md", _doc_id()),
+        "c": ("/docs/c/file.md", _doc_id()),
+    }
+    chunks = [
+        ChunkRecord(
+            doc_id=doc_id,
+            chunk_id=f"{doc_id}-000000",
+            text=f"content {label}",
+            vector=[float(i)] * _DIM,
+            source_path=path,
+            indexed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        for i, (label, (path, doc_id)) in enumerate(docs.items())
+    ]
+
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    results = await connected_store.hybrid_search(
+        col_name, [0.0] * _DIM, "content", top_k=10,
+        filters=SearchFilters(source_path_glob="*/docs/[ab]/*"),
+    )
+
+    assert len(results) > 0, "expected at least one matching result"
+    for r in results:
+        assert "/docs/a/" in r.source_path or "/docs/b/" in r.source_path, (
+            f"Result path {r.source_path!r} should be under docs/a/ or docs/b/"
+        )
+    matched_paths = {r.source_path for r in results}
+    assert "/docs/c/file.md" not in matched_paths, "docs/c/ should be excluded by glob"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_hybrid_search_glob_overfetch_replaces_default_multiplier(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Integration: _compute_fetch is called with has_glob=True when source_path_glob is set."""
+    from unittest.mock import patch
+    from archon_search.filters import SearchFilters
+
+    doc_id = _doc_id()
+    chunk = ChunkRecord(
+        doc_id=doc_id,
+        chunk_id=f"{doc_id}-000000",
+        text="overfetch test",
+        vector=[1.0] * _DIM,
+        source_path="/docs/test.md",
+        indexed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, [chunk])
+
+    with patch("archon_search.store._compute_fetch", wraps=lambda top_k, has_glob: max(top_k * (5 if has_glob else 3), 20)) as mock_cf:
+        await connected_store.hybrid_search(
+            col_name, [0.0] * _DIM, "overfetch", top_k=5,
+            filters=SearchFilters(source_path_glob="*.md"),
+        )
+
+    mock_cf.assert_called_once_with(5, has_glob=True)
+
+
+# ---------------------------------------------------------------------------
+# Task 3.2 — additional unit tests (TEST-2 through TEST-6, TEST-9)
+# ---------------------------------------------------------------------------
+
+
+def test_glob_zero_matches_returns_empty_and_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Glob that matches nothing returns [] and emits the under-delivery warning."""
+    import asyncio
+    import logging
+    from archon_search.filters import SearchFilters
+
+    doc_id = _doc_id()
+    rows = [
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-{i:06d}",
+            "text": f"chunk {i}",
+            "source_path": f"/src/file{i}.py",
+            "indexed_at": "2026-01-01T00:00:00.000000Z",
+        }
+        for i in range(3)
+    ]
+
+    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
+
+    filters = SearchFilters(source_path_glob="*.md")  # no .py files match
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=5, filters=filters))
+
+    assert results == [], f"Expected empty results when glob matches nothing, got: {results}"
+    assert any(
+        "glob post-filter shrank pool below top_k" in r.message
+        for r in caplog.records
+    ), f"Expected under-delivery warning. Got: {[r.message for r in caplog.records]}"
+
+
+def test_indexed_before_only_triggers_legacy_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """indexed_before alone (no indexed_after) still triggers legacy-format warning."""
+    import asyncio
+    import logging
+    from datetime import date
+    from archon_search.filters import SearchFilters
+
+    doc_id = _doc_id()
+    rows = [
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-000000",
+            "text": "legacy row",
+            "source_path": "/docs/a.md",
+            "indexed_at": "2026-05-21T10:00:00Z",  # legacy — no microseconds
+        },
+    ]
+
+    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
+
+    filters = SearchFilters(indexed_before=date(2027, 1, 1))  # indexed_before only
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
+
+    assert any(
+        "legacy-format rows" in r.message
+        for r in caplog.records
+    ), f"Expected legacy-format warning for indexed_before-only. Got: {[r.message for r in caplog.records]}"
+
+
+def test_null_indexed_at_counts_as_legacy_format(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Row with indexed_at=None is treated as legacy and triggers the warning."""
+    import asyncio
+    import logging
+    from datetime import date
+    from archon_search.filters import SearchFilters
+
+    doc_id = _doc_id()
+    rows = [
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-000000",
+            "text": "null indexed_at row",
+            "source_path": "/docs/a.md",
+            "indexed_at": None,  # null in DB
+        },
+    ]
+
+    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
+
+    filters = SearchFilters(indexed_after=date(2026, 1, 1))
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
+
+    assert any(
+        "legacy-format rows" in r.message
+        for r in caplog.records
+    ), f"Expected legacy-format warning for null indexed_at. Got: {[r.message for r in caplog.records]}"
+
+
+def test_glob_exact_top_k_matches_no_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Glob matching exactly top_k results does NOT emit the under-delivery warning."""
+    import asyncio
+    import logging
+    from archon_search.filters import SearchFilters
+
+    doc_id = _doc_id()
+    rows = [
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-{i:06d}",
+            "text": f"chunk {i}",
+            "source_path": f"/docs/file{i}.md",  # all match *.md
+            "indexed_at": "2026-01-01T00:00:00.000000Z",
+        }
+        for i in range(3)
+    ]
+
+    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
+
+    # top_k=3, exactly 3 rows match *.md — boundary: len(scored) == top_k, no warning
+    filters = SearchFilters(source_path_glob="*.md")
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=3, filters=filters))
+
+    assert len(results) == 3
+    assert not any(
+        "glob post-filter shrank pool below top_k" in r.message
+        for r in caplog.records
+    ), f"No under-delivery warning expected for exact top_k match. Got: {[r.message for r in caplog.records]}"
+
+
+def test_source_path_prefix_and_glob_combined(tmp_path: Path) -> None:
+    """Combining source_path_prefix (SQL WHERE) and source_path_glob (post-filter) narrows correctly.
+
+    The prefix filter is a SQL WHERE clause applied by LanceDB before results reach Python.
+    In this unit test the mock simulates LanceDB having already applied the prefix pre-filter,
+    so the mock returns only /docs/ rows.  The glob post-filter then keeps only .md files.
+    """
+    import asyncio
+    from archon_search.filters import SearchFilters
+
+    doc_id = _doc_id()
+    # Simulate LanceDB having applied source_path_prefix="/docs/" — only /docs/ rows returned
+    rows = [
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-000000",
+            "text": "docs md",
+            "source_path": "/docs/readme.md",
+            "indexed_at": "2026-01-01T00:00:00.000000Z",
+        },
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-000001",
+            "text": "docs py",
+            "source_path": "/docs/script.py",
+            "indexed_at": "2026-01-01T00:00:00.000000Z",
+        },
+    ]
+
+    store, _, mock_table = _make_mock_store_for_filter_tests(tmp_path, rows, [])
+
+    # glob post-filter keeps only .md — should return /docs/readme.md, not /docs/script.py
+    filters = SearchFilters(source_path_prefix="/docs/", source_path_glob="*.md")
+    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=10, filters=filters))
+
+    paths = [r.source_path for r in results]
+    assert "/docs/readme.md" in paths, f"Expected /docs/readme.md in results, got: {paths}"
+    assert "/docs/script.py" not in paths, f".py should be excluded by glob: {paths}"
+
+    # Verify the SQL prefix predicate was generated and passed to LanceDB via .where()
+    vec_builder = mock_table.vector_search.return_value
+    assert vec_builder.where.called, "vector builder .where() must be called for source_path_prefix"
+    prefix_pred = vec_builder.where.call_args[0][0]
+    assert "source_path" in prefix_pred and "LIKE" in prefix_pred and "/docs/" in prefix_pred, (
+        f"Expected source_path LIKE predicate for prefix '/docs/', got: {prefix_pred!r}"
+    )
+
+
+def test_glob_filter_applied_before_top_k_truncation(tmp_path: Path) -> None:
+    """Glob filter must run on the full scored list before top_k truncation.
+
+    Scenario: top_k=2, 5 rows, top-2 RRF don't match glob, rows 3-5 do.
+    Correct behavior: rows 3-5 (matching glob) are returned.
+    Wrong behavior (filter after truncation): empty or wrong results.
+    """
+    import asyncio
+    from archon_search.filters import SearchFilters
+
+    doc_id = _doc_id()
+    # All rows have source paths; only .md ones pass the glob
+    # We want the .md rows to NOT be the top-scored RRF rows
+    # Row insertion order (index 0-4) maps directly to vec scores (descending).
+    # With fts_rows=[], only the vector leg contributes, so .py rows (idx 0-1)
+    # always outscore .md rows (idx 2-4). If glob ran after [:top_k], it would
+    # see only .py rows, eliminate both, and return 0 results — contradicting the assertion.
+    rows = [
+        {
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}-{i:06d}",
+            "text": f"chunk {i}",
+            "source_path": path,
+            "indexed_at": "2026-01-01T00:00:00.000000Z",
+        }
+        for i, path in enumerate([
+            "/src/a.py",     # high score (vec rank 0) — excluded by glob
+            "/src/b.py",     # high score (vec rank 1) — excluded by glob
+            "/docs/c.md",    # lower score (vec rank 2) — passes glob
+            "/docs/d.md",    # lower score (vec rank 3) — passes glob
+            "/docs/e.md",    # lowest score (vec rank 4) — passes glob
+        ])
+    ]
+
+    store, _, _ = _make_mock_store_for_filter_tests(tmp_path, rows, [])
+
+    filters = SearchFilters(source_path_glob="*.md")
+    results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "q", top_k=2, filters=filters))
+
+    # With glob before truncation: top 2 of the 3 .md rows are returned
+    assert len(results) == 2, f"Expected 2 results after glob+truncation, got {len(results)}"
+    assert all(r.source_path.endswith(".md") for r in results), (
+        f"All results should be .md: {[r.source_path for r in results]}"
+    )

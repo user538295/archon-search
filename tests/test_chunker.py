@@ -92,14 +92,18 @@ def test_chunker_source_path_preserved() -> None:
 
 
 def test_chunker_indexed_at_is_iso8601() -> None:
-    """indexed_at is a non-empty ISO-8601 UTC string."""
+    """indexed_at uses fixed-width UTC format (microseconds + Z suffix) for date-filter compatibility."""
     import re
 
     chunker = DocumentChunker()
     records = chunker.chunk("Hello world.", "doc1", "/tmp/doc1.md", **_DEFAULT_KW)
-    iso_pattern = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+    # Must match the fixed-width Z format expected by store._FIXED_WIDTH_PATTERN:
+    # YYYY-MM-DDTHH:MM:SS.ffffffZ  (no +00:00 suffix)
+    fixed_width_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
     for r in records:
-        assert iso_pattern.match(r.indexed_at), f"Bad indexed_at: {r.indexed_at!r}"
+        assert fixed_width_pattern.match(r.indexed_at), (
+            f"indexed_at must be fixed-width UTC (microseconds+Z), got: {r.indexed_at!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

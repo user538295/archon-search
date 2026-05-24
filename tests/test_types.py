@@ -294,3 +294,25 @@ def test_normalize_iso_utc_three_digit_millis():
 def test_normalize_iso_utc_invalid_string_raises():
     with pytest.raises(ValueError):
         normalize_iso_utc("not-a-date")
+
+
+def test_fixed_width_pattern_matches_normalize_iso_utc_output():
+    """_FIXED_WIDTH_PATTERN in store.py must always match normalize_iso_utc output.
+
+    This test is the machine-verified sync contract between the two modules.
+    If either changes its format, this test fails immediately.
+    """
+    from datetime import timezone
+    from archon_search.store import _FIXED_WIDTH_PATTERN
+
+    samples = [
+        datetime(2026, 1, 1, 0, 0, 0, 0, tzinfo=timezone.utc),
+        datetime(2026, 5, 21, 12, 34, 56, 123456, tzinfo=timezone.utc),
+        datetime(2026, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc),
+        datetime.now(timezone.utc),
+    ]
+    for dt in samples:
+        result = normalize_iso_utc(dt)
+        assert _FIXED_WIDTH_PATTERN.match(result), (
+            f"_FIXED_WIDTH_PATTERN does not match normalize_iso_utc output: {result!r}"
+        )

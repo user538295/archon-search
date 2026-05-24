@@ -362,7 +362,7 @@ class FilterFlags(BaseModel):
   - Checkpoint: `uv run pytest tests/test_store.py -k filter -x`
 
 #### Task 3.2 — `fnmatch` glob post-RRF + over-fetch policy + warn log + mixed-storage WARNING
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 3.1
 - **Description**:
   - After RRF fusion, if `filters and filters.source_path_glob`, apply `fnmatch.fnmatchcase(row["source_path"], filters.source_path_glob)` and keep only matches.

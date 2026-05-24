@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import hashlib
 import json
 import logging
@@ -59,6 +60,10 @@ _ARCHON_PREFIX = "_archon_"
 _META_TABLE = "_archon_collection_meta"
 
 _RRF_K = 60  # RRF constant
+
+# Matches the fixed-width UTC format produced by normalize_iso_utc (_types.py).
+# Must stay in sync with: dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+_FIXED_WIDTH_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 
 _META_MAX_FIELDS = 50
 _META_MAX_KEY_LEN = 256
@@ -696,6 +701,21 @@ class SearchStore:
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
+        # fnmatch has no path semantics: * matches / and ** is identical to *;
+        # source_path_glob matches the full source_path; combine with source_path_prefix for
+        # prefix-anchored narrowing before this post-filter runs.
+        if filters and filters.source_path_glob:
+            glob_pattern = filters.source_path_glob
+            scored = [
+                (score, row) for score, row in scored
+                if fnmatch.fnmatchcase(row["source_path"], glob_pattern)
+            ]
+            if len(scored) < top_k:
+                logger.warning(
+                    "glob post-filter shrank pool below top_k: %d/%d",
+                    len(scored), top_k,
+                )
+
         results = []
         for score, row in scored[:top_k]:
             raw_acl = row.get("acl")
@@ -717,6 +737,20 @@ class SearchStore:
                     acl=row_acl,
                 )
             )
+
+        if filters and (filters.indexed_after or filters.indexed_before):
+            legacy_count = sum(
+                1 for r in results
+                if not _FIXED_WIDTH_PATTERN.match(r.indexed_at or "")
+            )
+            if legacy_count:
+                logger.warning(
+                    "date filter applied to %d legacy-format rows in collection %s; "
+                    "re-ingest these documents to normalize indexed_at format "
+                    "and avoid silent boundary errors",
+                    legacy_count, collection,
+                )
+
         return results
 
     # ------------------------------------------------------------------

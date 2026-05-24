@@ -36,7 +36,7 @@ class DocumentChunker:
             return []
 
         chunks = self._chunker.chunk(text)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         return [
             ChunkRecord(
                 doc_id=doc_id,
