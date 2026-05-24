@@ -299,7 +299,7 @@ class FilterFlags(BaseModel):
   - Checkpoint: `uv run pytest tests/test_types.py -k normalize_iso_utc -x`
 
 #### Task 2.3 — Predicate builder, escape helpers, fetch helper
-- [ ] **File**: `archon_search/store_filters.py` (NEW)
+- [x] **File**: `archon_search/store_filters.py` (NEW)
 - **Depends on**: Task 2.1, Task 2.2
 - **Description**:
   - `_sql_quote_str(s: str) -> str` — returns `'<s with internal ' doubled>'`. The standard SQL string-literal escape. Every user-supplied string flows through this before reaching the SQL string. No f-string or `.format()` SQL anywhere outside this module.
