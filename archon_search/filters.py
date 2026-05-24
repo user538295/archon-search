@@ -10,7 +10,7 @@ import re
 from datetime import date, datetime, time, timezone
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class SearchFilters(BaseModel):
@@ -23,7 +23,14 @@ class SearchFilters(BaseModel):
     source_path_glob: str | None = None
     indexed_after: datetime | date | None = None
     indexed_before: datetime | date | None = None
-    language: str | None = None
+    language: str | None = Field(
+        default=None,
+        description=(
+            "reserved — language extraction is not yet implemented. "
+            "This field is tracked as roadmap item C2. "
+            "Passing a non-empty value raises a validation error."
+        ),
+    )
     include_metadata: bool = False
 
     @field_validator("indexed_after", "indexed_before", mode="before")

@@ -424,7 +424,7 @@ class FilterFlags(BaseModel):
 > **Releasable**: after Task 4.3, callers can issue filtered queries over REST and MCP. Telemetry captures filter usage without leaking values.
 
 #### Task 4.1 — REST `SearchRequest` embeds `SearchFilters`
-- [ ] **File**: `archon_search/server/schemas.py`, `archon_search/server/routes_search.py`
+- [x] **File**: `archon_search/server/schemas.py`, `archon_search/server/routes_search.py`
 - **Depends on**: Task 3.3, Task 2.1
 - **Description**:
   - Add `filters: SearchFilters | None = None` to `SearchRequest` (imported from `archon_search.filters`).

@@ -402,66 +402,271 @@ def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCa
 
 
 # ---------------------------------------------------------------------------
-# Task 1.3: language field + metadata suppression
+# Task 4.1: SearchFilters embedded in SearchRequest
 # ---------------------------------------------------------------------------
 
 
-def test_search_response_includes_language_field(tmp_path: Path) -> None:
-    """REST response must include language from SearchResult."""
-    result = SearchResult(
-        doc_id="a" * 64,
-        chunk_id="a" * 64 + "-000001",
-        text="some text",
-        score=0.9,
-        source_path="/tmp/doc.md",
-        language="en",
-    )
+def test_post_search_with_file_type_filter_returns_filtered_results(tmp_path: Path) -> None:
+    """filters field reaches pipeline.search() as a SearchFilters instance."""
+    from archon_search.filters import SearchFilters
+
+    results = [_make_search_result(1)]
     app, client = _make_app(tmp_path)
-    app.state.pipeline = _make_pipeline_mock(results=[result])
+    app.state.pipeline = _make_pipeline_mock(results=results)
+
+    response = client.post(
+        "/search",
+        json={"collection": "col", "query": "q", "filters": {"file_type": "md"}},
+    )
+
+    assert response.status_code == 200
+    call_kwargs = app.state.pipeline.search.call_args
+    assert "filters" in call_kwargs.kwargs
+    filters = call_kwargs.kwargs["filters"]
+    assert isinstance(filters, SearchFilters), f"Expected SearchFilters, got {type(filters)}"
+    assert filters.file_type == "md"
+
+
+def test_post_search_all_filter_types_forwarded(tmp_path: Path) -> None:
+    """source_path_prefix, source_path_glob, indexed_after, indexed_before all reach pipeline."""
+    from archon_search.filters import SearchFilters
+
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock()
+
+    response = client.post(
+        "/search",
+        json={
+            "collection": "col",
+            "query": "q",
+            "filters": {
+                "source_path_prefix": "/docs/",
+                "source_path_glob": "*.md",
+                "indexed_after": "2025-01-01",
+                "indexed_before": "2025-12-31",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    filters = app.state.pipeline.search.call_args.kwargs["filters"]
+    assert isinstance(filters, SearchFilters)
+    assert filters.source_path_prefix == "/docs/"
+    assert filters.source_path_glob == "*.md"
+    assert filters.indexed_after is not None
+    assert filters.indexed_before is not None
+
+
+def test_post_search_invalid_filter_returns_422_with_validator_message(tmp_path: Path) -> None:
+    """Pydantic validation errors on SearchFilters surface as HTTP 422 with detail."""
+    _, client = _make_app(tmp_path)
+
+    # empty file_type — message should mention file_type
+    resp = client.post("/search", json={"collection": "col", "query": "q", "filters": {"file_type": ""}})
+    assert resp.status_code == 422
+    detail = str(resp.json().get("detail", ""))
+    assert detail, "422 response must have a non-empty detail field"
+
+    # indexed_after > indexed_before — message should mention the ordering constraint
+    resp = client.post(
+        "/search",
+        json={
+            "collection": "col",
+            "query": "q",
+            "filters": {"indexed_after": "2025-12-31", "indexed_before": "2025-01-01"},
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json().get("detail"), "422 must include detail for date-range inversion"
+
+    # non-empty language (reserved field)
+    resp = client.post("/search", json={"collection": "col", "query": "q", "filters": {"language": "en"}})
+    assert resp.status_code == 422
+    assert resp.json().get("detail"), "422 must include detail for reserved language field"
+
+
+def test_post_search_no_filter_unchanged_behavior(tmp_path: Path) -> None:
+    """Omitting filters field is backward-compatible — results still returned."""
+    results = [_make_search_result(1)]
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=results)
 
     response = client.post("/search", json={"collection": "col", "query": "q"})
 
     assert response.status_code == 200
     data = response.json()
-    assert data["results"][0]["language"] == "en"
+    assert len(data["results"]) == 1
 
 
-def test_search_response_omits_custom_metadata_when_include_metadata_false(tmp_path: Path) -> None:
-    """REST response must strip metadata when no filters / include_metadata is absent (default False)."""
+def test_post_search_metadata_suppressed_by_default(tmp_path: Path) -> None:
+    """No filters → include_metadata defaults to False → metadata stripped from ALL results."""
+    results = [
+        SearchResult(
+            doc_id="a" * 64,
+            chunk_id="a" * 64 + f"-{i:06d}",
+            text=f"text {i}",
+            score=0.9 - i * 0.1,
+            source_path="/tmp/doc.md",
+            metadata={"k": f"v{i}"},
+        )
+        for i in range(3)
+    ]
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=results)
+
+    response = client.post("/search", json={"collection": "col", "query": "q"})
+
+    assert response.status_code == 200
+    for r in response.json()["results"]:
+        assert r["metadata"] == {}, f"metadata not suppressed: {r['metadata']}"
+
+
+def test_post_search_include_metadata_true_passes_through(tmp_path: Path) -> None:
+    """include_metadata=True in filters → metadata present in response."""
     result = SearchResult(
         doc_id="a" * 64,
         chunk_id="a" * 64 + "-000001",
         text="some text",
         score=0.9,
         source_path="/tmp/doc.md",
-        metadata={"k": "v"},
+        metadata={"author": "alice"},
     )
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(results=[result])
 
-    # No filters in request body → include_metadata defaults to False → metadata stripped
-    response = client.post("/search", json={"collection": "col", "query": "q"})
+    response = client.post(
+        "/search",
+        json={"collection": "col", "query": "q", "filters": {"include_metadata": True}},
+    )
 
     assert response.status_code == 200
     data = response.json()
-    assert data["results"][0]["metadata"] == {}
+    assert data["results"][0]["metadata"] == {"author": "alice"}
 
 
-def test_search_result_schema_from_result_preserves_metadata(tmp_path: Path) -> None:
-    """Schema-level test: SearchResultSchema.from_result always preserves metadata.
-    The REST endpoint always suppresses it (default) until Task 4.1 wires SearchFilters."""
-    from archon_search.server.routes_search import SearchResultSchema
+def test_post_search_unknown_collection_returns_404_not_422(tmp_path: Path) -> None:
+    """Unknown collection → 404, not 422 (not a validation error)."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(meta_return=None)
 
-    result = SearchResult(
-        doc_id="a" * 64,
-        chunk_id="a" * 64 + "-000001",
-        text="some text",
-        score=0.9,
-        source_path="/tmp/doc.md",
-        metadata={"k": "v"},
+    response = client.post(
+        "/search",
+        json={"collection": "no-such-col", "query": "q", "filters": {"file_type": "pdf"}},
     )
-    schema = SearchResultSchema.from_result(result)
-    assert schema.metadata == {"k": "v"}
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "collection not found"
+
+
+def test_openapi_schema_language_description_says_reserved_c2(tmp_path: Path) -> None:
+    """OpenAPI schema for SearchFilters.language must mention 'reserved' and 'C2'."""
+    app, _ = _make_app(tmp_path)
+    sync_client = TestClient(app)
+
+    resp = sync_client.get("/openapi.json")
+    assert resp.status_code == 200
+    schema = resp.json()
+
+    search_filters = schema.get("components", {}).get("schemas", {}).get("SearchFilters", {})
+    assert search_filters, "SearchFilters not found in OpenAPI components"
+    language_prop = search_filters.get("properties", {}).get("language", {})
+    description = language_prop.get("description", "")
+    assert "reserved" in description, f"'reserved' not in language description: {description!r}"
+    assert "C2" in description, f"'C2' not in language description: {description!r}"
+
+
+@pytest.mark.integration
+async def test_search_filter_excludes_everything_returns_200_empty(tmp_path: Path) -> None:
+    """Filters that exclude all rows → 200 with empty results list."""
+    from archon_search._types import ChunkRecord
+    from archon_search.embedder import Embedder, ModelEmbedder
+    from archon_search.store import SearchStore
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
+
+    store = SearchStore(config.db_path)
+    await store.connect()
+
+    embedder = Embedder(ModelEmbedder(config.embedding_model))
+    vector = await embedder.embed_one("hello world")
+
+    chunk = ChunkRecord(
+        doc_id="a" * 64,
+        chunk_id="a" * 64 + "-000000",
+        text="hello world documentation",
+        vector=vector,
+        source_path="/docs/hello.md",
+        indexed_at="2025-01-01T00:00:00",
+        file_type="md",
+    )
+    await store.ingest_chunks("filtercol", [chunk])
+    await store.disconnect()
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = client.post(
+        "/search",
+        json={"collection": "filtercol", "query": "hello world", "filters": {"file_type": "pdf"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["results"] == []
+
+
+@pytest.mark.integration
+async def test_include_metadata_false_suppresses_metadata_end_to_end(tmp_path: Path) -> None:
+    """include_metadata=False suppresses metadata; True makes it present."""
+    from archon_search._types import ChunkRecord
+    from archon_search.embedder import Embedder, ModelEmbedder
+    from archon_search.store import SearchStore
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "BAAI/bge-small-en-v1.5"
+
+    store = SearchStore(config.db_path)
+    await store.connect()
+
+    embedder = Embedder(ModelEmbedder(config.embedding_model))
+    vector = await embedder.embed_one("metadata test")
+
+    chunk = ChunkRecord(
+        doc_id="b" * 64,
+        chunk_id="b" * 64 + "-000000",
+        text="metadata test document",
+        vector=vector,
+        source_path="/docs/meta.md",
+        indexed_at="2025-01-01T00:00:00",
+        metadata={"author": "tester"},
+    )
+    await store.ingest_chunks("metacol", [chunk])
+    await store.disconnect()
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    # Without include_metadata — metadata should be empty (suppressed)
+    resp_no_meta = client.post("/search", json={"collection": "metacol", "query": "metadata test"})
+    assert resp_no_meta.status_code == 200
+    results_no_meta = resp_no_meta.json()["results"]
+    assert len(results_no_meta) >= 1
+    assert results_no_meta[0]["metadata"] == {}
+
+    # With include_metadata=True — metadata should be present
+    resp_with_meta = client.post(
+        "/search",
+        json={"collection": "metacol", "query": "metadata test", "filters": {"include_metadata": True}},
+    )
+    assert resp_with_meta.status_code == 200
+    results_with_meta = resp_with_meta.json()["results"]
+    assert len(results_with_meta) >= 1
+    assert results_with_meta[0]["metadata"].get("author") == "tester"
 
 
 @pytest.mark.integration

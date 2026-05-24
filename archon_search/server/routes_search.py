@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
+from archon_search.filters import SearchFilters
 
 logger = logging.getLogger("archon.search")
 
@@ -18,6 +19,7 @@ class SearchRequest(BaseModel):
     collection: str
     query: str
     top_k: int = Field(default=5, ge=1, le=100)
+    filters: SearchFilters | None = None
 
     @field_validator("collection")
     @classmethod
@@ -88,10 +90,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         return JSONResponse({"detail": "collection not found"}, status_code=404)
 
     try:
-        result = await pipeline.search(body.query, body.collection, namespace=ns)
-        # SearchRequest gains filters: SearchFilters in Task 4.1; until then,
-        # include_metadata always defaults to False (metadata always suppressed).
-        include_metadata = getattr(getattr(body, "filters", None), "include_metadata", False)
+        result = await pipeline.search(body.query, body.collection, namespace=ns, filters=body.filters)
+        include_metadata = body.filters is not None and body.filters.include_metadata
         schemas = [SearchResultSchema.from_result(r) for r in result.results]
         if not include_metadata:
             for schema in schemas:
