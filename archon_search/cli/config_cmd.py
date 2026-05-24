@@ -129,5 +129,5 @@ def set_cmd(key: str, value: str, config_path: Path | None) -> None:
     doc[section][field] = coerced  # type: ignore[index]
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8")  # noqa: durable-write
     click.echo(f"Set {key} = {coerced}")

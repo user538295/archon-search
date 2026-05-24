@@ -156,7 +156,10 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
     ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
-    job = store.create(namespace=ns)
+    try:
+        job = store.create(namespace=ns)
+    except OSError:
+        return JSONResponse({"detail": "internal error"}, status_code=500)
     ingest_body = IngestRequest(
         collection=collection_name, path=resolved, ingested_by=ingested_by
     )
@@ -298,7 +301,7 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
 
 
 @router.post("/{name}/reindex", status_code=202, response_model=JobResponse, responses=_ERROR_401_404)
-async def reindex_collection(name: str, request: Request) -> JobResponse:
+async def reindex_collection(name: str, request: Request) -> JobResponse | JSONResponse:
     """Start a reindex job for an existing collection. 404 if not found."""
     config: SearchConfig = request.app.state.config
     store: JobStore = request.app.state.job_store
@@ -316,7 +319,10 @@ async def reindex_collection(name: str, request: Request) -> JobResponse:
     resolved = path_to_name[name]
 
     ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
-    job = store.create(namespace=ns)
+    try:
+        job = store.create(namespace=ns)
+    except OSError:
+        return JSONResponse({"detail": "internal error"}, status_code=500)
     ingest_body = IngestRequest(collection=name, path=resolved, ingested_by=ingested_by)
     task = asyncio.create_task(_default_ingest_task(job.job_id, store, ingest_body, namespace=ns))
     request.app.state._background_tasks.add(task)

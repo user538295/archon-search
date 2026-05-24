@@ -76,7 +76,7 @@ def save_config(config: SearchConfig, path: Path | str) -> None:
     col_section["pinned_collections"] = tomlkit.array()
     col_section["pinned_collections"].extend(config.pinned_collections)
 
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8")  # noqa: durable-write
 
 
 def get_default_config_path() -> Path:

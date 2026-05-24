@@ -82,15 +82,15 @@ async def _default_ingest_task(
         logger.exception("Ingest task %s failed", job_id)
         try:
             store.update(job_id, status=JobStatus.FAILED, error=str(exc))
-        except KeyError:
-            pass
+        except (KeyError, OSError):
+            logger.error("background ingest: could not persist FAILED status for job %s", job_id)
 
 
 _ERROR_401 = {401: {"model": ErrorDetail}}
 
 
 @router.post("/ingest", status_code=202, response_model=JobResponse, responses=_ERROR_401)
-async def ingest(body: IngestRequest, request: Request) -> JobResponse:
+async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONResponse:
     store: JobStore = request.app.state.job_store
     pipeline_fn: Callable[..., Awaitable[None]] | None = getattr(
         request.app.state, "ingest_pipeline", None
@@ -98,7 +98,10 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse:
     # Populate ingested_by from HTTP header (normalized at boundary).
     body.ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     ns = request.state.namespace
-    job = store.create(namespace=ns)
+    try:
+        job = store.create(namespace=ns)
+    except OSError:
+        return JSONResponse({"detail": "internal error"}, status_code=500)
     task = asyncio.create_task(_default_ingest_task(job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn))
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
@@ -137,7 +140,10 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
         return JobResponse(**job_to_dict(job))
     if job.status in _ACTIVE_STATUSES:
         # Use transition() to avoid TOCTOU race: only updates if still active
-        updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)
+        try:
+            updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)
+        except OSError:
+            return JSONResponse({"detail": "internal error"}, status_code=500)
         if updated is None:
             # Race: job became terminal between get() and transition() — idempotent 200
             job = store.get(job_id)

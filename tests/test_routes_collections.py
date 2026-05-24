@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1235,3 +1236,80 @@ def test_add_collection_rollback_save_failure(
         response = c.post("/collections/", json={"path": str(src)})
 
     assert response.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# OSError on JobStore writes → 500 envelope (Task 2.6)
+# ---------------------------------------------------------------------------
+
+
+def test_collection_add_oserror_returns_500_envelope(
+    tmp_path: Path,
+) -> None:
+    """POST /collections/ returns the 500 envelope when store.create raises OSError."""
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    job_store = MagicMock()
+    job_store.create.side_effect = OSError("disk full")
+
+    # search_store.update_collection_meta must succeed so execution reaches store.create
+    search_store = MagicMock()
+    search_store.get_all_collections_meta = AsyncMock(return_value=[])
+    search_store.update_collection_meta = AsyncMock()
+    search_store.migrate_namespace = AsyncMock()
+    search_store.migrate_acl = AsyncMock()
+    search_store.connect = AsyncMock()
+    search_store.disconnect = AsyncMock()
+
+    with mock.patch("archon_search.server.app.DocumentChunker"):
+        app = create_app(cfg, job_store)
+    app.state.search_store = search_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+
+
+def test_collection_reindex_oserror_returns_500_envelope(
+    tmp_path: Path,
+) -> None:
+    """POST /collections/{name}/reindex returns the 500 envelope when store.create raises OSError."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default")
+
+    job_store = MagicMock()
+    job_store.create.side_effect = OSError("disk full")
+
+    search_store = MagicMock()
+    search_store.get_collection_meta = AsyncMock(return_value=meta)
+    search_store.migrate_namespace = AsyncMock()
+    search_store.migrate_acl = AsyncMock()
+    search_store.connect = AsyncMock()
+    search_store.disconnect = AsyncMock()
+
+    with mock.patch("archon_search.server.app.DocumentChunker"):
+        app = create_app(cfg, job_store)
+    app.state.search_store = search_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
