@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -168,16 +170,18 @@ async def test_writer_swallows_oserror_and_continues(
     fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
     writer = TelemetryWriter(tmp_path, clock=lambda: fixed)
 
-    real_open = Path.open
+    # The rewritten _append writes via os.write on a persistent fd, so the
+    # fault must be injected there (Path.open is no longer used).
+    real_write = os.write
     calls = {"n": 0}
 
-    def flaky_open(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+    def flaky_write(fd, data):  # type: ignore[no-untyped-def]
         calls["n"] += 1
         if calls["n"] == 1:
             raise OSError("disk-full-simulation")
-        return real_open(self, *args, **kwargs)
+        return real_write(fd, data)
 
-    monkeypatch.setattr(Path, "open", flaky_open)
+    monkeypatch.setattr(os, "write", flaky_write)
 
     caplog.set_level(logging.WARNING, logger="archon.search")
     await writer.start()
@@ -185,8 +189,8 @@ async def test_writer_swallows_oserror_and_continues(
     writer.enqueue(_make_entry("ok"))
     await writer.drain_and_stop()
 
-    # Restore Path.open before reading back, so read_text doesn't trip the fault.
-    monkeypatch.setattr(Path, "open", real_open)
+    # Restore os.write before reading back, so nothing else trips the fault.
+    monkeypatch.setattr(os, "write", real_write)
 
     log_file = tmp_path / "2026-05-14.jsonl"
     assert log_file.exists()
@@ -605,3 +609,295 @@ async def test_writer_keeps_short_entry_result_doc_ids_intact(tmp_path: Path) ->
     parsed = json.loads(log_file.read_text(encoding="utf-8").splitlines()[0])
     assert "truncated" not in parsed
     assert parsed["result_doc_ids"] == original_ids
+
+
+# ---------------------------------------------------------------------------
+# Task 3.1 — persistent per-date fd with rotate-only fsync (ADR-06)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_append_opens_persistent_fd_once_per_date(tmp_path: Path) -> None:
+    """Three appends on the same date must open the fd exactly once."""
+    when = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: when)
+
+    real_open = os.open
+    with mock.patch.object(os, "open", side_effect=real_open) as spy_open:
+        writer._append(when, b'{"n":1}\n')
+        writer._append(when, b'{"n":2}\n')
+        writer._append(when, b'{"n":3}\n')
+        assert spy_open.call_count == 1
+
+    # Flush/close so the file is readable and no fd leaks.
+    assert writer._fd is not None
+    os.fsync(writer._fd)
+    os.close(writer._fd)
+    writer._fd = None
+
+    log_file = tmp_path / "2026-05-14.jsonl"
+    assert len(log_file.read_text(encoding="utf-8").splitlines()) == 3
+
+
+@pytest.mark.asyncio
+async def test_append_rotates_fd_on_date_change(tmp_path: Path) -> None:
+    """On a date rollover, os.fsync + os.close of the old fd must happen
+    BEFORE the second os.open."""
+    date_a = datetime(2026, 5, 14, 23, 0, 0, tzinfo=UTC)
+    date_b = datetime(2026, 5, 15, 1, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: date_a)
+
+    events: list[tuple[str, object]] = []
+    real_open = os.open
+    real_fsync = os.fsync
+    real_close = os.close
+
+    def spy_open(*args, **kwargs):  # type: ignore[no-untyped-def]
+        fd = real_open(*args, **kwargs)
+        events.append(("open", fd))
+        return fd
+
+    def spy_fsync(fd):  # type: ignore[no-untyped-def]
+        events.append(("fsync", fd))
+        return real_fsync(fd)
+
+    def spy_close(fd):  # type: ignore[no-untyped-def]
+        events.append(("close", fd))
+        return real_close(fd)
+
+    with (
+        mock.patch.object(os, "open", side_effect=spy_open),
+        mock.patch.object(os, "fsync", side_effect=spy_fsync),
+        mock.patch.object(os, "close", side_effect=spy_close),
+    ):
+        writer._append(date_a, b'{"d":"a"}\n')
+        old_fd = events[0][1]
+        writer._append(date_b, b'{"d":"b"}\n')
+
+        # Two opens total (one per date).
+        open_indices = [i for i, e in enumerate(events) if e[0] == "open"]
+        assert len(open_indices) == 2
+        second_open_idx = open_indices[1]
+
+        fsync_old_idx = events.index(("fsync", old_fd))
+        close_old_idx = events.index(("close", old_fd))
+
+        # fsync and close of the OLD fd both precede the second open.
+        assert fsync_old_idx < second_open_idx
+        assert close_old_idx < second_open_idx
+        # And fsync precedes close (durability ordering).
+        assert fsync_old_idx < close_old_idx
+
+    # Close the live (date_b) fd.
+    assert writer._fd is not None
+    os.fsync(writer._fd)
+    os.close(writer._fd)
+    writer._fd = None
+
+
+@pytest.mark.asyncio
+async def test_append_does_not_fsync_per_write(tmp_path: Path) -> None:
+    """100 appends on ONE date must trigger zero fsyncs (no rotation occurs)."""
+    when = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: when)
+
+    with mock.patch.object(os, "fsync") as spy_fsync:
+        for i in range(100):
+            writer._append(when, f'{{"n":{i}}}\n'.encode())
+        assert spy_fsync.call_count == 0
+
+    # Close the fd cleanly.
+    assert writer._fd is not None
+    os.fsync(writer._fd)
+    os.close(writer._fd)
+    writer._fd = None
+
+
+@pytest.mark.asyncio
+async def test_drain_and_stop_fsyncs_and_closes_fd(tmp_path: Path) -> None:
+    """drain_and_stop must fsync + close the persistent fd and reset it."""
+    fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: fixed)
+
+    real_fsync = os.fsync
+    real_close = os.close
+    fsynced: list[int] = []
+    closed: list[int] = []
+
+    def spy_fsync(fd):  # type: ignore[no-untyped-def]
+        fsynced.append(fd)
+        return real_fsync(fd)
+
+    def spy_close(fd):  # type: ignore[no-untyped-def]
+        closed.append(fd)
+        return real_close(fd)
+
+    await writer.start()
+    writer.enqueue(_make_entry())
+    # Let the drain task write the entry (and open the fd) before patching,
+    # then capture the live fd, then drain.
+    with (
+        mock.patch.object(os, "fsync", side_effect=spy_fsync),
+        mock.patch.object(os, "close", side_effect=spy_close),
+    ):
+        # Give the drain loop a tick to consume and open the fd.
+        await writer._queue.join()
+        fd = writer._fd
+        assert fd is not None
+        await writer.drain_and_stop()
+
+    assert fd in fsynced
+    assert fd in closed
+    assert writer._fd is None
+
+
+@pytest.mark.asyncio
+async def test_drain_and_stop_idempotent_with_no_fd(tmp_path: Path) -> None:
+    """drain_and_stop with no appends must not fsync and must return cleanly."""
+    fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: fixed)
+
+    await writer.start()
+    with mock.patch.object(os, "fsync") as spy_fsync:
+        await writer.drain_and_stop()
+        assert spy_fsync.call_count == 0
+    assert writer._fd is None
+
+
+@pytest.mark.asyncio
+async def test_oserror_during_rotation_swallowed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An OSError on rotation fsync is swallowed by _run; no exception escapes
+    the drain task and telemetry stays best-effort."""
+    date_a = datetime(2026, 5, 14, 23, 0, 0, tzinfo=UTC)
+    date_b = datetime(2026, 5, 15, 1, 0, 0, tzinfo=UTC)
+    times = [date_a, date_b]
+    idx = {"i": 0}
+
+    def fake_clock() -> datetime:
+        t = times[min(idx["i"], len(times) - 1)]
+        idx["i"] += 1
+        return t
+
+    writer = TelemetryWriter(tmp_path, clock=fake_clock)
+
+    real_fsync = os.fsync
+    call_count = {"n": 0}
+
+    def flaky_fsync(fd):  # type: ignore[no-untyped-def]
+        call_count["n"] += 1
+        # Fail only on the rotation fsync (the first fsync ever issued).
+        if call_count["n"] == 1:
+            raise OSError("rotation-fsync-failed")
+        return real_fsync(fd)
+
+    caplog.set_level(logging.WARNING, logger="archon.search")
+    with mock.patch.object(os, "fsync", side_effect=flaky_fsync):
+        await writer.start()
+        writer.enqueue(_make_entry("before"))  # opens fd on date_a
+        writer.enqueue(_make_entry("after"))  # triggers rotation -> fsync raises
+        await writer.drain_and_stop()
+
+    # The drain task must not have crashed with the rotation OSError.
+    assert writer._task is None
+    # A write-failure warning was emitted (the swallowed OSError path).
+    io_warnings = [
+        r for r in caplog.records if "write failed" in r.getMessage().lower()
+    ]
+    assert len(io_warnings) >= 1
+
+
+@pytest.mark.asyncio
+async def test_rotation_failure_clears_fd_state_and_recovers(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A one-shot OSError on rotation fsync is swallowed, clears fd state, and
+    the next append opens a fresh fd and writes its payload."""
+    date_a = datetime(2026, 5, 14, 23, 0, 0, tzinfo=UTC)
+    date_b = datetime(2026, 5, 15, 1, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: date_a)
+
+    real_fsync = os.fsync
+    call_count = {"n": 0}
+
+    def flaky_fsync(fd):  # type: ignore[no-untyped-def]
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise OSError("rotation-fsync-failed")
+        return real_fsync(fd)
+
+    caplog.set_level(logging.WARNING, logger="archon.search")
+    with mock.patch.object(os, "fsync", side_effect=flaky_fsync):
+        # First append on date_a opens the fd.
+        writer._append(date_a, b'{"d":"a"}\n')
+        # Rotation to date_b: rotation fsync raises -> state cleared, re-raised.
+        with pytest.raises(OSError, match="rotation-fsync-failed"):
+            writer._append(date_b, b'{"d":"b-lost"}\n')
+
+        # (ii) fd state fully cleared after the failed rotation.
+        assert writer._fd is None
+        assert writer._fd_date is None
+
+        # (iii) the NEXT append reopens a fresh fd on the current date and writes.
+        writer._append(date_b, b'{"d":"b-ok"}\n')
+        assert writer._fd is not None
+        assert writer._fd_date == "2026-05-15"
+        os.fsync(writer._fd)
+        os.close(writer._fd)
+        writer._fd = None
+
+    # (i) when driven through _run, the OSError would be swallowed; verified by
+    # the direct re-raise above being exactly OSError (caught by _run's except).
+    file_a = tmp_path / "2026-05-14.jsonl"
+    file_b = tmp_path / "2026-05-15.jsonl"
+    assert json.loads(file_a.read_text().splitlines()[0])["d"] == "a"
+    # The lost write never made it; the recovery write did.
+    b_lines = [json.loads(line) for line in file_b.read_text().splitlines()]
+    assert {"d": "b-ok"} in b_lines
+    assert {"d": "b-lost"} not in b_lines
+
+
+@pytest.mark.asyncio
+async def test_rotation_fsyncs_before_closing_old_fd(tmp_path: Path) -> None:
+    """Deterministic ordering: on rotation, fsync(old_fd) precedes close(old_fd)."""
+    date_a = datetime(2026, 5, 14, 23, 0, 0, tzinfo=UTC)
+    date_b = datetime(2026, 5, 15, 1, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: date_a)
+
+    calls: list[tuple[str, int]] = []
+    real_open = os.open
+    real_fsync = os.fsync
+    real_close = os.close
+    opened: list[int] = []
+
+    def spy_open(*args, **kwargs):  # type: ignore[no-untyped-def]
+        fd = real_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+
+    def spy_fsync(fd):  # type: ignore[no-untyped-def]
+        calls.append(("fsync", fd))
+        return real_fsync(fd)
+
+    def spy_close(fd):  # type: ignore[no-untyped-def]
+        calls.append(("close", fd))
+        return real_close(fd)
+
+    with (
+        mock.patch.object(os, "open", side_effect=spy_open),
+        mock.patch.object(os, "fsync", side_effect=spy_fsync),
+        mock.patch.object(os, "close", side_effect=spy_close),
+    ):
+        writer._append(date_a, b'{"d":"a"}\n')
+        old_fd = opened[0]
+        writer._append(date_b, b'{"d":"b"}\n')
+
+        assert ("fsync", old_fd) in calls
+        assert ("close", old_fd) in calls
+        assert calls.index(("fsync", old_fd)) < calls.index(("close", old_fd))
+
+    assert writer._fd is not None
+    os.fsync(writer._fd)
+    os.close(writer._fd)
+    writer._fd = None
