@@ -1,7 +1,7 @@
 **Purpose**: Enumerate every `archon_search` module, its role, and the layer it belongs to.
 **Audience**: Engineers locating where a change belongs; reviewers checking layering.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
+**Last reviewed**: 2026-05-24
 **Next review**: 2026-08-20
 
 # Component Catalog and Layer Breakdown
@@ -13,7 +13,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 1. **One module, one layer.** A module that touches two layers (e.g. parser code in a route handler) is a smell — escalate before merging.
 2. **Layers depend downward only.** Server depends on Query/Ingest; Query/Ingest never imports Server.
 3. **Names mirror responsibilities.** `routes_*.py` are HTTP edges; `*_meta.py` are metadata models; `_types.py` is the dataclass spine.
-4. **Underscored modules are internal.** `_types.py`, `_diagnostics.py`, `_helpers.py` are not part of the public import surface.
+4. **Underscored modules are internal.** `_types.py`, `_diagnostics.py`, `_helpers.py`, `_durable_io.py` are not part of the public import surface.
 5. **No reaching across siblings.** Pipeline stages talk to each other only through `SearchPipeline`; route modules talk to each other only through `app.state`. (#Unverified — `routes_collections.py` currently imports `IngestRequest` and `_default_ingest_task` from `routes_jobs.py` at module level; this is a type/helper import rather than runtime state sharing, but it bends the rule.)
 
 ## Layer summary
@@ -118,7 +118,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | Module | Purpose | Key public symbols |
 |---|---|---|
 | `archon_search/telemetry/entry.py` | Structural model + factories. **Factories take no `query` parameter — raw queries are never logged.** | `TelemetryEntry`, `EndpointKind`, `Status`, `ErrorKind` |
-| `archon_search/telemetry/writer.py` | Background JSONL writer; one line per call into `~/.archon-search/search-logs/`. | `TelemetryWriter` |
+| `archon_search/telemetry/writer.py` | Background JSONL writer; one line per call into `~/.archon-search/search-logs/` via a persistent per-date fd with rotate-only fsync (not per-line fsync; see [130 durability contract](130_data_architecture_and_persistence.md#telemetry-durability-rotate-only-fsync)). | `TelemetryWriter` |
 | `archon_search/telemetry/reader.py` | Reads logs for `/telemetry/stats` and `/telemetry/entries`. | `TelemetryReader` |
 | `archon_search/telemetry/pruner.py` | Enforces `retention_days` on the log directory. | `Pruner` |
 
@@ -148,8 +148,9 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/_types.py` | Internal dataclass spine: `ChunkRecord`, `SearchResult`, `DocumentInfo`, `CollectionInfo`, `IngestResult`. | (internal) |
 | `archon_search/types.py` | Public job/collection types: `JobStatus`, `IngestJob`, `ReindexJob`, `DeleteJob`, `Query`, `RouteResponse`, `Collection`, `CollectionDetail`, `Chunk`. | (public surface) |
 | `archon_search/progress.py` | Indexing progress state: `IndexingStatus`, `CollectionProgress`, `IndexingState`, `IndexingStateStore`, ETA helpers. | `IndexingStatus`, `CollectionProgress`, `IndexingState`, `IndexingStateStore`, `compute_eta_seconds` |
-| `archon_search/key_manager.py` | Resolve the API key from env (`ARCHON_SEARCH_API_KEY`), file (`ARCHON_SEARCH_KEY_FILE` or `~/.archon-search/.search.env`), or generate one (chmod 600). | `load_or_generate_key` |
+| `archon_search/key_manager.py` | Resolve the API key from env (`ARCHON_SEARCH_API_KEY`), file (`ARCHON_SEARCH_KEY_FILE` or `~/.archon-search/.search.env`), or generate one (durable write with mode `0600` set at creation via `_durable_io.atomic_write_bytes`). | `load_or_generate_key` |
 | `archon_search/watcher.py` | Watchdog-driven `CollectionWatcher` + `WatcherManager` with a debounced handler. | `CollectionWatcher`, `WatcherManager` |
 | `archon_search/sync.py` | `SearchCollectionSync`: full reconcile between on-disk corpora and the index; manifest-based collection naming. | `SearchCollectionSync`, `SyncResult`, `path_to_collection_name` |
 | `archon_search/install.py` | High-level installer driving `platform/*` and bootstrap. | `SearchInstaller` |
 | `archon_search/_diagnostics.py` | Internal diagnostics helpers. | internal |
+| `archon_search/_durable_io.py` | Durable fsync-backed atomic file writes (fsync file → `os.replace` → fsync parent dir). All durable JSON/bytes state writes route through here; see [130_data_architecture_and_persistence.md](130_data_architecture_and_persistence.md#durability-contract). | `atomic_write_json`, `atomic_write_bytes` |
