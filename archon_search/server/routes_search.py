@@ -141,7 +141,6 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         logger.error(
             "search pipeline timed out",
             extra={"event_type": "search_timeout"},
-            exc_info=True,
         )
         raise HTTPException(status_code=504, detail="Search timed out")
     except Exception as exc:
