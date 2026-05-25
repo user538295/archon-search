@@ -233,7 +233,7 @@ class ExplainResponse(BaseModel):
 > **Releasable**: after Task 2.2; every response from the FastAPI app and MCP app carries `X-Request-ID`.
 
 #### Task 2.1 — Pure-ASGI `RequestContextMiddleware`
-- [ ] **File**: `archon_search/server/middleware_context.py`
+- [x] **File**: `archon_search/server/middleware_context.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - `class RequestContextMiddleware` implementing the raw ASGI interface (NOT `BaseHTTPMiddleware`):
