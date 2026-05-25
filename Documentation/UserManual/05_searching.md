@@ -99,12 +99,13 @@ A typical workflow is: call `/route`, then call `/search` once per name in `pinn
 
 ## MCP tools
 
-`archon_search/server/mcp.py` registers nine tools, all auth-protected via the same Bearer middleware. The surface is intentionally narrower than REST — it covers search + ingestion + collection inspection, not async jobs or telemetry.
+`archon_search/server/mcp.py` registers ten tools, all auth-protected via the same Bearer middleware. The surface is intentionally narrower than REST — it covers search + ingestion + collection inspection + the `explain` debug/trace tool, not async jobs or telemetry.
 
 | Tool | Inputs | Output |
 | --- | --- | --- |
 | `search` | `query`, `collection?` | `{"results":[…], "acl_filtered":bool}` (see `BREAKING.md` — was previously a bare list) |
 | `search_with_context` | `query`, `collection?`, `context_window=1` | `[{result, context_before, context_after}, …]` |
+| `explain` | `query`, `collection?`, `top_k=5`, `rerank=true` | Per-stage retrieval/reranking trace plus routing decision (mirrors `POST /explain`) |
 | `ingest_file` | `path`, `collection?` | Per-file ingest result dict |
 | `ingest_directory` | `path`, `glob_pattern="**/*"`, `collection?` | List of ingest results; reports MCP progress |
 | `list_collections` | — | List of collection summaries (centroid omitted) |

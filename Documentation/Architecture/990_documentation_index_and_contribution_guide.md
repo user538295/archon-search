@@ -46,7 +46,7 @@ End-user / operator documentation. Audience is medior-technical operators runnin
 | [`UserManual/02_configuration.md`](../UserManual/02_configuration.md) | `archon-search.toml` sections, `ARCHON_SEARCH_CONFIG`, auth key resolution. |
 | [`UserManual/03_running_the_server.md`](../UserManual/03_running_the_server.md) | `start`/`stop`/`status`, exposed endpoints, Bearer-auth examples. |
 | [`UserManual/04_ingestion_and_collections.md`](../UserManual/04_ingestion_and_collections.md) | `ingest`/`sync`/`collection` CLI and REST equivalents; watcher and reindex triggers. |
-| [`UserManual/05_searching.md`](../UserManual/05_searching.md) | `POST /search`, `POST /route`, and the nine MCP tools. |
+| [`UserManual/05_searching.md`](../UserManual/05_searching.md) | `POST /search`, `POST /route`, and the ten MCP tools. |
 | [`UserManual/06_telemetry.md`](../UserManual/06_telemetry.md) | Opt-in local telemetry, no-raw-query invariant, read-back endpoints. |
 | [`UserManual/07_troubleshooting.md`](../UserManual/07_troubleshooting.md) | Common failure modes: auth, empty results, stuck reindex, install hangs. |
 
@@ -73,7 +73,7 @@ Integration-side documentation for engineers consuming `archon-search` from anot
 | [`DeveloperGuide/02_authentication.md`](../DeveloperGuide/02_authentication.md) | API-key resolution, Bearer header, per-namespace keys. |
 | [`DeveloperGuide/03_rest_client_python.md`](../DeveloperGuide/03_rest_client_python.md) | `httpx` examples for search, collections, jobs, route, health. |
 | [`DeveloperGuide/04_rest_client_typescript.md`](../DeveloperGuide/04_rest_client_typescript.md) | Same flows in TypeScript with hand-written types matching `schemas.py`. |
-| [`DeveloperGuide/05_mcp_integration.md`](../DeveloperGuide/05_mcp_integration.md) | The 9 MCP tools, Claude Code wiring, SDK usage. |
+| [`DeveloperGuide/05_mcp_integration.md`](../DeveloperGuide/05_mcp_integration.md) | The 10 MCP tools, Claude Code wiring, SDK usage. |
 | [`DeveloperGuide/06_error_handling.md`](../DeveloperGuide/06_error_handling.md) | REST status codes, MCP `McpErrorResponse`, retry guidance, 500/504 on pipeline failure (`CON-5` resolved in A3). |
 | [`DeveloperGuide/07_versioning_and_breaking_changes.md`](../DeveloperGuide/07_versioning_and_breaking_changes.md) | CalVer scheme, `BREAKING.md` reading guide, client pinning. |
 

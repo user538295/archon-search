@@ -783,6 +783,18 @@ class SearchStore:
 
         return results
 
+    async def hybrid_search_with_trace(
+        self,
+        collection: str,
+        query_vector: list[float],
+        query_text: str,
+        candidate_depth: int,
+    ) -> list[ScoredSearchCandidate]:
+        """Thin instance-method delegate to module-level _hybrid_search_with_trace."""
+        return await _hybrid_search_with_trace(
+            self, collection, query_vector, query_text, candidate_depth
+        )
+
     # ------------------------------------------------------------------
     # Delete
     # ------------------------------------------------------------------
@@ -1078,6 +1090,10 @@ async def _hybrid_search_with_trace(
         if in_fts:
             rrf += _rrf_score(fts_rank[chunk_id])
 
+        raw_acl = row.get("acl")
+        row_acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
+        indexed_at = row.get("indexed_at") or ""
+
         candidates.append(
             ScoredSearchCandidate(
                 doc_id=row["doc_id"],
@@ -1095,6 +1111,13 @@ async def _hybrid_search_with_trace(
                     reranker_score=None,
                 ),
                 collection=collection,
+                acl=row_acl,
+                file_type=row.get("file_type") or "",
+                indexed_at=indexed_at,
+                updated_at=row.get("updated_at") or indexed_at,
+                ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
+                language=row.get("language") or None,
+                metadata=parse_metadata(row.get("metadata") or "{}"),
             )
         )
 

@@ -1,4 +1,4 @@
-**Purpose**: Document how to consume `archon-search` as an MCP server, including the nine tool names, their argument shapes, and how to register the server with Claude Code and similar clients.
+**Purpose**: Document how to consume `archon-search` as an MCP server, including the ten tool names, their argument shapes, and how to register the server with Claude Code and similar clients.
 **Audience**: Engineers wiring `archon-search` into MCP-aware tools (Claude Code, Cline, custom agents using `@modelcontextprotocol` SDKs).
 **Status**: Draft
 **Last reviewed**: 2026-05-20 / **Next review**: 2027-05-20
@@ -12,11 +12,11 @@
 ## Principles
 
 1. **Same auth as REST.** Every MCP request carries `Authorization: Bearer <token>`. The `/health` route is registered on the FastMCP app at `mcp.py:230` (via `@app.custom_route`); the exemption from `APIKeyMiddleware` is shared with REST and defined by `_EXEMPT_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}` in `archon_search/server/middleware_auth.py:16`.
-2. **Nine tools, named exactly as in `mcp.py`.** Adding or renaming a tool requires a `BREAKING.md` entry per project policy (see `CLAUDE.md` and `Documentation/Architecture/520_api_design_and_contracts.md`). Tool names are not symmetric with REST routes.
+2. **Ten tools, named exactly as in `mcp.py`.** Adding or renaming a tool requires a `BREAKING.md` entry per project policy (see `CLAUDE.md` and `Documentation/Architecture/520_api_design_and_contracts.md`). Tool names are not symmetric with REST routes.
 3. **Responses are dicts, not validated.** Today MCP tools return `dataclasses.asdict(...)` payloads with no Pydantic gate (`mcp.py` uses `asdict(r)` throughout). This is tracked as `API-4` in `Documentation/Architecture/530_technical_debt_refactoring_roadmap.md` and as item C7 in `Documentation/Backlog/03_world_class_roadmap.md`; clients should expect best-effort field stability and watch `BREAKING.md`.
 4. **Errors are in-band.** Tool errors return `{"error": "...", "code": "..."}` as the tool result at HTTP 200, not an HTTP error. See `06_error_handling.md`.
 
-## The nine tools
+## The ten tools
 
 Verified against `archon_search/server/mcp.py`. The `collection` argument defaults to the server's `default_collection` when omitted. The happy-path returns are listed below; every tool also returns an `McpErrorResponse` dict (`{"error": str, "code": "internal_error"}`) on exception, regardless of the success type shown.
 
@@ -24,6 +24,7 @@ Verified against `archon_search/server/mcp.py`. The `collection` argument defaul
 | --- | --- | --- |
 | `search` | `query: str`, `collection?: str` | `{"results": [SearchResult dict ...], "acl_filtered": bool}` |
 | `search_with_context` | `query: str`, `collection?: str`, `context_window: int = 1` | `list[{result, context_before, context_after}]` |
+| `explain` | `query: str`, `collection?: str`, `top_k: int = 5`, `rerank: bool = True` | `ExplainResponse` dict (`{rerank, routing, collection, acl_filtered, results, near_misses}`) — same structure as REST `POST /explain` (serialized via `response.model_dump(mode="json", exclude_none=False)`) |
 | `ingest_file` | `path: str`, `collection?: str` | `asdict(IngestResult)` dict |
 | `ingest_directory` | `path: str`, `glob_pattern: str = "**/*"`, `collection?: str` | `list[dict]` (`asdict(IngestResult)` per entry); progress reported via `ctx.report_progress` |
 | `list_collections` | — | `list[dict]` (per-collection `asdict(CollectionMeta)` with the `centroid` field popped) |
@@ -37,6 +38,7 @@ Each `SearchResult` dict has the shape `{doc_id, chunk_id, text, score, source_p
 ## Difference vs REST
 
 - `search` over MCP returns the same top-level envelope as REST (`{results, acl_filtered}`), but the per-result dicts differ: MCP results include the `acl` field; REST's `SearchResultSchema.from_result` (`routes_search.py:47`) omits it. #Unverified — the framing "post-`BREAKING.md` shape; the old bare-list response is gone" is a historical claim not re-verified against `BREAKING.md` in this revision.
+- `explain` mirrors REST `POST /explain`: it returns the same `ExplainResponse` structure (per-stage score breakdown for `results` and `near_misses`, plus the `routing` decision when no collection is pinned). The MCP tool serializes the model via `model_dump`; the REST route returns the Pydantic model directly. The query is never echoed in the response or telemetry on either surface.
 - `search_with_context` exists **only** on MCP. There is no REST equivalent.
 - Ingest is **synchronous** on MCP — `ingest_file` and `ingest_directory` block until done and return the result. REST's `POST /ingest` is async (returns a job).
 - `list_documents` and `delete_document` are **MCP-only**. REST has no per-document routes.
@@ -61,7 +63,7 @@ Claude Code reads `~/.claude/settings.json` (and `.mcp.json` in the project root
 }
 ```
 
-Export `ARCHON_SEARCH_API_KEY` in the shell that launches Claude Code, or hard-code the hex token if you cannot rely on env interpolation. Once the MCP app is reachable, Claude Code surfaces the nine tools under the `archon-search` namespace; their schemas come from `FastMCP`'s `@app.tool()` decorators in `mcp.py` (verified). #Unverified — that Claude Code presents them under that exact namespace label depends on client behavior, not on this repo.
+Export `ARCHON_SEARCH_API_KEY` in the shell that launches Claude Code, or hard-code the hex token if you cannot rely on env interpolation. Once the MCP app is reachable, Claude Code surfaces the ten tools under the `archon-search` namespace; their schemas come from `FastMCP`'s `@app.tool()` decorators in `mcp.py` (verified). #Unverified — that Claude Code presents them under that exact namespace label depends on client behavior, not on this repo.
 
 #Unverified — Project-scoped configuration is described as using the same shape in `.mcp.json` at the repo root; this is Claude Code client behavior and is not verifiable from this repository.
 
@@ -101,7 +103,7 @@ curl -sf -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-A `200` response with a `result.tools` array of nine entries confirms the MCP surface is up and your token resolves correctly. A `401` means the bearer was rejected by `APIKeyMiddleware` — see `02_authentication.md`.
+A `200` response with a `result.tools` array of ten entries confirms the MCP surface is up and your token resolves correctly. A `401` means the bearer was rejected by `APIKeyMiddleware` — see `02_authentication.md`.
 
 ## Operational notes
 

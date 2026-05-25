@@ -6,7 +6,9 @@ the eval sub-package.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from archon_search._types import IngestedBy
 
 
 @dataclass
@@ -55,6 +57,13 @@ class ScoredSearchCandidate:
         source_path: File path of the source document.
         score_breakdown: Full score provenance for this candidate.
         collection: Collection this candidate was retrieved from.
+        acl: ACL namespace tokens from the stored row; None when absent.
+        file_type: Source file extension (lowercased at ingest, no leading dot; empty when absent).
+        indexed_at: ISO 8601 UTC ingest timestamp (empty when absent).
+        updated_at: File mtime ISO 8601 UTC; falls back to indexed_at when absent.
+        ingested_by: Call-site identity for the ingest write (cli/http/watcher/reindex).
+        language: Detected language code; None when absent or empty.
+        metadata: Parsed key/value metadata dict (empty when absent).
     """
 
     doc_id: str
@@ -63,3 +72,10 @@ class ScoredSearchCandidate:
     source_path: str
     score_breakdown: SearchScoreBreakdown
     collection: str
+    acl: list[str] | None = None
+    file_type: str = ""
+    indexed_at: str = ""
+    updated_at: str = ""
+    ingested_by: IngestedBy = "cli"
+    language: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)

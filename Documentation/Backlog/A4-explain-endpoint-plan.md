@@ -361,7 +361,7 @@ POST /explain {query, top_k, rerank}
 > **Releasable**: after Task 1.2 the public schemas and telemetry factory exist standalone — importable, validating, and unit-tested. Nothing user-callable yet.
 
 #### Task 1.1 — Extend telemetry entry with `explain`
-- [ ] **File**: `archon_search/telemetry/entry.py`
+- [x] **File**: `archon_search/telemetry/entry.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `explain = "explain"` to `EndpointKind`.
@@ -379,7 +379,7 @@ POST /explain {query, top_k, rerank}
   - Checkpoint: `uv run pytest tests/test_telemetry_entry.py -v`
 
 #### Task 1.2 — Public explain schemas in `routes_explain.py`
-- [ ] **File**: `archon_search/server/routes_explain.py` (new — schema-only stub at this stage; route handler added in Task 3.1)
+- [x] **File**: `archon_search/server/routes_explain.py` (new — schema-only stub at this stage; route handler added in Task 3.1)
 - **Depends on**: nothing
 - **Description**:
   - Create `archon_search/server/routes_explain.py` with the seven public models listed in the Architecture section, plus the `from_pipeline_result` / `from_candidate` / `from_breakdown` classmethods. All `extra="forbid"`. Co-locating schemas with the route matches the `routes_search.py` pattern.
@@ -415,7 +415,7 @@ POST /explain {query, top_k, rerank}
 > **Releasable**: after Task 2.3 the pipeline can compute an explain trace end-to-end against a real LanceDB collection. Still no HTTP surface.
 
 #### Task 2.1 — Extend `ScoredSearchCandidate` with ACL and expose store delegate
-- [ ] **Files**: `archon_search/_diagnostics.py`, `archon_search/store.py`
+- [x] **Files**: `archon_search/_diagnostics.py`, `archon_search/store.py`
 - **Depends on**: nothing
 - **Description**:
   - Append `acl: list[str] | None = None` to `ScoredSearchCandidate`.
@@ -430,7 +430,7 @@ POST /explain {query, top_k, rerank}
   - Checkpoint: `uv run pytest tests/test_diagnostics.py tests/test_store_trace.py -v`
 
 #### Task 2.2 — Router refactor + `rank_with_scores`
-- [ ] **File**: `archon_search/router.py`
+- [x] **File**: `archon_search/router.py`
 - **Depends on**: nothing
 - **Description**:
   - Extract `_score_collections(self, query_embedding, collections) -> list[tuple[CollectionMeta, float | None]]`. Iterates collections; for each, computes cosine similarity if `centroid is not None and embedding_model == self._embedding_model`, else pairs with `None`. Returns scored entries sorted by descending score with ascending `meta.name` tie-break; unscored entries appended in ascending-name order.
@@ -452,7 +452,7 @@ POST /explain {query, top_k, rerank}
   - Checkpoint: `uv run pytest tests/test_router.py -v`
 
 #### Task 2.2.5 — Thread A1/A2 metadata fields through `ScoredSearchCandidate` and `_hybrid_search_with_trace`
-- [ ] **Files**: `archon_search/_diagnostics.py`, `archon_search/store.py`
+- [x] **Files**: `archon_search/_diagnostics.py`, `archon_search/store.py`
 - **Depends on**: Task 2.1 (which already touches both files for the `acl` field; this task extends that change)
 - **Description**:
   - In `_diagnostics.py`: append the following defaulted fields to `ScoredSearchCandidate` (after the `acl` field added by Task 2.1): `file_type: str = ""`, `indexed_at: str = ""`, `updated_at: str = ""`, `ingested_by: IngestedBy = "cli"` (import `IngestedBy` from `archon_search._types`), `language: str | None = None`, `metadata: dict[str, str] = field(default_factory=dict)` (import `field` from `dataclasses`). All defaulted — no breaking constructor change.
@@ -474,11 +474,11 @@ POST /explain {query, top_k, rerank}
   - Integration: `test_hybrid_search_with_trace_normalizes_legacy_ingested_by` — write a row directly with `ingested_by="archon-search-cli"`; assert returned candidate's `ingested_by == "cli"` (boundary normalization parity with A1's `hybrid_search`).
   - Integration: `test_hybrid_search_with_trace_populates_language` — fixture row with `language="en"`; assert it propagates. Also test a row with no `language` column / `None` value; assert candidate's `language is None`.
   - Integration: `test_hybrid_search_with_trace_metadata_is_parsed_dict` — fixture row with `metadata='{"k":"v"}'` (JSON string as stored); assert `candidate.metadata == {"k": "v"}` (parsed, not the raw string).
-  - Unit: `test_scored_search_candidate_metadata_fields_default` — construct `ScoredSearchCandidate` with only required args; assert `file_type == ""`, `indexed_at == ""`, `updated_at == ""`, `ingested_by == "cli"`, `language is None`, `metadata is None`. Pins the defaults so direct test construction stays cheap.
+  - Unit: `test_scored_search_candidate_metadata_fields_default` — construct `ScoredSearchCandidate` with only required args; assert `file_type == ""`, `indexed_at == ""`, `updated_at == ""`, `ingested_by == "cli"`, `language is None`, `metadata == {}` (the field uses `default_factory=dict`). Pins the defaults so direct test construction stays cheap.
   - Checkpoint: `uv run pytest tests/test_diagnostics.py tests/test_store_trace.py -v`
 
 #### Task 2.3 — `SearchPipeline.explain` orchestration
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 1.2 (consumer schemas exist), Task 2.1 (store delegate + ACL field), Task 2.2 (router method available; pipeline does not call it directly but the route handler in Phase 3 does), Task 2.2.5 (metadata fields populated on trace candidates so `from_candidate` has data to read)
 - **Description**:
   - Add `ExplainPipelineResult` dataclass at module scope (`top_results`, `near_misses`, `acl_filtered`).
@@ -514,7 +514,7 @@ POST /explain {query, top_k, rerank}
 > **Releasable**: after Task 3.1 `POST /explain` is callable end-to-end against a running server with a real collection.
 
 #### Task 3.1 — `POST /explain` route handler
-- [ ] **Files**: `archon_search/server/routes_explain.py` (extend with handler), `archon_search/server/app.py` (register router)
+- [x] **Files**: `archon_search/server/routes_explain.py` (extend with handler), `archon_search/server/app.py` (register router)
 - **Depends on**: Task 1.1, Task 1.2, Task 2.1, Task 2.2, Task 2.3
 - **Description**:
   - Add `POST /explain` handler in `routes_explain.py`, bearer-auth-protected by the existing middleware (no per-route hook needed).
@@ -583,7 +583,7 @@ POST /explain {query, top_k, rerank}
 > **Releasable**: after Task 4.1 MCP clients can invoke `explain` and get equivalent output to REST.
 
 #### Task 4.1 — `explain` MCP tool registration
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 3.1 (route handler defines the reference shape)
 - **Description**:
   - Add a 10th `@app.tool()` function `explain(query: str, collection: str | None = None, top_k: int = 5, rerank: bool = True) -> dict[str, Any]`.
@@ -606,7 +606,7 @@ POST /explain {query, top_k, rerank}
 ### Phase 5 — Verification & documentation
 
 #### Task 5.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: Task 1.1, 1.2, 2.1, 2.2, 2.3, 3.1, 4.1
 - **Description**:
   - Spawn a documentation agent to discover and update every file affected by A4:
@@ -621,20 +621,20 @@ POST /explain {query, top_k, rerank}
   - Verify every acceptance criterion below before marking complete. Run the full default test suite (`uv run pytest`) and the eval-marker test (`uv run pytest -m eval`) to confirm green.
 - **Releasable**: after this task, the feature is fully verified and all documentation reflects the delivered implementation.
 - **Acceptance criteria** (must all pass — see `explain-endpoint-brief.md` §"Acceptance Criteria" for full prose):
-  - [ ] **AC1 — Endpoint exists and is authenticated** — `POST /explain` without bearer token returns 401; with valid token returns 200.
-  - [ ] **AC2 — REST↔MCP response equivalence** — for the same inputs against the pre-built fixture LanceDB table, the REST and MCP responses are deep-equal after a JSON round trip (i.e. `json.loads(json.dumps(rest)) == json.loads(json.dumps(mcp))`). Compared this way to dodge float-formatting drift; both responses originate from `ExplainResponse.model_dump(mode="json", exclude_none=False)` so structural parity is exact.
-  - [ ] **AC3 — `/search` top-k equality when `rerank=true` AND `top_k == config.top_k_return`** — ordered `(doc_id, chunk_id)` of `explain.results[:top_k]` equals `search.results` for the same `{collection, query}` when the explain request's `top_k` equals the server's `top_k_return` config. For other `top_k` values this equality is not contracted (and structurally cannot be — `/search` has no `top_k` request param).
-  - [ ] **AC4 — `rerank=false` ordering** — every `result.breakdown.reranker_score is None`; list sorted by `rrf_score` desc with `(doc_id, chunk_id)` ascending tie-break.
-  - [ ] **AC5 — Near-miss pool size** — let `P` = count of candidates surviving ACL filtering from the `max(self._top_k_retrieve * 3, 20)` retrieval pool. Assert `len(near_misses) == min(20, max(0, P - top_k))` for three corpus sizes (large / mid / smaller-than-`top_k`).
-  - [ ] **AC6 — Near-miss `text` absent** — `"text" not in nm` for every near-miss; structurally absent on the model.
-  - [ ] **AC7 — Routing block presence/absence** — pinned → `routing is None`; collectionless → `routing.candidates` non-empty, sorted by `centroid_score` desc + alpha tie-break, and `routing.confidence_threshold` / `routing.chosen_below_threshold` are populated.
-  - [ ] **AC8 — Routing covers all ACL-allowed collections (no confidence gating, ACL still applies)** — `set(c.collection for c in routing.candidates) == set(<ACL-allowed collection names in namespace>)`, including collections the confidence gate would filter out. ACL-disallowed collections MUST NOT appear in `routing.candidates`. If all collections are ACL-filtered → 404 `{"detail": "no collections available"}`.
-  - [ ] **AC9 — Telemetry no-query (positive)** — parsed telemetry JSONL line has no `"query"` key; query string not a substring of raw line; `endpoint == "explain"`; `result_count == len(response.results)`.
-  - [ ] **AC10 — Telemetry factory rejects query (structural)** — `"query" not in inspect.signature(TelemetryEntry.from_explain_result).parameters`; calling `from_explain_result(query="x", ...)` raises `TypeError`.
-  - [ ] **AC11 — ACL parity (REST only)** — `/explain` and `/search` return the same `acl_filtered: True` + empty `results` shape under a fully-filtering ACL fixture. MCP `explain` operates in `DEFAULT_NAMESPACE` only; ACL parity does not apply to MCP in v1.
-  - [ ] **AC12 — Edge-case error envelopes** — empty query → 422; missing pinned collection → 404; collectionless + no collections → 404 `{"detail": "no collections available"}`; collectionless + router/meta-lookup error → 503 (meta-lookup failure path only); store error → 500 (pipeline-stage failure per A3 taxonomy); reranker error → 500 `{"detail": "reranker error: <msg>"}` (pipeline-stage failure per A3 taxonomy — consistent with post-A3 `/search`, no longer a divergence); `top_k > 100` → 422; telemetry writer failure → does not abort response.
-  - [ ] **AC13 — MCP error envelope parity** — empty query, missing collection, collectionless + no collections each surface a matching MCP error (no silent swallowing).
+  - [x] **AC1 — Endpoint exists and is authenticated** — `POST /explain` without bearer token returns 401; with valid token returns 200.
+  - [x] **AC2 — REST↔MCP response equivalence** — for the same inputs against the pre-built fixture LanceDB table, the REST and MCP responses are deep-equal after a JSON round trip (i.e. `json.loads(json.dumps(rest)) == json.loads(json.dumps(mcp))`). Compared this way to dodge float-formatting drift; both responses originate from `ExplainResponse.model_dump(mode="json", exclude_none=False)` so structural parity is exact.
+  - [x] **AC3 — `/search` top-k equality when `rerank=true` AND `top_k == config.top_k_return`** — ordered `(doc_id, chunk_id)` of `explain.results[:top_k]` equals `search.results` for the same `{collection, query}` when the explain request's `top_k` equals the server's `top_k_return` config. For other `top_k` values this equality is not contracted (and structurally cannot be — `/search` has no `top_k` request param).
+  - [x] **AC4 — `rerank=false` ordering** — every `result.breakdown.reranker_score is None`; list sorted by `rrf_score` desc with `(doc_id, chunk_id)` ascending tie-break.
+  - [x] **AC5 — Near-miss pool size** — let `P` = count of candidates surviving ACL filtering from the `max(self._top_k_retrieve * 3, 20)` retrieval pool. Assert `len(near_misses) == min(20, max(0, P - top_k))` for three corpus sizes (large / mid / smaller-than-`top_k`).
+  - [x] **AC6 — Near-miss `text` absent** — `"text" not in nm` for every near-miss; structurally absent on the model.
+  - [x] **AC7 — Routing block presence/absence** — pinned → `routing is None`; collectionless → `routing.candidates` non-empty, sorted by `centroid_score` desc + alpha tie-break, and `routing.confidence_threshold` / `routing.chosen_below_threshold` are populated.
+  - [x] **AC8 — Routing covers all ACL-allowed collections (no confidence gating, ACL still applies)** — `set(c.collection for c in routing.candidates) == set(<ACL-allowed collection names in namespace>)`, including collections the confidence gate would filter out. ACL-disallowed collections MUST NOT appear in `routing.candidates`. If all collections are ACL-filtered → 404 `{"detail": "no collections available"}`.
+  - [x] **AC9 — Telemetry no-query (positive)** — parsed telemetry JSONL line has no `"query"` key; query string not a substring of raw line; `endpoint == "explain"`; `result_count == len(response.results)`.
+  - [x] **AC10 — Telemetry factory rejects query (structural)** — `"query" not in inspect.signature(TelemetryEntry.from_explain_result).parameters`; calling `from_explain_result(query="x", ...)` raises `TypeError`.
+  - [x] **AC11 — ACL parity (REST only)** — `/explain` and `/search` return the same `acl_filtered: True` + empty `results` shape under a fully-filtering ACL fixture. MCP `explain` operates in `DEFAULT_NAMESPACE` only; ACL parity does not apply to MCP in v1.
+  - [x] **AC12 — Edge-case error envelopes** — empty query → 422; missing pinned collection → 404; collectionless + no collections → 404 `{"detail": "no collections available"}`; collectionless + router/meta-lookup error → 503 (meta-lookup failure path only); store error → 500 (pipeline-stage failure per A3 taxonomy); reranker error → 500 `{"detail": "reranker error: <msg>"}` (pipeline-stage failure per A3 taxonomy — consistent with post-A3 `/search`, no longer a divergence); `top_k > 100` → 422; telemetry writer failure → does not abort response.
+  - [x] **AC13 — MCP error envelope parity** — empty query, missing collection, collectionless + no collections each surface a matching MCP error (no silent swallowing).
   - [ ] **AC14 — Eval-harness consistency via public mapping** [eval marker] — single fixture query: call `_rerank_with_trace` directly, pass output through `ExplainResponse.from_pipeline_result` (wrapping it in an `ExplainPipelineResult`), assert the resulting `ExplainResponse` equals the live `/explain` response against the same corpus.
-  - [ ] **AC15 — Coverage** — default `--cov-fail-under=85` gate remains green without amendment. (LOC budget removed; coverage is the only enforceable constraint.)
+  - [x] **AC15 — Coverage** — default `--cov-fail-under=85` gate remains green without amendment. (LOC budget removed; coverage is the only enforceable constraint.)
 - **Tests (TDD)**: N/A — this is a verification and documentation task.
 - **Checkpoint**: manually confirm every acceptance criterion above is checked. Final command: `uv run pytest && uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py`.

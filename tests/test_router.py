@@ -323,3 +323,193 @@ async def test_tier3_confidence_gate_failure_returns_none() -> None:
     assert result is None
     assert router._decomposer_was_invoked is False
     assert router._last_routable_names == []
+
+
+# ---------------------------------------------------------------------------
+# rank_with_scores() tests
+# ---------------------------------------------------------------------------
+
+
+def test_rank_with_scores_returns_all_collections() -> None:
+    """5 collections with valid matching-model centroids → result length == 5."""
+    router = _router(shortlist_size=5, confidence_threshold=0.5)
+    collections = [
+        _meta(f"col-{i}", centroid=[float(i), 1.0]) for i in range(1, 6)
+    ]
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    assert len(result) == 5
+
+
+def test_rank_with_scores_bypasses_confidence_gate() -> None:
+    """confidence_threshold=0.99 → rank() returns []; rank_with_scores() still returns all."""
+    router = _router(shortlist_size=5, confidence_threshold=0.99)
+    collections = [
+        _meta("col-a", centroid=[0.1, 0.9]),
+        _meta("col-b", centroid=[0.2, 0.8]),
+        _meta("col-c", centroid=[0.3, 0.7]),
+    ]
+    assert router.rank([1.0, 0.0], collections) == []
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    assert len(result) == len(collections)
+    # Scores should all be non-None and sorted descending
+    scores = [s for _, s in result]
+    assert all(s is not None for s in scores)
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_rank_with_scores_handles_mismatched_model() -> None:
+    """Collection with different embedding_model gets score=None and is placed after scored."""
+    router = _router(shortlist_size=5, confidence_threshold=0.0, embedding_model="model-a")
+    collections = [
+        _meta("col-scored", centroid=[1.0, 0.0], embedding_model="model-a"),
+        _meta("col-mismatch", centroid=[1.0, 0.0], embedding_model="model-b"),
+    ]
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    assert len(result) == 2
+    names = [m.name for m, _ in result]
+    scores = [s for _, s in result]
+    assert names[0] == "col-scored"
+    assert scores[0] is not None
+    assert names[1] == "col-mismatch"
+    assert scores[1] is None
+
+
+def test_rank_with_scores_handles_none_centroid() -> None:
+    """Collection with centroid=None gets score=None and is placed last."""
+    router = _router(shortlist_size=5, confidence_threshold=0.0)
+    collections = [
+        _meta("col-scored", centroid=[1.0, 0.0]),
+        _meta("col-no-centroid", centroid=None),
+    ]
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    assert len(result) == 2
+    names = [m.name for m, _ in result]
+    scores = [s for _, s in result]
+    assert names[0] == "col-scored"
+    assert scores[0] is not None
+    assert names[1] == "col-no-centroid"
+    assert scores[1] is None
+
+
+def test_rank_with_scores_alphabetical_tie_break() -> None:
+    """Two collections with identical centroids (equal similarity) are ordered by name ascending."""
+    router = _router(shortlist_size=5, confidence_threshold=0.0)
+    same_centroid = [1.0, 0.0]
+    collections = [
+        _meta("zeta", centroid=same_centroid),
+        _meta("alpha", centroid=same_centroid),
+    ]
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    names = [m.name for m, _ in result]
+    assert names == ["alpha", "zeta"]
+
+
+def test_rank_with_scores_does_not_truncate_to_shortlist() -> None:
+    """shortlist_size=2, 5 matching collections → rank_with_scores() returns all 5."""
+    router = _router(shortlist_size=2, confidence_threshold=0.0)
+    collections = [
+        _meta(f"col-{i}", centroid=[float(i), 1.0]) for i in range(1, 6)
+    ]
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    assert len(result) == 5
+
+
+# ---------------------------------------------------------------------------
+# rank() deterministic tie-break + regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_rank_uses_alpha_tie_break() -> None:
+    """Two collections with identical similarity are returned in ascending-name order."""
+    router = _router(shortlist_size=5, confidence_threshold=0.0)
+    same_centroid = [1.0, 0.0]
+    collections = [
+        _meta("zeta", centroid=same_centroid),
+        _meta("alpha", centroid=same_centroid),
+    ]
+    result = router.rank([1.0, 0.0], collections)
+    assert [m.name for m in result] == ["alpha", "zeta"]
+
+
+def test_rank_preserves_confidence_gate_after_refactor() -> None:
+    """All scored collections below threshold → rank() returns []; one above → non-empty."""
+    router_strict = _router(shortlist_size=5, confidence_threshold=0.99)
+    collections = [
+        _meta("col-a", centroid=[0.1, 0.9]),
+        _meta("col-b", centroid=[0.2, 0.8]),
+    ]
+    assert router_strict.rank([1.0, 0.0], collections) == []
+
+    router_lenient = _router(shortlist_size=5, confidence_threshold=0.0)
+    result = router_lenient.rank([1.0, 0.0], collections)
+    assert len(result) > 0
+
+
+def test_rank_preserves_shortlist_truncation_after_refactor() -> None:
+    """shortlist_size=2, 5 matching collections → rank() returns exactly 2."""
+    router = _router(shortlist_size=2, confidence_threshold=0.0)
+    collections = [
+        _meta(f"col-{i}", centroid=[float(i), 1.0]) for i in range(1, 6)
+    ]
+    result = router.rank([1.0, 0.0], collections)
+    assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 2.2 — new coverage tests
+# ---------------------------------------------------------------------------
+
+
+def test_rank_with_scores_none_scored_sorts_after_scored_by_position() -> None:
+    """Scored entry beats an unscored entry regardless of alphabetical order.
+
+    'aaa-unscored' (name sorts first) is unscored; 'zzz-scored' (name sorts last)
+    is scored — result must be ['zzz-scored', 'aaa-unscored'].
+    """
+    router = _router(embedding_model="model-a")
+    meta_aaa = _meta("aaa-unscored", centroid=None)
+    meta_zzz = _meta("zzz-scored", centroid=[1.0, 0.0])
+    result = router.rank_with_scores([1.0, 0.0], [meta_aaa, meta_zzz])
+    names = [m.name for m, _ in result]
+    scores = [s for _, s in result]
+    assert names == ["zzz-scored", "aaa-unscored"]
+    assert scores[0] is not None
+    assert scores[1] is None
+
+
+def test_rank_with_scores_all_unscored_sorted_by_name() -> None:
+    """All unscored collections → result is in ascending name order, all scores None."""
+    router = _router(embedding_model="model-a")
+    # Pass in reverse-alpha order to confirm sorting is applied
+    collections = [
+        _meta("z", centroid=None),
+        _meta("a", centroid=None),
+    ]
+    result = router.rank_with_scores([1.0, 0.0], collections)
+    names = [m.name for m, _ in result]
+    scores = [s for _, s in result]
+    assert names == ["a", "z"]
+    assert all(s is None for s in scores)
+
+
+def test_rank_with_scores_orders_by_descending_score_concrete() -> None:
+    """Three scored collections with distinct similarities → result name order and strict score order."""
+    router = _router(confidence_threshold=0.0)
+    # query [1, 0]; cosine sims: high=[1,0]→1.0, mid=[1,1]→~0.707, low=[0.1,1]→~0.0995
+    meta_low = _meta("low", centroid=[0.1, 1.0])
+    meta_mid = _meta("mid", centroid=[1.0, 1.0])
+    meta_high = _meta("high", centroid=[1.0, 0.0])
+    # pass in non-sorted order
+    result = router.rank_with_scores([1.0, 0.0], [meta_low, meta_mid, meta_high])
+    names = [m.name for m, _ in result]
+    scores = [s for _, s in result]
+    assert names == ["high", "mid", "low"]
+    assert scores[0] is not None and scores[1] is not None and scores[2] is not None
+    assert scores[0] > scores[1] > scores[2]
+
+
+def test_rank_and_rank_with_scores_empty_input() -> None:
+    """Empty collection list → rank() returns [] and rank_with_scores() returns []."""
+    router = _router()
+    assert router.rank([1.0, 0.0], []) == []
+    assert router.rank_with_scores([1.0, 0.0], []) == []

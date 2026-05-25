@@ -97,7 +97,7 @@ class Reranker:
             traced.append(dataclasses.replace(candidate, score_breakdown=new_breakdown))
 
         # Stable sort by reranker_score descending (Python sort is stable → equal scores keep input order)
-        traced.sort(key=lambda c: c.score_breakdown.reranker_score or 0.0, reverse=True)
+        traced.sort(key=lambda c: c.score_breakdown.reranker_score if c.score_breakdown.reranker_score is not None else 0.0, reverse=True)
         return traced[:top_k]
 
 

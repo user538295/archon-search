@@ -605,3 +605,25 @@ async def test_writer_keeps_short_entry_result_doc_ids_intact(tmp_path: Path) ->
     parsed = json.loads(log_file.read_text(encoding="utf-8").splitlines()[0])
     assert "truncated" not in parsed
     assert parsed["result_doc_ids"] == original_ids
+
+
+@pytest.mark.asyncio
+async def test_explain_entry_round_trips_through_writer(tmp_path: Path) -> None:
+    """An explain entry enqueued, drained, and reloaded from JSONL retains its fields."""
+    fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
+    writer = TelemetryWriter(tmp_path, clock=lambda: fixed)
+    await writer.start()
+    entry = TelemetryEntry.from_explain_result(
+        collection="docs", result_count=2, latency_ms=3.0
+    )
+    writer.enqueue(entry)
+    await writer.drain_and_stop()
+
+    log_file = tmp_path / "2026-05-14.jsonl"
+    assert log_file.exists()
+    lines = log_file.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    parsed = json.loads(lines[0])
+    assert parsed["endpoint"] == "explain"
+    assert parsed["result_count"] == 2
+    assert parsed.get("result_doc_ids") is None

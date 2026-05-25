@@ -74,6 +74,12 @@ Verified from `archon_search/server/routes_*.py`:
 | `DELETE /jobs/{id}` with unrecognized `JobStatus` (defensive `else`) | `500` | `routes_jobs.py:153-157` | none — `routes_jobs.py` does not enqueue telemetry |
 | Unmapped exception in `/route` handler body | (re-raised, surfaces per FastAPI default; typically `500`) | `routes_route.py:152-166` | `other` (with `status="internal_error"`) |
 | Telemetry parameter validation | `400` | `routes_telemetry.py:36, 61` | n/a (telemetry endpoint itself) |
+| `/explain` body validation (empty query / `top_k` out of range / extra fields) | `422` | FastAPI default (`ExplainRequest`, `extra="forbid"`) | none (fires before handler body) |
+| `/explain` pinned collection not found | `404` "collection not found" | `routes_explain.py:268` | n/a (not logged) |
+| `/explain` collectionless with no collections available | `404` "no collections available" | `routes_explain.py:278` | n/a (not logged) |
+| `/explain` meta-lookup or router failure | `503` "service unavailable" | `routes_explain.py:266, 276, 295` (catches `Exception`) | `other` (with `status="internal_error"`) |
+| `/explain` pipeline-stage failure (store / reranker) | `500` "`<stage>` error: `<ExceptionType>`" | `routes_explain.py:317-325` (`ExplainStageError`) | `other` (with `status="internal_error"`) |
+| `/explain` other handler failure | `500` "explain failed" | `routes_explain.py:326-329` | `other` (with `status="internal_error"`) |
 
 Successful job submissions (POST collection-add, POST reindex, POST ingest) return `202 Accepted` with a `JobResponse`; the job's eventual outcome is observed via `GET /jobs/{job_id}`.
 
