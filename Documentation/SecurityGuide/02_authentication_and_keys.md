@@ -35,16 +35,16 @@ Token comparison uses `secrets.compare_digest` end-to-end (`middleware_auth.py:4
 Resolution order in `archon_search/key_manager.py::load_or_generate_key`:
 
 1. **`ARCHON_SEARCH_API_KEY` env var.** Must be a non-empty lowercase hex string (`^[0-9a-f]+$`). Invalid values are logged as a warning and ignored; the loader falls through.
-2. **Key file.** Default `~/.archon-search/.search.env`. The path can be overridden by setting `ARCHON_SEARCH_KEY_FILE` **before `archon_search.key_manager` is imported** — the variable is read once at module import time (`key_manager.py:14`) and frozen into the module-global `KEY_FILE`. Setting it after import has no effect. The file must contain a line `ARCHON_SEARCH_API_KEY=<hex>`.
-3. **Auto-generation.** `secrets.token_hex(32)` produces 64 hex characters. The key is written via `os.open(..., O_WRONLY | O_CREAT | O_EXCL, 0o600)` to a temp file in the same directory, then `os.replace`d into place, and finally re-chmodded to `0o600` via `_chmod_600(KEY_FILE)` at `key_manager.py:131` to guarantee the final mode after the rename. Concurrent first-start writers are handled by retrying via `_load_from_file()` (`key_manager.py:87–114`).
+2. **Key file.** Default `~/.archon-search/.search.env`. The path can be overridden by setting `ARCHON_SEARCH_KEY_FILE` **before `archon_search.key_manager` is imported** — the variable is read once at module import time (`key_manager.py:16`) and frozen into the module-global `KEY_FILE`. Setting it after import has no effect. The file must contain a line `ARCHON_SEARCH_API_KEY=<hex>`.
+3. **Auto-generation.** `secrets.token_hex(32)` produces 64 hex characters. The key is written through the durable helper `_durable_io.atomic_write_bytes(KEY_FILE, payload, mode=0o600)` (`key_manager.py:92`), which creates the temp file via `os.open(..., O_WRONLY | O_CREAT | O_EXCL, 0o600)` so the mode is set at creation time (no chmod-after-rename window), fsyncs the file, `os.replace`s it into place, and fsyncs the parent directory. There is no separate post-rename `_chmod_600` call on the write path. Concurrent first-start writers raise `FileExistsError` from `O_EXCL` and are recovered by retrying via `_load_from_file()` (`key_manager.py:90–109`). See the [durability contract](../Architecture/130_data_architecture_and_persistence.md#durability-contract) and [ADR-06](../ADRs/06_durable_state_writes_via_fsync.md).
 
 ## File permissions
 
 | Aspect | Behavior | Source |
 | --- | --- | --- |
-| Creation mode | `0600` requested via the explicit mode argument to `os.open(..., O_WRONLY \| O_CREAT \| O_EXCL, 0o600)` (subject to umask); `O_EXCL` guarantees exclusivity, not mode. The final mode is re-applied via `_chmod_600(KEY_FILE)` after `os.replace` (`key_manager.py:131`). | `key_manager.py:89`, `key_manager.py:131` |
-| Re-tighten on read | If `stat & 0o777 != 0o600`, the loader chmods back to `0o600`. `OSError` from `stat`/`chmod` is silently swallowed (`except OSError: pass`); no log is emitted on failure. | `key_manager.py:54–59` |
-| Windows | `_chmod_600` skips chmod on `win32` and logs "permission check skipped". | `key_manager.py:135–138` |
+| Creation mode | `0600` set at creation via the explicit mode argument to `os.open(..., O_WRONLY \| O_CREAT \| O_EXCL, 0o600)` inside `_durable_io.atomic_write_bytes` (subject to umask); `O_EXCL` guarantees exclusivity. There is no post-`os.replace` re-chmod on the write path — mode-at-creation closes the world-readable window a `write` + `chmod` sequence would open. | `key_manager.py:92`, `_durable_io.py:45–75` |
+| Re-tighten on read | If `stat & 0o777 != 0o600`, the loader chmods back to `0o600`. `OSError` from `stat`/`chmod` is silently swallowed (`except OSError: pass`); no log is emitted on failure. | `key_manager.py:56–61` |
+| Windows | `_chmod_600` (read path only) skips chmod on `win32` and logs "permission check skipped". | `key_manager.py:112–115` |
 
 The directory `~/.archon-search/` is created with `os.makedirs(..., exist_ok=True)` and inherits the user's umask; the operator should ensure the parent directory is not group/world-readable on shared hosts.
 
@@ -53,7 +53,7 @@ The directory `~/.archon-search/` is created with `os.makedirs(..., exist_ok=Tru
 | Variable | Effect | Validation |
 | --- | --- | --- |
 | `ARCHON_SEARCH_API_KEY` | When **valid**, used as the default key for the lifetime of the process and the file is not consulted. When **invalid**, the loader logs a warning and falls through to the file, then to auto-generation. | Must match `^[0-9a-f]+$`. Invalid → warning and fall-through. |
-| `ARCHON_SEARCH_KEY_FILE` | Read/write the key file at this path instead of the default. **Resolved at module import time only** (`key_manager.py:14`); setting it after import has no effect. | No content validation here; the file content is validated by the normal loader. |
+| `ARCHON_SEARCH_KEY_FILE` | Read/write the key file at this path instead of the default. **Resolved at module import time only** (`key_manager.py:16`); setting it after import has no effect. | No content validation here; the file content is validated by the normal loader. |
 
 There is no env override for the per-namespace map — those are loaded from `[namespaces]` in `archon-search.toml` (`archon_search/config.py:225–233`).
 

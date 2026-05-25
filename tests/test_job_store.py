@@ -1,6 +1,7 @@
 """Tests for JobStore — TDD for ."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import uuid
@@ -39,14 +40,20 @@ def test_update_changes_status(store: JobStore) -> None:
     assert updated.status == JobStatus.RUNNING
 
 
-def test_atomic_write(store: JobStore, tmp_path: Path) -> None:
+def test_atomic_write(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
     jobs_path = tmp_path / "jobs.json"
     s = JobStore(path=jobs_path)
-    s.create()
-    # The .tmp file must NOT exist after the write
-    tmp_file = jobs_path.with_suffix(".tmp")
-    assert not tmp_file.exists(), "Temp file should be cleaned up after atomic rename"
-    assert jobs_path.exists(), "Jobs file should exist after write"
+    with patch("archon_search.jobs.store.atomic_write_json") as mock_write:
+        job = s.create()
+    expected = [
+        {
+            **dataclasses.asdict(job),
+            "status": job.status.value,
+        }
+    ]
+    mock_write.assert_called_once_with(jobs_path, expected)
 
 
 def test_crash_recovery_running_to_failed(tmp_path: Path) -> None:
@@ -322,27 +329,16 @@ def test_double_transition_second_rejected(tmp_path: Path) -> None:
     assert s.get(job.job_id).status == JobStatus.RUNNING  # type: ignore[union-attr]
 
 
-# rename failure leaves .tmp on disk
-def test_write_atomic_failure_leaves_tmp_file(tmp_path: Path) -> None:
-    """Verify that after a rename() failure during _write_atomic the .tmp file is on disk.
-
-    Strategy: let _write_atomic write the .tmp normally, then make rename() raise.
-    This is the exact crash scenario: process dies after writing .tmp but before rename.
-    We use unittest.mock.patch to intercept Path.rename and raise, then assert that the
-    .tmp file _write_atomic itself created is present on disk.
-    """
+def test_write_atomic_failure_reraises(tmp_path: Path) -> None:
+    """A helper-raised OSError propagates out of _write_atomic (the helper unlinks its own tmp)."""
     from unittest.mock import patch
 
     jobs_path = tmp_path / "jobs.json"
     s = JobStore(path=jobs_path)
 
-    tmp_file = jobs_path.with_suffix(".tmp")
-
-    with patch.object(type(tmp_file), "rename", side_effect=OSError("simulated rename failure")):
-        with pytest.raises(OSError, match="simulated rename failure"):
+    with patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")):
+        with pytest.raises(OSError, match="simulated write failure"):
             s.create()
-
-    assert tmp_file.exists(), ".tmp file must remain on disk when rename() fails"
 
 
 # ---------------------------------------------------------------------------

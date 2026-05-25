@@ -99,6 +99,7 @@ Production-grade operations documentation for SREs and sysadmins running `archon
 | [`ADRs/03_cross_encoder_reranker_second_stage.md`](../ADRs/03_cross_encoder_reranker_second_stage.md) | Why a cross-encoder second stage. |
 | [`ADRs/04_multi_collection_router_with_centroid_preranking.md`](../ADRs/04_multi_collection_router_with_centroid_preranking.md) | Why centroid pre-ranking for multi-collection routing. |
 | [`ADRs/05_opt_in_local_telemetry_no_raw_query.md`](../ADRs/05_opt_in_local_telemetry_no_raw_query.md) | Telemetry: opt-in, local-only, no raw queries. |
+| [`ADRs/06_durable_state_writes_via_fsync.md`](../ADRs/06_durable_state_writes_via_fsync.md) | Durable state writes via fsync (file + parent dir), rotate-only telemetry fsync. |
 
 ## Security Guide
 

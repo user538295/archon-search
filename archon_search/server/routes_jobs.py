@@ -81,15 +81,15 @@ async def _default_ingest_task(
     except asyncio.CancelledError:
         try:
             store.update(job_id, status=JobStatus.CANCELLED)
-        except KeyError:
-            pass
+        except (KeyError, OSError):
+            logger.error("background ingest: could not persist CANCELLED status for job %s", job_id)
         raise
     except Exception as exc:  # noqa: BLE001
         logger.exception("Ingest task %s failed", job_id)
         try:
             store.update(job_id, status=JobStatus.FAILED, error=str(exc))
-        except KeyError:
-            pass
+        except (KeyError, OSError):
+            logger.error("background ingest: could not persist FAILED status for job %s", job_id)
 
 
 async def _default_ingest_task_with_lock(
@@ -159,7 +159,10 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
         except PathUnsafeError as e:
             raise HTTPException(status_code=400, detail=f"path is unsafe: {e.reason}")
     ns = request.state.namespace
-    job = store.create(namespace=ns)
+    try:
+        job = store.create(namespace=ns)
+    except OSError:
+        return JSONResponse({"detail": "internal error"}, status_code=500)
 
     # Pre-acquire the per-collection lock to return 503 synchronously on contention.
     search_store = getattr(request.app.state, "search_store", None)
@@ -214,7 +217,10 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
         return JobResponse(**job_to_dict(job))
     if job.status in _ACTIVE_STATUSES:
         # Use transition() to avoid TOCTOU race: only updates if still active
-        updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)
+        try:
+            updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)
+        except OSError:
+            return JSONResponse({"detail": "internal error"}, status_code=500)
         if updated is None:
             # Race: job became terminal between get() and transition() — idempotent 200
             job = store.get(job_id)

@@ -87,7 +87,7 @@ def install(dry_run: bool, non_interactive: bool, config_path: Path | None) -> N
         click.echo(f"Creating default config at {config_file}")
         config_file.parent.mkdir(parents=True, exist_ok=True)
         from archon_search.cli.config_cmd import _default_toml
-        config_file.write_text(_default_toml(), encoding="utf-8")
+        config_file.write_text(_default_toml(), encoding="utf-8")  # noqa: durable-write
 
     # Load config to get host/port for health check
     cfg = load_config(config_file)

@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -54,6 +55,9 @@ class TelemetryWriter:
         self._stopped: bool = False
         self._task: asyncio.Task[None] | None = None
         self._dir_ensured: bool = False
+        # Persistent per-date file descriptor (rotate-only fsync per ADR-06).
+        self._fd: int | None = None
+        self._fd_date: str | None = None
         # Rate-limit state: kind → last-emit monotonic timestamp.
         self._warn_last: dict[str, float] = {}
 
@@ -120,6 +124,19 @@ class TelemetryWriter:
             exc = self._task.exception()
             if exc is not None and not isinstance(exc, asyncio.CancelledError):
                 _logger.warning("telemetry: drain task crashed: %r", exc)
+        # The drain task has stopped, so no concurrent _append can touch the
+        # fd. Flush + close the persistent fd best-effort (telemetry is
+        # best-effort on shutdown) and always clear it.
+        if self._fd is not None:
+            try:
+                os.fsync(self._fd)
+            except OSError:
+                pass
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
         self._task = None
 
     # -- internals -------------------------------------------------------
@@ -152,9 +169,35 @@ class TelemetryWriter:
         if not self._dir_ensured:
             self._log_dir.mkdir(parents=True, exist_ok=True)
             self._dir_ensured = True
-        path = self._file_for(when)
-        with path.open("ab") as fh:
-            fh.write(payload)
+        current_date = when.date().isoformat()
+        if self._fd_date != current_date:
+            if self._fd is not None:
+                # Rotation: fsync the old date's fd BEFORE closing it.
+                try:
+                    os.fsync(self._fd)
+                except OSError:
+                    # A failed rotation fsync must not leak the fd or wedge
+                    # state. Best-effort close, clear state, and re-raise so
+                    # _run's except (OSError, ValueError) swallows it; the next
+                    # _append reopens lazily on the current date.
+                    try:
+                        os.close(self._fd)
+                    except OSError:
+                        pass
+                    self._fd = None
+                    self._fd_date = None
+                    raise
+                os.close(self._fd)
+            # Rotate-only fsync per ADR-06; the persistent fd is the durability
+            # boundary, so the O_CREAT open below is intentionally not per-line
+            # synced (durable-write lint carve-out justified by that contract).
+            self._fd = os.open(  # noqa: durable-write
+                str(self._file_for(when)),
+                os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+                0o644,
+            )
+            self._fd_date = current_date
+        os.write(self._fd, payload)
 
     def _truncate_to_fit(
         self, entry: TelemetryEntry, limit_bytes: int = MAX_ENTRY_BYTES

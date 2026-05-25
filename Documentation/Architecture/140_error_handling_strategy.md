@@ -1,7 +1,7 @@
 **Purpose**: Define how `archon-search` surfaces, classifies, and records errors across config load, the REST surface, jobs, and telemetry.
 **Audience**: Maintainers writing new endpoints, handlers, or jobs.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
+**Last reviewed**: 2026-05-24
 **Next review**: 2026-08-20
 
 # Error Handling Strategy
@@ -73,6 +73,7 @@ Verified from `archon_search/server/routes_*.py`:
 | Routing timed out (`asyncio.TimeoutError` from `wait_for`) | `504` | `routes_route.py:122-135` | `timeout` |
 | Stub-meta-write rollback failure on collection add | `500` | `routes_collections.py:149-155` (`JSONResponse({"detail": "internal error"}, status_code=500)`) | none — `routes_collections.py` contains no `from_error` call |
 | `DELETE /jobs/{id}` with unrecognized `JobStatus` (defensive `else`) | `500` | `routes_jobs.py:153-157` | none — `routes_jobs.py` does not enqueue telemetry |
+| `OSError` from durable write (JobStore-driving routes) | `500` | `routes_jobs.py` ingest/delete_job + `routes_collections.py` add_collection/reindex_collection (`JSONResponse({"detail": "internal error"}, status_code=500)`); durable write via `archon_search/_durable_io.py` | none |
 | Unmapped exception in `/route` handler body | (re-raised, surfaces per FastAPI default; typically `500`) | `routes_route.py:152-166` | `other` (with `status="internal_error"`) |
 | Telemetry parameter validation | `400` | `routes_telemetry.py:36, 61` | n/a (telemetry endpoint itself) |
 | `/explain` body validation (empty query / `top_k` out of range / extra fields) | `422` | FastAPI default (`ExplainRequest`, `extra="forbid"`) | none (fires before handler body) |
@@ -83,6 +84,8 @@ Verified from `archon_search/server/routes_*.py`:
 | `/explain` other handler failure | `500` "explain failed" | `routes_explain.py:326-329` | `other` (with `status="internal_error"`) |
 
 Successful job submissions (POST collection-add, POST reindex, POST ingest) return `202 Accepted` with a `JobResponse`; the job's eventual outcome is observed via `GET /jobs/{job_id}`.
+
+`OSError` from other durable-write sites is handled differently and never reaches a route: `_safe_state_update`-routed progress/manifest writes and `manifest_remove_entry` are intentionally swallowed and logged (partial state recovers on the next sync pass), as is telemetry's best-effort `_append`. `OSError` at startup from `key_manager._generate_and_write` is intentionally **fatal** — the server cannot serve requests without a key file, so the operator must intervene. The full per-site error-propagation matrix is in [130_data_architecture_and_persistence.md](130_data_architecture_and_persistence.md#error-propagation-matrix) (see also [ADR-06](../ADRs/06_durable_state_writes_via_fsync.md)).
 
 ## Job error handling
 
@@ -102,6 +105,6 @@ The mapping from internal exception to `ErrorKind` is the responsibility of the 
 
 ## What is intentionally NOT done
 
-- No global FastAPI exception handler that rewrites unknown exceptions into rich JSON (verified by absence of `add_exception_handler` in `server/app.py` outside middleware; treat as a present-tense fact, not an invariant). An unmapped exception becomes a plain `500` — preferable to leaking internals.
+- No global FastAPI exception handler that rewrites unknown exceptions into rich JSON (verified by absence of `add_exception_handler` in `server/app.py` outside middleware; treat as a present-tense fact, not an invariant). An *unmapped* exception becomes a plain `500` — preferable to leaking internals. Note that `OSError` from JobStore-driving route writes is **not** unmapped: it is caught explicitly and mapped to the `{"detail": "internal error"}` `500` envelope (see the row above), so that path is a deliberate, mapped `500` rather than a default re-raise.
 - No retry middleware. The CLI and the watcher have their own retry semantics; the HTTP layer is a single attempt.
 - No structured error code field in REST responses. The `detail` string plus the HTTP status is the contract; breaking changes go in `BREAKING.md`.

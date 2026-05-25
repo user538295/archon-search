@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from unittest import mock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -461,6 +463,80 @@ def test_ingest_accepts_null_path(client: TestClient) -> None:
     assert "job_id" in response.json()
 
 
+# ---------------------------------------------------------------------------
+# OSError on JobStore writes → 500 envelope (Task 2.6)
+# ---------------------------------------------------------------------------
+
+
+def _make_client_with_store(tmp_path: Path, store: object, auth_headers: dict[str, str]) -> TestClient:
+    """Build an app with a custom job_store, patching out the eager DocumentChunker
+    (gpt2 tokenizer download is network-blocked in this environment)."""
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    with mock.patch("archon_search.server.app.DocumentChunker"):
+        app = create_app(config, store)  # type: ignore[arg-type]
+    return TestClient(app, headers=auth_headers)
+
+
+def test_job_create_oserror_returns_500_envelope(
+    tmp_path: Path, auth_headers: dict[str, str]
+) -> None:
+    """POST /ingest returns the 500 envelope when store.create raises OSError."""
+    store = MagicMock()
+    store.create.side_effect = OSError("disk full")
+    client = _make_client_with_store(tmp_path, store, auth_headers)
+
+    response = client.post("/ingest", json={"collection": "docs"})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+
+
+def test_delete_job_transition_oserror_returns_500_envelope(
+    tmp_path: Path, auth_headers: dict[str, str]
+) -> None:
+    """DELETE /jobs/{id} returns the 500 envelope when store.transition raises OSError."""
+    active_job = IngestJob(
+        job_id="job-1",
+        status=JobStatus.RUNNING,
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+        namespace=DEFAULT_NAMESPACE,
+    )
+    store = MagicMock()
+    store.get.return_value = active_job
+    store.transition.side_effect = OSError("disk full")
+    client = _make_client_with_store(tmp_path, store, auth_headers)
+
+    response = client.delete(f"/jobs/{active_job.job_id}")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+
+
+def test_background_ingest_oserror_does_not_500_client(
+    tmp_path: Path, auth_headers: dict[str, str]
+) -> None:
+    """A background-task OSError must NOT affect the synchronous POST /ingest response."""
+    real_store = JobStore(path=tmp_path / "jobs.json")
+
+    store = MagicMock()
+    # create succeeds synchronously (so the 202 is returned)
+    store.create.side_effect = real_store.create
+    # any subsequent .update() (which only happens in the background task) blows up
+    store.update.side_effect = OSError("disk full")
+    store.get.side_effect = real_store.get
+    store.transition.side_effect = real_store.transition
+
+    client = _make_client_with_store(tmp_path, store, auth_headers)
+
+    response = client.post("/ingest", json={"collection": "docs"})
+
+    # The synchronous response is unaffected by the (separate) background failure.
+    assert response.status_code == 202
+    assert "job_id" in response.json()
+
+
 def test_ingest_accepts_legitimate_absolute_path(client: TestClient) -> None:
     """POST /ingest with a valid absolute path still returns 202 (regression guard)."""
     response = client.post("/ingest", json={"collection": "c", "path": "/tmp/legit"})
@@ -478,3 +554,102 @@ def test_ingest_openapi_lists_400_response(client: TestClient) -> None:
     assert "400" in post_ingest["responses"]
     ref = post_ingest["responses"]["400"]["content"]["application/json"]["schema"]["$ref"]
     assert ref.endswith("ErrorDetail")
+
+
+@pytest.mark.anyio
+async def test_background_ingest_oserror_logs_and_marks_failed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A primary OSError in the background task is logged and the job is marked FAILED."""
+    real_store = JobStore(path=tmp_path / "jobs.json")
+    job = real_store.create()
+
+    calls = {"n": 0}
+    real_update = real_store.update
+
+    def flaky_update(job_id: str, **kwargs: object):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # First update (status=RUNNING) raises OSError
+            raise OSError("disk full")
+        return real_update(job_id, **kwargs)
+
+    store = MagicMock()
+    store.update.side_effect = flaky_update
+    store.get.side_effect = real_store.get
+    store.transition.side_effect = real_store.transition
+
+    body = IngestRequest(collection="docs")
+    with caplog.at_level("ERROR"):
+        await _default_ingest_task(job.job_id, store, body, pipeline_fn=None)
+
+    # The job ended FAILED with an error message set
+    completed = real_store.get(job.job_id)
+    assert completed is not None
+    assert completed.status == JobStatus.FAILED
+    assert completed.error
+    # The primary failure was logged
+    assert any("failed" in r.message.lower() for r in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_background_ingest_double_oserror_suppressed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If EVERY store.update raises OSError, no exception escapes _default_ingest_task."""
+    real_store = JobStore(path=tmp_path / "jobs.json")
+    job = real_store.create()
+
+    store = MagicMock()
+    store.update.side_effect = OSError("disk full")
+    store.get.side_effect = real_store.get
+    store.transition.side_effect = real_store.transition
+
+    body = IngestRequest(collection="docs")
+    with caplog.at_level("ERROR"):
+        # Must return normally — no OSError escapes.
+        await _default_ingest_task(job.job_id, store, body, pipeline_fn=None)
+
+    # The secondary-failure path (could not persist FAILED) is logged.
+    assert any(
+        "could not persist FAILED status" in r.message for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_background_ingest_cancelled_oserror_suppressed_and_reraises_cancelled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If persisting CANCELLED status raises OSError during cancellation, the OSError
+    is logged and suppressed, and CancelledError is still re-raised (not OSError)."""
+
+    def update_side_effect(job_id: str, **kwargs: object) -> None:
+        # RUNNING update (before cancel) is benign; CANCELLED update fails durably.
+        if kwargs.get("status") == JobStatus.CANCELLED:
+            raise OSError("disk full")
+
+    store = MagicMock(spec=JobStore)
+    store.update.side_effect = update_side_effect
+    store.get.return_value = MagicMock()
+
+    async def pipeline_fn(*a: object, **k: object) -> None:
+        await asyncio.Event().wait()  # block forever until cancelled
+
+    body = IngestRequest(collection="docs")
+    with caplog.at_level("ERROR"):
+        task = asyncio.create_task(
+            _default_ingest_task("job-1", store, body, pipeline_fn=pipeline_fn)
+        )
+        # Let the task start and reach the cancellable await point.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        task.cancel()
+
+        # The task surfaces CancelledError, NOT the OSError.
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    # The OSError from the CANCELLED persist was logged.
+    assert any(
+        "could not persist CANCELLED status" in r.message for r in caplog.records
+    )

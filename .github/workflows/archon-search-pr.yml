@@ -38,9 +38,20 @@ jobs:
       - name: Run eval slice with thresholds, coverage append, runxfail
         run: uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append --runxfail -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/
 
+      - name: Create disk-backed basetemp for integration tests
+        # GitHub Actions' default /tmp is tmpfs; the crash-injection integration
+        # tests skip on tmpfs, so they need a disk-backed basetemp to actually run.
+        run: mkdir -p /var/tmp/archon-search-it
+
+      - name: Run integration suite on disk-backed basetemp, coverage append
+        run: uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append -m integration tests/
+
       - name: Enforce coverage fail-under=85
         # The two pytest steps above both use --cov-append, which writes to a
         # single .coverage file. There is no parallel-mode shard set to merge,
         # so we skip `coverage combine` (it would error with "No data to
         # combine") and report directly on the single file.
         run: uv run coverage report --fail-under=85
+
+      - name: Verify 100% coverage of _durable_io.py
+        run: uv run coverage report --fail-under=100 --include=archon_search/_durable_io.py

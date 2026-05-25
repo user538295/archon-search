@@ -83,7 +83,7 @@ class LaunchdSearchService(SearchServiceLifecycle):
         try:
             self._plist_path.parent.mkdir(parents=True, exist_ok=True)
             Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-            self._plist_path.write_text(content)
+            self._plist_path.write_text(content)  # noqa: durable-write
         except PermissionError as e:
             raise RuntimeError(f"Permission denied writing {self._plist_path}") from e
 

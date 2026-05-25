@@ -39,13 +39,13 @@ Out of scope:
 
 1. `ARCHON_SEARCH_API_KEY` env var — must be a non-empty lowercase hex string (`^[0-9a-f]+$`). Invalid values are ignored with a warning, falling through to the next source.
 2. Key file — by default `~/.archon-search/.search.env`; `ARCHON_SEARCH_KEY_FILE` overrides the path. File must contain a line `ARCHON_SEARCH_API_KEY=<hex>`.
-3. Auto-generation — `secrets.token_hex(32)` writes a 64-char hex key to a temp file with `O_EXCL` + mode `0600`, then `os.replace`s it into place. Concurrent first-start writers are handled by retrying via `_load_from_file()`.
+3. Auto-generation — `secrets.token_hex(32)` writes a 64-char hex key through the durable helper `_durable_io.atomic_write_bytes` (mode `0600` set at creation via `O_EXCL`, then fsync file → `os.replace` → fsync parent dir; see the [durability contract](130_data_architecture_and_persistence.md#durability-contract)). Concurrent first-start writers raise `FileExistsError` and are recovered by retrying via `_load_from_file()`.
 
 ### File permissions
 
-- The key file is created with mode `0600` (owner read/write only).
+- The key file is created with mode `0600` (owner read/write only) at creation time by `atomic_write_bytes` — there is no chmod-after-rename window on the write path.
 - On subsequent reads, if the mode has drifted, `_chmod_600` attempts to retighten it. Failure is logged as a warning, not fatal.
-- On Windows, the chmod step is skipped (`key_manager.py:136–138`).
+- On Windows, the read-path chmod step is skipped (`key_manager.py:112–115`).
 
 ### Bearer enforcement (`archon_search/server/middleware_auth.py`)
 

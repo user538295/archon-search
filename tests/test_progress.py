@@ -281,13 +281,12 @@ class TestIndexingStateStore:
         assert "collections" in data
         assert "last_updated" in data
 
-    def test_write_atomic_uses_tmp(self, tmp_path: Path) -> None:
+    def test_write_delegates_to_atomic_write_json(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)
         state = IndexingState()
-        tmp_file = store._state_file.with_suffix(".json.tmp")
-        with patch("os.replace") as mock_replace:
+        with patch("archon_search.progress.atomic_write_json") as mock_write:
             store.write(state)
-            mock_replace.assert_called_once_with(tmp_file, store._state_file)
+        mock_write.assert_called_once_with(store._state_file, to_dict(state))
 
     def test_write_then_read_roundtrip(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)
@@ -910,17 +909,24 @@ class TestIndexingStateStoreEdgeCases:
         result = store.read()
         assert result is None
 
-    # os.replace raises → .tmp unlinked; original exception re-raised
-    def test_write_os_replace_raises_unlinks_tmp_and_reraises(self, tmp_path: Path) -> None:
+    # helper raises → exception propagates out of write()
+    def test_write_helper_raises_propagates(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)
         state = IndexingState()
-        tmp_file = store._state_file.with_suffix(".json.tmp")
-        error = OSError("disk full")
-        with patch("os.replace", side_effect=error):
+        with patch("archon_search.progress.atomic_write_json", side_effect=OSError("disk full")):
             with pytest.raises(OSError, match="disk full"):
                 store.write(state)
-        # .tmp file must have been cleaned up
-        assert not tmp_file.exists()
+
+    # _safe_state_update (sync.py) must swallow a helper-raised OSError
+    def test_safe_state_update_swallows_oserror_from_helper(self, tmp_path: Path) -> None:
+        from archon_search.progress import CollectionProgress as CP
+        from archon_search.sync import SearchCollectionSync
+
+        store = IndexingStateStore(tmp_path)
+        sync = SearchCollectionSync(pipeline=object(), state_store=store)
+        progress = CP(status=IndexingStatus.PENDING, total_files=1)
+        with patch("archon_search.progress.atomic_write_json", side_effect=OSError("disk full")):
+            sync._safe_state_update("col", progress)
 
     # state absent → remove_collection doesn't crash, doesn't write
     def test_remove_collection_state_absent_does_not_write(self, tmp_path: Path) -> None:

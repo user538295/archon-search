@@ -1,7 +1,7 @@
 **Purpose**: Document where `archon-search` keeps state on disk, the LanceDB schemas it writes, and how ingest mutates that state.
 **Audience**: Maintainers and operators of an `archon-search` install.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
+**Last reviewed**: 2026-05-24
 **Next review**: 2026-08-20
 
 # Data Architecture and Persistence
@@ -34,6 +34,54 @@ Override paths:
 - `ARCHON_SEARCH_KEY_FILE` overrides `.search.env` location.
 - `ARCHON_SEARCH_API_KEY` (env var) overrides reading any key file entirely.
 - `ARCHON_SEARCH_CONFIG` overrides `archon-search.toml` location.
+
+## Durability contract
+
+Every durable JSON/bytes write of runtime state routes through a single helper module, `archon_search/_durable_io.py`, rather than calling `os.replace`/`write_text`/`write_bytes` directly. The helper exposes two functions:
+
+- `atomic_write_json(path, data)` — write to `path.tmp`, `flush()`, `os.fsync(file_fd)`, `os.replace(tmp, path)`, then `os.fsync(parent_dir_fd)`.
+- `atomic_write_bytes(path, data, mode=0o600)` — same sequence, but the temp file is created with `os.open(..., O_WRONLY | O_CREAT | O_EXCL, mode)`, so the file permission is set at creation (no chmod-after window) and a pre-existing temp file is signalled as `FileExistsError` rather than silently overwritten.
+
+The crucial property is that the helper fsyncs **both the file and the parent directory**: the parent-directory fsync is what makes the `os.replace` rename itself durable. fsync is never retried — on `EIO` the kernel may already have marked the page clean (POSIX "fsyncgate"), so a retry is unsafe. The helper is **not internally synchronized**; callers must serialize writes to the same path.
+
+The five durable-write sites that use the helper are:
+
+| Site | Helper | File written |
+|------|--------|--------------|
+| `progress.IndexingStateStore.write` | `atomic_write_json` | indexing-state JSON |
+| `sync._write_manifest` | `atomic_write_json` | sync manifest |
+| `sync.manifest_remove_entry` | `atomic_write_json` | sync manifest |
+| `jobs/store.py::JobStore._write_atomic` | `atomic_write_json` | `archon-search-jobs.json` |
+| `key_manager._generate_and_write` | `atomic_write_bytes` | `.search.env` (mode `0600`) |
+
+A CI lint gate, `tests/test_no_raw_durable_writes.py`, scans `archon_search/**/*.py` (excluding the helper itself) for raw write patterns and fails the build on new ones; a handful of out-of-scope one-shot writes (TOML config writers, OS service-unit files) carry a `# noqa: durable-write` allow-list comment.
+
+### Telemetry durability (rotate-only fsync)
+
+Telemetry does **not** use `_durable_io`. `TelemetryWriter` (`telemetry/writer.py`) holds a persistent per-date file descriptor and appends each line **without per-line fsync**. It fsyncs only at boundaries: on a UTC-date rollover it does `fsync(old_fd) + close(old_fd)` before opening the new day's file, and `drain_and_stop()` does a final `fsync + close` on shutdown. This keeps the hot path cheap while still flushing on rotation and clean shutdown; the trade-off is that an unclean crash can lose up to one kernel writeback window of telemetry lines (see Known limits).
+
+### Error-propagation matrix
+
+Per-call-site `OSError` handling is deliberate, not uniform:
+
+| Site | On `OSError` |
+|------|--------------|
+| `sync._write_manifest` + progress writes invoked through sync | **Swallowed** by `sync.py::_safe_state_update` (`except Exception`); partial state is recoverable on the next sync pass. |
+| `sync.manifest_remove_entry` | **Swallowed** by its own local `except (json.JSONDecodeError, OSError): pass`. |
+| `key_manager._generate_and_write` | **Propagates** — fatal at startup; the operator must intervene. Concurrent-bootstrap `FileExistsError` is recovered (the other writer won the race). |
+| Route-driven `jobs/store` writes (`routes_jobs.py` ingest + `delete_job`; `routes_collections.py` add_collection + reindex_collection) | **Propagates** to the route's narrow `except OSError`, which returns `JSONResponse({"detail": "internal error"}, status_code=500)`. The background ingest task logs and marks the job `FAILED`, suppressing a secondary `OSError`. |
+| Telemetry `_append` | **Swallowed** by `_run`'s `except (OSError, ValueError)`; the entry is dropped (best-effort). |
+
+The OSError-to-`500` mapping for the route-driven sites is recorded in [140_error_handling_strategy.md](140_error_handling_strategy.md).
+
+### Known limits
+
+- **tmpfs caveat.** The crash-injection integration tests verify the write *sequence* on a disk-backed filesystem and **skip on tmpfs**; CI must pass a disk-backed `--basetemp` (GitHub Actions' default `/tmp` is tmpfs). The tests do not simulate power loss — `os._exit()` leaves the kernel page cache intact.
+- **Telemetry crash window.** Telemetry can lose up to one kernel writeback window of lines on an unclean crash (Linux default ~5s via `dirty_writeback_centisecs`, longer under load), because per-line fsync is deliberately rejected.
+- **macOS `F_FULLFSYNC` is not used.** `os.fsync()` on Darwin flushes the kernel buffer cache but not the device's internal write cache, so the "survives power loss" property is conditional on the device having power-loss protection.
+- **Windows is not exercised.** `platform/windows.py` is a stub; the helper's behavior there is best-effort and untested.
+
+The full rationale, alternatives, and consequences are in [ADR-06: Durable State Writes via fsync](../ADRs/06_durable_state_writes_via_fsync.md).
 
 ## LanceDB layout
 
@@ -173,7 +221,7 @@ The same `force_full_reindex` path is taken when the configured embedding model 
 
 When `[telemetry].enabled = true`:
 
-- `TelemetryWriter` (`telemetry/writer.py`) appends one JSON object per line to `~/.archon-search/search-logs/<YYYY-MM-DD>.jsonl` (UTC date). One file per UTC day; bounded async queue (`queue_size=1024`); entries beyond `MAX_ENTRY_BYTES=8192` get `result_doc_ids` truncated with `truncated=true`.
+- `TelemetryWriter` (`telemetry/writer.py`) appends one JSON object per line to `~/.archon-search/search-logs/<YYYY-MM-DD>.jsonl` (UTC date) via a persistent per-date file descriptor with rotate-only fsync (see [Telemetry durability](#telemetry-durability-rotate-only-fsync) above). One file per UTC day; bounded async queue (`queue_size=1024`); entries beyond `MAX_ENTRY_BYTES=8192` get `result_doc_ids` truncated with `truncated=true`.
 - `Pruner` (`telemetry/pruner.py`) runs once per 24 hours and deletes `*.jsonl` files whose UTC date is strictly older than `now - retention_days` (i.e. a file exactly `retention_days` old is deleted; see `telemetry/pruner.py:31, 47`). Default `retention_days = 30`. Today's file is never deleted; malformed filenames are skipped.
 - `[telemetry].export_enabled = true` is **not** honored — `config.py:213–215` logs a warning and forces the value to `false`. No external transmission path exists in v1.
 
@@ -181,7 +229,7 @@ The persisted schema is the closed field set declared in `telemetry/entry.py::DO
 
 ## Job state
 
-Long-running operations (ingest, reindex, delete) are tracked in `~/.archon-search/archon-search-jobs.json` (constant `JOBS_FILE` in `jobs/model.py`). Each job carries `JobStatus ∈ {PENDING, RUNNING, DONE, FAILED, CANCELLED, CANCELLING}` plus a `result` dict or an `error` string (see `archon_search/types.py::IngestJob`). The file is rewritten on every transition; see source: `archon_search/jobs/store.py` for the exact concurrency model.
+Long-running operations (ingest, reindex, delete) are tracked in `~/.archon-search/archon-search-jobs.json` (constant `JOBS_FILE` in `jobs/model.py`). Each job carries `JobStatus ∈ {PENDING, RUNNING, DONE, FAILED, CANCELLED, CANCELLING}` plus a `result` dict or an `error` string (see `archon_search/types.py::IngestJob`). The file is rewritten on every transition via `atomic_write_json` (see [Durability contract](#durability-contract) above); see source: `archon_search/jobs/store.py` for the exact concurrency model.
 
 ## Indexing state
 

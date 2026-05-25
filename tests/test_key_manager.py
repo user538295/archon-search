@@ -180,20 +180,11 @@ class TestAutoGenerate:
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
         monkeypatch.setattr(km, "KEY_FILE", key_file)
-        replace_calls: list[tuple[str, str]] = []
-        real_replace = os.replace
 
-        def tracking_replace(src: str, dst: str) -> None:
-            replace_calls.append((src, dst))
-            return real_replace(src, dst)
+        with patch("archon_search.key_manager.atomic_write_bytes") as mock_write:
+            key = km._generate_and_write()
 
-        with patch("os.replace", side_effect=tracking_replace):
-            km.load_or_generate_key()
-
-        assert len(replace_calls) == 1
-        src, dst = replace_calls[0]
-        assert src.endswith(".search.env.tmp")
-        assert dst == str(key_file)
+        mock_write.assert_called_once_with(key_file, f"{km.ENV_VAR}={key}\n".encode(), mode=0o600)
 
     def test_concurrent_race_loses(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """FileExistsError on O_EXCL + .search.env already present → reads existing file."""
@@ -219,25 +210,24 @@ class TestAutoGenerate:
         assert result == existing_key
 
     def test_orphaned_tmp(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """Orphaned .search.env.tmp + no .search.env → deletes tmp, retries, succeeds."""
+        """Orphaned .search.env.tmp causes FileExistsError on attempt 0 → unlink tmp, retry, succeed."""
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
         tmp_file = tmp_path / ".search.env.tmp"
         monkeypatch.setattr(km, "KEY_FILE", key_file)
-        # Create orphaned tmp
+        # Create orphaned tmp that the first O_EXCL open collides with.
         tmp_file.write_text("orphaned")
 
-        real_os_open = os.open
-        excl_calls: list[int] = [0]
+        real_write = km.atomic_write_bytes
+        calls: list[int] = [0]
 
-        def fake_os_open(path: str, flags: int, mode: int = 0o777) -> int:
-            if ".search.env.tmp" in path and (flags & os.O_EXCL):
-                excl_calls[0] += 1
-                if excl_calls[0] == 1:
-                    raise FileExistsError("injected")
-            return real_os_open(path, flags, mode)
+        def flaky_write(path: Path, data: bytes, mode: int = 0o600) -> None:
+            calls[0] += 1
+            if calls[0] == 1:
+                raise FileExistsError("injected O_EXCL collision")
+            real_write(path, data, mode=mode)
 
-        with patch("os.open", side_effect=fake_os_open):
+        with patch("archon_search.key_manager.atomic_write_bytes", side_effect=flaky_write):
             key = km._generate_and_write()
 
         assert len(key) == 64
@@ -259,20 +249,37 @@ class TestAutoGenerate:
             assert key not in record.getMessage(), f"Key appeared in log: {record.getMessage()}"
 
     def test_os_replace_failure_cleans_up(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """A non-FileExists OSError from the helper propagates out of _generate_and_write."""
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
-        tmp_file = tmp_path / ".search.env.tmp"
         monkeypatch.setattr(km, "KEY_FILE", key_file)
 
-        def failing_replace(src: str, dst: str) -> None:
-            raise OSError("injected replace failure")
-
-        with patch("os.replace", side_effect=failing_replace):
-            with pytest.raises(OSError):
+        with patch(
+            "archon_search.key_manager.atomic_write_bytes",
+            side_effect=OSError("injected replace failure"),
+        ):
+            with pytest.raises(OSError, match="injected replace failure"):
                 km._generate_and_write()
 
-        # tmp file must have been cleaned up
-        assert not tmp_file.exists()
+    def test_concurrent_bootstrap_retry_still_works(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """FileExistsError on both attempts, with a concurrent writer's key visible on retry."""
+        monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
+        key_file = tmp_path / ".search.env"
+        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        existing_key = "c" * 64
+
+        with (
+            patch(
+                "archon_search.key_manager.atomic_write_bytes",
+                side_effect=FileExistsError("injected"),
+            ),
+            patch.object(km, "_load_from_file", side_effect=[None, existing_key]),
+        ):
+            result = km._generate_and_write()
+
+        assert result == existing_key
 
     def test_generate_and_write_exhausted_raises_runtime_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

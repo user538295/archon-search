@@ -100,7 +100,7 @@ class SystemdSearchService(SearchServiceLifecycle):
 
         try:
             self._unit_path.parent.mkdir(parents=True, exist_ok=True)
-            self._unit_path.write_text(content)
+            self._unit_path.write_text(content)  # noqa: durable-write
         except PermissionError as e:
             raise RuntimeError(f"Permission denied writing {self._unit_path}") from e
 

@@ -21,7 +21,7 @@ Resolution order in `archon_search/key_manager.py::load_or_generate_key`:
 
 1. `ARCHON_SEARCH_API_KEY` environment variable, if set and hex-valid.
 2. `~/.archon-search/.search.env` (or the path in `ARCHON_SEARCH_KEY_FILE`), parsing the `ARCHON_SEARCH_API_KEY=...` line.
-3. Auto-generate a 64-char hex token (`secrets.token_hex(32)`), write it to the key file with `0o600`, and return it.
+3. Auto-generate a 64-char hex token (`secrets.token_hex(32)`), write it durably to the key file with mode `0o600` set at creation via `_durable_io.atomic_write_bytes` (fsync → `os.replace` → fsync parent dir; no chmod-after-rename window), and return it.
 
 The key file is created lazily on first server start. Its layout is intentionally `.env`-shaped so you can `source` it in a shell:
 

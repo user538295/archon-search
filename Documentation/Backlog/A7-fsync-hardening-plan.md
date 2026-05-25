@@ -142,7 +142,7 @@ None.
 > **Releasable**: after Task 1.5. PR 1 ships the helper module, the ADR, and the CI integration job — all callable from tests but with no production migration yet. Independently revertable.
 
 #### Task 1.1 — CI: add integration job with disk-backed basetemp
-- [ ] **File**: `.github/workflows/archon-search-pr.yml`
+- [x] **File**: `.github/workflows/archon-search-pr.yml`
 - **Depends on**: nothing
 - **Description**:
   - Add a new STEP (not a separate job — coverage `--cov-append` only merges within one runner) in the existing `eval-gate` job, positioned AFTER the eval step (`archon-search-pr.yml:39`) and BEFORE the `coverage report --fail-under=85` step (`archon-search-pr.yml:46`).
@@ -155,7 +155,7 @@ None.
 - **Checkpoint**: `gh workflow view archon-search-pr.yml` after push; confirm the integration step appears.
 
 #### Task 1.2 — `_durable_io.atomic_write_json`
-- [ ] **File**: `archon_search/_durable_io.py`
+- [x] **File**: `archon_search/_durable_io.py`
 - **Depends on**: nothing
 - **Description**:
   - Implement `atomic_write_json(path: Path, data: Any) -> None` exactly as the brief specifies.
@@ -175,7 +175,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_durable_io.py::TestAtomicWriteJson -v`
 
 #### Task 1.3 — `_durable_io.atomic_write_bytes`
-- [ ] **File**: `archon_search/_durable_io.py`
+- [x] **File**: `archon_search/_durable_io.py`
 - **Depends on**: Task 1.2 (same module)
 - **Description**:
   - Implement `atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None`.
@@ -195,7 +195,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_durable_io.py::TestAtomicWriteBytes -v`
 
 #### Task 1.4 — Helper 100% coverage CI gate
-- [ ] **File**: `.github/workflows/archon-search-pr.yml`
+- [x] **File**: `.github/workflows/archon-search-pr.yml`
 - **Depends on**: Task 1.2, Task 1.3
 - **Description**:
   - Add a step: `uv run coverage report --fail-under=100 --include=archon_search/_durable_io.py`.
@@ -207,7 +207,7 @@ None.
 - **Checkpoint**: PR CI run; confirm the new step appears and passes.
 
 #### Task 1.5 — ADR-06 "Durable state writes via fsync"
-- [ ] **File**: `Documentation/ADRs/06_durable_state_writes_via_fsync.md`
+- [x] **File**: `Documentation/ADRs/06_durable_state_writes_via_fsync.md`
 - **Depends on**: nothing (ADR records the design decision and can land before or alongside implementation)
 - **Description**:
   - Follow the existing ADR template (read ADR-05 for the shape: Status / Context / Decision / Consequences).
@@ -227,7 +227,7 @@ None.
 > **Releasable**: after Task 2.10. PR 2 migrates the five non-telemetry write sites, adds the route-level OSError handler, lands the lint gate (with telemetry carve-out), and ships crash-injection tests for atomic JSON and atomic bytes modes. Independently revertable.
 
 #### Task 2.1 — Migrate `progress.py::IndexingStateStore.write`
-- [ ] **File**: `archon_search/progress.py`
+- [x] **File**: `archon_search/progress.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Replace the current tmp+`os.replace` block in `IndexingStateStore.write` with a single call to `archon_search._durable_io.atomic_write_json(self._path, payload)`.
@@ -241,7 +241,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_progress.py -v`
 
 #### Task 2.2 — Migrate `sync.py::SearchCollectionSync._write_manifest`
-- [ ] **File**: `archon_search/sync.py`
+- [x] **File**: `archon_search/sync.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Replace the tmp+`os.replace` block in `_write_manifest` with `atomic_write_json(self._manifest_path, manifest_dict)`.
@@ -253,7 +253,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_sync.py -k manifest -v`
 
 #### Task 2.3 — Migrate `sync.py::manifest_remove_entry`
-- [ ] **File**: `archon_search/sync.py`
+- [x] **File**: `archon_search/sync.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Rewrite `manifest_remove_entry` (currently lines 73–82): keep the up-front `if not manifest_path.exists(): return`; replace the bare `manifest_path.write_text(json.dumps(data, indent=2))` with `atomic_write_json(manifest_path, data)`.
@@ -267,7 +267,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_sync.py -k manifest_remove -v`
 
 #### Task 2.4 — Migrate `jobs/store.py::_write_atomic`
-- [ ] **File**: `archon_search/jobs/store.py`
+- [x] **File**: `archon_search/jobs/store.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Replace `tmp.write_text(...) + tmp.rename(...)` (lines ~120–121) with `atomic_write_json(self._path, data)`. Helper uses `os.replace` (atomic-overwrite); on POSIX equivalent to `Path.rename` for this case, fixes the missing fsync.
@@ -280,7 +280,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_job_store.py -v`
 
 #### Task 2.5 — Migrate `key_manager.py::_generate_and_write`
-- [ ] **File**: `archon_search/key_manager.py`
+- [x] **File**: `archon_search/key_manager.py`
 - **Depends on**: Task 1.3
 - **Description**:
   - Replace the `os.open` + `os.write` + `os.replace` block (lines ~87–129) with `atomic_write_bytes(KEY_FILE, f"{ENV_VAR}={key}\n".encode(), mode=0o600)`.
@@ -294,7 +294,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_key_manager.py -v`
 
 #### Task 2.6 — Narrow `except OSError` in JobStore-driving route handlers
-- [ ] **File**: `archon_search/server/routes_jobs.py`, `archon_search/server/routes_collections.py`
+- [x] **File**: `archon_search/server/routes_jobs.py`, `archon_search/server/routes_collections.py`
 - **Depends on**: Task 2.4
 - **Description**:
   - Wrap each of the following request-handler call sites with a narrow `try/except OSError: return JSONResponse({"detail": "internal error"}, status_code=500)`:
@@ -316,7 +316,7 @@ None.
   - Checkpoint: `uv run pytest tests/server/test_routes_jobs.py tests/server/test_routes_collections.py -v`
 
 #### Task 2.7 — CI lint gate `tests/test_no_raw_durable_writes.py`
-- [ ] **File**: `tests/test_no_raw_durable_writes.py`
+- [x] **File**: `tests/test_no_raw_durable_writes.py`
 - **Depends on**: Tasks 2.1–2.5 (so the gate passes on the migrated codebase)
 - **Description**:
   - Pattern mirrors existing `tests/test_no_archon_imports.py` and `tests/test_no_shim_file.py` — a single pytest test function that walks files and asserts.
@@ -336,7 +336,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_no_raw_durable_writes.py tests/test_no_raw_durable_writes_self.py -v`
 
 #### Task 2.8 — Crash-injection integration test: atomic JSON
-- [ ] **File**: `tests/integration/test_durable_io_crash.py`
+- [x] **File**: `tests/integration/test_durable_io_crash.py`
 - **Depends on**: Task 1.2, Task 1.1
 - **Description**:
   - Marker: `@pytest.mark.integration`.
@@ -369,7 +369,7 @@ None.
   - Checkpoint: `uv run pytest --basetemp=/var/tmp/archon-search-it -m integration tests/integration/test_durable_io_crash.py -v`
 
 #### Task 2.9 — Crash-injection integration test: atomic bytes
-- [ ] **File**: `tests/integration/test_durable_io_crash.py`
+- [x] **File**: `tests/integration/test_durable_io_crash.py`
 - **Depends on**: Task 2.8 (same file, shared tmpfs-detect helper)
 - **Description**:
   - Mirror Task 2.8 for `atomic_write_bytes`, using the same monkeypatch-then-`os._exit(137)` fault-injection pattern. Use a 256-byte payload representing a fake key.
@@ -383,7 +383,7 @@ None.
   - Checkpoint: `uv run pytest --basetemp=/var/tmp/archon-search-it -m integration tests/integration/test_durable_io_crash.py -v`
 
 #### Task 2.10 — Verify Phase 2 end-to-end
-- [ ] **File**: N/A (verification task)
+- [x] **File**: N/A (verification task)
 - **Depends on**: Tasks 2.1–2.9
 - **Description**:
   - Run the full default suite + the integration suite; both must pass with no warnings (project rule: warning-free).
@@ -400,7 +400,7 @@ None.
 > **Releasable**: after Task 3.4. PR 3 restructures `TelemetryWriter._append` to use a persistent per-date fd with rotate-only fsync, removes any PR-2 telemetry carve-out, and adds the rotation crash-injection test.
 
 #### Task 3.1 — `TelemetryWriter._append` persistent per-date fd
-- [ ] **File**: `archon_search/telemetry/writer.py`
+- [x] **File**: `archon_search/telemetry/writer.py`
 - **Depends on**: nothing (independent of helper migrations)
 - **Description**:
   - Add two instance attributes initialized in `__init__`: `self._fd: int | None = None`, `self._fd_date: str | None = None` (ISO date string).
@@ -427,7 +427,7 @@ None.
   - Checkpoint: `uv run pytest tests/telemetry/test_writer.py -v`
 
 #### Task 3.2 — Remove PR-2 telemetry lint-gate carve-out (if any)
-- [ ] **File**: `archon_search/telemetry/writer.py`
+- [x] **File**: `archon_search/telemetry/writer.py`
 - **Depends on**: Task 3.1
 - **Description**:
   - If Task 2.7 added any `# noqa: durable-write` to telemetry code (re-check after Phase 2 ships), remove only those lines that no longer match a flagged pattern post-restructure.
@@ -438,7 +438,7 @@ None.
 - **Checkpoint**: `uv run pytest tests/test_no_raw_durable_writes.py -v`
 
 #### Task 3.3 — Crash-injection integration test: telemetry rotation
-- [ ] **File**: `tests/integration/test_telemetry_rotation_crash.py`
+- [x] **File**: `tests/integration/test_telemetry_rotation_crash.py`
 - **Depends on**: Task 3.1, Task 2.8 (reuses `_tmp_is_tmpfs` helper — import from `tests/integration/test_durable_io_crash.py` or extract to `tests/integration/_helpers.py` if used in 2 files)
 - **Description**:
   - Marker: `@pytest.mark.integration`. tmpfs skip via the shared helper in `tests/integration/_helpers.py`.
@@ -451,7 +451,7 @@ None.
   - Checkpoint: `uv run pytest --basetemp=/var/tmp/archon-search-it -m integration tests/integration/test_telemetry_rotation_crash.py -v`
 
 #### Task 3.4 — Verify Phase 3 end-to-end
-- [ ] **File**: N/A (verification task)
+- [x] **File**: N/A (verification task)
 - **Depends on**: Tasks 3.1–3.3
 - **Description**:
   - Full default + integration suite passes warning-free.
@@ -467,7 +467,7 @@ None.
 > **Releasable**: after Task 4.4. PR 4 documents the durability contract in the architecture docs, runs the project-wide doc sweep, and verifies gated suites locally before merge.
 
 #### Task 4.1 — Update `130_data_architecture_and_persistence.md`
-- [ ] **File**: `Documentation/Architecture/130_data_architecture_and_persistence.md`
+- [x] **File**: `Documentation/Architecture/130_data_architecture_and_persistence.md`
 - **Depends on**: Phases 1–3 complete
 - **Description**:
   - Add a new section "Durability contract" describing: every durable JSON/bytes write goes through `_durable_io.py`; fsync(file) + replace + fsync(parent dir); telemetry uses rotate-only fsync via a persistent per-date fd.
@@ -480,7 +480,7 @@ None.
 - **Checkpoint**: visual review of the diff; cross-link to ADR-06 renders correctly.
 
 #### Task 4.2 — Update `140_error_handling_strategy.md` with OSError→500 mapping
-- [ ] **File**: `Documentation/Architecture/140_error_handling_strategy.md`
+- [x] **File**: `Documentation/Architecture/140_error_handling_strategy.md`
 - **Depends on**: Task 2.6 (the mapping must exist in code first)
 - **Description**:
   - Add a row to the error-mapping table: `OSError from durable write (JobStore-driving routes)` → `JSONResponse({"detail": "internal error"}, status_code=500)`, referencing `routes_jobs.py` / `routes_collections.py` and the helper at `archon_search/_durable_io.py`.
@@ -491,7 +491,7 @@ None.
 - **Checkpoint**: visual diff review.
 
 #### Task 4.3 — Run gated suites locally before merging
-- [ ] **File**: N/A (verification task)
+- [x] **File**: N/A (verification task)
 - **Depends on**: Tasks 4.1, 4.2
 - **Description**:
   - Run `uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/`. Document the pass/fail and any threshold deltas in the PR description.
@@ -503,7 +503,7 @@ None.
 - **Checkpoint**: PR description contains the three command outputs.
 
 #### Task 4.4 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn a documentation-sweep agent: discover every project doc (READMEs, ADRs, API docs, architecture docs in `Documentation/**`, `CHANGELOG.md` if present, `CLAUDE.md`) and update any whose content is affected by A7 (durability invariant, helper module, ADR-06, error-mapping change, telemetry restructure). Do NOT update unrelated docs.

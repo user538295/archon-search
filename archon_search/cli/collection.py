@@ -74,7 +74,7 @@ def add(path: str, config_path: Path | None) -> None:
             existing.append(path)
             doc["collections"]["collections"] = existing  # type: ignore[index]
             config_file.parent.mkdir(parents=True, exist_ok=True)
-            config_file.write_text(tomlkit.dumps(doc), encoding="utf-8")
+            config_file.write_text(tomlkit.dumps(doc), encoding="utf-8")  # noqa: durable-write
 
     # Reload config and ingest
     cfg = load_config(config_file)
@@ -160,7 +160,7 @@ def remove(path: str, dry_run: bool, force: bool, config_path: Path | None) -> N
             if path in existing:
                 existing.remove(path)
                 doc["collections"]["collections"] = existing  # type: ignore[index]
-                config_file.write_text(tomlkit.dumps(doc), encoding="utf-8")
+                config_file.write_text(tomlkit.dumps(doc), encoding="utf-8")  # noqa: durable-write
 
 
 @collection.command("info")

@@ -164,7 +164,7 @@ class SearchInstaller:
                 return  # already set — skip to preserve user-extended chains
             database_section["providers"] = [target_provider]
 
-        config_path.write_text(tomlkit.dumps(doc))
+        config_path.write_text(tomlkit.dumps(doc))  # noqa: durable-write
 
     # ------------------------------------------------------------------
     # Data directory
