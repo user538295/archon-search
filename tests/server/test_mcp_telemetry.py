@@ -362,3 +362,53 @@ async def test_search_with_context_tool_does_not_log_when_writer_none() -> None:
     assert isinstance(output, list)
     assert len(output) == 1
     assert "result" in output[0]
+
+
+# ---------------------------------------------------------------------------
+# correlation_id threading (Task 4.2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_telemetry_has_correlation_id() -> None:
+    """MCP search tool threads correlation_id ContextVar into the telemetry entry."""
+    from archon_search.observability import correlation_id as _correlation_id
+
+    results = [SearchResult(doc_id="d1", chunk_id="c1", text="x", score=0.9, source_path="/x")]
+    pipeline = _make_pipeline(results=results)
+    writer = MagicMock(spec=TelemetryWriter)
+    cid = "mcp-test-corr-id-abc"
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
+        search_fn = app.tools["search"]  # type: ignore[attr-defined]
+
+        token = _correlation_id.set(cid)
+        try:
+            await search_fn(query="hello", collection=None)
+        finally:
+            _correlation_id.reset(token)
+
+    writer.enqueue.assert_called_once()
+    entry: TelemetryEntry = writer.enqueue.call_args[0][0]
+    assert entry.correlation_id == cid
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_telemetry_correlation_id_none_when_unset() -> None:
+    """MCP search tool telemetry has correlation_id=None when ContextVar is unset."""
+    results = [SearchResult(doc_id="d1", chunk_id="c1", text="x", score=0.9, source_path="/x")]
+    pipeline = _make_pipeline(results=results)
+    writer = MagicMock(spec=TelemetryWriter)
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
+        search_fn = app.tools["search"]  # type: ignore[attr-defined]
+        await search_fn(query="hello", collection=None)
+
+    entry: TelemetryEntry = writer.enqueue.call_args[0][0]
+    assert entry.correlation_id is None

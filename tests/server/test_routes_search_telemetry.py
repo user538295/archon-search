@@ -409,3 +409,76 @@ def test_search_pipeline_timeout_returns_504_and_enqueues_telemetry(
     ]
     assert len(error_records) == 1
     assert error_records[0].event_type == "search_timeout"
+
+
+# ---------------------------------------------------------------------------
+# Test 12: correlation_id is threaded into the search telemetry entry
+# ---------------------------------------------------------------------------
+
+
+def _make_test_app_with_correlation(
+    writer: MagicMock | None = None,
+    pipeline_mock: MagicMock | None = None,
+    request_id: str = "search-req-id-abc",
+) -> FastAPI:
+    """Like _make_test_app but also sets the correlation_id ContextVar."""
+    from archon_search.observability import correlation_id as _correlation_id
+    from archon_search.server import routes_search
+
+    app = FastAPI()
+    app.state.telemetry_writer = writer
+
+    if pipeline_mock is None:
+        pipeline_mock = MagicMock()
+        pipeline_mock.get_collection_meta = AsyncMock(
+            return_value=CollectionMeta(name="col", namespace="default")
+        )
+        pipeline_mock.search = AsyncMock(
+            return_value=SearchPipelineResult(results=[], acl_filtered=False)
+        )
+
+    app.state.pipeline = pipeline_mock
+
+    @app.middleware("http")
+    async def _inject_context(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.namespace = DEFAULT_NAMESPACE
+        token = _correlation_id.set(request_id)
+        try:
+            return await call_next(request)
+        finally:
+            _correlation_id.reset(token)
+
+    app.include_router(routes_search.router)
+    return app
+
+
+def test_search_telemetry_has_correlation_id() -> None:
+    """POST /search telemetry entry carries the correlation_id set by middleware."""
+    request_id = "search-corr-id-99999"
+    writer_mock = _make_mock_writer()
+    app = _make_test_app_with_correlation(writer=writer_mock, request_id=request_id)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"collection": "col", "query": "test"})
+
+    assert response.status_code == 200
+    writer_mock.enqueue.assert_called_once()
+    entry: TelemetryEntry = writer_mock.enqueue.call_args.args[0]
+    assert entry.correlation_id == request_id
+
+
+def test_search_telemetry_correlation_id_not_query() -> None:
+    """JSONL telemetry entry has correlation_id field but NOT a query field."""
+    request_id = "no-query-check-search"
+    writer_mock = _make_mock_writer()
+    app = _make_test_app_with_correlation(writer=writer_mock, request_id=request_id)
+
+    with TestClient(app) as client:
+        response = client.post("/search", json={"collection": "col", "query": "secret search"})
+
+    assert response.status_code == 200
+    writer_mock.enqueue.assert_called_once()
+    entry: TelemetryEntry = writer_mock.enqueue.call_args.args[0]
+    dumped = entry.model_dump()
+    assert "correlation_id" in dumped
+    assert "query" not in dumped

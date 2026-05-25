@@ -28,6 +28,7 @@ from archon_search.server.routes_explain import (
     RoutingExplain,
 )
 from archon_search.store import StoreBusyError
+from archon_search.observability import correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
@@ -119,6 +120,7 @@ def create_app(
                             result_doc_ids=[r.doc_id for r in result_obj.results],
                             latency_ms=(monotonic() - start) * 1000.0,
                             filter_flags=FilterFlags.from_search_filters(filters),
+                            correlation_id=_correlation_id.get(),
                         )
                     )
                 except Exception:
@@ -141,6 +143,7 @@ def create_app(
                             status="internal_error",
                             error_kind="other",
                             latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
                         )
                     )
                 except Exception:
@@ -188,6 +191,7 @@ def create_app(
                             result_doc_ids=[r["result"].doc_id for r in results],
                             latency_ms=(monotonic() - start) * 1000.0,
                             filter_flags=FilterFlags.from_search_filters(filters),
+                            correlation_id=_correlation_id.get(),
                         )
                     )
                 except Exception:
@@ -216,6 +220,7 @@ def create_app(
                             status="internal_error",
                             error_kind="other",
                             latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
                         )
                     )
                 except Exception:
@@ -291,6 +296,7 @@ def create_app(
                             collection=chosen,
                             result_count=len(response.results),
                             latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
                         )
                     )
                 except Exception:
@@ -305,6 +311,7 @@ def create_app(
                             status="internal_error",
                             error_kind="other",
                             latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
                         )
                     )
                 except Exception:
@@ -321,6 +328,7 @@ def create_app(
                             status="internal_error",
                             error_kind="other",
                             latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
                         )
                     )
                 except Exception:

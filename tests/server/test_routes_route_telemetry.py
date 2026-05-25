@@ -394,3 +394,77 @@ def test_route_handler_non_400_http_exception_produces_no_telemetry() -> None:
 
     assert resp.status_code == 503
     writer.enqueue.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Test 12: correlation_id is threaded into the telemetry entry
+# ---------------------------------------------------------------------------
+
+
+def _make_test_app_with_correlation(
+    writer: TelemetryWriter | None = None,
+    all_meta: list[CollectionMeta] | None = None,
+    request_id: str = "test-req-id-abc",
+) -> FastAPI:
+    """Like _make_test_app but also sets the correlation_id ContextVar."""
+    from archon_search.config import SearchConfig
+    from archon_search.observability import correlation_id as _correlation_id
+    from archon_search.server.routes_route import router
+
+    app = FastAPI()
+    app.state.config = SearchConfig()
+    app.state.telemetry_writer = writer
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=all_meta or [])
+    app.state.search_store = mock_store
+
+    @app.middleware("http")
+    async def _inject_context(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.namespace = DEFAULT_NAMESPACE
+        token = _correlation_id.set(request_id)
+        try:
+            return await call_next(request)
+        finally:
+            _correlation_id.reset(token)
+
+    app.include_router(router)
+    return app
+
+
+def test_route_telemetry_has_correlation_id() -> None:
+    """POST /route telemetry entry carries the correlation_id set by middleware."""
+    request_id = "route-corr-id-12345"
+    writer = _make_mock_writer()
+    app = _make_test_app_with_correlation(writer, request_id=request_id)
+
+    fake_router = _FakeColRouter(pre_context="ctx", routable=["col_b"], decomposer=False)
+
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
+        with TestClient(app) as client:
+            resp = client.post("/route", json={"query": "hello"})
+
+    assert resp.status_code == 200
+    writer.enqueue.assert_called_once()
+    entry: TelemetryEntry = writer.enqueue.call_args[0][0]
+    assert entry.correlation_id == request_id
+
+
+def test_route_telemetry_correlation_id_not_query() -> None:
+    """JSONL telemetry entry has correlation_id field but NOT a query field."""
+    request_id = "no-query-sentinel-xyz"
+    writer = _make_mock_writer()
+    app = _make_test_app_with_correlation(writer, request_id=request_id)
+
+    fake_router = _FakeColRouter(pre_context="ctx", routable=[], decomposer=False)
+
+    with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
+        with TestClient(app) as client:
+            resp = client.post("/route", json={"query": "my secret query"})
+
+    assert resp.status_code == 200
+    writer.enqueue.assert_called_once()
+    entry: TelemetryEntry = writer.enqueue.call_args[0][0]
+    dumped = entry.model_dump()
+    assert "correlation_id" in dumped
+    assert "query" not in dumped

@@ -469,7 +469,7 @@ class ExplainResponse(BaseModel):
   - Checkpoint: `uv run pytest tests/telemetry/ -v -k "correlation_id"`
 
 #### Task 4.2 — Thread `correlation_id` into telemetry enqueue sites
-- [ ] **Files**: `archon_search/server/routes_search.py`, `archon_search/server/routes_route.py`, `archon_search/server/routes_explain.py`, `archon_search/server/mcp.py`
+- [x] **Files**: `archon_search/server/routes_search.py`, `archon_search/server/routes_route.py`, `archon_search/server/routes_explain.py`, `archon_search/server/mcp.py`
 - **Depends on**: Task 4.1, Task 2.2 (correlation_id ContextVar is set by middleware)
 - **Description**:
   - At every `TelemetryEntry.from_*` call site in the four files above, add:

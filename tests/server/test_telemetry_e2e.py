@@ -241,6 +241,21 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
         )
         writer.enqueue(big_entry)
 
+        # correlation_id entry — provides: correlation_id key in JSONL.
+        # Constructed directly because middleware is not active in the test harness.
+        corr_entry = TelemetryEntry(
+            query_id=uuid.uuid4().hex,
+            timestamp="2024-01-01T00:00:00Z",
+            endpoint="search",
+            latency_ms=1.0,
+            status="ok",
+            collection="col1",
+            result_count=0,
+            result_doc_ids=[],
+            correlation_id="test-corr-id-e2e",
+        )
+        writer.enqueue(corr_entry)
+
     # lifespan exit has drained the writer
 
     entries = _read_all_jsonl(log_dir)
@@ -258,14 +273,18 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
         f"Extra   (undocumented keys): {extra}"
     )
 
-    # Assert structural parity: /search error entry must have the same key set
-    # as /route error entries (all error entries use from_error(...) and share the same field structure).
+    # Assert structural parity: /search error and /route error entries share the same
+    # stable field set (excluding correlation_id which is optional and context-dependent:
+    # present when RequestContextMiddleware is active, absent for MCP tool calls in tests).
     route_error_entries = [e for e in entries if e.get("endpoint") == "route" and e.get("status") != "ok"]
     search_error_entries = [e for e in entries if e.get("endpoint") == "search" and e.get("status") == "internal_error"]
     assert len(search_error_entries) >= 1, "Expected at least one /search error entry"
     assert len(route_error_entries) >= 1, "Expected at least one /route error entry"
-    assert set(search_error_entries[0].keys()) == set(route_error_entries[0].keys()), (
-        f"Key parity mismatch between /search and /route error entries.\n"
+    optional_fields = {"correlation_id"}
+    search_stable = set(search_error_entries[0].keys()) - optional_fields
+    route_stable = set(route_error_entries[0].keys()) - optional_fields
+    assert search_stable == route_stable, (
+        f"Key parity mismatch between /search and /route error entries (excluding optional fields).\n"
         f"/search keys: {set(search_error_entries[0].keys())}\n"
         f"/route keys: {set(route_error_entries[0].keys())}"
     )

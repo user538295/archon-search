@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder, ModelEmbedder
+from archon_search.observability import correlation_id as _correlation_id
 from archon_search.router import MultiCollectionRouter
 from archon_search.sync import path_to_collection_name
 from archon_search.telemetry.entry import ErrorKind, TelemetryEntry
@@ -113,6 +114,7 @@ async def route(body: RouteRequest, request: Request) -> Any:
                         collections=resp.pinned_names + resp.routable_names,
                         decomposer_invoked=resp.decomposer_invoked,
                         latency_ms=(monotonic() - start) * 1000.0,
+                        correlation_id=_correlation_id.get(),
                     )
                 )
             except Exception as tel_exc:
@@ -128,6 +130,7 @@ async def route(body: RouteRequest, request: Request) -> Any:
                         status="timeout",
                         error_kind="timeout",
                         latency_ms=(monotonic() - start) * 1000.0,
+                        correlation_id=_correlation_id.get(),
                     )
                 )
             except Exception as tel_exc:
@@ -143,6 +146,7 @@ async def route(body: RouteRequest, request: Request) -> Any:
                         status="validation_error",
                         error_kind=_redact_validation(exc.detail),
                         latency_ms=(monotonic() - start) * 1000.0,
+                        correlation_id=_correlation_id.get(),
                     )
                 )
             except Exception as tel_exc:
@@ -158,6 +162,7 @@ async def route(body: RouteRequest, request: Request) -> Any:
                         status="internal_error",
                         error_kind="other",
                         latency_ms=(monotonic() - start) * 1000.0,
+                        correlation_id=_correlation_id.get(),
                     )
                 )
             except Exception as tel_exc:

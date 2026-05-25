@@ -1320,6 +1320,43 @@ async def test_post_explain_telemetry_emits_no_query(tmp_path: Path) -> None:
     await store.disconnect()
 
 
+def test_explain_telemetry_has_correlation_id(tmp_path: Path) -> None:
+    """POST /explain telemetry entry carries the correlation_id set by RequestContextMiddleware."""
+    from unittest.mock import MagicMock
+    from archon_search.telemetry.writer import TelemetryWriter
+
+    app, _ = _make_app(tmp_path)
+    cid = "explain-corr-id-test"
+
+    writer = MagicMock(spec=TelemetryWriter)
+
+    pipeline = MagicMock()
+    pipeline.explain = AsyncMock(return_value=_make_explain_result())
+    pipeline.get_collection_meta = AsyncMock(return_value=CollectionMeta(
+        name="docs", centroid=[0.1, 0.2, 0.3, 0.4], embedding_model="mock-embedder", namespace="default"
+    ))
+    pipeline._embedder = MagicMock()
+    pipeline._embedder.embed = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
+    pipeline._embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
+    app.state.pipeline = pipeline
+    app.state.embedder = pipeline._embedder
+
+    with TestClient(app, headers={"Authorization": f"Bearer {os.environ.get('ARCHON_SEARCH_API_KEY', '')}"}) as c:
+        # Set writer AFTER lifespan startup (lifespan sets it to None when telemetry disabled)
+        app.state.telemetry_writer = writer
+        resp = c.post(
+            "/explain",
+            json={"query": "hello", "collection": "docs"},
+            headers={"X-Request-ID": cid},
+        )
+
+    assert resp.status_code == 200
+    writer.enqueue.assert_called_once()
+    from archon_search.telemetry.entry import TelemetryEntry
+    entry: TelemetryEntry = writer.enqueue.call_args[0][0]
+    assert entry.correlation_id == cid
+
+
 def test_post_explain_openapi_includes_route(tmp_path: Path) -> None:
     """GET /openapi.json must show /explain with 'post'; security includes HTTPBearer."""
     _, client = _make_app(tmp_path)

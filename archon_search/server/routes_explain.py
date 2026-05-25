@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from archon_search._types import IngestedBy
+from archon_search.observability import correlation_id as _correlation_id
 from archon_search.pipeline import ExplainStageError
 from archon_search.router import MultiCollectionRouter
 from archon_search.telemetry.entry import TelemetryEntry
@@ -234,6 +235,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     collection=collection,
                     result_count=result_count,
                     latency_ms=(monotonic() - start) * 1000.0,
+                    correlation_id=_correlation_id.get(),
                 )
             )
         except Exception as tel_exc:
@@ -249,6 +251,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     status="internal_error",
                     error_kind="other",
                     latency_ms=(monotonic() - start) * 1000.0,
+                    correlation_id=_correlation_id.get(),
                 )
             )
         except Exception as tel_exc:

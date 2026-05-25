@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
 from archon_search.filters import SearchFilters
+from archon_search.observability import correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
 # TODO: make configurable via config.py (see /route for parity)
@@ -117,6 +118,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                         result_doc_ids=[r.doc_id for r in result.results],
                         latency_ms=(monotonic() - start) * 1000.0,
                         filter_flags=flags,
+                        correlation_id=_correlation_id.get(),
                     )
                 )
             except Exception:
@@ -134,6 +136,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                         status="timeout",
                         error_kind="timeout",
                         latency_ms=(monotonic() - start) * 1000.0,
+                        correlation_id=_correlation_id.get(),
                     )
                 )
             except Exception as tel_exc:
@@ -152,6 +155,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                         status="internal_error",
                         error_kind="other",
                         latency_ms=(monotonic() - start) * 1000.0,
+                        correlation_id=_correlation_id.get(),
                     )
                 )
             except Exception as tel_exc:
