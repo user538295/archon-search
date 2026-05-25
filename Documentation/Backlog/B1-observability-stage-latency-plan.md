@@ -330,7 +330,7 @@ class ExplainResponse(BaseModel):
   - Checkpoint: `uv run pytest tests/test_embedder.py -v -k "stage"`
 
 #### Task 3.2 — `record_stage` in `Reranker.rerank`
-- [ ] **File**: `archon_search/reranker.py`
+- [x] **File**: `archon_search/reranker.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Wrap the `await asyncio.to_thread(...)` call in `Reranker.rerank()` with `record_stage("rerank")`:

@@ -8,6 +8,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import SearchResult
+from archon_search.observability import record_stage
 
 
 @runtime_checkable
@@ -53,14 +54,14 @@ class Reranker:
             return []
 
         pairs = [(query, c.text) for c in candidates]
-        scores: list[float] = await asyncio.to_thread(self._backend.predict, pairs)
+        with record_stage("rerank"):
+            scores: list[float] = await asyncio.to_thread(self._backend.predict, pairs)
 
         if len(scores) != len(candidates):
             raise ValueError(
                 f"Backend returned {len(scores)} scores for {len(candidates)} candidates"
             )
 
-        # Update scores in-place (intentional per spec) and return a sorted copy
         for candidate, score in zip(candidates, scores):
             candidate.score = score
 
@@ -81,7 +82,8 @@ class Reranker:
             return []
 
         pairs = [(query, c.text) for c in candidates]
-        scores: list[float] = await asyncio.to_thread(self._backend.predict, pairs)
+        with record_stage("rerank"):
+            scores: list[float] = await asyncio.to_thread(self._backend.predict, pairs)
 
         if len(scores) != len(candidates):
             raise ValueError(

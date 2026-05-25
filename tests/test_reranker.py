@@ -345,3 +345,48 @@ def test_model_reranker_uses_submodule_import_path() -> None:
     finally:
         if original is not None:
             top_level.TextCrossEncoder = original
+
+
+# ---------------------------------------------------------------------------
+# Stage recording tests — Task 3.2 (B1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rerank_records_stage_when_bound() -> None:
+    """Reranker.rerank records 'rerank' stage timing when a recorder is bound."""
+    from archon_search.observability import bind_stage_recorder
+
+    backend = _MockRerankerBackend()
+    reranker = Reranker(backend)
+    candidates = _make_candidates(2)
+    with bind_stage_recorder() as recorder:
+        await reranker.rerank("query", candidates, top_k=2)
+    assert "rerank" in recorder.stage_timings_ms
+    assert recorder.stage_timings_ms["rerank"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_rerank_noop_when_unbound() -> None:
+    """Reranker.rerank works normally with no recorder bound."""
+    from archon_search.observability import _stage_recorder
+
+    backend = _MockRerankerBackend()
+    reranker = Reranker(backend)
+    candidates = _make_candidates(2)
+    assert _stage_recorder.get() is None
+    result = await reranker.rerank("query", candidates, top_k=2)
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_rerank_with_trace_records_stage_when_bound() -> None:
+    """Reranker._rerank_with_trace records 'rerank' stage (explain path)."""
+    from archon_search.observability import bind_stage_recorder
+
+    backend = _MockRerankerBackend()
+    reranker = Reranker(backend)
+    scored = [_make_scored_candidate(f"doc{i}", f"text {i}", 0.5) for i in range(2)]
+    with bind_stage_recorder() as recorder:
+        await reranker._rerank_with_trace("query", scored, top_k=2)
+    assert "rerank" in recorder.stage_timings_ms
