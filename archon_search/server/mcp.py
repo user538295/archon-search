@@ -13,6 +13,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.filters import SearchFilters
 from archon_search.key_manager import load_or_generate_key
@@ -26,6 +27,7 @@ from archon_search.server.routes_explain import (
     RoutingCandidate,
     RoutingExplain,
 )
+from archon_search.store import StoreBusyError
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
@@ -38,6 +40,20 @@ logger = logging.getLogger("archon.search")
 class McpErrorResponse(TypedDict):
     error: str
     code: str
+
+
+_PATH_UNSAFE_MESSAGES: dict[str, str] = {
+    "empty": "path is unsafe: the path is empty — provide an absolute filesystem path",
+    "whitespace_only": "path is unsafe: the path is only whitespace — provide an absolute filesystem path",
+    "nul_byte": "path is unsafe: the path contains a NUL byte — provide a valid absolute path",
+    "contains_dotdot": "path is unsafe: the path contains a '..' segment — use an absolute path without traversal",
+    "not_absolute": "path is unsafe: the path is not absolute — use an absolute path (no relative or '..' segments)",
+}
+
+
+def _path_unsafe_message(reason: str) -> str:
+    """Map a PathUnsafeError reason code to an LLM-readable rejection phrase."""
+    return _PATH_UNSAFE_MESSAGES.get(reason, f"path is unsafe: {reason}")
 
 
 def _chunk_to_context_dict(chunk: Any, *, include_metadata: bool = True) -> dict[str, Any]:
@@ -319,10 +335,16 @@ def create_app(
     ) -> dict[str, Any]:
         """Ingest a single file into the RAG store."""
         try:
+            validated = validate_ingest_path(path)
+        except PathUnsafeError as e:
+            return McpErrorResponse(error=_path_unsafe_message(e.reason), code="path_unsafe")
+        try:
             result = await pipeline.ingest_file(
-                Path(path), collection or default_collection, ingested_by="http",
+                validated, collection or default_collection, ingested_by="http",
             )
             return asdict(result)
+        except StoreBusyError as exc:
+            return McpErrorResponse(error=str(exc), code="store_busy")
         except Exception as exc:
             logger.exception("ingest_file failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
@@ -336,18 +358,24 @@ def create_app(
     ) -> list[dict[str, Any]]:
         """Ingest all files in a directory into the RAG store."""
         try:
+            validated = validate_ingest_path(path)
+        except PathUnsafeError as e:
+            return McpErrorResponse(error=_path_unsafe_message(e.reason), code="path_unsafe")
+        try:
             async def progress_cb(done: int, total: int) -> None:
                 if ctx is not None:
                     await ctx.report_progress(done, total)
 
             results = await pipeline.ingest_directory(
-                Path(path),
+                validated,
                 collection or default_collection,
                 glob_pattern=glob_pattern,
                 progress_cb=progress_cb,
                 ingested_by="http",
             )
             return [asdict(r) for r in results]
+        except StoreBusyError as exc:
+            return McpErrorResponse(error=str(exc), code="store_busy")
         except Exception as exc:
             logger.exception("ingest_directory failed")
             return McpErrorResponse(error=str(exc), code="internal_error")

@@ -60,8 +60,8 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 **REST — additive (non-breaking)**:
 - `/search` result items gain the same six keys. Tolerant JSON consumers see new fields appear; strict-schema consumers (e.g., generated clients pinned to the older OpenAPI snapshot) must regenerate. (There is no `/search/context` REST endpoint; the equivalent capability is the MCP `search_with_context` tool, listed separately in the MCP section above.)
 
-**New 503 contract on `/ingest`**:
-- During an active reindex of the same collection, the store may raise `StoreBusyError` after a 30s lock-acquisition timeout. The lifecycle wrapper surfaces this in job state today (REST 202 + background task model); a synchronous 503 + `Retry-After: 30` response is a follow-up tied to a request-lifecycle refactor.
+**New 503 contract on `/ingest` and `/collections` (A5c)**:
+- During an active reindex of the same collection, the store may raise `StoreBusyError` after a 30s lock-acquisition timeout. HTTP `POST /ingest` and `POST /collections` now return HTTP 503 with `Retry-After: 30` and `{"error": "store_busy", ...}` synchronously; ingest into a different collection succeeds normally. MCP `ingest_file` and `ingest_directory` surface `StoreBusyError` synchronously as `McpErrorResponse(code="store_busy")`. (A5c closes A1's deferred 503 surface.)
 
 **`X-Ingested-By` header normalization**:
 - Missing/empty → `"http"`.
@@ -84,6 +84,17 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 - Migration: callers that treated an empty-results 200 as a pipeline-error signal must now handle HTTP 5xx. Callers that already treat 5xx as errors are unaffected.
 - The `503` meta-lookup path (`get_collection_meta` raises) is unchanged.
 - MCP `search` / `search_with_context` tools are unchanged.
+
+### [next release] — A5a ingest path safety
+
+**Surface**: MCP (behaviour change), REST (additive).
+
+- MCP `ingest_file` and `ingest_directory` previously accepted paths containing `..` segments, empty strings, whitespace-only strings, NUL bytes, and non-absolute paths, and silently followed/resolved them. They now reject those inputs and return `McpErrorResponse(error=..., code="path_unsafe")` with an LLM-readable reason.
+- HTTP `POST /collections` and `POST /jobs/ingest` gain a new `400` response (`ErrorDetail`, `detail` prefixed `"path is unsafe:"`) for the same input classes — additive (the `400` was not previously in the OpenAPI schema).
+
+**Migration**: callers must pass absolute paths without `..` traversal. `path: null` (documents-only) ingest on `POST /jobs/ingest` is unaffected. Symlinks and absolute-path scope are intentionally NOT validated (deferred to a future `allowed_dirs` feature).
+
+**Announced in**: this release. No prior deprecation — the silent-acceptance behaviour was never documented as stable.
 
 ### [next release] — MCP `search` tool response shape
 

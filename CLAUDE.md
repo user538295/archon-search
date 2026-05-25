@@ -84,6 +84,7 @@ Opt-in and **disabled by default**. `writer.py` appends one JSONL line per call 
 - The package directory is `archon_search/` (underscore), the distribution is `archon-search` (hyphen). `pyproject.toml` `[tool.hatch.build.targets.wheel].packages` is explicit about this — don't "fix" it.
 - Breaking REST/MCP changes go in `BREAKING.md`.
 - Telemetry's no-raw-query guarantee is structural: do not add a `query` parameter to telemetry entry constructors.
+- `store.py` SQL predicates must be built via `_where_eq`/`_where_in` (which quote through `_sql_quote_str` in `store_filters.py`), never f-strings; the `tests/test_no_fstring_sql.py` CI guard fails the build if an f-string-wrapped `.where(`/`.delete(`/`.count_rows(` reappears in `store.py`.
 
 ## Documentation map
 

@@ -377,3 +377,104 @@ def test_ingest_request_ignores_body_namespace(tmp_path: Path, auth_headers: dic
     assert "job_id" in data
     # The job namespace must NOT be "attacker-namespace"; it comes from request.state.namespace
     assert data.get("namespace") != "attacker-namespace"
+
+
+# ---------------------------------------------------------------------------
+# POST /ingest — path safety validation (Task 1.3 / A5a)
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_rejects_dotdot_path(client: TestClient) -> None:
+    """POST /ingest with a dotdot path returns 400 with 'path is unsafe:' detail."""
+    response = client.post("/ingest", json={"collection": "c", "path": "/foo/../bar"})
+    assert response.status_code == 400
+    assert response.json()["detail"].startswith("path is unsafe:")
+
+
+def test_ingest_uses_validator_returned_path(
+    tmp_path: Path, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Handler must forward the Path returned by validate_ingest_path to the ingest task."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, store)
+    c = TestClient(app, headers=auth_headers)
+
+    # Patch the validator in the route module namespace to return a sentinel path.
+    monkeypatch.setattr(
+        "archon_search.server.routes_jobs.validate_ingest_path",
+        lambda raw: Path("/sentinel/value"),
+    )
+
+    # Capture the IngestRequest passed to whichever ingest task variant the handler uses.
+    # The handler branches to _default_ingest_task_with_lock when search_store has _lock_for.
+    # Must stay await-free: completes in a single event-loop step before the response
+    # is returned (no await point => no race with asyncio.create_task).
+    captured: list[str] = []
+
+    async def _capturing_ingest_task(job_id, store, body, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append(body.path)
+
+    monkeypatch.setattr(
+        "archon_search.server.routes_jobs._default_ingest_task",
+        _capturing_ingest_task,
+    )
+    monkeypatch.setattr(
+        "archon_search.server.routes_jobs._default_ingest_task_with_lock",
+        _capturing_ingest_task,
+    )
+
+    response = c.post("/ingest", json={"collection": "c", "path": "/some/legitimate/path"})
+
+    assert response.status_code == 202
+    assert captured == [str(Path("/sentinel/value"))]
+
+
+def test_ingest_rejects_nul_byte_path(client: TestClient) -> None:
+    """POST /ingest with a NUL byte in path returns 400 with 'nul_byte' in detail."""
+    response = client.post("/ingest", json={"collection": "c", "path": "/tmp/x\x00.md"})
+    assert response.status_code == 400
+    assert "nul_byte" in response.json()["detail"]
+
+
+def test_ingest_rejects_empty_string_path(client: TestClient) -> None:
+    """POST /ingest with path: "" (distinct from null) reaches the validator -> 400 'empty'."""
+    response = client.post("/ingest", json={"collection": "c", "path": ""})
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail.startswith("path is unsafe:")
+    assert "empty" in detail
+
+
+def test_ingest_rejects_relative_path(client: TestClient) -> None:
+    """POST /ingest with a non-absolute path returns 400 with 'not_absolute' in detail."""
+    response = client.post("/ingest", json={"collection": "c", "path": "relative/path.md"})
+    assert response.status_code == 400
+    assert "not_absolute" in response.json()["detail"]
+
+
+def test_ingest_accepts_null_path(client: TestClient) -> None:
+    """POST /ingest with path: null is accepted — documents-only ingest keeps working."""
+    response = client.post("/ingest", json={"collection": "c", "path": None})
+    assert response.status_code == 202
+    assert "job_id" in response.json()
+
+
+def test_ingest_accepts_legitimate_absolute_path(client: TestClient) -> None:
+    """POST /ingest with a valid absolute path still returns 202 (regression guard)."""
+    response = client.post("/ingest", json={"collection": "c", "path": "/tmp/legit"})
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+
+
+def test_ingest_openapi_lists_400_response(client: TestClient) -> None:
+    """GET /openapi.json must expose 400 under POST /ingest responses."""
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+    spec = response.json()
+    post_ingest = spec["paths"]["/ingest"]["post"]
+    assert "400" in post_ingest["responses"]
+    ref = post_ingest["responses"]["400"]["content"]["application/json"]["schema"]["$ref"]
+    assert ref.endswith("ErrorDetail")

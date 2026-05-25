@@ -25,13 +25,14 @@ Verified against the route modules under `archon_search/server/`:
 | --- | --- | --- | --- |
 | `200` | Normal success | Typed JSON | Use the payload. |
 | `202` | `POST /collections/`, `POST /collections/{name}/reindex`, `POST /ingest`, `DELETE /jobs/{id}` on active jobs **or already-`CANCELLING` jobs** | `JobResponse` | Poll `GET /jobs/{id}` until terminal. |
-| `400` | `POST /route` — empty query, `slots < 1` | `{"detail": "..."}` | Fix the request; never retry as-is. |
+| `400` | `POST /route` — empty query, `slots < 1`; `POST /collections/` and `POST /ingest` — `path` fails safety validation (`"path is unsafe: <reason>"`: empty/whitespace-only/NUL/non-absolute/`..`-traversal) | `{"detail": "..."}` | Fix the request; never retry as-is. Use an absolute path with no `..` segments. |
 | `401` | `APIKeyMiddleware` rejected the token | (empty) | Reload the key file; if it rotated, re-read `.search.env`. |
 | `404` | Unknown collection, unknown job, cross-namespace access | `{"detail": "..."}` | Treat as logical "not visible to me". Do not retry. |
 | `409` | `POST /collections/` — path or name already registered; `DELETE /collections/{name}` — pinned-only | `{"detail": "..."}` | Reconcile config; do not retry blindly. |
 | `422` | FastAPI body validation (e.g. empty `collection` / `query` in `/search`) | FastAPI's structured error body | Fix the request; never retry as-is. |
 | `500` | Unmapped internal failure; `POST /search` — pipeline stage exception (embedder, store, reranker) (`routes_search.py`); `APIKeyMiddleware` returns a bare `500` (no body) if the resolved namespace fails revalidation (`middleware_auth.py:55-59`) | `{"detail": "..."}` for the routes that build a `JSONResponse({"detail": ...}, status_code=500)` (e.g. `routes_collections.py`, `routes_jobs.py`). **Exception: `POST /search` pipeline-failure 500 has a plain-text body `Internal Server Error` (Content-Type `text/plain`)** — the route bare-re-raises and Starlette's `ServerErrorMiddleware` renders the default response, not a JSON envelope. `APIKeyMiddleware`'s 500 path returns an empty body. | Backoff + retry once; surface to operator if it recurs. |
-| `503` | `POST /search` — any exception raised by `pipeline.get_collection_meta` (`routes_search.py:86-90`) | `{"detail": "service unavailable"}` | Retry with exponential backoff. |
+| `503` | `POST /search` — any exception raised by `pipeline.get_collection_meta` (`routes_search.py:67-71`) | `{"detail": "service unavailable"}` | Retry with exponential backoff. |
+| `503` | `POST /collections/`, `POST /ingest` — a reindex holds the per-collection ingest lock | `{"error": "store_busy", "detail": "..."}` + header `Retry-After: 30` (note: `error` key, not `detail`-only) | Honour `Retry-After`, then retry. Ingest to a *different* collection is unaffected. |
 | `504` | `POST /route` — 30 s routing timeout; `POST /search` — pipeline call timed out (~30 s) | `{"detail": "routing timed out"}` / `{"detail": "Search timed out"}` | Retry at most once; if persistent, check CPU pressure or model load. |
 
 The full server-side mapping with file:line citations is in `Architecture/140_error_handling_strategy.md`.
@@ -42,6 +43,7 @@ The full server-side mapping with file:line citations is in `Architecture/140_er
 | --- | --- | --- |
 | Transient network | connection reset, `httpx.RemoteProtocolError` | Yes — short backoff (e.g. 200ms, 500ms, 1s). |
 | `503` from `/search` | Meta lookup race during reindex | Yes — same backoff. |
+| `503` `store_busy` from `/collections/` or `/ingest` | Reindex holds the per-collection lock | Yes — honour `Retry-After` (30s), then retry. |
 | `504` from `/route` | Embedder warm-up, slow centroid load | Once, then surface. |
 | `500` | Unhandled exception | Once, then surface — log the response. |
 | `401` | Token rotated underneath the client | Reload key, retry once. After that, fail loudly. |
@@ -88,6 +90,8 @@ Verified `code` values today (`mcp.py`):
 | --- | --- | --- |
 | `internal_error` | every tool's `except Exception` branch | Unhandled server-side failure. Treat like REST `500`. |
 | `not_found` | `get_collection_meta` when the name is unknown | Treat like REST `404`. |
+| `path_unsafe` | `ingest_file` / `ingest_directory` when `path` fails safety validation; `error` is an LLM-readable phrase (e.g. `"path is unsafe: the path contains a '..' segment — use an absolute path without traversal"`) | Treat like REST `400`. Use an absolute path with no `..` segments. |
+| `store_busy` | `ingest_file` / `ingest_directory` when a reindex holds the per-collection lock | Treat like REST `503`. Retry after a short wait; ingest to a different collection is unaffected. |
 
 The `McpErrorResponse` `TypedDict` is declared at `mcp.py:25`. Because MCP tools are not yet Pydantic-validated (`API-4` / roadmap C7 #Unverified), do not assume *additional* fields will never appear in a success payload — schema-tolerant parsing is safer than strict matching.
 

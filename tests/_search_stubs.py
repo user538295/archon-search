@@ -79,25 +79,33 @@ def install_stubs() -> None:
     if "onnxruntime" not in sys.modules:
         sys.modules["onnxruntime"] = types.ModuleType("onnxruntime")
 
-    # chonkie.RecursiveChunker hardcodes tokenizer="gpt2", which requires a
-    # HuggingFace download. In offline environments that load fails (and would
-    # break every test that builds a chunker, pipeline, or the FastAPI app).
-    # Wrap __init__ to fall back to the always-available "character" tokenizer
-    # ONLY when the requested tokenizer cannot be loaded — so when network IS
-    # available (CI) the real tokenizer is used unchanged and nothing is masked.
-    try:
-        import chonkie as _chonkie_top  # noqa: PLC0415
+    # Stub chonkie: real RecursiveChunker downloads a gpt2 tokenizer over the network, which
+    # fails in offline test environments. The fake splits on whitespace into <= chunk_size word
+    # groups and reports token_count as the word count, preserving the size contract that
+    # DocumentChunker and its tests depend on (multiple chunks for long text, bounded size).
+    if "chonkie" not in sys.modules:
+        _chonkie = types.ModuleType("chonkie")
 
-        _orig_chunker_init = _chonkie_top.RecursiveChunker.__init__
+        class _FakeChunk:  # noqa: D101
+            def __init__(self, text: str, token_count: int) -> None:
+                self.text = text
+                self.token_count = token_count
 
-        def _patched_chunker_init(self, tokenizer="character", chunk_size=512, **kwargs):  # type: ignore[override]
-            try:
-                return _orig_chunker_init(self, tokenizer=tokenizer, chunk_size=chunk_size, **kwargs)
-            except Exception:
-                return _orig_chunker_init(self, tokenizer="character", chunk_size=chunk_size, **kwargs)
+        class _FakeRecursiveChunker:  # noqa: D101
+            def __init__(self, tokenizer: str = "gpt2", chunk_size: int = 512, **kwargs: object) -> None:
+                self._chunk_size = max(1, chunk_size)
 
-        _chonkie_top.RecursiveChunker.__init__ = _patched_chunker_init  # type: ignore[method-assign]
-    except Exception:
-        pass  # chonkie not installed — silently skip
+            def chunk(self, text: str):  # type: ignore[return]
+                words = text.split()
+                if not words:
+                    return []
+                size = self._chunk_size
+                return [
+                    _FakeChunk(" ".join(words[i : i + size]), token_count=len(words[i : i + size]))
+                    for i in range(0, len(words), size)
+                ]
+
+        _chonkie.RecursiveChunker = _FakeRecursiveChunker  # type: ignore[attr-defined]
+        sys.modules["chonkie"] = _chonkie
 
     _STUBS_INSTALLED = True

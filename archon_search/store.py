@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -15,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult, normalize_iso_utc
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, _validate_namespace
-from archon_search.store_filters import build_where, _compute_fetch
+from archon_search.store_filters import build_where, _compute_fetch, _sql_quote_str
 
 
 from dataclasses import dataclass, field
@@ -72,6 +73,24 @@ _FIXED_WIDTH_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z
 _META_MAX_FIELDS = 50
 _META_MAX_KEY_LEN = 256
 _META_MAX_VAL_LEN = 4096
+
+
+# ---------------------------------------------------------------------------
+# SQL fragment helpers — defense-in-depth behind upstream identifier regexes.
+# LanceDB 0.30.2 async delete()/count_rows() accept only str (no bind params),
+# so we build safe fragments via _sql_quote_str from store_filters.
+# ---------------------------------------------------------------------------
+
+
+def _where_eq(col: str, value: str) -> str:
+    """Return e.g. "name = 'O''Brien'". Callers compose with literal ' AND '."""
+    return f"{col} = {_sql_quote_str(value)}"
+
+
+def _where_in(col: str, values: Iterable[str]) -> str:
+    """Return e.g. "chunk_id IN ('a', 'b')". Empty values yield "1=0" (always-false)."""
+    items = ", ".join(_sql_quote_str(v) for v in values)
+    return f"{col} IN ({items})" if items else "1=0"
 
 
 def _rrf_score(rank: int) -> float:
@@ -361,7 +380,8 @@ class SearchStore:
         if _META_TABLE not in all_names:
             return
         table = await db.open_table(_META_TABLE)
-        await table.delete(f"name = '{name}' AND namespace = '{namespace}'")
+        # name validated by _COLLECTION_RE, namespace by _validate_namespace; _where_eq is defense-in-depth
+        await table.delete(_where_eq("name", name) + " AND " + _where_eq("namespace", namespace))
 
     async def get_all_collections_meta(self) -> "list[CollectionMeta]":
         db = self._require_connected()
@@ -450,7 +470,8 @@ class SearchStore:
                         f"Collection {meta.name!r} belongs to namespace {existing_ns!r}; "
                         f"cannot reassign to {meta.namespace!r}"
                     )
-                await table.delete(f"name = '{meta.name}'")
+                # meta.name validated upstream by _COLLECTION_RE; _where_eq is defense-in-depth
+                await table.delete(_where_eq("name", meta.name))
 
         centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
         last_indexed_str = meta.last_indexed.isoformat() if meta.last_indexed else ""
@@ -478,7 +499,13 @@ class SearchStore:
     # Ingest
     # ------------------------------------------------------------------
 
-    async def ingest_chunks(self, collection: str, chunks: list[ChunkRecord]) -> int:
+    async def ingest_chunks(
+        self,
+        collection: str,
+        chunks: list[ChunkRecord],
+        *,
+        _locked_by_caller: bool = False,
+    ) -> int:
         self._validate_collection(collection)
         db = self._require_connected()
         for chunk in chunks:
@@ -488,6 +515,10 @@ class SearchStore:
 
         if not chunks:
             return 0
+
+        if _locked_by_caller:
+            # REST /ingest pre-acquire path: caller holds the lock; skip acquire/release.
+            return await self._do_ingest(db, collection, chunks)
 
         # Acquire the per-collection lock; the timeout applies only to
         # acquisition. Once acquired, the write runs to completion.
@@ -809,10 +840,12 @@ class SearchStore:
             table = await db.open_table(collection)
         except ValueError:
             return 0
-        count: int = await table.count_rows(f"doc_id = '{doc_id}'")
+        # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
+        count: int = await table.count_rows(_where_eq("doc_id", doc_id))
         if count == 0:
             return 0
-        await table.delete(f"doc_id = '{doc_id}'")
+        # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
+        await table.delete(_where_eq("doc_id", doc_id))
         return count
 
     async def delete_by_source_path(self, collection: str, source_path: str) -> int:
@@ -900,11 +933,10 @@ class SearchStore:
         except ValueError:
             return []
 
-        # Build SQL IN clause
-        id_list = ", ".join(f"'{cid}'" for cid in target_ids)
+        # chunk_ids are constructed from doc_id (validated by _DOC_ID_RE); _where_in is defense-in-depth
         rows = (
             await table.query()
-            .where(f"chunk_id IN ({id_list})")
+            .where(_where_in("chunk_id", target_ids))
             .to_list()
         )
 

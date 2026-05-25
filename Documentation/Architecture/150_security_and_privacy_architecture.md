@@ -102,6 +102,20 @@ flowchart TD
 
 The filter is applied in the pipeline after retrieval; see `acl.py::apply_acl_filter`.
 
+## Ingest input safety (A5a)
+
+The four ingest entry points — HTTP `POST /collections`, HTTP `POST /jobs/ingest`, MCP `ingest_file`, MCP `ingest_directory` — validate the caller-supplied path through `validate_ingest_path` (`archon_search/_path_safety.py`) before any filesystem read. It rejects empty / whitespace-only input, NUL bytes, non-absolute paths (after `expanduser()`), and any path whose `Path.parts` contains a `..` traversal segment. HTTP rejections are `HTTPException(400, detail="path is unsafe: <reason>")`; MCP rejections are `McpErrorResponse(code="path_unsafe", error=<LLM-readable phrase>)`. Authentication fires first — an unauthenticated unsafe-path request gets 401, not 400.
+
+What is **not** validated (accepted trade-offs, deferred to a future `allowed_dirs` feature): symlink resolution (the validator inspects only the raw `Path.parts`; the returned `resolve()`d path may follow a symlink elsewhere — the existing `pipeline.py` / `sync.py` symlink-skip during walks is the only symlink defence), and absolute-path scope (e.g. `/etc/passwd` still passes the validator). The CLI ingest surface is out of scope (local trusted user).
+
+## SQL boundary defense-in-depth (A5b)
+
+`store.py` builds LanceDB (DataFusion) `where` / `delete` / `count_rows` predicates from identifiers (`name`, `namespace`, `doc_id`, constructed `chunk_id`). The **primary** security boundary remains the upstream regex gates — `_COLLECTION_RE` (name), `_validate_namespace` / `_NAMESPACE_RE` (namespace), `_DOC_ID_RE` (doc_id) — which make injection unreachable today. As defense-in-depth, every predicate is now composed via `_where_eq` / `_where_in` (`store.py`), which quote values through `_sql_quote_str` (`store_filters.py`, single-quote doubling) rather than f-string interpolation. A CI guard (`tests/test_no_fstring_sql.py`) fails the build if any f-string-wrapped `.where(` / `.delete(` / `.count_rows(` reappears in `store.py`, so relaxing a regex gate in the future cannot silently re-enable SQL injection.
+
+## Ingest concurrency — synchronous store-busy signalling (A5c)
+
+While a reindex holds a collection's per-collection ingest lock, `POST /jobs/ingest` and `POST /collections` pre-acquire that lock in the request handler and, on a 30s acquisition timeout, return HTTP 503 with `Retry-After: 30` and `{"error": "store_busy", ...}` synchronously (rather than a 202 followed by a failed job). Ingest into a different collection is unaffected. The MCP `ingest_file` / `ingest_directory` tools surface the same condition as `McpErrorResponse(code="store_busy")`.
+
 ## Privacy
 
 ### No raw query text in telemetry — structural guarantee

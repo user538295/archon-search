@@ -9,9 +9,11 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
+from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
+from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.schemas import ErrorDetail, JobResponse
 
@@ -46,10 +48,14 @@ async def _run_pipeline(
     body: IngestRequest,
     pipeline_fn: Callable[..., Awaitable[None]] | None,
     namespace: str = DEFAULT_NAMESPACE,
+    locked_by_caller: bool = False,
 ) -> None:
     """Run the ingest pipeline (real or stub). Raises on failure."""
     if pipeline_fn is not None:
-        await pipeline_fn(job_id, store, body, namespace=namespace)
+        kwargs: dict = {"namespace": namespace}
+        if locked_by_caller:
+            kwargs["locked_by_caller"] = True
+        await pipeline_fn(job_id, store, body, **kwargs)
     else:
         # Stub: succeed immediately
         await asyncio.sleep(0)
@@ -86,20 +92,91 @@ async def _default_ingest_task(
             pass
 
 
+async def _default_ingest_task_with_lock(
+    job_id: str,
+    store: JobStore,
+    body: IngestRequest,
+    namespace: str = DEFAULT_NAMESPACE,
+    pipeline_fn: Callable[..., Awaitable[None]] | None = None,
+    held_lock: "asyncio.Lock | None" = None,
+) -> None:
+    """Lifecycle wrapper that releases held_lock in try/finally on success, failure, and cancellation.
+
+    The held_lock was pre-acquired by the request handler; passing locked_by_caller=True
+    to _run_pipeline signals the pipeline not to re-acquire the same lock.
+    """
+    try:
+        store.update(job_id, status=JobStatus.RUNNING)
+        await _run_pipeline(
+            job_id, store, body, pipeline_fn, namespace=namespace, locked_by_caller=True
+        )
+        job = store.get(job_id)
+        if job and job.status == JobStatus.CANCELLING:
+            store.update(job_id, status=JobStatus.CANCELLED)
+            return
+        store.update(job_id, status=JobStatus.DONE)
+    except asyncio.CancelledError:
+        try:
+            store.update(job_id, status=JobStatus.CANCELLED)
+        except KeyError:
+            pass
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Ingest task %s failed", job_id)
+        try:
+            store.update(job_id, status=JobStatus.FAILED, error=str(exc))
+        except KeyError:
+            pass
+    finally:
+        # Release the pre-acquired lock regardless of outcome or cancellation.
+        if held_lock is not None and held_lock.locked():
+            held_lock.release()
+
+
 _ERROR_401 = {401: {"model": ErrorDetail}}
+_ERROR_400_401 = {
+    400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
+    401: {"model": ErrorDetail},
+}
+_ERROR_400_401_503 = {
+    400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
+    401: {"model": ErrorDetail},
+    503: {"description": "Store busy — reindex in progress"},
+}
 
 
-@router.post("/ingest", status_code=202, response_model=JobResponse, responses=_ERROR_401)
-async def ingest(body: IngestRequest, request: Request) -> JobResponse:
+@router.post("/ingest", status_code=202, response_model=JobResponse, responses=_ERROR_400_401_503)
+async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONResponse:
     store: JobStore = request.app.state.job_store
     pipeline_fn: Callable[..., Awaitable[None]] | None = getattr(
         request.app.state, "ingest_pipeline", None
     )
     # Populate ingested_by from HTTP header (normalized at boundary).
     body.ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
+    if body.path is not None:
+        try:
+            body.path = str(validate_ingest_path(body.path))
+        except PathUnsafeError as e:
+            raise HTTPException(status_code=400, detail=f"path is unsafe: {e.reason}")
     ns = request.state.namespace
     job = store.create(namespace=ns)
-    task = asyncio.create_task(_default_ingest_task(job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn))
+
+    # Pre-acquire the per-collection lock to return 503 synchronously on contention.
+    search_store = getattr(request.app.state, "search_store", None)
+    lock_result = await acquire_collection_lock_or_503(search_store, body.collection)
+    if isinstance(lock_result, JSONResponse):
+        return lock_result
+
+    if lock_result is not None:
+        task = asyncio.create_task(
+            _default_ingest_task_with_lock(
+                job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn, held_lock=lock_result
+            )
+        )
+    else:
+        task = asyncio.create_task(
+            _default_ingest_task(job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn)
+        )
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
     return JobResponse(**job_to_dict(job))

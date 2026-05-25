@@ -1619,6 +1619,16 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Ingest path failed safety validation"
+          },
           "401": {
             "content": {
               "application/json": {
@@ -1648,6 +1658,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "Store busy \u2014 reindex in progress"
           }
         },
         "security": [
@@ -1981,6 +1994,16 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Ingest path failed safety validation"
+          },
           "401": {
             "content": {
               "application/json": {
@@ -2000,6 +2023,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "Store busy \u2014 reindex in progress"
           }
         },
         "security": [

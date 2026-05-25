@@ -9,13 +9,15 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
+from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
-from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
+from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse
 from archon_search.sync import path_to_collection_name
 
@@ -110,9 +112,20 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
 _ERROR_401 = {401: {"model": ErrorDetail}}
 _ERROR_401_404 = {401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}}
 _ERROR_401_409 = {401: {"model": ErrorDetail}, 409: {"model": ErrorDetail}}
+_ERROR_400_401_409 = {
+    400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
+    401: {"model": ErrorDetail},
+    409: {"model": ErrorDetail},
+}
+_ERROR_400_401_409_503 = {
+    400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
+    401: {"model": ErrorDetail},
+    409: {"model": ErrorDetail},
+    503: {"description": "Store busy — reindex in progress"},
+}
 
 
-@router.post("/", status_code=202, response_model=JobResponse, responses=_ERROR_401_409)
+@router.post("/", status_code=202, response_model=JobResponse, responses=_ERROR_400_401_409_503)
 async def add_collection(body: AddCollectionRequest, request: Request) -> JobResponse | JSONResponse:
     """Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob."""
     config: SearchConfig = request.app.state.config
@@ -120,7 +133,10 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     search_store = request.app.state.search_store
     ns: str = request.state.namespace
 
-    resolved = str(Path(body.path).expanduser().resolve())
+    try:
+        resolved = str(validate_ingest_path(body.path))
+    except PathUnsafeError as e:
+        raise HTTPException(status_code=400, detail=f"path is unsafe: {e.reason}")
 
     # Dedup check against resolved paths from both lists
     existing_resolved = {
@@ -136,16 +152,28 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     if any(m.name == collection_name for m in all_meta):
         return JSONResponse({"detail": "collection name already registered"}, status_code=409)
 
+    # Pre-acquire the per-collection lock BEFORE any state mutation so a 503
+    # leaves config, meta, and jobs completely untouched (no orphaned state).
+    lock_result = await acquire_collection_lock_or_503(search_store, collection_name)
+    if isinstance(lock_result, JSONResponse):
+        return lock_result
+
+    # ``lock_result`` is now either an acquired asyncio.Lock or None (store
+    # unavailable).  Track it so failure branches can release it.
+    held_lock: asyncio.Lock | None = lock_result if isinstance(lock_result, asyncio.Lock) else None
+
     config.collections.append(resolved)
     _maybe_save_config(config, request)
 
-    # Write stub meta — rollback config on failure
+    # Write stub meta — rollback config on failure and release the held lock.
     try:
         await search_store.update_collection_meta(CollectionMeta(name=collection_name, namespace=ns))
     except ValueError:
         # TOCTOU race: name claimed by another namespace between check and write
         config.collections.remove(resolved)
         _maybe_save_config(config, request)
+        if held_lock is not None and held_lock.locked():
+            held_lock.release()
         return JSONResponse({"detail": "collection name already registered"}, status_code=409)
     except Exception:
         config.collections.remove(resolved)
@@ -153,6 +181,8 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
             _maybe_save_config(config, request)
         except Exception:
             logger.exception("Failed to rollback config after stub meta write failure")
+        if held_lock is not None and held_lock.locked():
+            held_lock.release()
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
     ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
@@ -160,9 +190,17 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     ingest_body = IngestRequest(
         collection=collection_name, path=resolved, ingested_by=ingested_by
     )
-    task = asyncio.create_task(
-        _default_ingest_task(job.job_id, store, ingest_body, namespace=ns)
-    )
+
+    if lock_result is not None:
+        task = asyncio.create_task(
+            _default_ingest_task_with_lock(
+                job.job_id, store, ingest_body, namespace=ns, held_lock=lock_result
+            )
+        )
+    else:
+        task = asyncio.create_task(
+            _default_ingest_task(job.job_id, store, ingest_body, namespace=ns)
+        )
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
 

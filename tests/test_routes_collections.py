@@ -98,6 +98,7 @@ def test_add_collection_persists_and_starts_ingest(
     tmp_path: Path, config: SearchConfig, tmp_store: JobStore
 ) -> None:
     """POST /collections/ persists the path and returns an IngestJob (202)."""
+    import asyncio as _asyncio
     src = tmp_path / "myproject"
     src.mkdir()
     app = create_app(config, tmp_store)
@@ -107,6 +108,7 @@ def test_add_collection_persists_and_starts_ingest(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
@@ -132,6 +134,7 @@ def test_add_duplicate_collection_returns_409(
     tmp_path: Path, config: SearchConfig, tmp_store: JobStore
 ) -> None:
     """POST /collections/ twice with same path returns 409 on second call."""
+    import asyncio as _asyncio
     src = tmp_path / "myproject"
     src.mkdir()
     app = create_app(config, tmp_store)
@@ -141,6 +144,7 @@ def test_add_duplicate_collection_returns_409(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
@@ -716,6 +720,7 @@ def test_add_collection_writes_stub_meta(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """Successful POST /collections/ writes a stub meta row before ingest completes."""
+    import asyncio as _asyncio
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "myproject"
@@ -729,6 +734,7 @@ def test_add_collection_writes_stub_meta(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -751,6 +757,8 @@ def test_add_collection_rollback_on_meta_failure(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/ returns 500 and reverts config when update_collection_meta raises non-ValueError."""
+    import asyncio as _asyncio
+
     src = tmp_path / "myproject"
     src.mkdir()
     cfg = SearchConfig()
@@ -762,6 +770,8 @@ def test_add_collection_rollback_on_meta_failure(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    # Provide a real lock so the pre-acquire (moved before state mutation) can succeed.
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -779,6 +789,8 @@ def test_add_collection_cross_namespace_race_returns_409(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/ returns 409 (not 500) when update_collection_meta raises ValueError (TOCTOU race)."""
+    import asyncio as _asyncio
+
     src = tmp_path / "myproject"
     src.mkdir()
     cfg = SearchConfig()
@@ -792,6 +804,8 @@ def test_add_collection_cross_namespace_race_returns_409(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    # Provide a real lock so the pre-acquire (moved before state mutation) can succeed.
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -809,6 +823,7 @@ def test_add_collection_job_has_correct_namespace(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """Created job's namespace matches the caller's namespace."""
+    import asyncio as _asyncio
     src = tmp_path / "myproject"
     src.mkdir()
 
@@ -824,6 +839,7 @@ def test_add_collection_job_has_correct_namespace(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
@@ -1203,6 +1219,8 @@ def test_add_collection_rollback_save_failure(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/ returns 500 when both update_collection_meta AND rollback _maybe_save_config raise."""
+    import asyncio as _asyncio
+
     src = tmp_path / "myproject"
     src.mkdir()
     cfg = SearchConfig()
@@ -1216,6 +1234,8 @@ def test_add_collection_rollback_save_failure(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    # Provide a real lock so the pre-acquire (moved before state mutation) can succeed.
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     # Inject config_path so _maybe_save_config is called during rollback
@@ -1235,3 +1255,202 @@ def test_add_collection_rollback_save_failure(
         response = c.post("/collections/", json={"path": str(src)})
 
     assert response.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# POST /collections/ — path safety validation (Task 1.2 / A5a)
+# ---------------------------------------------------------------------------
+
+
+def test_add_collection_rejects_dotdot_path(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ with a dotdot path returns 400 with 'path is unsafe:' detail."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": "/foo/../bar"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"].startswith("path is unsafe:")
+
+
+def test_add_collection_uses_validator_returned_path(
+    tmp_path: Path, tmp_store: JobStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Handler must use the path returned by validate_ingest_path, not re-resolve body.path."""
+    import asyncio as _asyncio
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    app.state.search_store = mock_store
+
+    # Patch the validator in the route module namespace to return a sentinel path.
+    monkeypatch.setattr(
+        "archon_search.server.routes_collections.validate_ingest_path",
+        lambda raw: Path("/sentinel/value"),
+    )
+
+    # Capture the IngestRequest passed to either ingest task variant.
+    # The handler branches to _default_ingest_task_with_lock when lock_result is not None.
+    captured: list[str] = []
+
+    # Must stay await-free: the assertion below relies on this completing in a single
+    # event-loop step before the response is returned (no await point => no race).
+    async def _capturing_ingest_task(job_id, store, body, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append(body.path)
+
+    monkeypatch.setattr(
+        "archon_search.server.routes_collections._default_ingest_task",
+        _capturing_ingest_task,
+    )
+    monkeypatch.setattr(
+        "archon_search.server.routes_collections._default_ingest_task_with_lock",
+        _capturing_ingest_task,
+    )
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    # Do NOT patch asyncio.create_task here — the task must actually run so that
+    # captured receives body.path.  TestClient drives a real event loop that will
+    # schedule and execute the capturing task before the response is returned.
+    response = c.post("/collections/", json={"path": "/some/legitimate/path"})
+
+    assert response.status_code == 202
+    assert captured == [str(Path("/sentinel/value"))]
+
+
+def test_add_collection_rejects_relative_path(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ with a relative path returns 400."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": "./foo"})
+
+    assert response.status_code == 400
+
+
+def test_add_collection_rejects_empty_path(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ with an empty path returns 400 with 'empty' in detail."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": ""})
+
+    assert response.status_code == 400
+    assert "empty" in response.json()["detail"]
+
+
+def test_add_collection_unauth_takes_precedence(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """Auth check fires before path validation: dotdot path WITHOUT auth → 401."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+    # No auth headers
+    c = TestClient(app)
+
+    response = c.post("/collections/", json={"path": "/foo/../bar"})
+
+    assert response.status_code == 401
+
+
+def test_add_collection_accepts_legitimate_absolute_path(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ with a valid absolute path still returns 202 (regression guard)."""
+    import asyncio as _asyncio
+    import uuid as _uuid
+    src = tmp_path / f"legit-{_uuid.uuid4().hex}"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    app.state.search_store = mock_store
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+    assert data["status"] == JobStatus.PENDING.value
+
+
+def test_add_collection_openapi_lists_400_response(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """OpenAPI spec for POST /collections/ includes a 400 response with ErrorDetail schema."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get("/openapi.json")
+    assert response.status_code == 200
+    spec = response.json()
+
+    post_responses = spec["paths"]["/collections/"]["post"]["responses"]
+    assert "400" in post_responses
+
+    # The 400 response schema must reference ErrorDetail
+    schema_ref = post_responses["400"]["content"]["application/json"]["schema"]["$ref"]
+    # $ref looks like "#/components/schemas/ErrorDetail"
+    assert schema_ref.endswith("ErrorDetail")

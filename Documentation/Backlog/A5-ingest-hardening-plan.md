@@ -213,7 +213,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 > **Releasable**: when Task 1.7 lands. The whole phase ships as **one PR** ("A5a: ingest path safety"). Every prior task is internal-only until the four entry points and the OpenAPI/BREAKING.md updates are all in place.
 
 #### Task 1.1 — `PathUnsafeError` and `validate_ingest_path` in `_path_safety.py`
-- [ ] **File**: `archon_search/_path_safety.py` (new, top-level)
+- [x] **File**: `archon_search/_path_safety.py` (new, top-level)
 - **Depends on**: nothing
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: add `tests/test_path_safety.py` with all unit tests below. The module under test does not yet exist, so tests fail on import — acceptable red state; if preferred, mark them `@pytest.mark.xfail(reason="implementation pending in next commit", strict=True)` so CI is green at this commit.
@@ -230,7 +230,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Unit: `test_accepts_dotdot_substring_in_dirname` — `/data/..backup/x.md` accepted (`..backup` is a real-dir-name substring, not a `..` part).
   - Unit: `test_accepts_nonexistent_absolute_path` — `/no/such/file.md` passes the validator; existence is downstream's concern.
   - Unit: `test_accepts_trailing_slash` — `/tmp/foo/` accepted.
-  - Unit: `test_rejects_dotdot_standalone` — raises `PathUnsafeError(reason="contains_dotdot")` for `..`.
+  - Unit: `test_rejects_dotdot_standalone` — raises `PathUnsafeError(reason="not_absolute")` for `..` (`..` is relative, so the not_absolute check fires before the dotdot-parts check).
   - Unit: `test_rejects_dotdot_mid_path` — `/foo/../bar` rejected.
   - Unit: `test_rejects_relative_dotdot_path` — `../foo` rejected with `reason == "not_absolute"` (relative-path rejection fires before dotdot-parts rejection per the check order documented above). (C1-I-DA1-1)
   - Unit: `test_rejects_empty_string` — `""` → `reason="empty"`.
@@ -242,7 +242,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/test_path_safety.py -v`
 
 #### Task 1.2 — Wire validator into `POST /collections`
-- [ ] **File**: `archon_search/server/routes_collections.py`
+- [x] **File**: `archon_search/server/routes_collections.py`
 - **Depends on**: Task 1.1
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: append the integration tests below to `tests/server/test_routes_collections.py`. Tests fail (wiring absent); if CI must stay green, mark them `@pytest.mark.xfail(strict=True, reason="wiring pending")`.
@@ -267,7 +267,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/server/test_routes_collections.py -v -k "path_safety or unauth_takes or openapi_lists or legitimate_absolute"`
 
 #### Task 1.3 — Wire validator into `POST /jobs/ingest`
-- [ ] **File**: `archon_search/server/routes_jobs.py`
+- [x] **File**: `archon_search/server/routes_jobs.py`
 - **Depends on**: Task 1.1
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: append the integration tests below to `tests/server/test_routes_jobs.py`; mark them `@pytest.mark.xfail(strict=True, reason="wiring pending")` if CI must stay green at this commit.
@@ -286,7 +286,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/server/test_routes_jobs.py -v -k "rejects_dotdot or nul_byte or null_path or legitimate_absolute or openapi_lists"`
 
 #### Task 1.4 — Wire validator into MCP `ingest_file`
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 1.1
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: append the tests below to `tests/server/test_mcp.py`; mark them `@pytest.mark.xfail(strict=True, reason="wiring pending")` if CI must stay green at this commit.
@@ -310,7 +310,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/server/test_mcp.py -v -k "ingest_file and (dotdot or relative or empty or whitespace_only or nul_byte or legitimate or unsafe_message or sentinel)"`
 
 #### Task 1.5 — Wire validator into MCP `ingest_directory`
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 1.4 (shares `_path_unsafe_message` helper)
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: append the tests below to `tests/server/test_mcp.py`; mark them `@pytest.mark.xfail(strict=True, reason="wiring pending")` if CI must stay green at this commit.
@@ -328,7 +328,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/server/test_mcp.py -v -k "ingest_directory and (dotdot or sentinel or legitimate or reuses_path_unsafe_message)"`
 
 #### Task 1.6 — `BREAKING.md` Changelog entry for MCP behaviour change
-- [ ] **File**: `BREAKING.md`
+- [x] **File**: `BREAKING.md`
 - **Depends on**: Task 1.4, Task 1.5
 - **Description**:
   - Append under the existing `### [next release]` heading (match the file's existing format — no new top-level section).
@@ -339,7 +339,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: `grep -F "path_unsafe" BREAKING.md` returns the new entry.
 
 #### Task 1.7 — A5a final wiring sanity
-- [ ] **File**: N/A (verification task)
+- [x] **File**: N/A (verification task)
 - **Depends on**: Tasks 1.1 – 1.6
 - **Description (C1-I-DA2-4)**:
   - Run the full default-tier pytest suite locally to confirm nothing outside A5a regressed.
@@ -361,7 +361,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 > **A2 sequencing canary**: A5b MUST be sequenced AFTER A2 merges — it consumes `_sql_quote_str` from `archon_search/store_filters.py`, which A2 creates. Task 2.0 below is the contract test that fails loudly if A2 renames the symbol or changes its signature before A5b code is touched.
 
 #### Task 2.0 — Import contract assertion for `_sql_quote_str`
-- [ ] **File**: `tests/test_store_filters_contract.py` (new)
+- [x] **File**: `tests/test_store_filters_contract.py` (new)
 - **Depends on**: A2 (`archon_search/store_filters.py` must exist and export `_sql_quote_str`)
 - **Description**:
   - Lands FIRST in the A5b PR, before Task 2.1. Acts as a canary: if A2 renames `_sql_quote_str` or changes its signature, this test fails before any A5b implementation code is touched.
@@ -377,7 +377,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: `uv run pytest tests/test_store_filters_contract.py -v`
 
 #### Task 2.1 — Probe LanceDB native bind support
-- [ ] **File**: N/A (research task, output is a one-paragraph note in the PR description and a comment at the top of the helpers module if Task 2.2 uses helpers)
+- [x] **File**: N/A (research task, output is a one-paragraph note in the PR description and a comment at the top of the helpers module if Task 2.2 uses helpers)
 - **Depends on**: nothing
 - **Description**:
   - Read the pinned `lancedb` version from `pyproject.toml` and consult its docs / source for a parameterised `where()` / `delete()` API (look for `?`, `@name`, `bind`, `params=`, or DataFusion-style binds).
@@ -390,7 +390,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: PR description contains the probe finding.
 
 #### Task 2.2 — Implement SQL helpers (or skip if native binds available)
-- [ ] **File**: `archon_search/store.py` (private helpers at top of file). (C1-I-DA2-6: location committed — no `_sql.py` alternative.)
+- [x] **File**: `archon_search/store.py` (private helpers at top of file). (C1-I-DA2-6: location committed — no `_sql.py` alternative.)
 - **Depends on**: Task 2.1
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: append the unit tests below to `tests/test_store.py`; tests fail because the helpers do not yet exist. Mark `@pytest.mark.xfail(strict=True, reason="helpers pending")` if CI must stay green at this commit.
@@ -412,7 +412,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "where_eq or where_in"`
 
 #### Task 2.3 — Replace the five f-string SQL sites in `store.py`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 2.2; Task 2.4 is a **blocking prerequisite for merging the A5b PR** (the CI guard must land in the same PR as the f-string replacements — C1-I-DA3-5).
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: append the integration tests below to `tests/test_store.py`. These are behaviour-preservation regression tests; if they pass against unchanged code, mark them `@pytest.mark.xfail(strict=False, reason="pending refactor — should remain green after f-string replacement")` and flip them to non-xfail in Commit 2. Pure-regression tasks are the one exception where the test commit can land green; the discipline is preserved by adding tests in a dedicated commit before any production code changes.
@@ -433,7 +433,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "delete_collection_meta or update_collection_meta or delete_document or fetch_adjacent_chunks or injection_safe or a5b_end_to_end"` (all green, including the pre-existing `test_store_delete_document_injection_safe`).
 
 #### Task 2.4 — CI guard preventing f-string SQL regressions
-- [ ] **File**: `tests/test_no_fstring_sql.py` (new)
+- [x] **File**: `tests/test_no_fstring_sql.py` (new)
 - **Depends on**: Task 2.2 (must ship in same PR as Task 2.3 — see Phase 2 header)
 - **Description (TDD, C1-I-DA3-1)**:
   - **Commit 1 (tests, red)**: write the meta-test `test_guard_detects_injected_violation` against a tempfile fixture; confirm it fails (no guard regex exists yet). Mark `@pytest.mark.xfail(strict=True, reason="guard pending")` if CI must stay green at this commit.
@@ -455,7 +455,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 > **Releasable**: when Task 2c.3 lands. Independent of A5a / A5b — can ship as its own PR or fold into A5b's PR. Closes the A1 deferral so the plan's "503 + Retry-After: 30" acceptance criterion is met from the HTTP response surface.
 
 #### Task 2c.1 — `SearchStore.ingest_chunks` accepts `_locked_by_caller`
-- [ ] **File**: `archon_search/store.py`, `tests/test_store_lock.py`
+- [x] **File**: `archon_search/store.py`, `tests/test_store_lock.py`
 - **Depends on**: nothing (independent of A5a / A5b).
 - **Description**:
   - Add private keyword-only parameter `_locked_by_caller: bool = False` to `ingest_chunks`.
@@ -467,7 +467,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: `uv run pytest tests/test_store_lock.py -v`.
 
 #### Task 2c.2 — Pre-acquire lock in `POST /ingest` and `POST /collections`
-- [ ] **File**: `archon_search/server/routes_jobs.py`, `archon_search/server/routes_collections.py`, `archon_search/server/_ingest_lock.py` (new helper module).
+- [x] **File**: `archon_search/server/routes_jobs.py`, `archon_search/server/routes_collections.py`, `archon_search/server/_ingest_lock.py` (new helper module).
 - **Depends on**: Task 2c.1.
 - **Description**:
   - New helper `acquire_collection_lock_or_503(store, collection_name) -> asyncio.Lock | JSONResponse | None`:
@@ -485,7 +485,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: `uv run pytest tests/test_routes_ingest_503.py -v`.
 
 #### Task 2c.3 — MCP path verification + docs
-- [ ] **File**: `tests/server/test_mcp_ingest_503.py` (new), `BREAKING.md`, A1 plan acceptance note.
+- [x] **File**: `tests/server/test_mcp_ingest_503.py` (new), `BREAKING.md`, A1 plan acceptance note.
 - **Depends on**: Task 2c.2.
 - **Description**:
   - Verify MCP `ingest_file` / `ingest_directory` surface `StoreBusyError` as `McpErrorResponse(code="store_busy")` synchronously (no code change expected — they call `pipeline.ingest_file` directly, which calls `ingest_chunks`; the existing `except Exception` in mcp.py wraps it into the error envelope). Add an explicit test that pre-acquires the per-collection lock and asserts the MCP tool returns the error envelope rather than a success dict.
@@ -501,7 +501,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 > Phase 3 must ship within one week of both feature PRs merging — it is not indefinitely deferrable. The roadmap checkmarks landing in Task 3.2 are part of A5's done-definition. (DA2-C2-I-3)
 
 #### Task 3.1 — Update `Documentation/Architecture/150_security_and_privacy_architecture.md`
-- [ ] **File**: `Documentation/Architecture/150_security_and_privacy_architecture.md`
+- [x] **File**: `Documentation/Architecture/150_security_and_privacy_architecture.md`
 - **Depends on**: Tasks 1.7, 2.4 (whichever ships second)
 - **Description**:
   - Add a short subsection noting that ingest paths are validated for `..` segments, empty/whitespace/NUL inputs, and absoluteness on the four HTTP/MCP entry points. Explicitly note what is NOT validated: symlinks, absolute-path scope (deferred to `allowed_dirs`).
@@ -511,7 +511,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: doc references `_path_safety.py` and `_where_eq` / `_where_in` (or native binds if Task 2.1 chose that path).
 
 #### Task 3.2 — Roadmap consolidation (VAL-1 / RP-5 cleanup + A5a / A5b / A5c checkmarks)
-- [ ] **File**: `Documentation/Backlog/03_world_class_roadmap.md`
+- [x] **File**: `Documentation/Backlog/03_world_class_roadmap.md`
 - **Depends on**: Task 1.7, Task 2.4, Task 2c.3
 - **Description (C1-I-DA2-4)**: This is the **sole** task that edits the roadmap. Tasks 1.7, 2.4, 2c.3 explicitly do NOT touch the roadmap, eliminating merge-conflict risk when the feature PRs land independently.
   - Remove or strike-through both `VAL-1` and `RP-5` forward IDs from the A5 line.
@@ -522,7 +522,7 @@ task = asyncio.create_task(_default_ingest_task_with_lock(
 - **Checkpoint**: `grep -E "VAL-1|RP-5" Documentation/Backlog/03_world_class_roadmap.md` returns nothing AND the A5a / A5b checkmarks are visible.
 
 #### Task 3.3 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, Architecture docs, UserManual, OperatorGuide, CHANGELOG, contributing.md, CLAUDE.md, brief, roadmap) and update every file whose content is affected by A5. Specifically check:

@@ -50,7 +50,10 @@ Goal: make the existing pipeline safe to extend, and ship two cheap features tha
 - [ ] **A2. Metadata filters at search (item 7, minimum slice)** — source-path prefix/glob, `indexed-after`/`indexed-before`, file-type. Exposed on REST `/search`, MCP `search`, and the explain output (A4). Bounds-validated; uses the LanceDB `where()` API (no f-string SQL). A1 ships filterable fields populated; A2 only adds query-side wiring. **Language filtering deferred to C2** (real language detection) — A1's `language` field stays storage-only and is not exposed as a filter dimension here.
 - [x] **A3. Hardening: search-failure semantics (`CON-5`)** ✅ — `/search` now returns HTTP 500 on pipeline stage failure (bare re-raise) and HTTP 504 on timeout; telemetry is emitted on both paths. See `BREAKING.md` `[next release]` — `POST /search` pipeline-exception behavior.
 - [x] **A4. Explain / debug endpoint (item 12)** — `POST /explain` (REST) + `explain` MCP tool (10th tool) returning vector rank, FTS rank, fused (RRF) score, reranker score, and routing path. Shipped in A4. Two roadmap sub-fields deferred: `matched_filters` → A4.1 (additive, after A2 ships); `expansion-feature usage` → A4.2 (additive, after Phase B/C HyDE / RAG Fusion ships). Unlocks every later ranking change.
-- [ ] **A5. Hardening: input safety on ingest paths (`VAL-1`, `RP-5`)** — reject `..`-containing or symlink-escape paths in `/collections` and `/jobs/ingest`; replace all f-string `where()` builders in `store.py` with parameterised LanceDB calls.
+- [x] **A5. Hardening: input safety on ingest paths** ✅ — reject `..`-containing/empty/whitespace/NUL/non-absolute paths in `/collections` and `/jobs/ingest` (and MCP `ingest_file`/`ingest_directory`); replace all f-string `where()`/`delete()`/`count_rows()` builders in `store.py` with quoted helpers behind a CI guard.
+  - [x] A5a — ingest path safety (`validate_ingest_path`). Note: narrowed from "symlink-escape" to `..`-traversal + trivial-junk rejection; symlink scope deferred to a future `allowed_dirs` feature.
+  - [x] A5b — SQL builder defense-in-depth (`_where_eq`/`_where_in` + `tests/test_no_fstring_sql.py` guard).
+  - [x] A5c — synchronous `StoreBusyError` → HTTP 503 (`Retry-After: 30`) on `/ingest` and `/collections`; MCP `code="store_busy"`.
 - [ ] **A6. Hardening: state-store + router cache locks (`CON-2`, `CON-3`)** — `asyncio.Lock` around `IndexingStateStore` mutations; router cache invalidates on ingest/reindex/description-regen. One PR, both bugs.
 - [ ] **A7. Hardening: stop writing without fsync (`PROG-1`, `TEL-2`, `SYN-1`)** — `IndexingStateStore`, telemetry writer, and sync manifest all `flush + fsync` before `os.replace`. Cheap durability win.
 
@@ -203,7 +206,7 @@ If only one ordering is used for planning, use this — each phase is a coherent
 2. ⬜ A2. Metadata filters at search (item 7).
 3. ✅ A3. Search-failure semantics (`CON-5`) — shipped; see `BREAKING.md` `[next release]` — `POST /search` pipeline-exception behavior.
 4. ✅ A4. Explain / debug endpoint (item 12) — shipped; `matched_filters` deferred to A4.1 (after A2), `expansions` deferred to A4.2 (after Phase B/C).
-5. ⬜ A5. Ingest path safety + parameterised store queries (`VAL-1`, `RP-5`).
+5. ✅ A5. Ingest path safety + SQL-builder defense-in-depth + synchronous store-busy 503 (A5a/A5b/A5c).
 6. ⬜ A6. State-store and router cache locks (`CON-2`, `CON-3`).
 7. ⬜ A7. fsync on durable writes (`PROG-1`, `TEL-2`, `SYN-1`).
 

@@ -3605,3 +3605,163 @@ def test_glob_filter_applied_before_top_k_truncation(tmp_path: Path) -> None:
     assert all(r.source_path.endswith(".md") for r in results), (
         f"All results should be .md: {[r.source_path for r in results]}"
     )
+
+
+# A5b Task 2.2 — _where_eq / _where_in SQL fragment helper unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_where_eq_basic() -> None:
+    from archon_search.store import _where_eq  # noqa: PLC0415
+
+    assert _where_eq("name", "foo") == "name = 'foo'"
+
+
+def test_where_eq_adversarial() -> None:
+    """Belt-and-braces: call directly, bypassing upstream regex gate."""
+    from archon_search.store import _where_eq  # noqa: PLC0415
+
+    assert _where_eq("name", "O'Brien") == "name = 'O''Brien'"
+
+
+def test_where_in_basic() -> None:
+    from archon_search.store import _where_in  # noqa: PLC0415
+
+    assert _where_in("chunk_id", ["a", "b"]) == "chunk_id IN ('a', 'b')"
+
+
+def test_where_in_empty_returns_always_false() -> None:
+    from archon_search.store import _where_in  # noqa: PLC0415
+
+    assert _where_in("chunk_id", []) == "1=0"
+
+
+def test_where_in_single() -> None:
+    from archon_search.store import _where_in  # noqa: PLC0415
+
+    assert _where_in("chunk_id", ["a"]) == "chunk_id IN ('a')"
+
+
+def test_where_in_adversarial() -> None:
+    """Values containing single-quotes are doubled."""
+    from archon_search.store import _where_in  # noqa: PLC0415
+
+    assert _where_in("c", ["a'b"]) == "c IN ('a''b')"
+
+
+# ---------------------------------------------------------------------------
+# A5b Task 2.3 — SQL-site regression tests (pure-regression; xfail strict=False)
+# These test existing behaviour and should remain green before AND after the
+# f-string-to-helper refactor in the next commit.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_collection_meta_removes_only_named_row(connected_store: SearchStore) -> None:
+    """delete_collection_meta removes only the named (name, namespace) row; other survives.
+
+    Exercises the compound-predicate site (delete_collection_meta, line ~353).
+
+    Note: a same-name/different-namespace scenario is not tested here because
+    update_collection_meta enforces global name uniqueness — it raises ValueError
+    if a name already exists under a different namespace.  The AND namespace clause
+    in delete_collection_meta is therefore purely defensive (belt-and-suspenders).
+    """
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta_a = CollectionMeta(name="dcmr-col-a", namespace=DEFAULT_NAMESPACE)
+    meta_b = CollectionMeta(name="dcmr-col-b", namespace=DEFAULT_NAMESPACE)
+    await connected_store.update_collection_meta(meta_a)
+    await connected_store.update_collection_meta(meta_b)
+
+    await connected_store.delete_collection_meta("dcmr-col-a", DEFAULT_NAMESPACE)
+
+    all_meta = await connected_store.get_all_collections_meta()
+    names = {m.name for m in all_meta}
+    assert "dcmr-col-a" not in names, "deleted row should be gone"
+    assert "dcmr-col-b" in names, "sibling row must survive"
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_replaces_existing_row(connected_store: SearchStore) -> None:
+    """update_collection_meta upserts: a second write with the same name replaces the first.
+
+    Exercises the delete-then-insert site (update_collection_meta, line ~442).
+    """
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta1 = CollectionMeta(name="ucmr-col", namespace=DEFAULT_NAMESPACE, doc_count=1)
+    await connected_store.update_collection_meta(meta1)
+
+    meta2 = CollectionMeta(name="ucmr-col", namespace=DEFAULT_NAMESPACE, doc_count=99)
+    await connected_store.update_collection_meta(meta2)
+
+    result = await connected_store.get_collection_meta("ucmr-col", namespace=DEFAULT_NAMESPACE)
+    assert result is not None
+    assert result.doc_count == 99, "second write should replace the first (upsert semantics)"
+    # Assert exactly one row survived — proves the delete-half of upsert ran
+    all_metas = await connected_store.get_all_collections_meta()
+    assert len([m for m in all_metas if m.name == "ucmr-col"]) == 1, (
+        "upsert must leave exactly one row; more means the delete-half did not run"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_document_removes_all_chunks(connected_store: SearchStore, col_name: str) -> None:
+    """delete_document returns chunk count > 0 and leaves no chunks behind.
+
+    Exercises both count_rows and delete sites (lines ~725 and ~728).
+    """
+    doc_id, chunks = await _ingest_doc(connected_store, col_name, n_chunks=3)
+
+    deleted = await connected_store.delete_document(col_name, doc_id)
+    assert deleted == 3, f"Expected 3 chunks deleted, got {deleted}"
+
+    docs = await connected_store.list_documents(col_name)
+    assert all(d.doc_id != doc_id for d in docs), "doc must be absent after delete"
+
+
+@pytest.mark.asyncio
+async def test_fetch_adjacent_chunks_returns_window(connected_store: SearchStore, col_name: str) -> None:
+    """fetch_adjacent_chunks returns neighbors within the window.
+
+    Exercises the chunk_id IN (...) site (fetch_adjacent_chunks, line ~820).
+    Uses center_idx=1, window=1 → expects chunks at idx 0 and 2.
+    """
+    doc_id = _doc_id()
+    chunks = [_chunk(doc_id, i) for i in range(4)]
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    neighbors = await connected_store.fetch_adjacent_chunks(col_name, doc_id, 1, 1)
+    neighbor_ids = {c.chunk_id for c in neighbors}
+    assert f"{doc_id}-000000" in neighbor_ids, "chunk idx 0 must be in window"
+    assert f"{doc_id}-000002" in neighbor_ids, "chunk idx 2 must be in window"
+    assert f"{doc_id}-000001" not in neighbor_ids, "center must be excluded"
+
+
+@pytest.mark.asyncio
+async def test_a5b_end_to_end_flow_unchanged(connected_store: SearchStore, col_name: str) -> None:
+    """Full happy-path regression: add → ingest → search → delete → search empty.
+
+    Verifies that the f-string-to-helper refactor preserves semantics end-to-end
+    across all five replaced sites.
+    """
+    # Ingest a document
+    doc_id, _ = await _ingest_doc(connected_store, col_name, n_chunks=2, text_prefix="e2e")
+    await connected_store.rebuild_fts_index(col_name)
+
+    # Search returns the document
+    results = await connected_store.hybrid_search(col_name, [0.0] * _DIM, "e2e", top_k=5)
+    found_ids = {r.doc_id for r in results}
+    assert doc_id in found_ids, "search must find the ingested document"
+
+    # Delete the document
+    deleted = await connected_store.delete_document(col_name, doc_id)
+    assert deleted > 0, "delete must report removed chunks"
+
+    # After delete, the doc is no longer in the store
+    docs = await connected_store.list_documents(col_name)
+    assert all(d.doc_id != doc_id for d in docs), "doc must be absent after delete"
