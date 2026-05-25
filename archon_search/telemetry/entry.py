@@ -95,6 +95,7 @@ DOCUMENTED_SCHEMA_FIELDS: frozenset[str] = frozenset(
         "decomposer_invoked",
         "error_kind",
         "filter_flags",
+        "correlation_id",
     }
 )
 
@@ -119,6 +120,7 @@ class TelemetryEntry(BaseModel):
     error_kind: ErrorKind | None = None
 
     filter_flags: FilterFlags = Field(default_factory=FilterFlags)
+    correlation_id: str | None = None
 
     @staticmethod
     def _new_query_id() -> str:
@@ -137,6 +139,7 @@ class TelemetryEntry(BaseModel):
         result_doc_ids: list[str],
         latency_ms: float,
         filter_flags: FilterFlags | None = None,
+        correlation_id: str | None = None,
     ) -> TelemetryEntry:
         if endpoint not in ("search", "search_with_context"):
             raise ValueError(
@@ -153,6 +156,7 @@ class TelemetryEntry(BaseModel):
             result_count=len(result_doc_ids),
             result_doc_ids=result_doc_ids,
             filter_flags=filter_flags if filter_flags is not None else FilterFlags(),
+            correlation_id=correlation_id,
         )
 
     @classmethod
@@ -162,6 +166,7 @@ class TelemetryEntry(BaseModel):
         collections: list[str],
         decomposer_invoked: bool,
         latency_ms: float,
+        correlation_id: str | None = None,
     ) -> TelemetryEntry:
         return cls(
             query_id=cls._new_query_id(),
@@ -171,6 +176,7 @@ class TelemetryEntry(BaseModel):
             status="ok",
             collections=collections,
             decomposer_invoked=decomposer_invoked,
+            correlation_id=correlation_id,
         )
 
     @classmethod
@@ -181,6 +187,7 @@ class TelemetryEntry(BaseModel):
         status: Status,
         error_kind: ErrorKind,
         latency_ms: float,
+        correlation_id: str | None = None,
     ) -> TelemetryEntry:
         if status == "ok":
             raise ValueError("from_error requires a non-'ok' status")
@@ -191,6 +198,7 @@ class TelemetryEntry(BaseModel):
             latency_ms=latency_ms,
             status=status,
             error_kind=error_kind,
+            correlation_id=correlation_id,
         )
 
     @classmethod
@@ -200,6 +208,7 @@ class TelemetryEntry(BaseModel):
         collection: str,
         result_count: int,
         latency_ms: float,
+        correlation_id: str | None = None,
     ) -> TelemetryEntry:
         return cls(
             query_id=cls._new_query_id(),
@@ -209,4 +218,5 @@ class TelemetryEntry(BaseModel):
             status="ok",
             collection=collection,
             result_count=result_count,
+            correlation_id=correlation_id,
         )

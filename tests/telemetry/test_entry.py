@@ -202,3 +202,80 @@ def test_search_writes_filter_flags_to_jsonl(tmp_path: Path) -> None:
     # Must NOT contain raw filter strings at the top-level entry
     for forbidden_key in ("file_type_value", "source_path_prefix_value", "query", "source_path_prefix", "source_path_glob"):
         assert forbidden_key not in entry, f"Raw filter key {forbidden_key!r} leaked into telemetry entry"
+
+
+# ---------------------------------------------------------------------------
+# correlation_id field (Task 4.1)
+# ---------------------------------------------------------------------------
+
+
+def test_from_route_response_accepts_correlation_id() -> None:
+    entry = TelemetryEntry.from_route_response(
+        collections=["a", "b"],
+        decomposer_invoked=False,
+        latency_ms=5.0,
+        correlation_id="abc123",
+    )
+    assert entry.correlation_id == "abc123"
+
+
+def test_correlation_id_default_none() -> None:
+    entry = TelemetryEntry.from_route_response(
+        collections=["a"],
+        decomposer_invoked=False,
+        latency_ms=2.0,
+    )
+    assert entry.correlation_id is None
+
+
+def test_query_kwarg_still_rejected() -> None:
+    with pytest.raises(ValidationError):
+        TelemetryEntry(
+            query_id="deadbeef" * 4,
+            timestamp="2026-05-14T09:00:00Z",
+            endpoint="route",
+            latency_ms=1.0,
+            status="ok",
+            query="some query text",  # type: ignore[call-arg]
+        )
+
+
+def test_all_factories_accept_correlation_id() -> None:
+    cid = "trace-xyz"
+    entries = [
+        TelemetryEntry.from_search_tool_result(
+            endpoint="search", collection="c", result_doc_ids=[], latency_ms=1.0, correlation_id=cid
+        ),
+        TelemetryEntry.from_route_response(
+            collections=["c"], decomposer_invoked=False, latency_ms=1.0, correlation_id=cid
+        ),
+        TelemetryEntry.from_error(
+            endpoint="search", status="internal_error", error_kind="other", latency_ms=1.0, correlation_id=cid
+        ),
+        TelemetryEntry.from_explain_result(
+            collection="c", result_count=1, latency_ms=1.0, correlation_id=cid
+        ),
+    ]
+    for entry in entries:
+        assert entry.correlation_id == cid
+
+
+def test_query_not_in_factory_signatures() -> None:
+    import inspect
+
+    factories = [
+        TelemetryEntry.from_search_tool_result,
+        TelemetryEntry.from_route_response,
+        TelemetryEntry.from_error,
+        TelemetryEntry.from_explain_result,
+    ]
+    for factory in factories:
+        params = inspect.signature(factory).parameters
+        assert "query" not in params, f"{factory.__name__} must not have 'query' param"
+        assert "correlation_id" in params, f"{factory.__name__} must have 'correlation_id' param"
+
+
+def test_correlation_id_in_documented_schema_fields() -> None:
+    from archon_search.telemetry.entry import DOCUMENTED_SCHEMA_FIELDS
+
+    assert "correlation_id" in DOCUMENTED_SCHEMA_FIELDS

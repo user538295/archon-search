@@ -447,7 +447,7 @@ class ExplainResponse(BaseModel):
 > **Releasable**: after Task 4.3; `correlation_id` flows into telemetry JSONL and `stage_timings_ms` appears on `/explain`.
 
 #### Task 4.1 — `correlation_id` field on `TelemetryEntry`
-- [ ] **File**: `archon_search/telemetry/entry.py`
+- [x] **File**: `archon_search/telemetry/entry.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Add `correlation_id: str | None = None` to `TelemetryEntry` (after `filter_flags`, before the factory methods).
