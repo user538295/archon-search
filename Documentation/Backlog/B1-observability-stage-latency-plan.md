@@ -418,7 +418,7 @@ class ExplainResponse(BaseModel):
   - Checkpoint: `uv run pytest tests/test_router.py -v -k "stage"`
 
 #### Task 3.5 — `record_stage("context")` in `SearchPipeline.search_with_context` and ingest stages in `ingest_file`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - In `SearchPipeline.search_with_context` neighbor-fetch loop (`pipeline.py:340-343`): wrap the per-result `store.fetch_adjacent_chunks` + `apply_acl_filter` loop with `record_stage("context")`:

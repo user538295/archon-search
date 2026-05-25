@@ -826,6 +826,153 @@ async def test_ingest_directory_sets_described_at_doc_count_on_success(
 
 
 # ===========================================================================
+# Stage instrumentation tests (B1 Task 3.5)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_records_context_stage(tmp_path):
+    """search_with_context records the 'context' stage when a recorder is bound."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.observability import bind_stage_recorder
+
+    search_result = SearchResult(
+        doc_id="a" * 64,
+        chunk_id=("a" * 64) + "-000000",
+        text="some text",
+        score=0.9,
+        source_path="/some/path",
+    )
+
+    class StubStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+            return [search_result]
+
+        async def fetch_adjacent_chunks(self, *a: Any, **kw: Any) -> list[ChunkRecord]:
+            return []
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    with bind_stage_recorder() as recorder:
+        await pipeline.search_with_context("query", "test-col", context_window=1)
+
+    assert "context" in recorder.stage_timings_ms
+    assert recorder.stage_timings_ms["context"] >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_records_parse_embed_persist(tmp_path):
+    """ingest_file records parse, embed, and persist stages when a recorder is bound."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.observability import bind_stage_recorder
+
+    class StubStore:
+        async def ensure_collection(self, *a: Any, **kw: Any) -> None:
+            pass
+
+        async def delete_document(self, *a: Any, **kw: Any) -> int:
+            return 0
+
+        async def ingest_chunks(self, *a: Any, **kw: Any) -> int:
+            return 1
+
+        async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
+            pass
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=64),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Test\n\nContent for stage recording.\n" * 10)
+
+    with bind_stage_recorder() as recorder:
+        result = await pipeline.ingest_file(md_file, "test-col")
+
+    assert result.status == "ok"
+    assert {"parse", "embed", "persist"} <= recorder.stage_timings_ms.keys()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_noop_when_unbound(tmp_path):
+    """Pipeline methods run without error when no recorder is bound; ContextVar stays None."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.observability import _stage_recorder
+
+    search_result = SearchResult(
+        doc_id="b" * 64,
+        chunk_id=("b" * 64) + "-000000",
+        text="text",
+        score=0.5,
+        source_path="/path",
+    )
+
+    class StubStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+            return [search_result]
+
+        async def fetch_adjacent_chunks(self, *a: Any, **kw: Any) -> list[ChunkRecord]:
+            return []
+
+        async def ensure_collection(self, *a: Any, **kw: Any) -> None:
+            pass
+
+        async def delete_document(self, *a: Any, **kw: Any) -> int:
+            return 0
+
+        async def ingest_chunks(self, *a: Any, **kw: Any) -> int:
+            return 1
+
+        async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
+            pass
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=64),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._embedder.embed(["warmup"])
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Test\n\nSome content.\n" * 5)
+
+    assert _stage_recorder.get() is None
+    await pipeline.search("query", "col")
+    assert _stage_recorder.get() is None
+
+    await pipeline.search_with_context("query", "col")
+    assert _stage_recorder.get() is None
+
+    await pipeline.ingest_file(md_file, "col")
+    assert _stage_recorder.get() is None
+
+
+# ===========================================================================
 # Unit tests
 # ===========================================================================
 

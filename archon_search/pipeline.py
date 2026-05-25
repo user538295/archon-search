@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestedBy, IngestResult, SearchResult
 from archon_search.acl import apply_acl_filter, resolve_acl
+from archon_search.observability import record_stage
 from archon_search.filters import SearchFilters
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.collection_meta import CollectionMeta
@@ -169,7 +170,8 @@ class SearchPipeline:
 
         # Parse
         try:
-            markdown = await self._parser.parse(path)
+            with record_stage("parse"):
+                markdown = await self._parser.parse(path)
         except ParseError as e:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="error", error=str(e))
 
@@ -221,12 +223,13 @@ class SearchPipeline:
             _vector_collector.extend(vectors)
 
         # Persist
-        await self.store.ensure_collection(collection, self._embedder.embedding_dim)
-        await self.store.delete_document(collection, doc_id)
-        await self.store.ingest_chunks(collection, records)
+        with record_stage("persist"):
+            await self.store.ensure_collection(collection, self._embedder.embedding_dim)
+            await self.store.delete_document(collection, doc_id)
+            await self.store.ingest_chunks(collection, records)
 
-        if rebuild_fts:
-            await self.store.rebuild_fts_index(collection)
+            if rebuild_fts:
+                await self.store.rebuild_fts_index(collection)
 
         return IngestResult(doc_id=doc_id, chunks_created=len(records), status="ok")
 
@@ -431,33 +434,34 @@ class SearchPipeline:
         result_obj = await self.search(query, collection, namespace=namespace, filters=filters)
         output: list[dict[str, Any]] = []
 
-        for result in result_obj.results:
-            try:
-                center_idx = int(result.chunk_id.split("-")[-1])
-            except ValueError:
-                logger.warning("Malformed chunk_id %r — skipping adjacent fetch", result.chunk_id)
-                output.append({"result": result, "context_before": [], "context_after": []})
-                continue
-
-            neighbors = await self.store.fetch_adjacent_chunks(
-                collection, result.doc_id, center_idx, context_window
-            )
-            neighbors, _ = apply_acl_filter(neighbors, lambda c: c.acl, namespace)
-
-            context_before: list[ChunkRecord] = []
-            context_after: list[ChunkRecord] = []
-            for chunk in neighbors:
+        with record_stage("context"):
+            for result in result_obj.results:
                 try:
-                    neighbor_idx = int(chunk.chunk_id.split("-")[-1])
+                    center_idx = int(result.chunk_id.split("-")[-1])
                 except ValueError:
-                    logger.warning("Malformed neighbor chunk_id %r — skipping", chunk.chunk_id)
+                    logger.warning("Malformed chunk_id %r — skipping adjacent fetch", result.chunk_id)
+                    output.append({"result": result, "context_before": [], "context_after": []})
                     continue
-                if neighbor_idx < center_idx:
-                    context_before.append(chunk)
-                else:
-                    context_after.append(chunk)
 
-            output.append({"result": result, "context_before": context_before, "context_after": context_after})
+                neighbors = await self.store.fetch_adjacent_chunks(
+                    collection, result.doc_id, center_idx, context_window
+                )
+                neighbors, _ = apply_acl_filter(neighbors, lambda c: c.acl, namespace)
+
+                context_before: list[ChunkRecord] = []
+                context_after: list[ChunkRecord] = []
+                for chunk in neighbors:
+                    try:
+                        neighbor_idx = int(chunk.chunk_id.split("-")[-1])
+                    except ValueError:
+                        logger.warning("Malformed neighbor chunk_id %r — skipping", chunk.chunk_id)
+                        continue
+                    if neighbor_idx < center_idx:
+                        context_before.append(chunk)
+                    else:
+                        context_after.append(chunk)
+
+                output.append({"result": result, "context_before": context_before, "context_after": context_after})
 
         return output
 
