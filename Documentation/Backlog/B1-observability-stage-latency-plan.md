@@ -398,7 +398,7 @@ class ExplainResponse(BaseModel):
   - Checkpoint: `uv run pytest tests/test_store_trace.py -v -k "stage"`
 
 #### Task 3.4 — `record_stage("route")` in `MultiCollectionRouter._score_collections`
-- [ ] **File**: `archon_search/router.py`
+- [x] **File**: `archon_search/router.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Wrap the body of `_score_collections()` with `record_stage("route")`:

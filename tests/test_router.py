@@ -642,6 +642,41 @@ def test_rank_and_rank_with_scores_empty_input() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Task 3.4 — record_stage("route") in _score_collections
+# ---------------------------------------------------------------------------
+
+
+def test_score_collections_records_route_stage() -> None:
+    """Bind a recorder, call _score_collections directly; assert 'route' key in timings."""
+    from archon_search.observability import bind_stage_recorder
+
+    router = _router()
+    metas = [_meta("col-a", centroid=[1.0, 0.0])]
+    vec = [1.0, 0.0]
+
+    with bind_stage_recorder() as recorder:
+        router._score_collections(vec, metas)
+
+    assert "route" in recorder.stage_timings_ms
+    assert recorder.stage_timings_ms["route"] >= 0.0
+
+
+def test_rank_with_scores_records_route_stage() -> None:
+    """Bind a recorder, call rank_with_scores; assert 'route' key in timings (via _score_collections)."""
+    from archon_search.observability import bind_stage_recorder
+
+    router = _router()
+    metas = [_meta("col-b", centroid=[0.0, 1.0]), _meta("col-a", centroid=[1.0, 0.0])]
+    vec = [1.0, 0.0]
+
+    with bind_stage_recorder() as recorder:
+        router.rank_with_scores(vec, metas)
+
+    assert "route" in recorder.stage_timings_ms
+    assert recorder.stage_timings_ms["route"] >= 0.0
+
+
 def test_eval_runner_no_direct_cached_metadata_write() -> None:
     """Source-level guard: no code under archon_search/ (excluding router.py)
     assigns to the private _cached_metadata field.

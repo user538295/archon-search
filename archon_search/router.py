@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from archon_search.collection_meta import CollectionMeta
+from archon_search.observability import record_stage
 
 if TYPE_CHECKING:
     from archon_search.embedder import Embedder
@@ -148,20 +149,21 @@ class MultiCollectionRouter:
         Unscored entries (None centroid or mismatched model) are paired with ``None`` and
         appended last in ascending ``meta.name`` order.
         """
-        scored: list[tuple[CollectionMeta, float]] = []
-        unscored: list[CollectionMeta] = []
+        with record_stage("route"):
+            scored: list[tuple[CollectionMeta, float]] = []
+            unscored: list[CollectionMeta] = []
 
-        for col in collections:
-            if col.centroid is not None and col.embedding_model == self._embedding_model:
-                sim = _cosine_similarity(query_embedding, col.centroid)
-                scored.append((col, sim))
-            else:
-                unscored.append(col)
+            for col in collections:
+                if col.centroid is not None and col.embedding_model == self._embedding_model:
+                    sim = _cosine_similarity(query_embedding, col.centroid)
+                    scored.append((col, sim))
+                else:
+                    unscored.append(col)
 
-        scored.sort(key=lambda p: (-p[1], p[0].name))
-        unscored.sort(key=lambda c: c.name)
+            scored.sort(key=lambda p: (-p[1], p[0].name))
+            unscored.sort(key=lambda c: c.name)
 
-        return [(m, s) for m, s in scored] + [(m, None) for m in unscored]
+            return [(m, s) for m, s in scored] + [(m, None) for m in unscored]
 
     def rank(
         self, query_embedding: list[float], collections: list[CollectionMeta]
