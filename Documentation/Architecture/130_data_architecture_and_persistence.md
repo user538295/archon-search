@@ -78,9 +78,26 @@ The per-field partition map (**system** / **filterable** / **ranking** / **audit
 | `described_at_doc_count` | `int64` | `-1` sentinel = unset |
 | `namespace` | `utf8` | added by `migrate_namespace`; defaults to `default` |
 
+### Timestamp format
+
+`indexed_at` and `updated_at` are stored as fixed-width UTC strings: **`YYYY-MM-DDTHH:MM:SS.ffffffZ`** (26 characters, always 6 fractional digits, always `Z` suffix). The canonical producer is `archon_search._types.normalize_iso_utc`.
+
+**Mixed-storage transition window**: rows indexed before A2 may carry variable-precision ISO 8601 timestamps (e.g. `2025-01-02T10:00:00Z` without microseconds). Because date-range filter comparisons use lexicographic SQL ordering against the `indexed_at` column, mixed-precision rows may sort incorrectly and produce wrong date-range filter results. Run `archon-search collection reindex-metadata <name> --normalize-timestamps` (offline-friendly, online-safe) to rewrite all rows to the fixed-width format and restore correct ordering.
+
 ### Full-text index
 
 FTS is built per chunk table on the `text` column via `store.py::rebuild_fts_index` using `lancedb.index.FTS`. The hybrid search path (`hybrid_search`) issues a vector search and an FTS search in parallel, fuses results with Reciprocal Rank Fusion (`_RRF_K=60`), and gracefully falls back to vector-only if no FTS index exists.
+
+### Filter execution and over-fetch
+
+A2 adds query-side filtering (`archon_search/filters.py`, `archon_search/store_filters.py`). Filter execution splits into two phases:
+
+1. **SQL WHERE clause** (LanceDB-side, `store_filters.build_where`): handles `file_type`, `source_path_prefix`, `indexed_after`, `indexed_before`. These are expressed as SQL predicates pushed into the LanceDB query.
+2. **Python post-filter** (in-memory, `store.py`): handles `source_path_glob` via `fnmatch.fnmatchcase`. **No path semantics**: `*` matches `/`, and `**` is identical to `*` — there is no shell-style directory-boundary awareness.
+
+Because glob and ACL filtering happen after retrieval, the store over-fetches candidates before post-processing. The `_compute_fetch` helper (`store_filters.py`) controls this:
+- No glob: `max(top_k * 3, 20)` — standard RRF over-fetch.
+- With glob: `max(top_k * GLOB_OVERFETCH_FACTOR, 60)` where `GLOB_OVERFETCH_FACTOR = 5` — extra headroom to absorb glob × ACL attrition.
 
 ### Migrations (idempotent, run at startup)
 

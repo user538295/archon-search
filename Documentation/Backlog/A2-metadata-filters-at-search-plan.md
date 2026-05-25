@@ -561,7 +561,7 @@ class FilterFlags(BaseModel):
 ### Final Phase — Verification & Documentation
 
 #### Task 7.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: Tasks 1.1, 1.2, 1.3, 2.1, 2.2, 2.3, 3.1, 3.2, 3.3, 3.4, 4.1, 4.2, 4.3, 5.1, 6.1, 6.2, 6.3
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, API docs, architecture docs, user guides, `BREAKING.md`) and update every file whose content is affected by A2. The agent must not update docs unrelated to A2.

@@ -53,6 +53,8 @@ When adding capability, prefer this order:
 
 When a behaviour exists on both surfaces, divergence in shape between them is a contract bug. Example, currently logged in `BREAKING.md` under `[next release]` (unreleased at time of writing): the MCP `search` tool was changed from returning a bare list to returning `{"results": [...], "acl_filtered": bool}` so that the MCP response carries the same ACL-filter signal already available on REST.
 
+**A2 filter parity**: A2 added `SearchFilters` as a shared model across both surfaces. REST receives it as `SearchRequest.filters` (a nested object); MCP receives the same fields as individual tool kwargs (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`, `include_metadata`) that are assembled into a `SearchFilters` instance inside the tool handler. The parity contract is verified by `tests/server/test_mcp_search.py`.
+
 ## Schema Discipline
 
 Request and response shapes that cross the API boundary are Pydantic `BaseModel` subclasses. Most live in two centralised files; two routers currently keep their schemas inline:
@@ -60,6 +62,7 @@ Request and response shapes that cross the API boundary are Pydantic `BaseModel`
 - `archon_search/server/schemas.py` — control-plane and collection responses: `HealthResponse`, `StatusCollectionEntry`, `StatusResponse`, `IndexingStateCollectionEntry`, `IndexingStateResponse`, `CollectionSummary`, `CollectionDetail`, `JobResponse`, `DeleteResponse`, `ErrorDetail`.
 - `archon_search/server/schemas_telemetry.py` — telemetry-specific shapes: `StatsResponse`, `EntriesResponse`, `DisabledResponse`, plus the sub-models `LatencyPercentiles`, `EndpointStats`, `CollectionStats`, `ErrorBreakdown`.
 - Inline in `archon_search/server/routes_search.py`: `SearchRequest`, `SearchResultSchema`, `SearchResponse`.
+- `archon_search/filters.py`: `SearchFilters` — the shared filter model used by both REST (`SearchRequest.filters`) and MCP (`search` / `search_with_context` tool kwargs). It lives outside `schemas.py` and `_types.py` deliberately: `_types.py` is dataclass-only by convention (no Pydantic), and `SearchFilters` is reused across the REST and MCP surfaces without being a server schema itself.
 - Inline in `archon_search/server/routes_route.py`: `RouteRequest`, `RouteResponse`.
 
 The inline schemas in the search and route routers are the current reality; consolidating them into `schemas.py` is a possible future cleanup but is not a hard rule today.

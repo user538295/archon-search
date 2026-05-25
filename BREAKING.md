@@ -8,6 +8,30 @@
 
 ## Changelog
 
+### [next release] — A2 query-side filters
+
+**Surface**: REST (additive, non-breaking for tolerant JSON consumers); MCP (additive, non-breaking — all new params are optional with sensible defaults).
+
+**REST — additive**:
+- `POST /search` request body gains an optional `filters` field (`SearchFilters` object, `null` = no filter). Existing clients that omit `filters` are unaffected.
+- `SearchFilters` fields: `file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language` (reserved — non-empty raises 422), `include_metadata`.
+- `language` with a non-empty value is rejected with HTTP 422 at validation time. Roadmap item C2.
+
+**MCP — additive**:
+- `search` tool gains optional kwargs: `include_metadata` (bool, default `false`), `file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`. All default to `None`/`false`; existing callers passing only `query` and `collection` are unaffected.
+- `search_with_context` tool gains the same optional kwargs.
+- A `language` value that is non-empty returns `{error: ..., code: "validation_error"}` instead of raising.
+
+**Operational — datetime normalization**:
+- Date-range filters (`indexed_after`, `indexed_before`) compare lexicographically against the `indexed_at` column using fixed-width UTC format (`YYYY-MM-DDTHH:MM:SS.ffffffZ`). Collections indexed before A2 may contain variable-precision timestamps that produce incorrect date-range results. Run `archon-search collection reindex-metadata <name> --normalize-timestamps` (introduced in this release) to rewrite all rows to the fixed-width format. This command is offline-friendly and blocks only concurrent ingest to the same collection.
+
+**Migration**:
+- REST: no migration needed for existing clients — `filters` is optional.
+- MCP: no migration needed — new kwargs are optional with defaults.
+- Operators using date-range filters on pre-A2 collections: run `reindex-metadata --normalize-timestamps` before relying on date-range filter results.
+
+**Announced in**: this release.
+
 ### [next release] — A1 metadata schema v1
 
 **Surface**: MCP (breaking for strict-validating clients), REST (additive, non-breaking for tolerant JSON consumers).

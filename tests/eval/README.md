@@ -144,6 +144,11 @@ local LanceDB index. They exist as **regression guards** for the eval
 harness itself — they are **not production SLAs** and must not be
 compared to live server latency.
 
+## A2 filter constraints for fixture authors
+
+- **`language` is reserved and rejected with HTTP 422** (roadmap item C2). Eval fixture queries must **not** use `language` as a filter value — doing so will always produce a validation error rather than a retrieval result, and the test will fail or produce meaningless metrics.
+- When writing new `queries.jsonl` entries that exercise filtered search, use only `file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, or `indexed_before` as filter fields.
+
 ## Local commands
 
 Report-only calibration (no gating, prints measured metrics):

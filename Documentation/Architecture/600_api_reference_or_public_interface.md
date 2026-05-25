@@ -48,9 +48,25 @@ The machine-readable contract is `GET /openapi.json`. Tables below trace every e
 
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
-| POST | `/search` | Hybrid vector + FTS search over one collection, rerank, ACL filter. | `SearchRequest` (`routes_search.py`) — `{collection, query, top_k}`. **`top_k` is ignored** at runtime (see BREAKING.md); pipeline uses `config.top_k_return`. The field is still validated (`ge=1, le=100`), so `top_k=0` or `top_k>100` returns `422`. `collection` and `query` are stripped and must be non-empty. | `SearchResponse` — `{results: [SearchResultSchema{doc_id, chunk_id, text, score, source_path}], acl_filtered: bool}` |
+| POST | `/search` | Hybrid vector + FTS search over one collection, rerank, ACL filter. | `SearchRequest` (`routes_search.py`) — `{collection, query, top_k, filters?}`. **`top_k` is ignored** at runtime (see BREAKING.md); pipeline uses `config.top_k_return`. The field is still validated (`ge=1, le=100`), so `top_k=0` or `top_k>100` returns `422`. `collection` and `query` are stripped and must be non-empty. `filters` is an optional `SearchFilters` object (see below); omitting it is equivalent to `null`. | `SearchResponse` — `{results: [SearchResultSchema{doc_id, chunk_id, text, score, source_path, file_type, language, indexed_at, updated_at, ingested_by, metadata, acl}], acl_filtered: bool}` |
 
-Returns `404` when the collection is not visible to the caller's namespace; `503` when meta lookup fails. Pipeline `search()` exceptions are caught and returned as `200` with `{results: [], acl_filtered: false}` (i.e. errors after the meta check do not surface to the client).
+Returns `404` when the collection is not visible to the caller's namespace; `503` when meta lookup fails. Pipeline `search()` exceptions are caught and returned as `200` with `{results: [], acl_filtered: false}` (i.e. errors after the meta check do not surface to the client). A malformed `filters` object returns `422`.
+
+#### `SearchFilters` (A2 — `archon_search/filters.py`)
+
+Optional sub-model on `SearchRequest.filters`. All fields are optional; omitting `filters` entirely or setting it to `null` runs an unfiltered search. Model uses `extra="forbid"` — unknown keys return `422`.
+
+| Field | Type | Constraints | Behavior |
+| --- | --- | --- | --- |
+| `file_type` | `str \| null` | Non-empty; leading dots stripped; lowercased. e.g. `"md"`, `".py"` | SQL `WHERE file_type = '<value>'` |
+| `source_path_prefix` | `str \| null` | Non-empty | SQL `WHERE source_path LIKE '<prefix>%' ESCAPE '\\'` |
+| `source_path_glob` | `str \| null` | Non-empty; must compile via `fnmatch.translate` | Python-side post-filter via `fnmatch.fnmatchcase`. **No path semantics**: `*` matches `/`; `**` is identical to `*`. |
+| `indexed_after` | `datetime \| date \| null` | Date-only strings `YYYY-MM-DD` coerced to midnight UTC | SQL `WHERE indexed_at >= '<fixed-width UTC>'` |
+| `indexed_before` | `datetime \| date \| null` | Date-only strings `YYYY-MM-DD` coerced to end-of-day UTC (23:59:59.999999Z). Must be ≥ `indexed_after`. | SQL `WHERE indexed_at <= '<fixed-width UTC>'` |
+| `language` | `str \| null` | **Reserved — always rejected with 422 when non-empty.** Roadmap item C2. | Not implemented in v1. |
+| `include_metadata` | `bool` | Default `false` | When `false`, `metadata` is returned as `{}` in results; when `true`, the stored `dict[str,str]` is returned. |
+
+**Date-range correctness note**: date-range filters compare against the `indexed_at` column, which is stored as a fixed-width UTC string (`YYYY-MM-DDTHH:MM:SS.ffffffZ`). Legacy rows with variable-precision timestamps may not sort correctly until `archon-search collection reindex-metadata <name> --normalize-timestamps` runs (see BREAKING.md A2 entry).
 
 ### `routes_route.py`
 
@@ -95,8 +111,8 @@ Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mount
 
 | Tool name | Purpose | Arguments | Returns |
 | --- | --- | --- | --- |
-| `search` | Hybrid vector + FTS search, rerank, ACL filter. | `query: str`, `collection: str \| None` | `{"results": [SearchResult...], "acl_filtered": bool}` — new shape per `BREAKING.md`. On error: `{error, code}`. |
-| `search_with_context` | Search plus surrounding chunks for each hit. | `query`, `collection?`, `context_window: int = 1` | `list[{result, context_before, context_after}]` |
+| `search` | Hybrid vector + FTS search, rerank, ACL filter. | `query: str`, `collection: str \| None`, `include_metadata: bool = false`, `file_type: str \| None`, `source_path_prefix: str \| None`, `source_path_glob: str \| None`, `indexed_after: str \| None`, `indexed_before: str \| None`, `language: str \| None` (reserved — non-empty raises validation error) | `{"results": [SearchResult...], "acl_filtered": bool}` — new shape per `BREAKING.md`. On validation error: `{error, code: "validation_error"}`. On internal error: `{error, code: "internal_error"}`. |
+| `search_with_context` | Search plus surrounding chunks for each hit. | `query`, `collection?`, `context_window: int = 1`, `include_metadata: bool = false`, `file_type: str \| None`, `source_path_prefix: str \| None`, `source_path_glob: str \| None`, `indexed_after: str \| None`, `indexed_before: str \| None`, `language: str \| None` (reserved) | `list[{result, context_before, context_after}]`. On error: `{error, code}`. |
 | `ingest_file` | Ingest one file. | `path: str`, `collection?` | Ingest result dict |
 | `ingest_directory` | Ingest a directory tree (reports progress via `ctx`). | `path`, `glob_pattern = "**/*"`, `collection?` | `list[ingest result]` |
 | `list_collections` | List collections with counts (centroid omitted). | — | `list[dict]` — `asdict(CollectionMeta)` with `centroid` popped (not a typed `CollectionMeta`). |
@@ -130,6 +146,7 @@ Entry point: `archon-search` (`archon_search/cli/main.py`, Click group). Most su
 | `collection` | `remove <path>` | Drop collection from store and config; rejects pinned-only. Note: `--force` is currently only enforced as mutually exclusive with `--dry-run`; despite its help text ("Proceed even if service is running"), no service-running check exists in `cli/collection.py::remove`, so the flag is effectively a no-op beyond the mutex. #Unverified — intentional behaviour vs. unimplemented check | `--dry-run`, `--force`, `--config` |
 | `collection` | `info <name>` | Print collection metadata. | `--config` |
 | `collection` | `reindex <name>` | Clear state, drop table, re-ingest from source path. | `--config` |
+| `collection` | `reindex-metadata <name>` | Backfill metadata fields (`file_type`, `updated_at`, `ingested_by`) on an existing collection without re-ingesting. When `--normalize-timestamps` (default ON) rewrites `indexed_at` and `updated_at` to fixed-width UTC (`YYYY-MM-DDTHH:MM:SS.ffffffZ`) for any row not already in canonical form — required before date-range filters return correct results on pre-A2 collections. `--dry-run` reports counts without writing. Introduced in A2. | `--normalize-timestamps / --no-normalize-timestamps`, `--dry-run`, `--config` |
 | `config` | `show` | Print effective config (defaults when no file exists) (`cli/config_cmd.py`). | `--config` |
 | `config` | `get <section.field>` | Read one dotted key. Requires exactly a two-part `section.field` key; other formats error out. | `--config` |
 | `config` | `set <section.field> <value>` | Write one dotted key (bool/int/float coercion). | `--config` |
