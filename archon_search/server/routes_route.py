@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from contextlib import ExitStack
 from time import monotonic
 from typing import Any
 
@@ -11,7 +13,7 @@ from pydantic import BaseModel
 
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder, ModelEmbedder
-from archon_search.observability import correlation_id as _correlation_id
+from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.router import MultiCollectionRouter
 from archon_search.sync import path_to_collection_name
 from archon_search.telemetry.entry import ErrorKind, TelemetryEntry
@@ -71,101 +73,123 @@ async def route(body: RouteRequest, request: Request) -> Any:
     """
     start = monotonic()
     writer = getattr(request.app.state, "telemetry_writer", None)
+    config: SearchConfig = request.app.state.config
+    timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
 
-    try:
-        if not body.query or not body.query.strip():
-            raise HTTPException(status_code=400, detail="query must not be empty")
+    with ExitStack() as stack:
+        recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
+        t0 = time.perf_counter()
 
-        if body.slots is not None and body.slots < 1:
-            raise HTTPException(status_code=400, detail="slots must be >= 1")
+        def _emit_timings() -> None:
+            if recorder is not None:
+                recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                logger.info(
+                    "stage timings",
+                    extra={
+                        "event_type": "stage_timings",
+                        "correlation_id": _correlation_id.get(),
+                        "endpoint": "route",
+                        "collection": None,
+                        "stage_timings_ms": recorder.stage_timings_ms,
+                    },
+                )
 
-        config: SearchConfig = request.app.state.config
-        shortlist_size = body.slots if body.slots is not None else config.routing_shortlist_size
-        embedder: Embedder | None = getattr(request.app.state, "embedder", None)
-        col_router = _build_router(config, shortlist_size, embedder=embedder)
+        try:
+            if not body.query or not body.query.strip():
+                raise HTTPException(status_code=400, detail="query must not be empty")
 
-        ns: str = request.state.namespace
-        store = request.app.state.search_store
-        all_meta = await store.get_all_collections_meta()
-        ns_names = {m.name for m in all_meta if m.namespace == ns}
+            if body.slots is not None and body.slots < 1:
+                raise HTTPException(status_code=400, detail="slots must be >= 1")
 
-        all_pinned = [path_to_collection_name(p) for p in config.pinned_collections]
-        pinned_names = [n for n in all_pinned if n in ns_names]
+            shortlist_size = body.slots if body.slots is not None else config.routing_shortlist_size
+            embedder: Embedder | None = getattr(request.app.state, "embedder", None)
+            col_router = _build_router(config, shortlist_size, embedder=embedder)
 
-        pre_context = await asyncio.wait_for(
-            col_router.get_pre_context(
-                query=body.query,
+            ns: str = request.state.namespace
+            store = request.app.state.search_store
+            all_meta = await store.get_all_collections_meta()
+            ns_names = {m.name for m in all_meta if m.namespace == ns}
+
+            all_pinned = [path_to_collection_name(p) for p in config.pinned_collections]
+            pinned_names = [n for n in all_pinned if n in ns_names]
+
+            pre_context = await asyncio.wait_for(
+                col_router.get_pre_context(
+                    query=body.query,
+                    pinned_names=pinned_names,
+                    available_slots=shortlist_size,
+                ),
+                timeout=30.0,
+            )
+
+            resp = RouteResponse(
+                pre_context=pre_context,
                 pinned_names=pinned_names,
-                available_slots=shortlist_size,
-            ),
-            timeout=30.0,
-        )
-
-        resp = RouteResponse(
-            pre_context=pre_context,
-            pinned_names=pinned_names,
-            routable_names=col_router.last_routable_names,
-            decomposer_invoked=col_router.decomposer_was_invoked,
-        )
-        if writer is not None:
-            try:
-                writer.enqueue(
-                    TelemetryEntry.from_route_response(
-                        collections=resp.pinned_names + resp.routable_names,
-                        decomposer_invoked=resp.decomposer_invoked,
-                        latency_ms=(monotonic() - start) * 1000.0,
-                        correlation_id=_correlation_id.get(),
+                routable_names=col_router.last_routable_names,
+                decomposer_invoked=col_router.decomposer_was_invoked,
+            )
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_route_response(
+                            collections=resp.pinned_names + resp.routable_names,
+                            decomposer_invoked=resp.decomposer_invoked,
+                            latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
+                        )
                     )
-                )
-            except Exception as tel_exc:
-                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
-        return resp
+                except Exception as tel_exc:
+                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            _emit_timings()
+            return resp
 
-    except asyncio.TimeoutError:
-        if writer is not None:
-            try:
-                writer.enqueue(
-                    TelemetryEntry.from_error(
-                        endpoint="route",
-                        status="timeout",
-                        error_kind="timeout",
-                        latency_ms=(monotonic() - start) * 1000.0,
-                        correlation_id=_correlation_id.get(),
+        except asyncio.TimeoutError:
+            _emit_timings()
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_error(
+                            endpoint="route",
+                            status="timeout",
+                            error_kind="timeout",
+                            latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
+                        )
                     )
-                )
-            except Exception as tel_exc:
-                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
-        raise HTTPException(status_code=504, detail="routing timed out")
+                except Exception as tel_exc:
+                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            raise HTTPException(status_code=504, detail="routing timed out")
 
-    except HTTPException as exc:
-        if exc.status_code == 400 and writer is not None:
-            try:
-                writer.enqueue(
-                    TelemetryEntry.from_error(
-                        endpoint="route",
-                        status="validation_error",
-                        error_kind=_redact_validation(exc.detail),
-                        latency_ms=(monotonic() - start) * 1000.0,
-                        correlation_id=_correlation_id.get(),
+        except HTTPException as exc:
+            if exc.status_code == 400 and writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_error(
+                            endpoint="route",
+                            status="validation_error",
+                            error_kind=_redact_validation(exc.detail),
+                            latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
+                        )
                     )
-                )
-            except Exception as tel_exc:
-                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
-        raise
+                except Exception as tel_exc:
+                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            raise
 
-    except Exception as exc:
-        if writer is not None:
-            try:
-                writer.enqueue(
-                    TelemetryEntry.from_error(
-                        endpoint="route",
-                        status="internal_error",
-                        error_kind="other",
-                        latency_ms=(monotonic() - start) * 1000.0,
-                        correlation_id=_correlation_id.get(),
+        except Exception as exc:
+            _emit_timings()
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_error(
+                            endpoint="route",
+                            status="internal_error",
+                            error_kind="other",
+                            latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
+                        )
                     )
-                )
-            except Exception as tel_exc:
-                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
-        logger.error("route handler failed: %s", type(exc).__name__)
-        raise
+                except Exception as tel_exc:
+                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            logger.error("route handler failed: %s", type(exc).__name__)
+            raise

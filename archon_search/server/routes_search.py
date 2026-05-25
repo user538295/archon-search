@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from contextlib import ExitStack
 from time import monotonic
 
 from fastapi import APIRouter, HTTPException, Request
@@ -11,7 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
 from archon_search.filters import SearchFilters
-from archon_search.observability import correlation_id as _correlation_id
+from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
 # TODO: make configurable via config.py (see /route for parity)
@@ -87,7 +89,9 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     pipeline = request.app.state.pipeline
     ns = request.state.namespace
     writer = getattr(request.app.state, "telemetry_writer", None)
+    config = request.app.state.config
     start = monotonic()
+    timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
 
     try:
         meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
@@ -98,72 +102,93 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     if meta is None:
         return JSONResponse({"detail": "collection not found"}, status_code=404)
 
-    try:
-        result = await asyncio.wait_for(
-            pipeline.search(body.query, body.collection, namespace=ns, filters=body.filters),
-            timeout=_SEARCH_TIMEOUT_SECONDS,
-        )
-        include_metadata = body.filters is not None and body.filters.include_metadata
-        schemas = [SearchResultSchema.from_result(r) for r in result.results]
-        if not include_metadata:
-            for schema in schemas:
-                schema.metadata = {}
-        if writer is not None:
-            try:
-                flags = FilterFlags.from_search_filters(body.filters) if body.filters is not None else FilterFlags()
-                writer.enqueue(
-                    TelemetryEntry.from_search_tool_result(
-                        endpoint="search",
-                        collection=body.collection,
-                        result_doc_ids=[r.doc_id for r in result.results],
-                        latency_ms=(monotonic() - start) * 1000.0,
-                        filter_flags=flags,
-                        correlation_id=_correlation_id.get(),
-                    )
+    with ExitStack() as stack:
+        recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
+        t0 = time.perf_counter()
+
+        def _emit_timings() -> None:
+            if recorder is not None:
+                recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                logger.info(
+                    "stage timings",
+                    extra={
+                        "event_type": "stage_timings",
+                        "correlation_id": _correlation_id.get(),
+                        "endpoint": "search",
+                        "collection": body.collection,
+                        "stage_timings_ms": recorder.stage_timings_ms,
+                    },
                 )
-            except Exception:
-                logger.warning("telemetry: search entry enqueue failed", exc_info=True)
-        return SearchResponse(
-            results=schemas,
-            acl_filtered=result.acl_filtered,
-        )
-    except asyncio.TimeoutError:
-        if writer is not None:
-            try:
-                writer.enqueue(
-                    TelemetryEntry.from_error(
-                        endpoint="search",
-                        status="timeout",
-                        error_kind="timeout",
-                        latency_ms=(monotonic() - start) * 1000.0,
-                        correlation_id=_correlation_id.get(),
+
+        try:
+            result = await asyncio.wait_for(
+                pipeline.search(body.query, body.collection, namespace=ns, filters=body.filters),
+                timeout=_SEARCH_TIMEOUT_SECONDS,
+            )
+            include_metadata = body.filters is not None and body.filters.include_metadata
+            schemas = [SearchResultSchema.from_result(r) for r in result.results]
+            if not include_metadata:
+                for schema in schemas:
+                    schema.metadata = {}
+            if writer is not None:
+                try:
+                    flags = FilterFlags.from_search_filters(body.filters) if body.filters is not None else FilterFlags()
+                    writer.enqueue(
+                        TelemetryEntry.from_search_tool_result(
+                            endpoint="search",
+                            collection=body.collection,
+                            result_doc_ids=[r.doc_id for r in result.results],
+                            latency_ms=(monotonic() - start) * 1000.0,
+                            filter_flags=flags,
+                            correlation_id=_correlation_id.get(),
+                        )
                     )
-                )
-            except Exception as tel_exc:
-                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
-        logger.error(
-            "search pipeline timed out",
-            extra={"event_type": "search_timeout"},
-        )
-        raise HTTPException(status_code=504, detail="Search timed out")
-    except Exception as exc:
-        if writer is not None:
-            try:
-                writer.enqueue(
-                    TelemetryEntry.from_error(
-                        endpoint="search",
-                        status="internal_error",
-                        error_kind="other",
-                        latency_ms=(monotonic() - start) * 1000.0,
-                        correlation_id=_correlation_id.get(),
+                except Exception:
+                    logger.warning("telemetry: search entry enqueue failed", exc_info=True)
+            _emit_timings()
+            return SearchResponse(
+                results=schemas,
+                acl_filtered=result.acl_filtered,
+            )
+        except asyncio.TimeoutError:
+            _emit_timings()
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_error(
+                            endpoint="search",
+                            status="timeout",
+                            error_kind="timeout",
+                            latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
+                        )
                     )
-                )
-            except Exception as tel_exc:
-                logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
-        logger.error(
-            "search pipeline failed: %s",
-            type(exc).__name__,
-            extra={"event_type": "search_pipeline_failure"},
-            exc_info=True,
-        )
-        raise
+                except Exception as tel_exc:
+                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            logger.error(
+                "search pipeline timed out",
+                extra={"event_type": "search_timeout"},
+            )
+            raise HTTPException(status_code=504, detail="Search timed out")
+        except Exception as exc:
+            _emit_timings()
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_error(
+                            endpoint="search",
+                            status="internal_error",
+                            error_kind="other",
+                            latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
+                        )
+                    )
+                except Exception as tel_exc:
+                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            logger.error(
+                "search pipeline failed: %s",
+                type(exc).__name__,
+                extra={"event_type": "search_pipeline_failure"},
+                exc_info=True,
+            )
+            raise

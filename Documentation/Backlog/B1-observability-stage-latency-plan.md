@@ -550,7 +550,7 @@ class ExplainResponse(BaseModel):
 > **Releasable**: after Task 5.1; all instrumented request paths emit one `event_type="stage_timings"` log record per request when enabled.
 
 #### Task 5.1 — Structured-log emission in REST `/search` and `/route` handlers
-- [ ] **Files**: `archon_search/server/routes_search.py`, `archon_search/server/routes_route.py`
+- [x] **Files**: `archon_search/server/routes_search.py`, `archon_search/server/routes_route.py`
 - **Depends on**: Task 1.1, Task 2.2, Task 3.1–3.5, Task 4.2
 - **Description**:
   - In `routes_search.py` (`search` handler):

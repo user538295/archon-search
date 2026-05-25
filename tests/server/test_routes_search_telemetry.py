@@ -27,8 +27,11 @@ def _make_test_app(
     """Create a minimal FastAPI app with only the search router and mocked state."""
     from archon_search.server import routes_search
 
+    from archon_search.config import SearchConfig
+
     app = FastAPI()
     app.state.telemetry_writer = writer
+    app.state.config = SearchConfig()
 
     # Build a default pipeline mock if none supplied.
     if pipeline_mock is None:
@@ -422,11 +425,13 @@ def _make_test_app_with_correlation(
     request_id: str = "search-req-id-abc",
 ) -> FastAPI:
     """Like _make_test_app but also sets the correlation_id ContextVar."""
+    from archon_search.config import SearchConfig
     from archon_search.observability import correlation_id as _correlation_id
     from archon_search.server import routes_search
 
     app = FastAPI()
     app.state.telemetry_writer = writer
+    app.state.config = SearchConfig()
 
     if pipeline_mock is None:
         pipeline_mock = MagicMock()
