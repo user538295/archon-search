@@ -25,6 +25,12 @@ class TelemetryConfig:
 
 
 @dataclass
+class ObservabilityConfig:
+    stage_timings_enabled: bool = True
+    request_id_header: str = "X-Request-ID"
+
+
+@dataclass
 class SearchConfig:
     # [server]
     host: str = "127.0.0.1"
@@ -51,6 +57,8 @@ class SearchConfig:
     log_file: str = "~/.archon-search/logs/archon-search.log"
     # [telemetry]
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
+    # [observability]
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     # [namespaces]
     namespaces: dict[str, str] = field(default_factory=dict)
 
@@ -221,6 +229,19 @@ def load_config(path: Path | None = None) -> SearchConfig:
             raise ConfigError("[telemetry].log_dir must be a non-empty string")
         telemetry.log_dir = log_dir
     config.telemetry = telemetry
+
+    obs_cfg = doc.get("observability", {})
+    observability = ObservabilityConfig()
+    if "stage_timings_enabled" in obs_cfg:
+        observability.stage_timings_enabled = _coerce_bool(
+            obs_cfg["stage_timings_enabled"], "[observability].stage_timings_enabled"
+        )
+    if "request_id_header" in obs_cfg:
+        header = str(obs_cfg["request_id_header"])
+        if not header:
+            raise ConfigError("[observability].request_id_header must be a non-empty string")
+        observability.request_id_header = header
+    config.observability = observability
 
     raw_ns = doc.get("namespaces", {})
     namespaces: dict[str, str] = {}

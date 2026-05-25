@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.config import ConfigError, SearchConfig, get_default_config_path, load_config, save_config
+from archon_search.config import ConfigError, ObservabilityConfig, SearchConfig, get_default_config_path, load_config, save_config
 
 
 def test_load_config_defaults_when_no_file(tmp_path: Path) -> None:
@@ -457,3 +457,60 @@ def test_env_var_relative_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ARCHON_SEARCH_CONFIG", "relative/path.toml")
     result = get_default_config_path()
     assert result == (Path.cwd() / "relative/path.toml").resolve()
+
+
+# ---------------------------------------------------------------------------
+# [observability] config section — Task 1.2 (B1)
+# ---------------------------------------------------------------------------
+
+
+def test_observability_defaults(tmp_path: Path) -> None:
+    config = load_config(path=tmp_path / "nonexistent.toml")
+    assert config.observability.stage_timings_enabled is True
+    assert config.observability.request_id_header == "X-Request-ID"
+
+
+def test_observability_from_toml(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        "[observability]\nstage_timings_enabled = false\nrequest_id_header = \"X-Trace-ID\"\n",
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.observability.stage_timings_enabled is False
+    assert config.observability.request_id_header == "X-Trace-ID"
+
+
+def test_observability_invalid_bool_raises(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        "[observability]\nstage_timings_enabled = \"yes\"\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_observability_empty_header_raises(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        '[observability]\nrequest_id_header = ""\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_observability_config_dataclass_defaults() -> None:
+    obs = ObservabilityConfig()
+    assert obs.stage_timings_enabled is True
+    assert obs.request_id_header == "X-Request-ID"
+
+
+def test_observability_section_absent_uses_defaults(tmp_path: Path) -> None:
+    """A config file with no [observability] section still gives defaults."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[server]\nhost = \"0.0.0.0\"\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.observability.stage_timings_enabled is True
+    assert config.observability.request_id_header == "X-Request-ID"

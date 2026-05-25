@@ -209,7 +209,7 @@ class ExplainResponse(BaseModel):
   - Checkpoint: `uv run pytest tests/test_observability.py -v`
 
 #### Task 1.2 — `[observability]` config section in `config.py`
-- [ ] **File**: `archon_search/config.py`
+- [x] **File**: `archon_search/config.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Add `@dataclass class ObservabilityConfig` with `stage_timings_enabled: bool = True` and `request_id_header: str = "X-Request-ID"`.
