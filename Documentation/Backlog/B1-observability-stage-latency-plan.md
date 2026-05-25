@@ -349,7 +349,7 @@ class ExplainResponse(BaseModel):
   - Checkpoint: `uv run pytest tests/test_reranker.py -v -k "stage"`
 
 #### Task 3.3 — `record_stage` in `SearchStore.hybrid_search` and `_hybrid_search_with_trace`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - In `SearchStore.hybrid_search` (around line 706):
