@@ -228,3 +228,105 @@ def test_health_endpoint_unauthenticated_200(tmp_path: Path, job_store: JobStore
             response = client.get("/health")
 
     assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# X-Request-ID header tests — Task 2.2 (B1)
+# ---------------------------------------------------------------------------
+
+import re as _re
+_REQUEST_ID_RE = _re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+def _make_test_client(tmp_path: Path, job_store: JobStore):  # type: ignore[no-untyped-def]
+    from unittest.mock import AsyncMock, patch
+    from starlette.testclient import TestClient
+    from archon_search.store import SearchStore
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+    ):
+        app = create_app(cfg, job_store)
+        return TestClient(app)
+
+
+def test_health_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
+    from unittest.mock import AsyncMock, patch
+    from starlette.testclient import TestClient
+    from archon_search.store import SearchStore
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app) as client:
+            resp = client.get("/health")
+    assert _REQUEST_ID_RE.match(resp.headers.get("x-request-id", ""))
+
+
+def test_401_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
+    from unittest.mock import AsyncMock, patch
+    from starlette.testclient import TestClient
+    from archon_search.store import SearchStore
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get("/search")  # no auth
+    assert resp.status_code == 401
+    assert _REQUEST_ID_RE.match(resp.headers.get("x-request-id", ""))
+
+
+def test_options_preflight_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
+    from unittest.mock import AsyncMock, patch
+    from starlette.testclient import TestClient
+    from archon_search.store import SearchStore
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.options("/search", headers={"Origin": "http://example.com"})
+    assert _REQUEST_ID_RE.match(resp.headers.get("x-request-id", ""))
+
+
+def test_inbound_id_echoed(tmp_path: Path, job_store: JobStore) -> None:
+    from unittest.mock import AsyncMock, patch
+    from starlette.testclient import TestClient
+    from archon_search.store import SearchStore
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app) as client:
+            resp = client.get("/health", headers={"X-Request-ID": "myid-abc123"})
+    assert resp.headers.get("x-request-id") == "myid-abc123"

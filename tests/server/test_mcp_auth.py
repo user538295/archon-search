@@ -72,3 +72,66 @@ def test_mcp_wrong_token_returns_401() -> None:
     wrong_key = "cc" * 32  # different valid-format key
     response = client.post("/mcp", headers={"Authorization": f"Bearer {wrong_key}"}, json={})
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# X-Request-ID on MCP HTTP app — Task 2.2 (B1)
+# ---------------------------------------------------------------------------
+
+import re as _re
+_REQUEST_ID_RE = _re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+_MCP_INIT = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {},
+        "clientInfo": {"name": "test", "version": "0.0.1"},
+    },
+}
+_MCP_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
+
+
+def test_mcp_request_id_on_valid_message() -> None:
+    """MCP responses carry X-Request-ID header on a valid authenticated request."""
+    pipeline = _make_pipeline()
+    with patch("archon_search.server.mcp.load_or_generate_key", return_value=(VALID_KEY, "test")):
+        from archon_search.server import mcp as mcp_module
+        starlette_app = mcp_module.create_mcp_http_app(pipeline, "default")
+    with TestClient(starlette_app, raise_server_exceptions=False) as client:
+        resp = client.post(
+            "/mcp",
+            json=_MCP_INIT,
+            headers={**_MCP_HEADERS, "Authorization": f"Bearer {VALID_KEY}"},
+        )
+    assert _REQUEST_ID_RE.match(resp.headers.get("x-request-id", "")), (
+        f"Expected X-Request-ID header matching charset, got headers: {dict(resp.headers)}"
+    )
+
+
+def test_request_id_present_when_timings_disabled() -> None:
+    """X-Request-ID header is present even when stage_timings_enabled=False."""
+    from archon_search.config import ObservabilityConfig, SearchConfig
+
+    pipeline = _make_pipeline()
+    cfg = SearchConfig()
+    cfg.observability = ObservabilityConfig(stage_timings_enabled=False)
+
+    with patch("archon_search.server.mcp.load_or_generate_key", return_value=(VALID_KEY, "test")):
+        from archon_search.server import mcp as mcp_module
+        starlette_app = mcp_module.create_mcp_http_app(pipeline, "default", config=cfg)
+
+    with TestClient(starlette_app, raise_server_exceptions=False) as client:
+        resp = client.post(
+            "/mcp",
+            json=_MCP_INIT,
+            headers={**_MCP_HEADERS, "Authorization": f"Bearer {VALID_KEY}"},
+        )
+    assert _REQUEST_ID_RE.match(resp.headers.get("x-request-id", "")), (
+        f"X-Request-ID must be present when timings disabled, got: {dict(resp.headers)}"
+    )

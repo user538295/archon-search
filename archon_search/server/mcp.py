@@ -459,6 +459,7 @@ def create_mcp_http_app(
     default_collection: str,
     writer: TelemetryWriter | None = None,
     config: SearchConfig | None = None,
+    request_id_header: str = "X-Request-ID",
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
@@ -466,10 +467,13 @@ def create_mcp_http_app(
     (endpoint: /mcp).  APIKeyMiddleware is added so every request to /mcp
     requires a valid Bearer token; /health remains exempt per _EXEMPT_PATHS.
     """
+    from archon_search.server.middleware_context import RequestContextMiddleware
+
     fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config)
     starlette_app: Starlette = fastmcp_app.streamable_http_app()
     api_key, _ = load_or_generate_key()
     starlette_app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces={})
+    starlette_app.add_middleware(RequestContextMiddleware, header_name=request_id_header)
     return starlette_app
 
 

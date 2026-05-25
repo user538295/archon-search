@@ -22,6 +22,7 @@ from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingStateStore
 from archon_search.reranker import ModelReranker, Reranker
 from archon_search.server.middleware_auth import APIKeyMiddleware, _EXEMPT_PATHS
+from archon_search.server.middleware_context import RequestContextMiddleware
 from archon_search.store import SearchStore
 
 try:
@@ -121,6 +122,10 @@ def create_app(
     app = FastAPI(title="archon-search", lifespan=lifespan)
     app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces=config.namespaces)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    app.add_middleware(
+        RequestContextMiddleware,
+        header_name=config.observability.request_id_header,
+    )
     logger.info("API key authentication enabled (source: %s)", key_source)
     app.state.config = config
     app.state.job_store = job_store

@@ -273,7 +273,7 @@ class ExplainResponse(BaseModel):
   - Checkpoint: `uv run pytest tests/server/test_middleware_context.py -v`
 
 #### Task 2.2 — Register middleware on FastAPI app and MCP Starlette app
-- [ ] **Files**: `archon_search/server/app.py`, `archon_search/server/mcp.py`
+- [x] **Files**: `archon_search/server/app.py`, `archon_search/server/mcp.py`
 - **Depends on**: Task 2.1, Task 1.2
 - **Description**:
   - In `create_app` (`app.py`): after the existing `add_middleware` calls (line 122-123), add:
