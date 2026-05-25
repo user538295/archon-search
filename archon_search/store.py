@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult, normalize_iso_utc
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, _validate_namespace
+from archon_search.observability import record_stage, _stage_recorder
 from archon_search.store_filters import build_where, _compute_fetch, _sql_quote_str
 
 
@@ -723,21 +725,26 @@ class SearchStore:
         pred = build_where(filters) if filters else ""
 
         # Vector search
-        vec_q = table.vector_search(query_vector)
-        if pred:
-            vec_q = vec_q.where(pred)
-        vec_rows = await vec_q.limit(fetch).to_list()
-        vec_rank: dict[str, int] = {r["chunk_id"]: i for i, r in enumerate(vec_rows)}
+        with record_stage("vector"):
+            vec_q = table.vector_search(query_vector)
+            if pred:
+                vec_q = vec_q.where(pred)
+            vec_rows = await vec_q.limit(fetch).to_list()
+            vec_rank: dict[str, int] = {r["chunk_id"]: i for i, r in enumerate(vec_rows)}
 
-        # FTS search (may fail if no index)
+        # FTS search (may fail if no index); record only on success
         fts_rows: list[dict[str, Any]] = []
         fts_rank: dict[str, int] = {}
+        _fts_t0 = time.perf_counter()
         try:
             fts_q = await table.search(query_text, query_type="fts")
             if pred:
                 fts_q = fts_q.where(pred)
             fts_rows = await fts_q.limit(fetch).to_list()
             fts_rank = {r["chunk_id"]: i for i, r in enumerate(fts_rows)}
+            _fts_recorder = _stage_recorder.get()
+            if _fts_recorder is not None:
+                _fts_recorder.record("fts", (time.perf_counter() - _fts_t0) * 1000.0)
         except Exception as exc:
             exc_str = str(exc).lower()
             if "index" in exc_str or "fts" in exc_str:
@@ -745,22 +752,22 @@ class SearchStore:
             else:
                 raise
 
-        # Build combined row lookup
-        all_rows: dict[str, dict[str, Any]] = {r["chunk_id"]: r for r in vec_rows}
-        for r in fts_rows:
-            all_rows.setdefault(r["chunk_id"], r)
+        # Build combined row lookup and RRF scoring
+        with record_stage("fuse"):
+            all_rows: dict[str, dict[str, Any]] = {r["chunk_id"]: r for r in vec_rows}
+            for r in fts_rows:
+                all_rows.setdefault(r["chunk_id"], r)
 
-        # RRF scoring
-        scored: list[tuple[float, dict[str, Any]]] = []
-        for chunk_id, row in all_rows.items():
-            score = 0.0
-            if chunk_id in vec_rank:
-                score += _rrf_score(vec_rank[chunk_id])
-            if chunk_id in fts_rank:
-                score += _rrf_score(fts_rank[chunk_id])
-            scored.append((score, row))
+            scored: list[tuple[float, dict[str, Any]]] = []
+            for chunk_id, row in all_rows.items():
+                score = 0.0
+                if chunk_id in vec_rank:
+                    score += _rrf_score(vec_rank[chunk_id])
+                if chunk_id in fts_rank:
+                    score += _rrf_score(fts_rank[chunk_id])
+                scored.append((score, row))
 
-        scored.sort(key=lambda x: x[0], reverse=True)
+            scored.sort(key=lambda x: x[0], reverse=True)
 
         # fnmatch has no path semantics: * matches / and ** is identical to *;
         # source_path_glob matches the full source_path; combine with source_path_prefix for
@@ -1062,22 +1069,24 @@ async def _hybrid_search_with_trace(
         return []
 
     # --- Vector search ---
-    vec_rows: list[dict[str, Any]] = await (
-        table.vector_search(query_vector).limit(candidate_depth).to_list()
-    )
-    # Map chunk_id → (rank, raw_distance | None)
-    vec_rank: dict[str, int] = {}
-    vec_raw: dict[str, float | None] = {}
-    for i, row in enumerate(vec_rows):
-        cid = row["chunk_id"]
-        vec_rank[cid] = i
-        raw = row.get("_distance")
-        vec_raw[cid] = float(raw) if raw is not None else None
+    with record_stage("vector"):
+        vec_rows: list[dict[str, Any]] = await (
+            table.vector_search(query_vector).limit(candidate_depth).to_list()
+        )
+        # Map chunk_id → (rank, raw_distance | None)
+        vec_rank: dict[str, int] = {}
+        vec_raw: dict[str, float | None] = {}
+        for i, row in enumerate(vec_rows):
+            cid = row["chunk_id"]
+            vec_rank[cid] = i
+            raw = row.get("_distance")
+            vec_raw[cid] = float(raw) if raw is not None else None
 
-    # --- FTS search (degrades gracefully when no index) ---
+    # --- FTS search (degrades gracefully when no index); record only on success ---
     fts_rows: list[dict[str, Any]] = []
     fts_rank: dict[str, int] = {}
     fts_raw: dict[str, float | None] = {}
+    _fts_t0 = time.perf_counter()
     try:
         fts_q = await table.search(query_text, query_type="fts")
         fts_rows = await fts_q.limit(candidate_depth).to_list()
@@ -1086,6 +1095,9 @@ async def _hybrid_search_with_trace(
             fts_rank[cid] = i
             raw = row.get("_score")
             fts_raw[cid] = float(raw) if raw is not None else None
+        _fts_recorder = _stage_recorder.get()
+        if _fts_recorder is not None:
+            _fts_recorder.record("fts", (time.perf_counter() - _fts_t0) * 1000.0)
     except Exception as exc:
         exc_str = str(exc).lower()
         if "index" in exc_str or "fts" in exc_str:
@@ -1096,63 +1108,63 @@ async def _hybrid_search_with_trace(
         else:
             raise
 
-    # --- Merge candidates ---
-    all_rows: dict[str, dict[str, Any]] = {r["chunk_id"]: r for r in vec_rows}
-    for r in fts_rows:
-        all_rows.setdefault(r["chunk_id"], r)
+    # --- Merge candidates and build ScoredSearchCandidate list ---
+    with record_stage("fuse"):
+        all_rows: dict[str, dict[str, Any]] = {r["chunk_id"]: r for r in vec_rows}
+        for r in fts_rows:
+            all_rows.setdefault(r["chunk_id"], r)
 
-    # --- Build ScoredSearchCandidate list ---
-    candidates: list[ScoredSearchCandidate] = []
-    for chunk_id, row in all_rows.items():
-        in_vec = chunk_id in vec_rank
-        in_fts = chunk_id in fts_rank
+        candidates: list[ScoredSearchCandidate] = []
+        for chunk_id, row in all_rows.items():
+            in_vec = chunk_id in vec_rank
+            in_fts = chunk_id in fts_rank
 
-        v_rank = vec_rank[chunk_id] if in_vec else None
-        v_score = vec_raw[chunk_id] if in_vec else None
-        # score_kind follows score: if raw score field was absent, kind is also None
-        v_kind: str | None = "distance" if (in_vec and v_score is not None) else None
+            v_rank = vec_rank[chunk_id] if in_vec else None
+            v_score = vec_raw[chunk_id] if in_vec else None
+            # score_kind follows score: if raw score field was absent, kind is also None
+            v_kind: str | None = "distance" if (in_vec and v_score is not None) else None
 
-        f_rank = fts_rank[chunk_id] if in_fts else None
-        f_score = fts_raw[chunk_id] if in_fts else None
-        f_kind: str | None = "bm25" if (in_fts and f_score is not None) else None
+            f_rank = fts_rank[chunk_id] if in_fts else None
+            f_score = fts_raw[chunk_id] if in_fts else None
+            f_kind: str | None = "bm25" if (in_fts and f_score is not None) else None
 
-        rrf = 0.0
-        if in_vec:
-            rrf += _rrf_score(vec_rank[chunk_id])
-        if in_fts:
-            rrf += _rrf_score(fts_rank[chunk_id])
+            rrf = 0.0
+            if in_vec:
+                rrf += _rrf_score(vec_rank[chunk_id])
+            if in_fts:
+                rrf += _rrf_score(fts_rank[chunk_id])
 
-        raw_acl = row.get("acl")
-        row_acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
-        indexed_at = row.get("indexed_at") or ""
+            raw_acl = row.get("acl")
+            row_acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
+            indexed_at = row.get("indexed_at") or ""
 
-        candidates.append(
-            ScoredSearchCandidate(
-                doc_id=row["doc_id"],
-                chunk_id=chunk_id,
-                text=row["text"],
-                source_path=row["source_path"],
-                score_breakdown=SearchScoreBreakdown(
-                    vector_rank=v_rank,
-                    vector_score=v_score,
-                    vector_score_kind=v_kind,
-                    fts_rank=f_rank,
-                    fts_score=f_score,
-                    fts_score_kind=f_kind,
-                    rrf_score=rrf,
-                    reranker_score=None,
-                ),
-                collection=collection,
-                acl=row_acl,
-                file_type=row.get("file_type") or "",
-                indexed_at=indexed_at,
-                updated_at=row.get("updated_at") or indexed_at,
-                ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
-                language=row.get("language") or None,
-                metadata=parse_metadata(row.get("metadata") or "{}"),
+            candidates.append(
+                ScoredSearchCandidate(
+                    doc_id=row["doc_id"],
+                    chunk_id=chunk_id,
+                    text=row["text"],
+                    source_path=row["source_path"],
+                    score_breakdown=SearchScoreBreakdown(
+                        vector_rank=v_rank,
+                        vector_score=v_score,
+                        vector_score_kind=v_kind,
+                        fts_rank=f_rank,
+                        fts_score=f_score,
+                        fts_score_kind=f_kind,
+                        rrf_score=rrf,
+                        reranker_score=None,
+                    ),
+                    collection=collection,
+                    acl=row_acl,
+                    file_type=row.get("file_type") or "",
+                    indexed_at=indexed_at,
+                    updated_at=row.get("updated_at") or indexed_at,
+                    ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
+                    language=row.get("language") or None,
+                    metadata=parse_metadata(row.get("metadata") or "{}"),
+                )
             )
-        )
 
-    # Stable sort: descending RRF, then ascending chunk_id for ties
-    candidates.sort(key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id))
+        # Stable sort: descending RRF, then ascending chunk_id for ties
+        candidates.sort(key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id))
     return candidates

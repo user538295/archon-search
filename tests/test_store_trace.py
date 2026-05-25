@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from archon_search._diagnostics import ScoredSearchCandidate
+from archon_search.observability import bind_stage_recorder
 from archon_search.store import SearchStore, _hybrid_search_with_trace
 
 # ---------------------------------------------------------------------------
@@ -207,3 +208,83 @@ def test_lance_store_hybrid_search_with_trace_delegates_to_module_function(
 
     mock_fn.assert_awaited_once_with(store, "col", [0.1], "q", 7)
     assert result is fake_candidates
+
+
+# ---------------------------------------------------------------------------
+# Stage instrumentation tests (Task 3.3)
+# ---------------------------------------------------------------------------
+
+
+def _store_with_fts(tmp_path: Path, name: str, row: dict) -> SearchStore:
+    """Store where both vector and FTS legs succeed."""
+    return _trace_store_with_row(tmp_path, name, row)
+
+
+def _store_without_fts(tmp_path: Path, name: str, row: dict) -> SearchStore:
+    """Store where FTS raises an 'index not available' error (degraded path)."""
+    store = SearchStore(tmp_path / name)
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(
+            limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[row])))
+        )
+    )
+    mock_table.search = AsyncMock(side_effect=RuntimeError("fts index not available"))
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+    return store
+
+
+def _run_hybrid_search(store: SearchStore) -> list:
+    return asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", 5))
+
+
+def test_hybrid_search_records_vector_fuse_stages(tmp_path: Path) -> None:
+    """hybrid_search records 'vector' and 'fuse' stages when a recorder is bound."""
+    store = _store_with_fts(tmp_path, "hs1", _row("s1"))
+    with bind_stage_recorder() as recorder:
+        _run_hybrid_search(store)
+    assert {"vector", "fuse"} <= recorder.stage_timings_ms.keys()
+
+
+def test_hybrid_search_records_fts_when_index_exists(tmp_path: Path) -> None:
+    """hybrid_search records 'fts' stage when FTS search succeeds."""
+    store = _store_with_fts(tmp_path, "hs2", _row("s2"))
+    with bind_stage_recorder() as recorder:
+        _run_hybrid_search(store)
+    assert "fts" in recorder.stage_timings_ms
+
+
+def test_hybrid_search_omits_fts_when_no_index(tmp_path: Path) -> None:
+    """hybrid_search omits 'fts' key when FTS raises (degraded path)."""
+    store = _store_without_fts(tmp_path, "hs3", _row("s3"))
+    with bind_stage_recorder() as recorder:
+        _run_hybrid_search(store)
+    timings = recorder.stage_timings_ms
+    assert "fts" not in timings
+    assert "vector" in timings
+    assert "fuse" in timings
+
+
+def test_hybrid_search_trace_records_same_stages(tmp_path: Path) -> None:
+    """_hybrid_search_with_trace records 'vector', 'fts', and 'fuse' stages."""
+    store = _store_with_fts(tmp_path, "hs4", _row("s4"))
+    with bind_stage_recorder() as recorder:
+        asyncio.run(_hybrid_search_with_trace(store, "my-col", [0.0] * _DIM, "hello", 20))
+    timings = recorder.stage_timings_ms
+    assert {"vector", "fts", "fuse"} <= timings.keys()
+
+
+def test_hybrid_search_with_trace_omits_fts_when_no_index(tmp_path: Path) -> None:
+    """_hybrid_search_with_trace omits 'fts' key on the degraded (no-index) path."""
+    store = _store_without_fts(tmp_path, "hs5", _row("s5"))
+    with bind_stage_recorder() as recorder:
+        asyncio.run(_hybrid_search_with_trace(store, "my-col", [0.0] * _DIM, "hello", 20))
+    timings = recorder.stage_timings_ms
+    assert "fts" not in timings
+    assert "vector" in timings
+    assert "fuse" in timings
