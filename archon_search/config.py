@@ -32,7 +32,7 @@ class SearchConfig:
     # [database]
     db_path: str = "~/.archon-search/search"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
-    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
     chunk_size: int = 512
     auto_reindex_on_chunk_size_change: bool = True
     providers: list[str] = field(default_factory=list)

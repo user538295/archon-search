@@ -48,7 +48,7 @@ The annotated reference is `archon-search.toml.example`. The sections below matc
 | --- | --- | --- | --- |
 | `db_path` | string | `~/.archon-search/search` | LanceDB on-disk location. Tilde is expanded. |
 | `embedding_model` | string | `BAAI/bge-small-en-v1.5` | Sentence-transformers model id. |
-| `reranker_model` | string | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder used for second-stage scoring. |
+| `reranker_model` | string | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder used for second-stage scoring. |
 | `chunk_size` | int (>0) | `512` | Target chunk size in tokens. |
 | `auto_reindex_on_chunk_size_change` | bool | `true` | If `chunk_size` changes between starts, affected collections are reindexed automatically. #Unverified (reindex behaviour lives outside `config.py`). |
 | `providers` | list[string] | `[]` | ONNX Runtime execution providers. See [`01_installation.md`](./01_installation.md). |

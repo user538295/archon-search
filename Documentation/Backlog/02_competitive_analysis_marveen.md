@@ -98,7 +98,7 @@ This comparison therefore has two layers:
 ## Dimension 3 — Search Quality
 
 ### Archon
-**Pipeline:** embed query → hybrid search (vector + FTS via LanceDB) → RRF fusion (k=60) → cross-encoder reranking (default `cross-encoder/ms-marco-MiniLM-L-6-v2`, configurable) → context-window enrichment (adjacent chunk fetch).
+**Pipeline:** embed query → hybrid search (vector + FTS via LanceDB) → RRF fusion (k=60) → cross-encoder reranking (default `Xenova/ms-marco-MiniLM-L-6-v2`, configurable) → context-window enrichment (adjacent chunk fetch).
 
 **Strengths:**
 - Cross-encoder reranking is state-of-the-art for precision (query-document pair scoring vs. bi-encoder approximation)
@@ -139,7 +139,7 @@ This comparison therefore has two layers:
 
 ### Archon
 - **Default:** `BAAI/bge-small-en-v1.5` (model specs such as 384-dim / 33 MB ONNX are upstream model properties, not asserted in archon-search source) #Unverified
-- **Reranker:** `cross-encoder/ms-marco-MiniLM-L-6-v2` (default; configurable via `reranker_model`)
+- **Reranker:** `Xenova/ms-marco-MiniLM-L-6-v2` (default; configurable via `reranker_model`)
 - **Provider:** fastembed; runtime auto-detects GPU type via `runtime.detect_gpu()` (CUDA on Linux, METAL on ARM macOS, NONE otherwise). CoreML acceleration is referenced in `install.py` on macOS. #Unverified (clean three-way CPU/CUDA/CoreML framing is simplified)
 - **Configurable:** Both models are `config.toml` fields under `[database]`; can swap without code changes
 - **Lazy loading:** Thread-safe singleton; loaded on first call

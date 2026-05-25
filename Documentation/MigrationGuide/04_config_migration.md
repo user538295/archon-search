@@ -25,7 +25,7 @@ The following sections and keys are part of the documented config surface and ha
 | `[server]` | `port` | int | `8765` | Validated `1..65535`. |
 | `[database]` | `db_path` | string | `"~/.archon-search/search"` | LanceDB root. |
 | `[database]` | `embedding_model` | string | `"BAAI/bge-small-en-v1.5"` | fastembed model id. |
-| `[database]` | `reranker_model` | string | `"cross-encoder/ms-marco-MiniLM-L-6-v2"` | Cross-encoder id. |
+| `[database]` | `reranker_model` | string | `"Xenova/ms-marco-MiniLM-L-6-v2"` | Cross-encoder id. |
 | `[database]` | `chunk_size` | int | `512` | Must be `> 0`. |
 | `[database]` | `auto_reindex_on_chunk_size_change` | bool | `true` | Reindex on chunk-size diff at start. |
 | `[database]` | `providers` | list[string] | `[]` | ONNX execution providers. |

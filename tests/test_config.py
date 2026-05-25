@@ -97,7 +97,7 @@ def test_config_error_is_exception() -> None:
 def test_load_config_defaults_for_all_sections() -> None:
     config = SearchConfig()
     assert config.embedding_model == "BAAI/bge-small-en-v1.5"
-    assert config.reranker_model == "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    assert config.reranker_model == "Xenova/ms-marco-MiniLM-L-6-v2"
     assert config.chunk_size == 512
     assert config.auto_reindex_on_chunk_size_change is True
     assert config.routing_shortlist_size == 8
@@ -209,7 +209,7 @@ def test_c11_13_search_config_no_args_all_defaults_valid() -> None:
     assert config.port == 8765
     assert config.db_path == "~/.archon-search/search"
     assert config.embedding_model == "BAAI/bge-small-en-v1.5"
-    assert config.reranker_model == "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    assert config.reranker_model == "Xenova/ms-marco-MiniLM-L-6-v2"
     assert config.chunk_size == 512
     assert config.auto_reindex_on_chunk_size_change is True
     assert config.providers == []

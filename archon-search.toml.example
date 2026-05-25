@@ -23,7 +23,7 @@ db_path = "~/.archon-search/search"
 # Sentence-transformers embedding model used for indexing and queries.
 embedding_model = "BAAI/bge-small-en-v1.5"
 # Cross-encoder used to rerank candidate results before returning them.
-reranker_model = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
 # Target chunk size (tokens) when splitting documents during ingestion.
 chunk_size = 512
 # If chunk_size changes, automatically reindex affected collections on startup.

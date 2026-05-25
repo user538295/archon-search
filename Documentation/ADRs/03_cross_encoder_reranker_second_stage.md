@@ -25,7 +25,7 @@ the eval harness.
 
 Add a cross-encoder rerank stage between retrieval and response, implemented
 in `archon_search/reranker.py` and orchestrated by
-`archon_search/pipeline.py`. Default model: **`cross-encoder/ms-marco-MiniLM-L-6-v2`**
+`archon_search/pipeline.py`. Default model: **`Xenova/ms-marco-MiniLM-L-6-v2`**
 (see `SearchConfig.reranker_model` and `archon-search.toml.example` →
 `[database] reranker_model`). The reranker is backed by
 `fastembed.rerank.cross_encoder.TextCrossEncoder` and receives the same
