@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
 from time import monotonic
@@ -28,7 +30,7 @@ from archon_search.server.routes_explain import (
     RoutingExplain,
 )
 from archon_search.store import StoreBusyError
-from archon_search.observability import correlation_id as _correlation_id
+from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
@@ -250,44 +252,64 @@ def create_app(
         ns = DEFAULT_NAMESPACE
         routing: RoutingExplain | None = None
         query_vector: list[float] | None = None
+        timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         try:
-            if req.collection is not None:
-                meta = await pipeline.get_collection_meta(req.collection, namespace=ns)
-                if meta is None:
-                    return McpErrorResponse(error=f"Collection {req.collection!r} not found", code="not_found")
-                chosen = req.collection
-            elif config is None:
-                # No routing config — fall back to the default collection (like search).
-                chosen = default_collection
-            else:
-                all_meta = await pipeline.get_all_collections_meta(namespace=ns)
-                if not all_meta:
-                    return McpErrorResponse(error="no collections available", code="not_found")
-                query_vector = await pipeline._embedder.embed_one(req.query)
-                col_router = MultiCollectionRouter(
-                    search_url="http://mcp",
-                    embedder=pipeline._embedder,
-                    shortlist_size=config.routing_shortlist_size,
-                    confidence_threshold=config.routing_confidence_threshold,
-                    embedding_model=config.embedding_model,
-                )
-                ranked = col_router.rank_with_scores(query_vector, all_meta)
-                chosen_meta, chosen_score = ranked[0]
-                chosen = chosen_meta.name
-                threshold = config.routing_confidence_threshold
-                routing = RoutingExplain(
-                    invoked=True,
-                    chosen_collection=chosen,
-                    confidence_threshold=threshold,
-                    chosen_below_threshold=(chosen_score is None or chosen_score < threshold),
-                    candidates=[RoutingCandidate(collection=m.name, centroid_score=s) for m, s in ranked],
-                )
+            with ExitStack() as stack:
+                recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
+                t0 = time.perf_counter()
 
-            result = await pipeline.explain(
-                req.query, chosen, top_k=req.top_k, rerank=req.rerank, namespace=ns, query_vector=query_vector
-            )
+                if req.collection is not None:
+                    meta = await pipeline.get_collection_meta(req.collection, namespace=ns)
+                    if meta is None:
+                        return McpErrorResponse(error=f"Collection {req.collection!r} not found", code="not_found")
+                    chosen = req.collection
+                elif config is None:
+                    # No routing config — fall back to the default collection (like search).
+                    chosen = default_collection
+                else:
+                    all_meta = await pipeline.get_all_collections_meta(namespace=ns)
+                    if not all_meta:
+                        return McpErrorResponse(error="no collections available", code="not_found")
+                    query_vector = await pipeline._embedder.embed_one(req.query)
+                    col_router = MultiCollectionRouter(
+                        search_url="http://mcp",
+                        embedder=pipeline._embedder,
+                        shortlist_size=config.routing_shortlist_size,
+                        confidence_threshold=config.routing_confidence_threshold,
+                        embedding_model=config.embedding_model,
+                    )
+                    ranked = col_router.rank_with_scores(query_vector, all_meta)
+                    chosen_meta, chosen_score = ranked[0]
+                    chosen = chosen_meta.name
+                    threshold = config.routing_confidence_threshold
+                    routing = RoutingExplain(
+                        invoked=True,
+                        chosen_collection=chosen,
+                        confidence_threshold=threshold,
+                        chosen_below_threshold=(chosen_score is None or chosen_score < threshold),
+                        candidates=[RoutingCandidate(collection=m.name, centroid_score=s) for m, s in ranked],
+                    )
+
+                result = await pipeline.explain(
+                    req.query, chosen, top_k=req.top_k, rerank=req.rerank, namespace=ns, query_vector=query_vector
+                )
+                if recorder is not None:
+                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    logger.info(
+                        "stage timings",
+                        extra={
+                            "event_type": "stage_timings",
+                            "correlation_id": _correlation_id.get(),
+                            "endpoint": "explain",
+                            "collection": chosen,
+                            "stage_timings_ms": recorder.stage_timings_ms,
+                        },
+                    )
+
+            stage_timings = recorder.stage_timings_ms if recorder is not None else None
             response = ExplainResponse.from_pipeline_result(
-                rerank=req.rerank, collection=chosen, routing=routing, result=result
+                rerank=req.rerank, collection=chosen, routing=routing, result=result,
+                stage_timings_ms=stage_timings,
             )
             if writer is not None:
                 try:
@@ -301,7 +323,10 @@ def create_app(
                     )
                 except Exception:
                     logger.warning("telemetry: explain entry enqueue failed", exc_info=True)
-            return response.model_dump(mode="json", exclude_none=False)
+            result_dict = response.model_dump(mode="json", exclude_none=False)
+            if stage_timings is None:
+                result_dict.pop("stage_timings_ms", None)
+            return result_dict
         except ExplainStageError as exc:
             if writer is not None:
                 try:

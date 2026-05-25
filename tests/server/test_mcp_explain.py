@@ -175,6 +175,7 @@ async def test_mcp_explain_rest_parity(tmp_path: Path) -> None:
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     config.embedding_model = "mock-embedder"
+    config.observability.stage_timings_enabled = False  # timings are non-deterministic; exclude from parity check
     pipeline = await _build_real_pipeline(tmp_path, config)
 
     # MCP side
@@ -204,6 +205,7 @@ async def test_mcp_explain_collectionless_rest_parity(tmp_path: Path) -> None:
     config.db_path = str(tmp_path / "search")
     config.embedding_model = "mock-embedder"
     config.routing_confidence_threshold = 0.0
+    config.observability.stage_timings_enabled = False  # timings are non-deterministic; exclude from parity check
     pipeline = await _build_real_pipeline(tmp_path, config)
 
     # Second collection so routing.candidates is non-trivial (and sorted).

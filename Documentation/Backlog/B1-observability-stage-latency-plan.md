@@ -497,7 +497,7 @@ class ExplainResponse(BaseModel):
   - Checkpoint: `uv run pytest tests/server/test_routes_route_telemetry.py tests/test_mcp.py -v -k "correlation_id"`
 
 #### Task 4.3 — `stage_timings_ms` field on `ExplainResponse` and population in REST `/explain` and MCP `explain`
-- [ ] **Files**: `archon_search/server/routes_explain.py`, `archon_search/server/mcp.py`
+- [x] **Files**: `archon_search/server/routes_explain.py`, `archon_search/server/mcp.py`
 - **Depends on**: Task 1.1, Task 3.1–3.5, Task 4.1
 - **Description**:
   - In `routes_explain.py`:

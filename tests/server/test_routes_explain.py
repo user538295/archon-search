@@ -1372,3 +1372,551 @@ def test_post_explain_openapi_includes_route(tmp_path: Path) -> None:
     security = post_op.get("security", [])
     bearer_in_security = any("BearerAuth" in sec for sec in security)
     assert bearer_in_security, f"BearerAuth not in /explain post security: {security}"
+
+
+# ---------------------------------------------------------------------------
+# Task 4.3 — stage_timings_ms on ExplainResponse
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_explain_stage_timings_keys_pinned_collection_with_rerank(tmp_path: Path) -> None:
+    """Pinned collection + rerank=True → stage_timings_ms contains expected keys including 'total'."""
+    from archon_search.store import SearchStore
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "mock-embedder"
+    config.observability.stage_timings_enabled = True
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+
+    store = SearchStore(tmp_path / "realdb")
+    await store.connect()
+    await _ingest(store, "docs", _make_records(8))
+    await store.update_collection_meta(
+        CollectionMeta(
+            name="docs",
+            centroid=[0.1, 0.2, 0.3, 0.4],
+            embedding_model=config.embedding_model,
+            namespace="default",
+        )
+    )
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=Embedder(MockEmbedderBackend()),
+        reranker=Reranker(DistinctTextRerankerBackend()),
+        chunker=MagicMock(),
+        parser=MagicMock(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    app.state.pipeline = pipeline
+    app.state.embedder = pipeline._embedder
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://t",
+        headers={"Authorization": f"Bearer {key}"},
+    ) as ac:
+        resp = await ac.post(
+            "/explain",
+            json={"query": "common alpha beta", "collection": "docs", "top_k": 3, "rerank": True},
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "stage_timings_ms" in data, "stage_timings_ms key must be present when enabled"
+    timings = data["stage_timings_ms"]
+    assert isinstance(timings, dict)
+    # Must contain at minimum embed, vector, fuse, rerank, total
+    # fts may or may not be present depending on FTS index
+    assert "embed" in timings, f"'embed' missing from stage_timings_ms: {set(timings)}"
+    assert "vector" in timings, f"'vector' missing from stage_timings_ms: {set(timings)}"
+    assert "fuse" in timings, f"'fuse' missing from stage_timings_ms: {set(timings)}"
+    assert "rerank" in timings, f"'rerank' missing from stage_timings_ms: {set(timings)}"
+    assert "total" in timings, f"'total' missing from stage_timings_ms: {set(timings)}"
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_explain_stage_timings_keys_collectionless(tmp_path: Path) -> None:
+    """Collectionless request → stage_timings_ms contains 'route' key."""
+    from archon_search.store import SearchStore
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "mock-embedder"
+    config.routing_confidence_threshold = 0.0
+    config.observability.stage_timings_enabled = True
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+
+    store = SearchStore(tmp_path / "realdb")
+    await store.connect()
+    await _ingest(store, "docs", _make_records(5))
+    await store.update_collection_meta(
+        CollectionMeta(
+            name="docs",
+            centroid=[0.1, 0.2, 0.3, 0.4],
+            embedding_model=config.embedding_model,
+            namespace="default",
+        )
+    )
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=Embedder(MockEmbedderBackend()),
+        reranker=Reranker(DistinctTextRerankerBackend()),
+        chunker=MagicMock(),
+        parser=MagicMock(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    app.state.pipeline = pipeline
+    app.state.embedder = pipeline._embedder
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://t",
+        headers={"Authorization": f"Bearer {key}"},
+    ) as ac:
+        resp = await ac.post("/explain", json={"query": "common alpha beta", "top_k": 3})
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "stage_timings_ms" in data, "stage_timings_ms key must be present when enabled"
+    timings = data["stage_timings_ms"]
+    assert "route" in timings, f"'route' key must be present for collectionless explain: {set(timings)}"
+    assert "total" in timings
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_explain_stage_timings_no_rerank(tmp_path: Path) -> None:
+    """rerank=False → 'rerank' stage absent from stage_timings_ms."""
+    from archon_search.store import SearchStore
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "mock-embedder"
+    config.observability.stage_timings_enabled = True
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+
+    store = SearchStore(tmp_path / "realdb")
+    await store.connect()
+    await _ingest(store, "docs", _make_records(8))
+    await store.update_collection_meta(
+        CollectionMeta(
+            name="docs",
+            centroid=[0.1, 0.2, 0.3, 0.4],
+            embedding_model=config.embedding_model,
+            namespace="default",
+        )
+    )
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=Embedder(MockEmbedderBackend()),
+        reranker=Reranker(DistinctTextRerankerBackend()),
+        chunker=MagicMock(),
+        parser=MagicMock(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    app.state.pipeline = pipeline
+    app.state.embedder = pipeline._embedder
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://t",
+        headers={"Authorization": f"Bearer {key}"},
+    ) as ac:
+        resp = await ac.post(
+            "/explain",
+            json={"query": "common alpha beta", "collection": "docs", "top_k": 3, "rerank": False},
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "stage_timings_ms" in data
+    timings = data["stage_timings_ms"]
+    assert "rerank" not in timings, f"'rerank' must be absent when rerank=False, got: {set(timings)}"
+    assert "total" in timings
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_explain_stage_timings_values_non_negative(tmp_path: Path) -> None:
+    """All float values in stage_timings_ms must be >= 0."""
+    from archon_search.store import SearchStore
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "mock-embedder"
+    config.observability.stage_timings_enabled = True
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+
+    store = SearchStore(tmp_path / "realdb")
+    await store.connect()
+    await _ingest(store, "docs", _make_records(8))
+    await store.update_collection_meta(
+        CollectionMeta(
+            name="docs",
+            centroid=[0.1, 0.2, 0.3, 0.4],
+            embedding_model=config.embedding_model,
+            namespace="default",
+        )
+    )
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=Embedder(MockEmbedderBackend()),
+        reranker=Reranker(DistinctTextRerankerBackend()),
+        chunker=MagicMock(),
+        parser=MagicMock(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    app.state.pipeline = pipeline
+    app.state.embedder = pipeline._embedder
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://t",
+        headers={"Authorization": f"Bearer {key}"},
+    ) as ac:
+        resp = await ac.post(
+            "/explain",
+            json={"query": "common alpha beta", "collection": "docs", "top_k": 3},
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "stage_timings_ms" in data
+    timings = data["stage_timings_ms"]
+    for stage, value in timings.items():
+        assert isinstance(value, float | int), f"stage {stage!r}: expected float, got {type(value)}"
+        assert value >= 0.0, f"stage {stage!r}: timing must be >= 0, got {value}"
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_explain_stage_timings_disabled(tmp_path: Path) -> None:
+    """stage_timings_enabled=False → 'stage_timings_ms' key absent from response JSON entirely."""
+    from archon_search.store import SearchStore
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "mock-embedder"
+    config.observability.stage_timings_enabled = False
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+
+    store = SearchStore(tmp_path / "realdb")
+    await store.connect()
+    await _ingest(store, "docs", _make_records(8))
+    await store.update_collection_meta(
+        CollectionMeta(
+            name="docs",
+            centroid=[0.1, 0.2, 0.3, 0.4],
+            embedding_model=config.embedding_model,
+            namespace="default",
+        )
+    )
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=Embedder(MockEmbedderBackend()),
+        reranker=Reranker(DistinctTextRerankerBackend()),
+        chunker=MagicMock(),
+        parser=MagicMock(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    app.state.pipeline = pipeline
+    app.state.embedder = pipeline._embedder
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://t",
+        headers={"Authorization": f"Bearer {key}"},
+    ) as ac:
+        resp = await ac.post(
+            "/explain",
+            json={"query": "common alpha beta", "collection": "docs", "top_k": 3},
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "stage_timings_ms" not in data, (
+        "stage_timings_ms must be absent from response when stage_timings_enabled=False"
+    )
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_emits_stage_timings_log_record(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """MCP explain with valid request emits a log record with event_type=='stage_timings'
+    containing 'total' in stage_timings_ms."""
+    import sys
+    import types
+    from unittest.mock import patch
+
+    # Stub fastmcp if not present
+    if "fastmcp" not in sys.modules:
+        _fastmcp = types.ModuleType("fastmcp")
+        _fastmcp.FastMCP = type("FastMCP", (), {})
+        _fastmcp.Context = type("Context", (), {})
+        sys.modules["fastmcp"] = _fastmcp
+
+    from archon_search.store import SearchStore
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "mock-embedder"
+    config.observability.stage_timings_enabled = True
+
+    store = SearchStore(tmp_path / "realdb")
+    await store.connect()
+    await store.ensure_collection("docs", 4)
+    await store.ingest_chunks("docs", _make_records(8))
+    await store.rebuild_fts_index("docs")
+    await store.update_collection_meta(
+        CollectionMeta(
+            name="docs",
+            centroid=[0.1, 0.2, 0.3, 0.4],
+            embedding_model=config.embedding_model,
+            namespace="default",
+        )
+    )
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=Embedder(MockEmbedderBackend()),
+        reranker=Reranker(DistinctTextRerankerBackend()),
+        chunker=MagicMock(),
+        parser=MagicMock(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    class _FakeApp:
+        def __init__(self, name: str) -> None:
+            self.tools: dict = {}
+
+        def tool(self):
+            def decorator(func):
+                self.tools[func.__name__] = func
+                return func
+            return decorator
+
+        def custom_route(self, path, methods=None):
+            def decorator(func):
+                return func
+            return decorator
+
+    class _FakeFastMCP:
+        def __new__(cls, name, **kwargs):
+            return _FakeApp(name)
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+        mcp_app = mcp_module.create_app(pipeline, "default", writer=None, config=config)
+
+    import logging
+    with caplog.at_level(logging.INFO, logger="archon.search"):
+        result = await mcp_app.tools["explain"](query="common alpha beta", collection="docs", top_k=3)
+
+    assert "error" not in result, f"MCP explain returned error: {result}"
+    assert "results" in result
+
+    # Find a log record with event_type == "stage_timings"
+    timing_records = [
+        r for r in caplog.records
+        if getattr(r, "event_type", None) == "stage_timings"
+    ]
+    assert len(timing_records) >= 1, (
+        f"Expected at least 1 stage_timings log record, got {len(timing_records)}. "
+        f"All records: {[(r.getMessage(), r.__dict__.get('event_type')) for r in caplog.records]}"
+    )
+    rec = timing_records[0]
+    timings = getattr(rec, "stage_timings_ms", None)
+    assert timings is not None, "stage_timings_ms must be present on the log record"
+    assert "total" in timings, f"'total' must be in stage_timings_ms, got: {set(timings)}"
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_explain_stage_timings_fts_absent_degradation(tmp_path: Path) -> None:
+    """Corpus without FTS index → 'fts' absent, 'vector' and 'fuse' present in stage_timings_ms."""
+    from archon_search.store import SearchStore
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "mock-embedder"
+    config.observability.stage_timings_enabled = True
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(config, job_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+
+    store = SearchStore(tmp_path / "realdb")
+    await store.connect()
+    # Ingest WITHOUT calling rebuild_fts_index to simulate corpus without FTS
+    await store.ensure_collection("docs", 4)
+    await store.ingest_chunks("docs", _make_records(8))
+    # Deliberately skip: await store.rebuild_fts_index("docs")
+    await store.update_collection_meta(
+        CollectionMeta(
+            name="docs",
+            centroid=[0.1, 0.2, 0.3, 0.4],
+            embedding_model=config.embedding_model,
+            namespace="default",
+        )
+    )
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=Embedder(MockEmbedderBackend()),
+        reranker=Reranker(DistinctTextRerankerBackend()),
+        chunker=MagicMock(),
+        parser=MagicMock(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    app.state.pipeline = pipeline
+    app.state.embedder = pipeline._embedder
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://t",
+        headers={"Authorization": f"Bearer {key}"},
+    ) as ac:
+        resp = await ac.post(
+            "/explain",
+            json={"query": "common alpha beta", "collection": "docs", "top_k": 3},
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "stage_timings_ms" in data
+    timings = data["stage_timings_ms"]
+    assert "fts" not in timings, f"'fts' must be absent when no FTS index, got: {set(timings)}"
+    assert "vector" in timings, f"'vector' must be present, got: {set(timings)}"
+    assert "fuse" in timings, f"'fuse' must be present, got: {set(timings)}"
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_rest_mcp_explain_key_parity(tmp_path: Path) -> None:
+    """For identical inputs, set(REST stage_timings_ms keys) == set(MCP stage_timings_ms keys)."""
+    import sys
+    import types
+    from unittest.mock import patch
+
+    if "fastmcp" not in sys.modules:
+        _fastmcp = types.ModuleType("fastmcp")
+        _fastmcp.FastMCP = type("FastMCP", (), {})
+        _fastmcp.Context = type("Context", (), {})
+        sys.modules["fastmcp"] = _fastmcp
+
+    from archon_search.store import SearchStore
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "mock-embedder"
+    config.observability.stage_timings_enabled = True
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    rest_app = create_app(config, job_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+
+    store = SearchStore(tmp_path / "realdb")
+    await store.connect()
+    await _ingest(store, "docs", _make_records(8))
+    await store.update_collection_meta(
+        CollectionMeta(
+            name="docs",
+            centroid=[0.1, 0.2, 0.3, 0.4],
+            embedding_model=config.embedding_model,
+            namespace="default",
+        )
+    )
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=Embedder(MockEmbedderBackend()),
+        reranker=Reranker(DistinctTextRerankerBackend()),
+        chunker=MagicMock(),
+        parser=MagicMock(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    rest_app.state.pipeline = pipeline
+    rest_app.state.embedder = pipeline._embedder
+
+    transport = httpx.ASGITransport(app=rest_app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://t",
+        headers={"Authorization": f"Bearer {key}"},
+    ) as ac:
+        rest_resp = await ac.post(
+            "/explain",
+            json={"query": "common alpha beta", "collection": "docs", "top_k": 3, "rerank": True},
+        )
+
+    assert rest_resp.status_code == 200, rest_resp.text
+    rest_data = rest_resp.json()
+    assert "stage_timings_ms" in rest_data, "REST response must contain stage_timings_ms"
+
+    class _FakeApp:
+        def __init__(self, name: str) -> None:
+            self.tools: dict = {}
+
+        def tool(self):
+            def decorator(func):
+                self.tools[func.__name__] = func
+                return func
+            return decorator
+
+        def custom_route(self, path, methods=None):
+            def decorator(func):
+                return func
+            return decorator
+
+    class _FakeFastMCP:
+        def __new__(cls, name, **kwargs):
+            return _FakeApp(name)
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+        mcp_app = mcp_module.create_app(pipeline, "default", writer=None, config=config)
+
+    mcp_result = await mcp_app.tools["explain"](
+        query="common alpha beta", collection="docs", top_k=3, rerank=True
+    )
+    assert "error" not in mcp_result, f"MCP explain returned error: {mcp_result}"
+    assert "stage_timings_ms" in mcp_result, "MCP response must contain stage_timings_ms"
+
+    rest_keys = set(rest_data["stage_timings_ms"].keys())
+    mcp_keys = set(mcp_result["stage_timings_ms"].keys())
+    assert rest_keys == mcp_keys, (
+        f"REST and MCP stage_timings_ms key sets differ: REST={rest_keys}, MCP={mcp_keys}"
+    )
+
+    await store.disconnect()
