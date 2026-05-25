@@ -546,7 +546,7 @@ class FilterFlags(BaseModel):
   - Checkpoint: `uv run pytest -m benchmark tests/test_search_filtered_benchmark.py`
 
 #### Task 6.3 — Eval baseline-unchanged regression
-- [ ] **File**: `tests/eval/test_eval_baseline_unchanged.py` (or extend the existing eval suite)
+- [x] **File**: `tests/eval/test_eval_baseline_unchanged.py`
 - **Depends on**: Task 3.3
 - **Description**:
   - Run the existing eval suite with `filters=None` on every query and assert metrics are identical to `baselines/baseline.json`. Filters are additive; the default code path must not regress.
