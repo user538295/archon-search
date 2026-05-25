@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,13 +17,22 @@ from archon_search.server.app import create_app
 
 
 def _make_app(tmp_path: Path) -> tuple:
-    """Create app and return (app, client) with pipeline mock on app.state."""
+    """Create app and return (app, client) with pipeline mock on app.state.
+
+    DocumentChunker.__init__ is patched to skip gpt2 tokenizer download so
+    tests pass in network-restricted environments.  Tests that replace
+    app.state.pipeline immediately after this call are unaffected; tests that
+    inspect the real pipeline (isinstance, store identity) still work because
+    SearchPipeline is constructed normally — only the embedded chunker is a
+    stub that must not be invoked.
+    """
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     job_store = JobStore(path=tmp_path / "jobs.json")
-    app = create_app(config, job_store)
+    with patch("archon_search.chunker.DocumentChunker.__init__", return_value=None):
+        app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    client = TestClient(app, raise_server_exceptions=False, headers={"Authorization": f"Bearer {key}"})
     return app, client
 
 
@@ -137,17 +146,14 @@ def test_search_collection_not_found_returns_404(tmp_path: Path) -> None:
     assert response.status_code == 404
 
 
-def test_search_pipeline_error_returns_empty(tmp_path: Path) -> None:
-    """When pipeline.search() raises, returns SearchResponse(results=[], acl_filtered=False)."""
+def test_search_pipeline_error_returns_500(tmp_path: Path) -> None:
+    """When pipeline.search() raises → HTTP 500 (bare re-raise; plain text body from ServerErrorMiddleware)."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=RuntimeError("search boom"))
 
     response = client.post("/search", json={"collection": "col", "query": "q"})
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["results"] == []
-    assert data["acl_filtered"] is False
+    assert response.status_code == 500
 
 
 # ---------------------------------------------------------------------------
@@ -255,22 +261,20 @@ def test_search_whitespace_collection(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Exception in pipeline.search() → log WARNING + return []
+# 5. Exception in pipeline.search() → HTTP 500 with structured error log
 # ---------------------------------------------------------------------------
 
 
-def test_search_store_exception_returns_empty(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """Exception in pipeline.search() (after successful meta lookup) → log WARNING + return []."""
+def test_search_store_exception_returns_500(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Exception in pipeline.search() (after successful meta lookup) → HTTP 500 with standard error envelope."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=RuntimeError("db failure"))
 
-    with caplog.at_level(logging.WARNING, logger="archon.search"):
+    with caplog.at_level(logging.ERROR, logger="archon.search"):
         response = client.post("/search", json={"collection": "col", "query": "test"})
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["results"] == []
-    assert any("search failed" in record.message for record in caplog.records)
+    assert response.status_code == 500
+    assert any("search pipeline failed" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -292,35 +296,33 @@ def test_search_top_k_accepted_but_ignored_by_pipeline(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Pipeline search failure → 200 + []
+# 7. Pipeline search failure → HTTP 500
 # ---------------------------------------------------------------------------
 
 
-def test_search_embedder_failure_returns_empty(tmp_path: Path) -> None:
-    """pipeline.search() failure → 200 + [] (pipeline encapsulates embed+rerank)."""
+def test_search_embedder_failure_returns_500(tmp_path: Path) -> None:
+    """pipeline.search() failure → HTTP 500 (bare re-raise; plain text body from ServerErrorMiddleware)."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=RuntimeError("model error"))
 
     response = client.post("/search", json={"collection": "col", "query": "test"})
 
-    assert response.status_code == 200
-    assert response.json()["results"] == []
+    assert response.status_code == 500
 
 
 # ---------------------------------------------------------------------------
-# 8. Reranker failure inside pipeline → 200 + []
+# 8. Reranker failure inside pipeline → HTTP 500
 # ---------------------------------------------------------------------------
 
 
-def test_search_reranker_failure_returns_empty(tmp_path: Path) -> None:
-    """Any exception from pipeline.search() → 200 + [] (reranker failure path)."""
+def test_search_reranker_failure_returns_500(tmp_path: Path) -> None:
+    """Any exception from pipeline.search() → HTTP 500 (bare re-raise; plain text body from ServerErrorMiddleware)."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(search_raises=ValueError("score count mismatch"))
 
     response = client.post("/search", json={"collection": "col", "query": "test"})
 
-    assert response.status_code == 200
-    assert response.json()["results"] == []
+    assert response.status_code == 500
 
 
 # ---------------------------------------------------------------------------
@@ -384,9 +386,17 @@ def test_search_cross_namespace_404(tmp_path: Path) -> None:
 
 
 def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """When get_collection_meta raises (LanceDB error), response is 503, not 404 or 200."""
+    """When get_collection_meta raises (LanceDB error), response is 503, not 404 or 200.
+
+    Also verifies that the 503 meta-lookup failure path does NOT enqueue a telemetry
+    entry (telemetry is reserved for the search-execution failure paths).
+    """
+    from archon_search.telemetry.writer import TelemetryWriter
+
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(meta_raises=RuntimeError("lancedb failure"))
+    writer_mock = MagicMock(spec=TelemetryWriter)
+    app.state.telemetry_writer = writer_mock
 
     with caplog.at_level(logging.ERROR, logger="archon.search"):
         response = client.post("/search", json={"collection": "col", "query": "test"})
@@ -394,6 +404,8 @@ def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCa
     assert response.status_code == 503
     app.state.pipeline.search.assert_not_called()
     assert any("service unavailable" in record.message.lower() or "lancedb" in record.message.lower() or "col" in record.message for record in caplog.records)
+    # 503 meta-lookup path must not enqueue telemetry.
+    assert writer_mock.enqueue.call_count == 0
 
 
 # ---------------------------------------------------------------------------

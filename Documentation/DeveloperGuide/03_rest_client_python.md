@@ -12,7 +12,7 @@ This page shows the most common integration flows. Every code block was checked 
 1. **One client, one base URL, one bearer.** Build a single `httpx.Client` (or `AsyncClient`) and attach the auth header once.
 2. **Use a `with`-context.** `httpx.Client` is a connection pool; closing it cleanly releases sockets.
 3. **`raise_for_status()` is your friend.** REST errors come back with the envelope `{"detail": "..."}` and a non-2xx status; let the client surface that as an exception.
-4. **`/search` cannot be assumed to fail loudly.** Pipeline failures currently return `200` with an empty `results` list (debt item `CON-5`, see `Documentation/Backlog/03_world_class_roadmap.md` item A3). Check `len(results)` if you need to distinguish "no hits" from "broken".
+4. **`/search` fails loudly on pipeline errors.** Pipeline stage exceptions (embedder, store, reranker) return HTTP 500; a hung pipeline returns HTTP 504. HTTP 200 with `results: []` means the pipeline ran successfully but found no matching documents — it is not an error signal.
 
 ## Setting up a client
 
@@ -180,7 +180,7 @@ for hit in payload["results"]:
 - Empty `query` or empty `collection` → `422` from Pydantic validators.
 - Unknown / cross-namespace collection → `404 {"detail": "collection not found"}`.
 - Meta lookup failure → `503 {"detail": "service unavailable"}`.
-- Pipeline failure mid-search → currently `200` with `results=[]` and `acl_filtered=false`. Roadmap item A3 will change this to a 5xx.
+- Pipeline failure mid-search → HTTP 500 with a **plain-text** body `Internal Server Error` (Content-Type `text/plain`), produced by Starlette's `ServerErrorMiddleware` after the route bare-re-raises. Do NOT call `response.json()` on the 500 body — it is not JSON and `requests`/`httpx` will raise `JSONDecodeError`. Use `response.text` or branch on `response.status_code` before parsing. Pipeline timeout → HTTP 504 with `{"detail": "Search timed out"}` (JSON, safe to parse). HTTP 200 with `results=[]` means no matches found on a healthy pipeline.
 
 There is no REST `/search/with_context` endpoint. That capability is exposed only as the MCP tool `search_with_context` (`mcp.py:77`). If you need it from REST today, ingest the document and issue follow-up `/search` calls; or use the MCP transport.
 

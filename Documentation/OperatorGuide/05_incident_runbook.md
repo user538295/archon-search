@@ -12,7 +12,7 @@ This runbook lists the failure modes the codebase is known to produce today, pai
 
 1. **Start with `/health`, then `/status`, then the log.** Three commands cover the first decision branch in nearly every incident.
 2. **Restart is a legitimate first step.** The router cache (`CON-2`) and the lack of cache-bust APIs mean restart is the only currently supported recovery for several issues.
-3. **Search failures may be silent.** `POST /search` returns 200 with empty `results` on pipeline error (`CON-5`). Do not equate HTTP 200 with correctness.
+3. **Search pipeline errors surface as 5xx.** `POST /search` returns HTTP 500 on pipeline failure and HTTP 504 on timeout (`CON-5` resolved in A3). HTTP 200 with `results: []` means the pipeline succeeded but found no matching documents — it is not a failure signal.
 4. **Re-ingest is the rollback.** There is no transactional repair (`Architecture/160…md` principle 5).
 
 ## First-five-minutes checklist
@@ -83,7 +83,7 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 
 ### LanceDB lock contention or "table busy"
 
-**Symptoms**: `/search` may surface a LanceDB lock/IO condition as either a `503` (only from the meta-lookup branch, `routes_search.py:69-71`) **or** a silent `200 OK` with `results: []` (pipeline-path exceptions are swallowed at `routes_search.py:82-84`); or `archon-search start` fails to connect to the store; or two processes started against the same `db_path`. Check the log for LanceDB lock/IO messages — do not rely on the HTTP status alone.
+**Symptoms**: `/search` may surface a LanceDB lock/IO condition as either a `503` (from the meta-lookup branch) or an `HTTP 500` (pipeline-path exception); or `archon-search start` fails to connect to the store; or two processes started against the same `db_path`. Check the log for LanceDB lock/IO messages — do not rely on the HTTP status alone.
 
 **Triage**:
 
@@ -92,23 +92,27 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 3. If a stale lock file remains after an unclean shutdown, restart resolves it. There is no manual lock-clearing tool. #Unverified (LanceDB lock-file semantics are external to this repo).
 4. As a last resort, restore `search/` from backup (`OperatorGuide/03_backup_restore_disaster_recovery.md`).
 
-### Search returns empty (silent regression — `CON-5`)
+### Search returns HTTP 500/503/504 (pipeline failure — `CON-5` resolved in A3; 503 is the unchanged meta-lookup path)
 
-**Symptoms**: `POST /search` returns `200 OK` with `results: []` and `acl_filtered: false` for queries that previously returned hits. No 5xx, no client-visible error.
+**Symptoms**: `POST /search` returns HTTP 500, HTTP 503, or HTTP 504 instead of expected results; or `/telemetry/entries` shows entries with `endpoint="search"` and `status="internal_error"` or `status="timeout"`. Note: HTTP 503 from the meta-lookup branch produces no telemetry entry and no `event_type` log field — check the raw server log for the `"search: meta lookup failed"` ERROR message instead.
 
-This is the documented failure-downgrade behaviour: when the pipeline raises, `routes_search.py:82-84` logs a warning and returns an empty response. Treat empty results as suspect until verified.
+**Diagnosis**:
 
-**Triage**:
+- HTTP 500 indicates a pipeline stage failed (embedder, store query, or reranker). Look in server logs for a record at ERROR level with `event_type="search_pipeline_failure"` from logger `archon.search`. This record will contain the exception class name and full traceback.
+- HTTP 504 indicates the pipeline call timed out (>30 s). Look for a record at ERROR level with `event_type="search_timeout"` from logger `archon.search`.
+- The telemetry endpoint `/telemetry/entries` will show entries with `endpoint="search"`, `status="internal_error"` (for pipeline exceptions) or `status="timeout"` (for timeouts).
+- HTTP 503 from the meta-lookup branch (`"search: meta lookup failed"` in the log) means collection metadata was unavailable. No telemetry entry is emitted; triage as a store connectivity issue (see "LanceDB lock contention" above).
+- HTTP 200 with `results: []` means the pipeline succeeded but found no matching documents — it is not a failure signal.
 
-1. Confirm the collection is in the caller's namespace: `GET /collections`.
-2. `GET /status` — look for `status: "failed"` or non-zero `error_count` on that collection.
-3. `GET /indexing-state` — check `error` and `error_count` fields.
-4. Grep the log for `search failed for collection` and `meta lookup failed` — these are the exact log strings emitted on the two failure branches (`routes_search.py:70`, `:83`).
-5. If telemetry is enabled, `GET /telemetry/entries?collection=<name>&endpoint=search&status=error` enumerates the failure entries.
-6. Re-run with a known-good query. Persistent emptiness with no log signal indicates either an empty collection or a model-load issue.
-7. If the cause is router staleness after a recent reindex (`CON-2`), restart the service to repopulate `MultiCollectionRouter._cached_metadata` (`router.py:50, :69-70, :124`). This is a private one-shot in-process cache with no public bust API; restart is the only supported recovery. #Unverified (operator-symptom mapping to router staleness is inferential; cache mechanics are verified in source).
+**Action**:
 
-Roadmap fix `A3` (propagate 5xx on pipeline failure) will eliminate this class of silent failure.
+1. Filter telemetry: `GET /telemetry/entries` and look for `endpoint="search"` + `status="internal_error"` or `status="timeout"`.
+2. Check server logs for `event_type="search_pipeline_failure"` or `event_type="search_timeout"` to get exception details and traceback.
+3. Verify the store (LanceDB) is healthy and accessible.
+4. Verify the embedding model is loaded.
+5. Restart the server if pipeline stages are in a bad state.
+
+**Escalation**: if HTTP 500s or 504s persist after a restart, file an issue with the full log excerpt (including the `search_pipeline_failure` or `search_timeout` record), the `GET /status` snapshot, and `archon-search --version`.
 
 ### Telemetry log explosion
 

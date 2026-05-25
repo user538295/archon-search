@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,7 +23,8 @@ def _make_client(tmp_path: Path) -> TestClient:
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     job_store = JobStore(path=tmp_path / "jobs.json")
-    app = create_app(config, job_store)
+    with patch("archon_search.chunker.DocumentChunker.__init__", return_value=None):
+        app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
     pipeline = MagicMock()

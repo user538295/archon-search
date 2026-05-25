@@ -142,6 +142,18 @@ def _make_error_pipeline(exc: Exception) -> MagicMock:
     return pipeline
 
 
+def _make_search_error_pipeline(exc: Exception) -> MagicMock:
+    """Pipeline mock where get_collection_meta succeeds but search fails."""
+    from archon_search.collection_meta import CollectionMeta
+
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(
+        return_value=CollectionMeta(name="col", namespace="default")
+    )
+    pipeline.search = AsyncMock(side_effect=exc)
+    return pipeline
+
+
 # ---------------------------------------------------------------------------
 # E2E Test 1: key-set equality with DOCUMENTED_SCHEMA_FIELDS
 # ---------------------------------------------------------------------------
@@ -184,7 +196,7 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
             await err_mcp.tools["search_with_context"](query="q4", collection=None)
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    with TestClient(app, headers={"Authorization": f"Bearer {key}"}) as client:
+    with TestClient(app, headers={"Authorization": f"Bearer {key}"}, raise_server_exceptions=False) as client:
         writer = app.state.telemetry_writer
         assert writer is not None, "Writer must be set when telemetry is enabled"
 
@@ -208,6 +220,12 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
         with patch("archon_search.server.routes_route._build_router", return_value=timeout_router):
             resp = client.post("/route", json={"query": "q7"})
         assert resp.status_code == 504
+
+        # /search pipeline error → emits telemetry entry with endpoint="search", status="internal_error"
+        search_err_pipeline = _make_search_error_pipeline(RuntimeError("search error"))
+        app.state.pipeline = search_err_pipeline
+        resp = client.post("/search", json={"collection": "col", "query": "q_search_err"})
+        assert resp.status_code == 500
 
         # Oversized entry → triggers truncation; serialized form gains truncated=True key.
         # The writer's drain task calls _truncate_to_fit() which adds truncated=True.
@@ -238,6 +256,18 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
         f"Key mismatch.\n"
         f"Missing (not in any entry): {missing}\n"
         f"Extra   (undocumented keys): {extra}"
+    )
+
+    # Assert structural parity: /search error entry must have the same key set
+    # as /route error entries (all error entries use from_error(...) and share the same field structure).
+    route_error_entries = [e for e in entries if e.get("endpoint") == "route" and e.get("status") != "ok"]
+    search_error_entries = [e for e in entries if e.get("endpoint") == "search" and e.get("status") == "internal_error"]
+    assert len(search_error_entries) >= 1, "Expected at least one /search error entry"
+    assert len(route_error_entries) >= 1, "Expected at least one /route error entry"
+    assert set(search_error_entries[0].keys()) == set(route_error_entries[0].keys()), (
+        f"Key parity mismatch between /search and /route error entries.\n"
+        f"/search keys: {set(search_error_entries[0].keys())}\n"
+        f"/route keys: {set(route_error_entries[0].keys())}"
     )
 
 
@@ -302,6 +332,12 @@ def test_handler_does_not_leak_query_text_into_log(
                 "archon_search.server.routes_route._build_router", return_value=crash_router
             ):
                 resp = client.post("/route", json={"query": SENTINEL})
+            assert resp.status_code == 500
+
+            # /search pipeline error path — sentinel as query
+            search_err_pipeline = _make_search_error_pipeline(RuntimeError("search failed"))
+            app.state.pipeline = search_err_pipeline
+            resp = client.post("/search", json={"collection": "col", "query": SENTINEL})
             assert resp.status_code == 500
 
     # (a) Sentinel must not appear anywhere in any JSONL file

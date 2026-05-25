@@ -74,7 +74,7 @@ Integration-side documentation for engineers consuming `archon-search` from anot
 | [`DeveloperGuide/03_rest_client_python.md`](../DeveloperGuide/03_rest_client_python.md) | `httpx` examples for search, collections, jobs, route, health. |
 | [`DeveloperGuide/04_rest_client_typescript.md`](../DeveloperGuide/04_rest_client_typescript.md) | Same flows in TypeScript with hand-written types matching `schemas.py`. |
 | [`DeveloperGuide/05_mcp_integration.md`](../DeveloperGuide/05_mcp_integration.md) | The 9 MCP tools, Claude Code wiring, SDK usage. |
-| [`DeveloperGuide/06_error_handling.md`](../DeveloperGuide/06_error_handling.md) | REST status codes, MCP `McpErrorResponse`, retry guidance, `CON-5` quirk. |
+| [`DeveloperGuide/06_error_handling.md`](../DeveloperGuide/06_error_handling.md) | REST status codes, MCP `McpErrorResponse`, retry guidance, 500/504 on pipeline failure (`CON-5` resolved in A3). |
 | [`DeveloperGuide/07_versioning_and_breaking_changes.md`](../DeveloperGuide/07_versioning_and_breaking_changes.md) | CalVer scheme, `BREAKING.md` reading guide, client pinning. |
 
 ## Operator Guide
@@ -87,7 +87,7 @@ Production-grade operations documentation for SREs and sysadmins running `archon
 | [`OperatorGuide/02_monitoring_and_alerts.md`](../OperatorGuide/02_monitoring_and_alerts.md) | `/health`, `/status`, `/indexing-state`, `/telemetry/*` — what each reports, gaps, suggested alert rules. |
 | [`OperatorGuide/03_backup_restore_disaster_recovery.md`](../OperatorGuide/03_backup_restore_disaster_recovery.md) | Backing up `~/.archon-search/`, restore steps, disaster scenarios, no-export-API gap. |
 | [`OperatorGuide/04_capacity_and_performance.md`](../OperatorGuide/04_capacity_and_performance.md) | Single-process limits, ingest cost surfaces (`CON-4`, `C6`), router-cache caveats (`CON-2`), sizing heuristics. |
-| [`OperatorGuide/05_incident_runbook.md`](../OperatorGuide/05_incident_runbook.md) | Triage for stuck jobs, watcher churn, key loss, LanceDB locks, silent empty search (`CON-5`), telemetry log explosion. |
+| [`OperatorGuide/05_incident_runbook.md`](../OperatorGuide/05_incident_runbook.md) | Triage for stuck jobs, watcher churn, key loss, LanceDB locks, search pipeline failures / timeouts (`CON-5` resolved in A3), telemetry log explosion. |
 | [`OperatorGuide/06_upgrading.md`](../OperatorGuide/06_upgrading.md) | Reading CalVer + `BREAKING.md`, pre-upgrade backup, upgrade and rollback procedure; links to `MigrationGuide/` for detail. |
 
 ## Architecture Decision Records (ADRs)

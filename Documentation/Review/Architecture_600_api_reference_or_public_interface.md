@@ -12,7 +12,8 @@ The document is largely accurate and traces well to the source code. The REST/MC
 
 3. **Line 51 — `SearchResponse` schema**: Doc says `{results: [SearchResultSchema], acl_filtered: bool}`. Correct, but `SearchResultSchema` fields are not listed (`doc_id, chunk_id, text, score, source_path`); other entries in the table similarly cite a schema name without listing fields. Consistency issue, not a factual error.
 
-4. **Line 53 — "503 when meta lookup fails"**: Accurate (`routes_search.py` returns `503` on meta lookup exception). However, the doc does not mention that pipeline `search()` exceptions are swallowed and return `200` with `{results: [], acl_filtered: false}` (lines 82–84 of `routes_search.py`), which is a surprising behaviour worth documenting.
+4. **Line 53 — "503 when meta lookup fails"**: Accurate (`routes_search.py` returns `503` on meta lookup exception). Pre-A3 this review noted that pipeline `search()` exceptions were swallowed and returned `200` with `{results: [], acl_filtered: false}` — that behavior was fixed in A3 (CON-5). Post-A3 the doc's status-code table (which lists 500 and 504 for pipeline failures) correctly documents the current behavior; this inaccuracy is resolved.
+   - **Follow-up bug missed at original review** (caught in the post-A3 sweep): the 500 body shape was initially documented as a JSON envelope, but the route bare-re-raises the pipeline exception and Starlette's `ServerErrorMiddleware` produces a **plain-text** body (`Internal Server Error`, `Content-Type: text/plain`), not a JSON envelope. The doc has since been corrected to reflect this; callers must not `.json()`-parse the 500 body.
 
 5. **Line 59 — `RouteRequest` fields `{query, slots?}`**: Correct. `slots: int | None = None` confirmed.
 

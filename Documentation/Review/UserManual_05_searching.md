@@ -2,7 +2,7 @@
 
 ## Summary
 
-The document is largely accurate against `routes_search.py`, `routes_route.py`, `mcp.py`, and `pipeline.py`. Verified: hybrid pipeline, `SearchRequest` shape, `SearchResponse` shape, status codes (200/404/503 plus degraded-empty-200), `/route` request/response, 400 validation and 504 timeout (30s), MCP tool count (9) and signatures, `default_collection` fallback, `/health` auth exemption, port 8765, streamable-HTTP transport at `/mcp`. One minor inconsistency: `BREAKING.md` (lines 21–22) labels the setting `[search] top_k_return`, but the implementation (config.py:163, archon-search.toml.example line 20) places it under `[database]`. The doc agrees with the implementation (`[database].top_k_return`), so the doc is correct and `BREAKING.md` is the file that drifted — not an inaccuracy in this doc.
+The document is largely accurate against `routes_search.py`, `routes_route.py`, `mcp.py`, and `pipeline.py`. Verified: hybrid pipeline, `SearchRequest` shape, `SearchResponse` shape, status codes (200/404/503/500/504), `/route` request/response, 400 validation and 504 timeout (30s), MCP tool count (9) and signatures, `default_collection` fallback, `/health` auth exemption, port 8765, streamable-HTTP transport at `/mcp`. One minor inconsistency: `BREAKING.md` (lines 21–22) labels the setting `[search] top_k_return`, but the implementation (config.py:163, archon-search.toml.example line 20) places it under `[database]`. The doc agrees with the implementation (`[database].top_k_return`), so the doc is correct and `BREAKING.md` is the file that drifted — not an inaccuracy in this doc. Note: an earlier version of this review cited "degraded-empty-200" as a valid status-code path; that behavior was removed in A3 (CON-5) — pipeline exceptions now return 500, timeouts return 504.
 
 ## Inaccuracies (numbered)
 
@@ -18,7 +18,7 @@ None found that are attributable to this doc. All concrete claims verify against
 4. "REST and MCP are equivalent surfaces. The MCP tools wrap the same pipeline calls" — `mcp.py:46` calls `pipeline.search`, same instance used by REST.
 5. `SearchRequest` fields, defaults, `top_k` `1..100` default `5`, validators — match `routes_search.py:17-36`.
 6. `SearchResponse` fields (`results`, `acl_filtered`) and `SearchResultSchema` fields (`doc_id`, `chunk_id`, `text`, `score`, `source_path`) — match `routes_search.py:39-59`.
-7. Status codes: `200` success; `404` "collection not found"; `503` "service unavailable" on meta lookup failure; pipeline exception degrades to empty `results` with 200 — `routes_search.py:69-84`.
+7. Status codes: `200` success; `404` "collection not found"; `503` "service unavailable" on meta lookup failure; `500` on pipeline stage exception (embedder, store, reranker — A3/CON-5); `504` on pipeline timeout (~30 s — A3/CON-5) — `routes_search.py`. Note: the pre-A3 "pipeline exception degrades to empty results with 200" claim verified against the old `routes_search.py:82-84` block; that path was removed in A3.
 8. `/route` request shape `{query, slots?}`, `slots` optional and `>= 1` when set, overrides `routing_shortlist_size` — `routes_route.py:23-25, 84-87`.
 9. `/route` response `pre_context, pinned_names, routable_names, decomposer_invoked` — `routes_route.py:28-32, 102-107`.
 10. `/route` 400 validation messages "query must not be empty" / "slots must be >= 1"; 504 with 30s hard timeout — `routes_route.py:79-82, 96` (`timeout=30.0`), `121` (`raise HTTPException(status_code=504, ...)`).

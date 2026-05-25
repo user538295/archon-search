@@ -29,7 +29,7 @@
 
 `GET /health` returns `{"status":"running","version":"<vcs version>"}` (`routes_health.py:18-20`). It performs no internal checks. In particular it will return 200 even when:
 
-- LanceDB is unreachable (search will then 503 via `routes_search.py:71`).
+- LanceDB is unreachable (search will then 503 via `routes_search.py:86-90`).
 - The embedder or reranker model has not been loaded yet.
 - The watcher loop has died.
 - The job-store file is corrupt.
@@ -56,18 +56,20 @@ These are starting thresholds for a single-host deployment. Tune to local noise;
 | Critical | `GET /status` 5xx | 3 consecutive failures | Auth or storage broken; user search broken too. |
 | Warning | `error_count` increases on any collection in `/status` | Δ ≥ 1 per 10 minutes | Ingest path is repeatedly failing for that source. |
 | Warning | `status == "in_progress"` with `processed_files` unchanged | Stuck > 30 min | Likely a hung ingest job; see `OperatorGuide/05_incident_runbook.md`. |
-| Warning | `/telemetry/stats` `success_rate < 0.95` over last 24h | When telemetry is enabled | Pipeline regression; see `CON-5` re. silent empty results. #Unverified (tech-debt ID not re-verified in this pass) |
+| Warning | `/telemetry/stats` `success_rate < 0.95` over last 24h | When telemetry is enabled | Pipeline regression — post-A3 these surface as HTTP 500/504 with `status="internal_error"` or `status="timeout"` telemetry entries; see "Search pipeline failures surface as 5xx" below. |
 | Warning | `/telemetry/stats` `latency_ms.p95` regresses ≥ 50% vs. 7d baseline | Rolling window | Slow path; correlate with model load, ingest activity, disk pressure. |
 | Warning | `skipped_lines > 0` in `/telemetry/stats` | Any non-zero | Schema-invalid JSONL lines; investigate the day's file under `~/.archon-search/search-logs/`. |
 | Info | Telemetry log dir growth > 100 MB/day | Per disk-monitor | Adjust `[telemetry].retention_days` (default 30). |
 
-### Caveat: silent empty results
+### Search pipeline failures surface as 5xx (CON-5 resolved in A3)
 
-`POST /search` returns `200 OK` with `results: []` and `acl_filtered: false` when the pipeline raises (`routes_search.py:82-84`). Alerting on HTTP status alone will miss this regression. Mitigations:
+Pre-A3, `POST /search` returned `200 OK` with `results: []` and `acl_filtered: false` when the pipeline raised — alerting on HTTP status alone would miss the regression. **A3 resolved this**: pipeline stage exceptions now return HTTP 500 (bare re-raise; plain-text `Internal Server Error` body — not JSON), pipeline timeouts return HTTP 504 with `{"detail": "Search timed out"}`. Both paths emit a telemetry entry with `endpoint="search"`, `status="internal_error"` or `status="timeout"` accordingly, and an ERROR-level log record on `archon.search` with `event_type="search_pipeline_failure"` or `event_type="search_timeout"`. Alerts can now key on 5xx rate plus the telemetry `status` field.
 
-- Compare `/telemetry/stats` `success_rate` and result-count distributions over time.
-- Spot-check known-good queries from a synthetic monitor.
-- Track `CON-5` in `Architecture/530_technical_debt_refactoring_roadmap.md` and `A3` in `Backlog/03_world_class_roadmap.md` — both target this. #Unverified (roadmap/tech-debt IDs not re-verified in this pass)
+Notes:
+- The 503 meta-lookup path (`routes_search.py:86-90`) is **unchanged** by A3: it returns `{"detail": "service unavailable"}` and emits **no** telemetry entry (only a logger.error message). Alerts that count "search failures" via `/telemetry/entries` will not see meta-lookup failures — pair with a 503-rate alert sourced from access logs or a reverse proxy.
+- `HTTP 200` with `results: []` now unambiguously means the pipeline ran successfully and found no matching documents; it is **not** a failure signal.
+
+See `BREAKING.md` `[next release]` — `POST /search` pipeline-exception behavior, and the resolved CON-5 entry in `Architecture/530_technical_debt_refactoring_roadmap.md`.
 
 ## Scraping recipes
 

@@ -1,6 +1,6 @@
 === Archon Search Eval Report ===
-generated_at: 2026-05-20T19:30:16.043134+00:00
-corpus_root:  /private/tmp/archon-search-extract-v2/tests/eval
+generated_at: 2026-05-25T04:20:01.429298+00:00
+corpus_root:  /Users/manczg/Documents/development/archon-search/tests/eval
 queries:      27 (routing_disabled=0, routing_bypassed=0)
 documents:    50
 
@@ -15,7 +15,7 @@ Quality metrics:
   routing_accuracy   = 0.9259
 
 Latency (ms):
-  latency_p50_ms     = 8.51
-  latency_p95_ms     = 10.60
+  latency_p50_ms     = 8.59
+  latency_p95_ms     = 10.61
 
 Note: latency was measured using deterministic eval backends (EvalEmbedderBackend, EvalRerankerBackend); values are not comparable to production runtime latency.

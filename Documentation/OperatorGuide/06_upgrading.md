@@ -70,7 +70,7 @@ Verification:
 
 - `/health` reports the new version string.
 - `/status` lists the expected collections without new `error_count` entries.
-- A known-good search query returns hits (`/search` swallows pipeline failures into empty results — see `CON-5`).
+- A known-good search query returns hits (pipeline failures now surface as HTTP 500/504, not silent empty results — `CON-5` resolved in A3).
 - If telemetry is on, `/telemetry/stats` returns numbers, not `{"enabled": false}`.
 
 ## Configuration drift
