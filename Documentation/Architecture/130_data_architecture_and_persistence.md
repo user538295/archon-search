@@ -28,6 +28,7 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
 | `search-logs/` | `telemetry/writer.py` | `YYYY-MM-DD.jsonl` per UTC day | only if `[telemetry].enabled = true` |
 | `logs/archon-search.log` | server | server logs | `[logging].log_file` |
 | `archon-search-jobs.json` | `jobs/store.py` | job state for long-running ingest/reindex | `JOBS_FILE` constant in `jobs/model.py` |
+| `.indexing_state.json` | `progress.py` (`IndexingStateStore`) | per-collection indexing progress/status | atomic-rename writes; RMW serialized by an internal `RLock` (see "Indexing state") |
 
 Override paths:
 - `ARCHON_SEARCH_KEY_FILE` overrides `.search.env` location.
@@ -181,6 +182,10 @@ The persisted schema is the closed field set declared in `telemetry/entry.py::DO
 ## Job state
 
 Long-running operations (ingest, reindex, delete) are tracked in `~/.archon-search/archon-search-jobs.json` (constant `JOBS_FILE` in `jobs/model.py`). Each job carries `JobStatus ∈ {PENDING, RUNNING, DONE, FAILED, CANCELLED, CANCELLING}` plus a `result` dict or an `error` string (see `archon_search/types.py::IngestJob`). The file is rewritten on every transition; see source: `archon_search/jobs/store.py` for the exact concurrency model.
+
+## Indexing state
+
+Per-collection indexing progress (`status`, file counters, timestamps, `error_count`, and the path/mtime/hash bookkeeping) is persisted in `~/.archon-search/.indexing_state.json` by `IndexingStateStore` (`progress.py`). Each mutation writes the whole file via a tmp-file + `os.replace` atomic rename. The store is **thread-safe**: `write`, `update_collection`, `remove_collection`, `set_trigger`, and `reset_in_progress` are serialized by an internal `threading.RLock`, so concurrent cross-collection writers cannot lose updates (A6 closed `CON-3`; see `Architecture/530_technical_debt_refactoring_roadmap.md`). `read()` is an unlocked snapshot; read-modify-write must go through the locked composite methods. On-disk **durability** under power loss (fsync of the rename) is still open — tracked under A7.
 
 ## Backup and recovery
 

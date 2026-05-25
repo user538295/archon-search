@@ -62,7 +62,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 
 | Module | Purpose | Key public symbols |
 |---|---|---|
-| `archon_search/router.py` | Fetch collection metadata over JSON-RPC, score each centroid against the query embedding, apply a confidence gate, build a three-tier shortlist for the decomposer. `_score_collections` is the shared scoring helper (extracted for A4); `rank_with_scores` returns every supplied collection paired with its centroid similarity, bypassing the confidence-threshold gate — used exclusively by `/explain`. | `MultiCollectionRouter`, `MultiCollectionRouter.rank`, `MultiCollectionRouter.rank_with_scores`, `MultiCollectionRouter._score_collections` |
+| `archon_search/router.py` | Fetch collection metadata over JSON-RPC, score each centroid against the query embedding, apply a confidence gate, build a three-tier shortlist for the decomposer. `_score_collections` is the shared scoring helper (extracted for A4); `rank_with_scores` returns every supplied collection paired with its centroid similarity, bypassing the confidence-threshold gate — used exclusively by `/explain`. Accepts `initial_metadata` for constructor-time injection; exposes `invalidate()` to clear the cached metadata for long-lived router instances. | `MultiCollectionRouter`, `MultiCollectionRouter.rank`, `MultiCollectionRouter.rank_with_scores`, `MultiCollectionRouter._score_collections`, `MultiCollectionRouter.invalidate` |
 
 ## Metadata
 
@@ -152,7 +152,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/constants.py` | Default namespace and namespace validation. | `DEFAULT_NAMESPACE`, `_validate_namespace` |
 | `archon_search/_types.py` | Internal dataclass spine: `ChunkRecord`, `SearchResult`, `DocumentInfo`, `CollectionInfo`, `IngestResult`. | (internal) |
 | `archon_search/types.py` | Public job/collection types: `JobStatus`, `IngestJob`, `ReindexJob`, `DeleteJob`, `Query`, `RouteResponse`, `Collection`, `CollectionDetail`, `Chunk`. | (public surface) |
-| `archon_search/progress.py` | Indexing progress state: `IndexingStatus`, `CollectionProgress`, `IndexingState`, `IndexingStateStore`, ETA helpers. | `IndexingStatus`, `CollectionProgress`, `IndexingState`, `IndexingStateStore`, `compute_eta_seconds` |
+| `archon_search/progress.py` | Indexing progress state: `IndexingStatus`, `CollectionProgress`, `IndexingState`, `IndexingStateStore`, ETA helpers. `IndexingStateStore` is thread-safe — all mutating methods (`write`, `update_collection`, `remove_collection`, `set_trigger`, `reset_in_progress`) are serialized by an internal `threading.RLock`; `read()` is an unlocked snapshot. | `IndexingStatus`, `CollectionProgress`, `IndexingState`, `IndexingStateStore` (incl. `reset_in_progress`), `compute_eta_seconds` |
 | `archon_search/key_manager.py` | Resolve the API key from env (`ARCHON_SEARCH_API_KEY`), file (`ARCHON_SEARCH_KEY_FILE` or `~/.archon-search/.search.env`), or generate one (chmod 600). | `load_or_generate_key` |
 | `archon_search/watcher.py` | Watchdog-driven `CollectionWatcher` + `WatcherManager` with a debounced handler. | `CollectionWatcher`, `WatcherManager` |
 | `archon_search/sync.py` | `SearchCollectionSync`: full reconcile between on-disk corpora and the index; manifest-based collection naming. | `SearchCollectionSync`, `SyncResult`, `path_to_collection_name` |

@@ -12,7 +12,7 @@
 
 1. **No production SLA.** Latency p50/p95 from telemetry and `tests/eval/` are regression guards (`EVL-1`, `Architecture/160…md`). Plan capacity in absolute terms, not against an SLO.
 2. **Ingest dominates write cost; the search path is bounded by reranker + FTS rebuild.** Batch ingest (`SearchPipeline.ingest_directory`, `pipeline.py:258-289`) computes the centroid from vectors accumulated in-memory during the batch; single-file `ingest_file` does not touch the centroid. The full-collection re-read of vectors (`recompute_collection_meta`, `pipeline.py:368-401`) only fires from sync reconciliation, reindex, and the eval runner (`CON-4`). The FTS index is rebuilt once per batch (`pipeline.py:253-255`) or per single-file ingest (`C6`).
-3. **Router cache is read-once.** `MultiCollectionRouter._cached_metadata` is populated once and never invalidated until the process restarts (`CON-2`). Capacity planning must assume long-lived processes will drift if collections evolve.
+3. **Router cache is per-request in the FastAPI runtime.** `POST /route` builds a fresh `MultiCollectionRouter` per request (`routes_route._build_router`), so its `_cached_metadata` never outlives a single call — the runtime does not drift as collections evolve. `MultiCollectionRouter` now also exposes `invalidate()` and an `initial_metadata` ctor param for long-lived router consumers (`CON-2`, addressed by A6). Capacity planning need not assume centroid drift on the server path.
 4. **GPU helps embedding throughput, not LanceDB I/O.** ONNX providers are written to config at install time by `install.py::configure_providers` (`install.py:135-165`); `platform/runtime.py` only detects GPU type.
 
 ## Single-process limits
@@ -58,13 +58,13 @@ Concrete chunk-count thresholds for "imperceptible", "user-visible", and "practi
 
 `archon_search/watcher.py` debounces filesystem events and feeds them into the sync layer. There is no event-rate limiter — pathological churn on a watched directory will queue ingest work indefinitely. If you watch a directory that an external tool rewrites frequently (e.g. a Jupyter notebook on auto-save), expect proportional ingest load.
 
-### Router cache caveats (`CON-2`)
+### Router cache caveats (`CON-2`, addressed by A6)
 
-`MultiCollectionRouter._cached_metadata` is populated on first use and never invalidated. Implications:
+`MultiCollectionRouter._cached_metadata` is populated on first use within a single router instance. Implications:
 
-- After ingest, reindex, or description regeneration, the router routes against **stale centroids** until the process restarts.
-- There is no cache-bust API. A long-lived server whose collections evolve will degrade route quality silently.
-- Mitigation today: restart the service after large ingest batches if route quality matters. Roadmap fix is `A6`.
+- The FastAPI `/route` path builds a **fresh router per request** (`routes_route._build_router`), so the documented "stale centroids until restart" symptom does **not** occur on the server path — each request re-fetches metadata. A regression test pins this per-request lifecycle.
+- For **non-FastAPI** router consumers, `MultiCollectionRouter` now exposes `invalidate()` to clear the cache and an `initial_metadata` ctor param for constructor-time injection. The eval runner is a constructor-injection consumer: `_run_router_for_query` (`eval/runner.py`) builds a fresh router per query and passes `initial_metadata=`, so its cache is seeded up front rather than re-fetched. A residual in-flight-fetch TOCTOU is documented on `invalidate()`.
+- A future migration to a shared, long-lived router (the actual long-lived case) would need to call `invalidate()` after collection mutations or the stale-centroid symptom reappears; that migration is out of scope for A6.
 
 ## Sizing heuristics
 

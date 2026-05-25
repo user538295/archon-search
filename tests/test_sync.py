@@ -2734,6 +2734,236 @@ class TestResetStalePreservesPhase4Fields:
         assert cp.indexed_chunk_size == 512
 
 
+class TestResetStaleInProgressDelegation:
+    """Task 1.3 — _reset_stale_in_progress delegates to IndexingStateStore.reset_in_progress."""
+
+    def test_reset_stale_in_progress_delegates_to_store(self, tmp_path, monkeypatch):
+        """Spies reset_in_progress: called exactly once; captured predicate matches
+        IN_PROGRESS (True) and not DONE (False)."""
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
+        from archon_search.sync import SearchCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        calls: list = []
+
+        def spy_reset_in_progress(self, predicate):  # noqa: ANN001
+            calls.append(predicate)
+
+        monkeypatch.setattr(
+            IndexingStateStore, "reset_in_progress", spy_reset_in_progress
+        )
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+        syncer._reset_stale_in_progress()
+
+        assert len(calls) == 1, "reset_in_progress must be called exactly once"
+        predicate = calls[0]
+        assert predicate(CollectionProgress(status=IndexingStatus.IN_PROGRESS)) is True
+        assert predicate(CollectionProgress(status=IndexingStatus.DONE)) is False
+
+    def test_reset_stale_in_progress_no_rmw_in_sync(self):
+        """Source-level guard: the method body must contain no read/write RMW or
+        .collections iteration left over from the old implementation."""
+        import inspect
+
+        from archon_search.sync import SearchCollectionSync
+
+        source = inspect.getsource(SearchCollectionSync._reset_stale_in_progress)
+        # Positive anchor: the delegation must exist. This is the robust proof
+        # that the method funnels through the store's reset_in_progress API.
+        assert "reset_in_progress" in source
+        # Best-effort negative guards: these exact-string checks are
+        # alias-bypassable (e.g. via a local alias of self._state_store), so
+        # treat them as a tripwire only. The ".collections"-absence check below
+        # is the robust signal that the old read-modify-write loop is gone.
+        assert "self._state_store.read()" not in source
+        assert "self._state_store.write(" not in source
+        assert ".collections" not in source
+
+    def test_reset_stale_in_progress_noop_when_store_is_none(self, tmp_path, caplog):
+        """With state_store=None, the early guard returns before the try/except,
+        so NO warning is logged.
+
+        This discriminates the guard path from the except-swallow path: a buggy
+        impl that dropped the ``if self._state_store is None: return`` guard would
+        do ``None.reset_in_progress(...)`` → AttributeError → caught by the broad
+        ``except Exception`` → "Failed to reset stale IN_PROGRESS states" warning.
+        Asserting the warning is ABSENT catches that regression (a bare no-raise
+        assertion would pass vacuously).
+        """
+        from archon_search.sync import SearchCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        syncer = SearchCollectionSync(pipeline, state_store=None)
+
+        with caplog.at_level(logging.WARNING, logger="archon"):
+            # Must not raise.
+            syncer._reset_stale_in_progress()
+
+        # The guard returns before the try/except — no warning may be logged.
+        assert not any(
+            "Failed to reset stale IN_PROGRESS states" in r.message
+            for r in caplog.records
+        ), "guard path must not hit the except-swallow warning"
+
+    def test_reset_stale_in_progress_noop_when_nothing_in_progress(self, tmp_path):
+        """Real store seeded with ONLY non-IN_PROGRESS entries: the delegate
+        short-circuits (no write) and leaves every entry untouched.
+
+        This pins the behavioral difference from the old always-write code: when
+        no entry matches the predicate, reset_in_progress returns before writing.
+        """
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
+        from archon_search.sync import SearchCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        state_store.update_collection("done_col", CollectionProgress(
+            status=IndexingStatus.DONE,
+            total_files=5,
+            processed_files=5,
+            processed_paths=["/b/file.md"],
+            indexed_embedding_model="bge",
+            indexed_chunk_size=256,
+        ))
+        state_store.update_collection("pending_col", CollectionProgress(
+            status=IndexingStatus.PENDING,
+            total_files=3,
+            processed_files=0,
+            processed_paths=["/c/file.md"],
+        ))
+
+        # Spy on write to prove the no-match path performs no write at all.
+        writes: list = []
+        orig_write = IndexingStateStore.write
+
+        def spy_write(self, state):  # noqa: ANN001
+            writes.append(state)
+            return orig_write(self, state)
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+        with patch.object(IndexingStateStore, "write", spy_write):
+            # Must not raise.
+            syncer._reset_stale_in_progress()
+
+        assert writes == [], "no-match path must not write to the store"
+
+        state = state_store.read()
+        assert state is not None
+
+        # Entries are unchanged (status + key fields).
+        done = state.collections["done_col"]
+        assert done.status == IndexingStatus.DONE
+        assert done.total_files == 5
+        assert done.processed_files == 5
+
+        pending = state.collections["pending_col"]
+        assert pending.status == IndexingStatus.PENDING
+        assert pending.total_files == 3
+        assert pending.processed_files == 0
+
+    def test_reset_stale_in_progress_swallows_store_error(self, tmp_path, monkeypatch, caplog):
+        """If reset_in_progress raises, the broad except swallows it and logs a
+        warning — no exception propagates.
+
+        This discriminates the resilience contract: if the except clause were
+        removed (or did not log), the RuntimeError would propagate / no warning
+        would appear, failing this test.
+        """
+        from archon_search.progress import IndexingStateStore
+        from archon_search.sync import SearchCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        def boom(self, predicate):  # noqa: ANN001
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(IndexingStateStore, "reset_in_progress", boom)
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+
+        with caplog.at_level(logging.WARNING, logger="archon"):
+            # (a) No exception propagates — the broad except swallows it.
+            syncer._reset_stale_in_progress()
+
+        # (b) The warning IS logged.
+        assert any(
+            "Failed to reset stale IN_PROGRESS states" in r.message
+            for r in caplog.records
+        ), "the except path must log the failure warning"
+
+    def test_reset_stale_in_progress_integration(self, tmp_path):
+        """Real store, multi-status filtering: ONLY IN_PROGRESS entries become
+        PENDING; DONE / PENDING / FAILED entries are left untouched.
+
+        (Field-preservation across the reset is owned by
+        TestResetStalePreservesPhase4Fields and tests/test_progress.py; this test
+        focuses on the status-filter behavior.)
+        """
+        from archon_search.progress import (
+            CollectionProgress,
+            IndexingStateStore,
+            IndexingStatus,
+        )
+        from archon_search.sync import SearchCollectionSync
+
+        pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        state_store.update_collection("stale", CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=30,
+            processed_files=12,
+            processed_paths=["/a/file.md"],
+            file_mtimes={"a": 1.0},
+        ))
+        state_store.update_collection("finished", CollectionProgress(
+            status=IndexingStatus.DONE,
+            total_files=5,
+            processed_files=5,
+        ))
+        state_store.update_collection("queued", CollectionProgress(
+            status=IndexingStatus.PENDING,
+            total_files=8,
+            processed_files=0,
+        ))
+        state_store.update_collection("broken", CollectionProgress(
+            status=IndexingStatus.FAILED,
+            total_files=2,
+            processed_files=1,
+        ))
+
+        syncer = SearchCollectionSync(pipeline, state_store=state_store)
+        syncer._reset_stale_in_progress()
+
+        state = state_store.read()
+        assert state is not None
+
+        # Only the IN_PROGRESS entry is reset to PENDING.
+        stale = state.collections["stale"]
+        assert stale.status == IndexingStatus.PENDING
+        # Light sanity check that the reset carried run state forward.
+        assert stale.total_files == 30
+        assert stale.file_mtimes == {"a": 1.0}
+
+        # All other statuses are untouched.
+        assert state.collections["finished"].status == IndexingStatus.DONE
+        assert state.collections["queued"].status == IndexingStatus.PENDING
+        assert state.collections["broken"].status == IndexingStatus.FAILED
+
+
 # ---------------------------------------------------------------------------
 # TestTask45# ---------------------------------------------------------------------------
 

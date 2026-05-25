@@ -29,6 +29,7 @@ Done (visible in the current repo):
 - Opt-in local telemetry with structural no-raw-query guarantee; `[telemetry].export_enabled = true` is coerced to `false` with a warning at config load (`archon_search/telemetry/`, `archon_search/config.py`).
 - Deterministic evaluation harness with committed thresholds and baseline (`tests/eval/`).
 - Per-OS service install (`archon_search/platform/`, `cli/install_cmd.py`).
+- Concurrency hardening of the indexing-state store and router cache (A6): `IndexingStateStore` is thread-safe via an internal `RLock` (closes `CON-3` — no lost updates to `.indexing_state.json` under concurrent multi-collection writes), and `MultiCollectionRouter` gained `invalidate()` / `initial_metadata` with the FastAPI per-request router lifecycle pinned by a regression test (addresses `CON-2`). See `Architecture/530_technical_debt_refactoring_roadmap.md`.
 
 ## Priority 0 — Product Boundary (largely landed; remaining hardening)
 
@@ -92,6 +93,7 @@ These are documented elsewhere and noted here so they are not lost:
 
 - **Hashed-doc-id mode for telemetry.** Today `result_doc_ids` are derived from filesystem paths and may leak username / directory structure when telemetry is enabled. Operators accept this when they opt in; a hashed mode is planned. See README "Path-derived `doc_id` risk".
 - **External telemetry transmission.** Reserved for a future release; `[telemetry].export_enabled = true` is currently coerced to `false` with a warning at config load (`archon_search/config.py`). See `Architecture/000_introduction_and_guiding_principles.md` "Explicit Non-Goals".
+- **State-file durability under power loss.** A6 closed the in-process consistency race on `.indexing_state.json` (`CON-3`), but the atomic-rename write is not yet `fsync`-backed, so a power loss between rename and disk flush can still corrupt or lose the latest write. Closing this durability gap is the next step (A7 / fsync).
 
 ## Related Documents
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -999,3 +1001,681 @@ class TestIndexingStateStoreEdgeCases:
         result = store.read()
         assert result is not None
         assert result.collections["col"].file_mtimes == {}
+
+
+class _ThreadSafetyHarness:
+    """Shared concurrency test scaffolding (helpers + tuning constants).
+
+    Deliberately NOT prefixed with ``Test`` so pytest does not collect it as a
+    test class. Both ``TestIndexingStateStoreThreadSafety`` and
+    ``TestResetInProgressThreadSafety`` inherit from this mixin to reuse the
+    ``_slow_read_patch`` / ``_atomic_write_patch`` helpers and the load-bearing
+    timing/sizing constants — without either class re-running the other's tests.
+    """
+
+    # --- Load-bearing timing/sizing constants (named so intent is explicit) ---
+    # Delay injected after each read() to widen the no-lock RMW window enough that
+    # all racing threads read stale state before any writes back.
+    _RMW_DELAY = 0.05
+    # Small safety margin to let a peer thread settle onto the lock queue once it
+    # has signalled it is about to acquire (ordering itself is forced by Events).
+    _LOCK_SETTLE = 0.02
+    # Number of concurrent writers in the multi-writer races.
+    _N_WRITERS = 8
+    # Thread.join safety net so a hung worker fails fast instead of blocking the
+    # suite forever. Generous relative to the sub-second work each worker does.
+    _JOIN_TIMEOUT = 10.0
+
+    @classmethod
+    def _slow_read_patch(cls, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Widen every composite's read-modify-write window to force interleaving."""
+        original_read = IndexingStateStore.read
+
+        def slow_read(self: IndexingStateStore) -> IndexingState | None:
+            result = original_read(self)
+            time.sleep(cls._RMW_DELAY)  # AFTER read returns, BEFORE the modify+write
+            return result
+
+        monkeypatch.setattr(IndexingStateStore, "read", slow_read)
+
+    @classmethod
+    def _atomic_write_patch(cls, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Serialize only the PHYSICAL write (tmp write + os.replace) so the final
+        on-disk file is always valid JSON — never a torn shared ``.json.tmp``.
+
+        This isolates the LOGICAL lost-update (stale RMW snapshot clobbered by the
+        last writer) from the incidental tmp tear, so the lost-update tests go red
+        on their intended lost-update assertion rather than on a torn file that
+        makes ``read()`` return None. The composite RMW window stays unguarded —
+        only the inner write() body is atomic via this test-local lock.
+        """
+        original_write = IndexingStateStore.write
+        write_lock = threading.Lock()
+
+        def atomic_write(self: IndexingStateStore, state: IndexingState) -> None:
+            with write_lock:
+                original_write(self, state)
+
+        monkeypatch.setattr(IndexingStateStore, "write", atomic_write)
+
+
+class TestIndexingStateStoreThreadSafety(_ThreadSafetyHarness):
+    """Concurrency regression tests for the internal RLock (CON-3).
+
+    The lost-update bug lives in the read-modify-write (RMW) window of each
+    composite method: reader A reads, reader B reads, A writes, B writes over A's
+    update. The internal RLock closes that window by making the whole RMW atomic.
+
+    To make the race manifest WITHOUT the lock (the "red" phase that proves these
+    tests can detect a regression), we widen the no-lock RMW window by sleeping a
+    few milliseconds immediately after each ``read()`` returns. Without the lock,
+    that sleep guarantees every thread reads stale state before any thread writes,
+    so the last writer clobbers the others (lost update). WITH the lock the sleep
+    runs while the lock is held, so it cannot interleave two RMW cycles — only one
+    thread is ever inside the critical section.
+
+    Shared rationale for the lost-update tests below
+    (``remove_collection`` / ``set_trigger`` races): the guarded invariant is the
+    lost-update window of the RMW, NOT the incidental shared-``.json.tmp`` tear.
+    To keep the tear from pre-empting the intended assertion, these tests also
+    make the inner ``write()`` body atomic with a test-local lock
+    (``_atomic_write_patch``) — the final file is therefore always valid JSON, so
+    they read back via ``store.read()`` and go red on the lost update itself, not
+    on a torn file that would make ``read()`` return None. We do NOT place a
+    ``Barrier`` inside the critical section: under a correct lock only one thread
+    can be inside it, so a barrier there would deadlock by construction. Where
+    ordering must be forced deterministically (without timing luck), we signal an
+    Event BEFORE acquiring the lock so a peer can wait on it without deadlock.
+
+    The shared helpers (``_slow_read_patch`` / ``_atomic_write_patch``) and tuning
+    constants live on ``_ThreadSafetyHarness`` so they can be reused without
+    re-running these tests under a subclass.
+    """
+
+    def test_concurrent_update_collection_no_lost_writes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store = IndexingStateStore(tmp_path)
+        n = self._N_WRITERS
+        self._slow_read_patch(monkeypatch)
+        self._atomic_write_patch(monkeypatch)  # final file always valid JSON
+        start = threading.Barrier(n)  # start all threads simultaneously
+
+        def worker(idx: int) -> None:
+            start.wait()
+            store.update_collection(
+                f"col_{idx}", CollectionProgress(status=IndexingStatus.DONE)
+            )
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=self._JOIN_TIMEOUT)
+            assert not t.is_alive()
+
+        result = store.read()
+        assert result is not None
+        assert len(result.collections) == n
+        for i in range(n):
+            assert f"col_{i}" in result.collections
+
+    def test_concurrent_writers_same_key_serialize_to_consistent_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Two writers update the SAME key with self-consistent records (all three
+        # int fields carry the same writer id). The lock must serialize their RMW
+        # cycles so the survivor is a clean, internally consistent record from ONE
+        # writer — never a MIXED Frankenstein (total from one, error_count from
+        # another) and never TORN (invalid JSON). We force the ordering
+        # deterministically with the signal-BEFORE-lock pattern (no wall-clock
+        # timeout, no deadlock risk): writer 2 sets ``w2_entered`` right before it
+        # calls update_collection (before it can touch the lock), and writer 1 —
+        # already inside its os.replace, holding the lock — waits on that signal.
+        # WITH the lock the os.replace calls serialize (enter/exit/enter/exit) and
+        # the survivor is consistent; WITHOUT the lock writer 2's RMW overlaps
+        # writer 1's (enter, enter, ...) and the records interleave.
+        store = IndexingStateStore(tmp_path)
+        order: list[str] = []
+        order_lock = threading.Lock()
+        original_replace = os.replace
+        w1_in_replace = threading.Event()
+        w2_entered = threading.Event()
+
+        def wrapped_replace(src: object, dst: object) -> None:
+            with order_lock:
+                order.append("enter")
+            # Writer 1 reaches here first (it started + acquired the lock first).
+            # Hold its replace open until writer 2 has entered update_collection
+            # and queued on the lock, so the ordering is forced by the lock.
+            if not w1_in_replace.is_set():
+                w1_in_replace.set()
+                w2_entered.wait(timeout=5)
+                time.sleep(self._LOCK_SETTLE)
+            original_replace(src, dst)  # type: ignore[arg-type]
+            with order_lock:
+                order.append("exit")
+
+        monkeypatch.setattr(os, "replace", wrapped_replace)
+
+        def writer1() -> None:
+            store.update_collection(
+                "col",
+                CollectionProgress(
+                    status=IndexingStatus.DONE,
+                    total_files=1,
+                    processed_files=1,
+                    error_count=1,
+                ),
+            )
+
+        def writer2() -> None:
+            w1_in_replace.wait(timeout=5)  # writer 1 entered its replace first
+            w2_entered.set()  # signal BEFORE touching the lock — no deadlock
+            store.update_collection(
+                "col",
+                CollectionProgress(
+                    status=IndexingStatus.DONE,
+                    total_files=2,
+                    processed_files=2,
+                    error_count=2,
+                ),
+            )
+
+        threads = [threading.Thread(target=writer1), threading.Thread(target=writer2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=self._JOIN_TIMEOUT)
+            assert not t.is_alive()
+
+        # Serialized: each enter is followed by its own exit before the next enter.
+        assert order == ["enter", "exit", "enter", "exit"]
+        # Valid JSON is the WITH-lock guarantee (no torn shared tmp write).
+        raw = json.loads(store._state_file.read_text())
+        result = store.read()
+        assert result is not None
+        assert list(result.collections.keys()) == ["col"]
+        # Survivor is one writer's consistent record, never a mix.
+        col = result.collections["col"]
+        fields = {col.total_files, col.processed_files, col.error_count}
+        assert len(fields) == 1, f"mixed record: {fields}"
+        assert col.total_files in (1, 2)
+        raw_col = raw["collections"]["col"]
+        raw_fields = {raw_col["total_files"], raw_col["processed_files"], raw_col["error_count"]}
+        assert len(raw_fields) == 1, f"mixed record on disk: {raw_fields}"
+
+    def test_remove_collection_early_return_is_locked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Race remove("k") against an update of a DIFFERENT key "m" (plus a
+        # pre-seeded "survivor"). Under the lock both RMW cycles serialize, so
+        # BOTH effects land; without it, the last writer clobbers the other's
+        # stale snapshot, dropping one effect. See the class docstring for the
+        # shared lost-update rationale.
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(
+                collections={
+                    "k": CollectionProgress(status=IndexingStatus.DONE),
+                    "survivor": CollectionProgress(status=IndexingStatus.DONE),
+                }
+            )
+        )
+        self._slow_read_patch(monkeypatch)
+        self._atomic_write_patch(monkeypatch)  # final file always valid JSON
+        start = threading.Barrier(2)
+
+        def remover() -> None:
+            start.wait()
+            store.remove_collection("k")
+
+        def updater() -> None:
+            start.wait()
+            store.update_collection("m", CollectionProgress(status=IndexingStatus.PENDING))
+
+        threads = [threading.Thread(target=remover), threading.Thread(target=updater)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=self._JOIN_TIMEOUT)
+            assert not t.is_alive()
+
+        result = store.read()
+        assert result is not None
+        # No update is lost: the remove ("k" absent) AND the unrelated update
+        # ("m" present) both survive, and the pre-seeded "survivor" is untouched.
+        # This is the intended lost-update discriminator (the physical write is
+        # made atomic above, so a torn file can never pre-empt these asserts).
+        assert "k" not in result.collections
+        assert "m" in result.collections
+        assert "survivor" in result.collections
+
+    def test_exception_under_lock_releases_lock(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+
+        def boom(_state: IndexingState) -> None:
+            raise OSError("disk full")
+
+        with patch.object(store, "write", side_effect=boom):
+            with pytest.raises(OSError, match="disk full"):
+                store.update_collection("col", CollectionProgress(status=IndexingStatus.DONE))
+
+        # Lock must have been released by the `with` context manager.
+        done = threading.Event()
+
+        def call_set_trigger() -> None:
+            store.set_trigger("x")
+            done.set()
+
+        t = threading.Thread(target=call_set_trigger)
+        t.start()
+        t.join(timeout=1)
+        assert not t.is_alive()
+        assert done.is_set()
+        result = store.read()
+        assert result is not None
+        assert result.trigger == "x"
+
+    def test_write_is_locked_independently(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # write() must hold the lock for its whole body, so two concurrent
+        # write() calls serialize: the second cannot start os.replace until the
+        # first returns. We force the ordering with Events (signal-before-lock):
+        # writer 1 holds its os.replace open until writer 2 has entered write()
+        # and queued on the lock, so the order is a consequence of the lock, not
+        # scheduling luck. (No barrier INSIDE the critical section — that would
+        # deadlock against a correct lock.)
+        store = IndexingStateStore(tmp_path)
+        order: list[str] = []
+        order_lock = threading.Lock()
+        original_replace = os.replace
+        w1_in_replace = threading.Event()
+        w2_entered_write = threading.Event()
+
+        def wrapped_replace(src: object, dst: object) -> None:
+            with order_lock:
+                order.append("enter")
+            # Only writer 1 reaches here first: it started first and holds the
+            # lock, so writer 2 is still blocked acquiring it. Hold the replace
+            # open until writer 2 has entered write() and queued on the lock,
+            # proving the resulting order is forced by the lock, not by timing.
+            if not w1_in_replace.is_set():
+                w1_in_replace.set()
+                w2_entered_write.wait(timeout=5)
+                time.sleep(self._LOCK_SETTLE)  # small safety margin
+            original_replace(src, dst)
+            with order_lock:
+                order.append("exit")
+
+        monkeypatch.setattr(os, "replace", wrapped_replace)
+
+        def writer1() -> None:
+            store.write(
+                IndexingState(
+                    collections={"col": CollectionProgress(status=IndexingStatus.DONE, total_files=1)}
+                )
+            )
+
+        def writer2() -> None:
+            w1_in_replace.wait(timeout=5)  # writer 1 is inside its critical section first
+            w2_entered_write.set()
+            store.write(
+                IndexingState(
+                    collections={"col": CollectionProgress(status=IndexingStatus.DONE, total_files=2)}
+                )
+            )
+
+        threads = [threading.Thread(target=writer1), threading.Thread(target=writer2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=self._JOIN_TIMEOUT)
+            assert not t.is_alive()
+
+        # Serialized: each enter is followed by its own exit before the next enter.
+        assert order == ["enter", "exit", "enter", "exit"]
+        raw = json.loads(store._state_file.read_text())
+        assert raw["collections"]["col"]["total_files"] in (1, 2)
+
+    def test_set_trigger_under_concurrent_update_collection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Race set_trigger (writes the `trigger` field) against update_collection
+        # (writes the `collections` dict). Under the lock both fields survive;
+        # without it one writer clobbers the other (commonly `trigger` reverts to
+        # None). A pre-seeded "survivor" key proves no unrelated state is lost.
+        # See the class docstring for the shared lost-update rationale.
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(
+                collections={"survivor": CollectionProgress(status=IndexingStatus.DONE)}
+            )
+        )
+        self._slow_read_patch(monkeypatch)
+        self._atomic_write_patch(monkeypatch)  # final file always valid JSON
+        start = threading.Barrier(2)
+
+        def trigger_worker() -> None:
+            start.wait()
+            store.set_trigger("t")
+
+        def update_worker() -> None:
+            start.wait()
+            store.update_collection("col", CollectionProgress(status=IndexingStatus.DONE))
+
+        threads = [threading.Thread(target=trigger_worker), threading.Thread(target=update_worker)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=self._JOIN_TIMEOUT)
+            assert not t.is_alive()
+
+        result = store.read()
+        assert result is not None
+        # No update is lost: the trigger set by one writer AND the collection
+        # added by the other BOTH survive, and the pre-seeded survivor remains.
+        assert result.trigger == "t"
+        assert "col" in result.collections
+        assert "survivor" in result.collections
+
+    def test_rlock_reentry_does_not_deadlock(self, tmp_path: Path) -> None:
+        # update_collection acquires the lock and then calls write(), which
+        # re-acquires it — RLock re-entry must not deadlock. This is only the
+        # interesting scenario while write() itself re-acquires the lock; a valid
+        # future refactor that splits out an unlocked `_write_unlocked` helper for
+        # composites would make re-entry impossible by construction, so skip
+        # rather than fail in that case.
+        if hasattr(IndexingStateStore, "_write_unlocked"):
+            pytest.skip("write() refactored to a lock-free helper; RLock re-entry no longer occurs")
+        store = IndexingStateStore(tmp_path)
+
+        def worker() -> None:
+            store.update_collection("col", CollectionProgress(status=IndexingStatus.DONE))
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        t.join(timeout=2)
+        assert not t.is_alive()
+        result = store.read()
+        assert result is not None
+        assert "col" in result.collections
+
+    def test_read_does_not_acquire_lock(self, tmp_path: Path) -> None:
+        # read() is lock-free: even while a writer holds the lock for a long time,
+        # concurrent read() calls return without blocking.
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(collections={"col": CollectionProgress(status=IndexingStatus.DONE)})
+        )
+        writer_holding = threading.Event()
+        release_writer = threading.Event()
+        original_write = IndexingStateStore.write
+
+        def slow_write(self: IndexingStateStore, state: IndexingState) -> None:
+            writer_holding.set()
+            release_writer.wait(timeout=5)
+            original_write(self, state)
+
+        writer = threading.Thread(
+            target=lambda: store.update_collection(
+                "blocker", CollectionProgress(status=IndexingStatus.PENDING)
+            )
+        )
+        with patch.object(IndexingStateStore, "write", slow_write):
+            writer.start()
+            assert writer_holding.wait(timeout=5)  # writer now holds the lock
+
+            barrier = threading.Barrier(2)
+            results: list[IndexingState | None] = []
+            results_lock = threading.Lock()
+
+            def reader() -> None:
+                barrier.wait()
+                res = store.read()
+                with results_lock:
+                    results.append(res)
+
+            readers = [threading.Thread(target=reader) for _ in range(2)]
+            for t in readers:
+                t.start()
+            for t in readers:
+                t.join(timeout=2)
+                assert not t.is_alive()  # readers did NOT block on the held lock
+
+            release_writer.set()
+
+        writer.join(timeout=5)
+        assert not writer.is_alive()
+
+        assert len(results) == 2
+        assert all(r is not None for r in results)
+
+
+class TestResetInProgress:
+    """Tests for IndexingStateStore.reset_in_progress(predicate) — locked RMW."""
+
+    def test_reset_in_progress_resets_matching_entries(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        in_prog = CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=10,
+            processed_files=4,
+            started_at="2026-01-01T00:00:00+00:00",
+            error="boom",
+            error_count=3,
+            processed_paths=["/a/file.md"],
+            indexed_embedding_model="BAAI/bge-small-en-v1.5",
+            indexed_chunk_size=512,
+        )
+        done = CollectionProgress(
+            status=IndexingStatus.DONE,
+            total_files=5,
+            processed_files=5,
+            completed_at="2026-01-01T00:05:00+00:00",
+        )
+        old_last_updated = "2020-01-01T00:00:00+00:00"
+        store.write(
+            IndexingState(
+                collections={"working": in_prog, "finished": done},
+                last_updated=old_last_updated,
+            )
+        )
+
+        store.reset_in_progress(lambda c: c.status == IndexingStatus.IN_PROGRESS)
+
+        result = store.read()
+        assert result is not None
+        # A real reset bumps the top-level last_updated timestamp.
+        assert result.last_updated != old_last_updated
+        reset = result.collections["working"]
+        assert reset.status == IndexingStatus.PENDING
+        # non-status fields preserved
+        assert reset.total_files == 10
+        assert reset.processed_files == 4
+        assert reset.processed_paths == ["/a/file.md"]
+        assert reset.indexed_embedding_model == "BAAI/bge-small-en-v1.5"
+        assert reset.indexed_chunk_size == 512
+        # status-related fields cleared
+        assert reset.started_at is None
+        assert reset.completed_at is None
+        assert reset.error is None
+        assert reset.error_count == 0
+        # DONE entry untouched
+        assert result.collections["finished"].status == IndexingStatus.DONE
+        assert result.collections["finished"].completed_at == "2026-01-01T00:05:00+00:00"
+
+    def test_reset_in_progress_short_circuits_when_no_match(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(collections={"col": CollectionProgress(status=IndexingStatus.DONE)})
+        )
+        calls: list[IndexingState] = []
+
+        def spy_write(state: IndexingState) -> None:
+            calls.append(state)
+
+        with patch.object(store, "write", side_effect=spy_write):
+            store.reset_in_progress(lambda c: False)
+        assert calls == []
+
+    def test_reset_in_progress_short_circuits_on_none_state(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        assert not store._state_file.exists()
+        calls: list[IndexingState] = []
+
+        def spy_write(state: IndexingState) -> None:
+            calls.append(state)
+
+        with patch.object(store, "write", side_effect=spy_write):
+            # No state file → must not raise and must not write.
+            store.reset_in_progress(lambda cp: True)
+        assert calls == []
+        assert not store._state_file.exists()
+
+    def test_reset_in_progress_preserves_non_status_fields(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        cp = CollectionProgress(
+            status=IndexingStatus.IN_PROGRESS,
+            total_files=20,
+            processed_files=7,
+            started_at="2026-01-01T00:00:00+00:00",
+            completed_at="2026-01-01T00:09:00+00:00",
+            error="some error",
+            error_count=2,
+            processed_paths=["/a/file.md", "/b/doc.txt"],
+            file_mtimes={"/a/file.md": 1700000000.5},
+            file_hashes={"/a/file.md": "abc123"},
+            indexed_embedding_model="BAAI/bge-small-en-v1.5",
+            indexed_chunk_size=256,
+        )
+        store.write(IndexingState(collections={"col": cp}))
+
+        store.reset_in_progress(lambda c: c.status == IndexingStatus.IN_PROGRESS)
+
+        result = store.read()
+        assert result is not None
+        out = result.collections["col"]
+        assert out.status == IndexingStatus.PENDING
+        # preserved
+        assert out.total_files == 20
+        assert out.processed_files == 7
+        assert out.processed_paths == ["/a/file.md", "/b/doc.txt"]
+        assert out.file_mtimes == {"/a/file.md": 1700000000.5}
+        assert out.file_hashes == {"/a/file.md": "abc123"}
+        assert out.indexed_embedding_model == "BAAI/bge-small-en-v1.5"
+        assert out.indexed_chunk_size == 256
+        # cleared
+        assert out.started_at is None
+        assert out.completed_at is None
+        assert out.error is None
+        assert out.error_count == 0
+
+    def test_reset_in_progress_skips_failed_and_done(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(
+                collections={
+                    "working": CollectionProgress(
+                        status=IndexingStatus.IN_PROGRESS, total_files=3, processed_files=1
+                    ),
+                    "broken": CollectionProgress(
+                        status=IndexingStatus.FAILED, error="bad", error_count=4
+                    ),
+                    "finished": CollectionProgress(
+                        status=IndexingStatus.DONE, total_files=2, processed_files=2
+                    ),
+                }
+            )
+        )
+
+        store.reset_in_progress(lambda cp: cp.status == IndexingStatus.IN_PROGRESS)
+
+        result = store.read()
+        assert result is not None
+        assert result.collections["working"].status == IndexingStatus.PENDING
+        assert result.collections["broken"].status == IndexingStatus.FAILED
+        assert result.collections["broken"].error == "bad"
+        assert result.collections["broken"].error_count == 4
+        assert result.collections["finished"].status == IndexingStatus.DONE
+
+    def test_reset_in_progress_all_entries_match(self, tmp_path: Path) -> None:
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(
+                collections={
+                    f"col_{i}": CollectionProgress(
+                        status=IndexingStatus.IN_PROGRESS,
+                        total_files=i + 1,
+                        processed_files=i,
+                        started_at="2026-01-01T00:00:00+00:00",
+                        error_count=i,
+                    )
+                    for i in range(3)
+                }
+            )
+        )
+
+        store.reset_in_progress(lambda cp: cp.status == IndexingStatus.IN_PROGRESS)
+
+        result = store.read()
+        assert result is not None
+        for i in range(3):
+            out = result.collections[f"col_{i}"]
+            assert out.status == IndexingStatus.PENDING
+            assert out.total_files == i + 1
+            assert out.processed_files == i
+            assert out.started_at is None
+            assert out.error_count == 0
+
+
+class TestResetInProgressThreadSafety(_ThreadSafetyHarness):
+    """Concurrency regression test for reset_in_progress (reuses the CON-3 harness)."""
+
+    def test_reset_in_progress_concurrent_with_update_collection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Race reset_in_progress (resets IN_PROGRESS entries to PENDING) against an
+        # update of a DIFFERENT key. Under the lock both RMW cycles serialize so
+        # BOTH effects land; without it the last writer clobbers the other's stale
+        # snapshot, dropping one effect. See the parent class docstring for the
+        # shared lost-update rationale.
+        store = IndexingStateStore(tmp_path)
+        store.write(
+            IndexingState(
+                collections={
+                    "working": CollectionProgress(
+                        status=IndexingStatus.IN_PROGRESS, total_files=5, processed_files=2
+                    ),
+                }
+            )
+        )
+        self._slow_read_patch(monkeypatch)
+        self._atomic_write_patch(monkeypatch)  # final file always valid JSON
+        start = threading.Barrier(2)
+
+        def resetter() -> None:
+            start.wait()
+            store.reset_in_progress(lambda cp: cp.status == IndexingStatus.IN_PROGRESS)
+
+        def updater() -> None:
+            start.wait()
+            store.update_collection("new-col", CollectionProgress(status=IndexingStatus.DONE))
+
+        threads = [threading.Thread(target=resetter), threading.Thread(target=updater)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=self._JOIN_TIMEOUT)
+            assert not t.is_alive()
+
+        # (a) valid JSON on disk (atomic write guarantees this even without the lock)
+        raw = json.loads(store._state_file.read_text())
+        assert isinstance(raw, dict)
+        result = store.read()
+        assert result is not None
+        # (b) the update survived
+        assert "new-col" in result.collections
+        # (c) the reset survived: the previously IN_PROGRESS entry is now PENDING
+        assert result.collections["working"].status == IndexingStatus.PENDING

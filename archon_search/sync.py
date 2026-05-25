@@ -318,28 +318,16 @@ class SearchCollectionSync:
             logger.warning("Failed to remove indexing state for %r", name, exc_info=True)
 
     def _reset_stale_in_progress(self) -> None:
-        """Reset any IN_PROGRESS entries to PENDING (crash recovery)."""
+        """Reset any IN_PROGRESS entries to PENDING (crash recovery), as a single
+        locked read-modify-write inside the store so concurrent mutators can't race it."""
         if self._state_store is None:
             return
         try:
-            from archon_search.progress import CollectionProgress, IndexingStatus
+            from archon_search.progress import IndexingStatus
 
-            state = self._state_store.read()
-            if state is None:
-                return
-            for name, cp in state.collections.items():
-                if cp.status == IndexingStatus.IN_PROGRESS:
-                    state.collections[name] = CollectionProgress(
-                        status=IndexingStatus.PENDING,
-                        total_files=cp.total_files,
-                        processed_files=cp.processed_files,
-                        processed_paths=cp.processed_paths,
-                        file_mtimes=cp.file_mtimes,
-                        file_hashes=cp.file_hashes,
-                        indexed_embedding_model=cp.indexed_embedding_model,
-                        indexed_chunk_size=cp.indexed_chunk_size,
-                    )
-            self._state_store.write(state)
+            self._state_store.reset_in_progress(
+                lambda cp: cp.status == IndexingStatus.IN_PROGRESS
+            )
         except Exception:  # noqa: BLE001
             logger.warning("Failed to reset stale IN_PROGRESS states", exc_info=True)
 

@@ -11,7 +11,7 @@ This runbook lists the failure modes the codebase is known to produce today, pai
 ## Principles
 
 1. **Start with `/health`, then `/status`, then the log.** Three commands cover the first decision branch in nearly every incident.
-2. **Restart is a legitimate first step.** The router cache (`CON-2`) and the lack of cache-bust APIs mean restart is the only currently supported recovery for several issues.
+2. **Restart is a legitimate first step.** It clears LanceDB lock-file remnants and re-loads models. The FastAPI `/route` path builds a fresh router per request, so router-cache staleness (`CON-2`, addressed by A6) is no longer a reason to restart.
 3. **Search pipeline errors surface as 5xx.** `POST /search` returns HTTP 500 on pipeline failure and HTTP 504 on timeout (`CON-5` resolved in A3). HTTP 200 with `results: []` means the pipeline succeeded but found no matching documents — it is not a failure signal.
 4. **Re-ingest is the rollback.** There is no transactional repair (`Architecture/160…md` principle 5).
 
@@ -105,6 +105,14 @@ Distinct from the above: `POST /ingest` or `POST /collections/` returning `503` 
 - The telemetry endpoint `/telemetry/entries` will show entries with `endpoint="search"`, `status="internal_error"` (for pipeline exceptions) or `status="timeout"` (for timeouts).
 - HTTP 503 from the meta-lookup branch (`"search: meta lookup failed"` in the log) means collection metadata was unavailable. No telemetry entry is emitted; triage as a store connectivity issue (see "LanceDB lock contention" above).
 - HTTP 200 with `results: []` means the pipeline succeeded but found no matching documents — it is not a failure signal.
+
+1. Confirm the collection is in the caller's namespace: `GET /collections`.
+2. `GET /status` — look for `status: "failed"` or non-zero `error_count` on that collection.
+3. `GET /indexing-state` — check `error` and `error_count` fields.
+4. Grep the log for `search failed for collection` and `meta lookup failed` — these are the exact log strings emitted on the two failure branches (`routes_search.py:70`, `:83`).
+5. If telemetry is enabled, `GET /telemetry/entries?collection=<name>&endpoint=search&status=error` enumerates the failure entries.
+6. Re-run with a known-good query. Persistent emptiness with no log signal indicates either an empty collection or a model-load issue.
+7. Router staleness is **not** a likely cause on the server path: `POST /route` builds a fresh `MultiCollectionRouter` per request (`routes_route._build_router`), so `_cached_metadata` never outlives a single call and centroids cannot go stale across requests (`CON-2`, addressed by A6; per-request lifecycle pinned by a regression test). If a future build switches to a shared, long-lived router, it must call `MultiCollectionRouter.invalidate()` after collection mutations.
 
 **Action**:
 

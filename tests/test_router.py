@@ -1,6 +1,7 @@
 """Tests for MultiCollectionRouter ."""
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,6 +25,7 @@ def _router(
     confidence_threshold: float = 0.5,
     embedding_model: str = "model-a",
     embedder: MagicMock | None = None,
+    initial_metadata: list[CollectionMeta] | None = None,
 ) -> MultiCollectionRouter:
     return MultiCollectionRouter(
         search_url="http://localhost:9999",
@@ -31,6 +33,7 @@ def _router(
         shortlist_size=shortlist_size,
         confidence_threshold=confidence_threshold,
         embedding_model=embedding_model,
+        initial_metadata=initial_metadata,
     )
 
 
@@ -305,6 +308,125 @@ def test_rank_all_none_centroid_bypasses_confidence_gate() -> None:
     assert len(result) == 3
 
 
+# ---------------------------------------------------------------------------
+# invalidate() / initial_metadata tests (Task 2.1)
+# ---------------------------------------------------------------------------
+
+
+def test_invalidate_clears_cached_metadata() -> None:
+    """invalidate() resets a populated cache back to None."""
+    router = _router()
+    router._cached_metadata = [_meta("col-a")]
+    router.invalidate()
+    assert router._cached_metadata is None
+
+
+def test_invalidate_is_idempotent() -> None:
+    """invalidate() is safe to call repeatedly on an already-empty cache."""
+    router = _router()
+    assert router._cached_metadata is None
+    router.invalidate()
+    router.invalidate()
+    assert router._cached_metadata is None
+
+
+@pytest.mark.asyncio
+async def test_invalidate_triggers_refetch_with_fresh_data() -> None:
+    """After invalidate(), the next fetch_metadata() issues a real HTTP fetch and
+    returns fresh post-invalidation data, replacing the stale seeded cache."""
+    router = _router(initial_metadata=[_meta("stale-col")])
+
+    # Before-state anchor: the populated cache is served without any HTTP.
+    with patch("httpx.AsyncClient") as no_http_cls:
+        before = await router.fetch_metadata()
+        no_http_cls.assert_not_called()
+    assert [m.name for m in before] == ["stale-col"]
+
+    router.invalidate()
+    assert router._cached_metadata is None
+
+    # A successful JSON-RPC envelope: list[dict] serialised as one TextContent block.
+    fresh_payload = json.dumps([{"name": "fresh-col", "embedding_model": "model-a"}])
+    response = MagicMock()
+    response.raise_for_status = MagicMock(return_value=None)
+    response.json = MagicMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"content": [{"type": "text", "text": fresh_payload}]},
+        }
+    )
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=response)
+
+        result = await router.fetch_metadata()
+
+        # (a) an actual HTTP fetch occurred this time
+        mock_client_cls.assert_called()
+        mock_client.post.assert_awaited_once()
+
+    # (b) fresh data is returned, not the stale seeded data
+    assert [m.name for m in result] == ["fresh-col"]
+    # (c) the cache now holds the fresh list
+    assert router._cached_metadata == result
+    assert [m.name for m in router._cached_metadata] == ["fresh-col"]
+
+
+def test_initial_metadata_populates_cache() -> None:
+    """initial_metadata seeds the cache without any fetch."""
+    some_meta = _meta("col-a")
+    router = _router(initial_metadata=[some_meta])
+    assert router._cached_metadata == [some_meta]
+
+
+def test_initial_metadata_none_leaves_cache_empty() -> None:
+    """Omitting initial_metadata (None) leaves the cache as None."""
+    router = _router(initial_metadata=None)
+    assert router._cached_metadata is None
+
+
+@pytest.mark.asyncio
+async def test_initial_metadata_empty_list_marks_cache_populated() -> None:
+    """An empty list is a populated cache (distinct from None): fetch_metadata returns [] without HTTP."""
+    router = _router(initial_metadata=[])
+    assert router._cached_metadata == []
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        result = await router.fetch_metadata()
+        mock_client_cls.assert_not_called()
+
+    assert result == []
+
+
+def test_initial_metadata_is_copied() -> None:
+    """initial_metadata is defensively copied: mutating the original does not affect the cache."""
+    original = [_meta("col-a")]
+    router = _router(initial_metadata=original)
+    original.append(_meta("col-b"))
+    assert router._cached_metadata == [_meta("col-a")]
+
+
+@pytest.mark.asyncio
+async def test_select_uses_initial_metadata_without_http() -> None:
+    """select() uses initial_metadata cache without triggering an HTTP fetch."""
+    embedder = _make_embedder(vector=[1.0, 0.0])
+    router = _router(
+        confidence_threshold=0.0,
+        embedder=embedder,
+        initial_metadata=[_meta("col-a", centroid=[1.0, 0.0])],
+    )
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        result = await router.select("test query")
+        mock_client_cls.assert_not_called()
+
+    assert [m.name for m in result] == ["col-a"]
+    embedder.embed_one.assert_awaited_once_with("test query")
+
+
 @pytest.mark.asyncio
 async def test_tier3_confidence_gate_failure_returns_none() -> None:
     """Tier 3: rank() returns [] (confidence gate failed) → get_pre_context returns None."""
@@ -513,3 +635,75 @@ def test_rank_and_rank_with_scores_empty_input() -> None:
     router = _router()
     assert router.rank([1.0, 0.0], []) == []
     assert router.rank_with_scores([1.0, 0.0], []) == []
+
+
+# ---------------------------------------------------------------------------
+# eval/runner.py constructor-injection guard tests (Task 2.2)
+# ---------------------------------------------------------------------------
+
+
+def test_eval_runner_no_direct_cached_metadata_write() -> None:
+    """Source-level guard: no code under archon_search/ (excluding router.py)
+    assigns to the private _cached_metadata field.
+
+    The router class owns that field; every other caller must populate it via
+    the ``initial_metadata`` constructor argument. This is the automated
+    regression guard for Task 2.2. Test files are intentionally out of scope
+    (tests legitimately poke the private field).
+    """
+    import re
+    from pathlib import Path
+
+    import archon_search
+
+    package_dir = Path(archon_search.__file__).parent
+    router_path = (package_dir / "router.py").resolve()
+    # Negative lookahead `(?!=)` matches assignment (`_cached_metadata = ...`)
+    # but NOT the equality comparison form (`_cached_metadata == ...`), so a
+    # legitimate read in a comparison elsewhere won't trip this write guard.
+    pattern = re.compile(r"_cached_metadata\s*=(?!=)")
+
+    offenders: list[str] = []
+    for py_file in package_dir.rglob("*.py"):
+        if py_file.resolve() == router_path:
+            continue
+        source = py_file.read_text(encoding="utf-8")
+        if pattern.search(source):
+            offenders.append(str(py_file))
+
+    assert not offenders, (
+        "Direct _cached_metadata assignment found outside router.py: "
+        f"{offenders}. Use the initial_metadata constructor argument instead."
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_router_for_query_uses_initial_metadata() -> None:
+    """_run_router_for_query seeds the router via initial_metadata and triggers
+    no HTTP fetch when ranking the injected collections."""
+    from archon_search.eval.runner import _run_router_for_query
+
+    embedder = _make_embedder(vector=[1.0, 0.0])
+    # model_name must match the injected metas' embedding_model; otherwise the
+    # router skips centroid scoring and the non-empty assertion is meaningless.
+    embedder.model_name = "model-a"
+
+    # `_run_router_for_query` only touches `pipeline._embedder`.
+    pipeline = MagicMock()
+    pipeline._embedder = embedder
+
+    collection_metas = [
+        _meta("col-a", centroid=[1.0, 0.0], embedding_model="model-a"),
+        _meta("col-b", centroid=[0.0, 1.0], embedding_model="model-a"),
+    ]
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        shortlist = await _run_router_for_query(pipeline, "test query", collection_metas)
+        mock_client_cls.assert_not_called()
+
+    assert shortlist, "expected a non-empty shortlist from the injected metadata"
+    # col-a's centroid aligns with the query vector (sim 1.0); col-b is
+    # orthogonal (sim 0.0). With threshold 0.0 both pass, ranked by descending
+    # similarity, so col-a must come first.
+    assert shortlist == ["col-a", "col-b"]
+    embedder.embed_one.assert_awaited_once_with("test query")

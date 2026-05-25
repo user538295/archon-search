@@ -11,7 +11,7 @@
 ## Principles
 
 1. **The runtime directory is the database.** Lose `~/.archon-search/` and the only way back is to re-ingest from source. There is no schema migration or transactional repair path — see `Architecture/160…md` principle 5.
-2. **Stop the service before snapshotting.** LanceDB writes and `IndexingStateStore` read-modify-write are not crash-isolated against a live snapshot (`CON-3` in `Architecture/530_technical_debt_refactoring_roadmap.md`).
+2. **Stop the service before snapshotting.** LanceDB writes and `IndexingStateStore` writes are not crash-isolated against a live snapshot: a snapshot taken under concurrent writes can capture LanceDB tables mid-write, and an in-flight ingest may not yet be flushed to disk. (`IndexingStateStore.write` itself replaces `.indexing_state.json` via an atomic `os.replace`, so the file is never torn at the filesystem level; A6 also closed the in-process cross-collection consistency race — `CON-3` in `Architecture/530_technical_debt_refactoring_roadmap.md`. The residual gap is on-disk durability under power-loss — an unflushed write can still be lost — tracked under A7/fsync.)
 3. **The API key is part of the backup.** Restoring data without the key file invalidates every client that was holding the old token.
 4. **There is no built-in export.** `archon-search` has no `export` job kind or `dump` CLI; the roadmap tracks this as `D1`/`D2`. Until then, file-system copy is the contract.
 
@@ -66,7 +66,7 @@ archon-search start
 If you cannot stop the service:
 
 1. Pause ingest by avoiding any `POST /ingest`, `POST /collections`, or `POST /collections/{name}/reindex` calls during the window.
-2. Snapshot the directory; you may get a partially-updated `.indexing_state.json` (`CON-3`). On restore, run `archon-search sync` and accept that one in-flight ingest may need to be re-run.
+2. Snapshot the directory; you may get a partially-updated `.indexing_state.json` (durability/atomicity gap tracked under A7 — A6 fixed only the in-process consistency race, not on-disk torn-write durability). On restore, run `archon-search sync` and accept that one in-flight ingest may need to be re-run.
 3. LanceDB table snapshots taken under concurrent writes are not guaranteed consistent — the resulting backup may fail to open. Cold backups are the only supported method for high-confidence recovery.
 
 ### What to retain

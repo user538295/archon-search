@@ -179,7 +179,7 @@ router = MultiCollectionRouter(
 > **Releasable**: after Task 1.3 — CON-3 is fully closed, `sync._reset_stale_in_progress` delegates entirely to the store, and all concurrency regression tests pass.
 
 #### Task 1.1 — Add `threading.RLock` and lock public mutating methods on `IndexingStateStore`
-- [ ] **File**: `archon_search/progress.py`
+- [x] **File**: `archon_search/progress.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `import threading` to imports.
@@ -215,7 +215,7 @@ router = MultiCollectionRouter(
   - Checkpoint: `uv run pytest tests/test_progress.py -v -k "concurrent or locked or lock or reentry or write_is_locked or set_trigger_under"`
 
 #### Task 1.2 — Add `IndexingStateStore.reset_in_progress(predicate)` locked method
-- [ ] **File**: `archon_search/progress.py`
+- [x] **File**: `archon_search/progress.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Add `from collections.abc import Callable` to imports.
@@ -239,7 +239,7 @@ router = MultiCollectionRouter(
   - Checkpoint: `uv run pytest tests/test_progress.py -v -k "reset_in_progress"`
 
 #### Task 1.3 — Refactor `sync._reset_stale_in_progress` to delegate to store
-- [ ] **File**: `archon_search/sync.py`
+- [x] **File**: `archon_search/sync.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Replace the entire `_reset_stale_in_progress` method body with a single delegation call:
@@ -270,7 +270,7 @@ router = MultiCollectionRouter(
 > **Releasable**: after Task 2.3 — CON-2 is fully addressed: `invalidate()` exists, eval path uses the constructor injection pattern, and FastAPI per-request lifecycle is pinned by a regression test.
 
 #### Task 2.1 — Add `MultiCollectionRouter.invalidate()` and `initial_metadata` constructor param
-- [ ] **File**: `archon_search/router.py`
+- [x] **File**: `archon_search/router.py`
 - **Depends on**: nothing (independent of Phase 1)
 - **Description**:
   - Add `initial_metadata: list[CollectionMeta] | None = None` as the last parameter of `MultiCollectionRouter.__init__`.
@@ -304,7 +304,7 @@ router = MultiCollectionRouter(
   - Checkpoint: `uv run pytest tests/test_router.py -v -k "invalidate or initial_metadata"`
 
 #### Task 2.2 — Replace `eval/runner.py` direct `_cached_metadata` assignment with constructor injection
-- [ ] **File**: `archon_search/eval/runner.py`
+- [x] **File**: `archon_search/eval/runner.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - At `runner.py:508`, remove `router._cached_metadata = list(collection_metas)`.
@@ -318,7 +318,7 @@ router = MultiCollectionRouter(
   - Checkpoint: `uv run pytest tests/test_router.py -v -k "cached_metadata or run_router_for_query"`
 
 #### Task 2.3 — FastAPI per-request router lifecycle regression guard
-- [ ] **File**: `tests/test_routes_route.py`
+- [x] **File**: `tests/test_routes_route.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - Add two regression guard tests to `tests/test_routes_route.py`:
@@ -336,7 +336,7 @@ router = MultiCollectionRouter(
 ### Phase 3 — Verification & Documentation
 
 #### Task 3.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: Tasks 1.1, 1.2, 1.3, 2.1, 2.2, 2.3
 - **Description**:
   - Run the full test suite and confirm no regressions: `uv run pytest`.
