@@ -5,6 +5,8 @@ import asyncio
 import threading
 from typing import Any, Protocol, runtime_checkable
 
+from archon_search.observability import record_stage
+
 
 @runtime_checkable
 class EmbedderBackend(Protocol):
@@ -58,7 +60,8 @@ class Embedder:
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """Encode texts in a thread pool; lazily initialises embedding_dim."""
-        result: list[list[float]] = await asyncio.to_thread(self._backend.encode, texts)
+        with record_stage("embed"):
+            result: list[list[float]] = await asyncio.to_thread(self._backend.encode, texts)
         if self._embedding_dim is None and result:
             self._embedding_dim = len(result[0])
         return result

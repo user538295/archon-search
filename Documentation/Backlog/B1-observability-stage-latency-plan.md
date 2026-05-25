@@ -311,7 +311,7 @@ class ExplainResponse(BaseModel):
 > **Releasable**: after Task 3.5; all retrieval and ingest stages populate a bound `StageRecorder` when one is active.
 
 #### Task 3.1 — `record_stage` in `Embedder.embed` and `embed_one`
-- [ ] **File**: `archon_search/embedder.py`
+- [x] **File**: `archon_search/embedder.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Wrap the `await asyncio.to_thread(...)` call in `embed()` with `record_stage("embed")`:

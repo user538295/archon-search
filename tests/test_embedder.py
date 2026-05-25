@@ -252,3 +252,34 @@ def test_model_embedder_init_called_once_under_concurrent_encode() -> None:
         assert init_count == 1, f"Model __init__ called {init_count} times — lock missing"
     finally:
         sys.modules["fastembed"].TextEmbedding = original
+
+
+# ---------------------------------------------------------------------------
+# Stage recording tests — Task 3.1 (B1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_embed_records_stage_when_bound() -> None:
+    """Embedder.embed records 'embed' stage timing when a recorder is bound."""
+    from archon_search.observability import bind_stage_recorder
+
+    backend = _MockBackend(dim=4)
+    embedder = Embedder(backend)
+    with bind_stage_recorder() as recorder:
+        await embedder.embed(["text"])
+    assert "embed" in recorder.stage_timings_ms
+    assert recorder.stage_timings_ms["embed"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_embed_noop_when_unbound() -> None:
+    """Embedder.embed works normally with no recorder bound."""
+    from archon_search.observability import _stage_recorder
+
+    backend = _MockBackend(dim=4)
+    embedder = Embedder(backend)
+    assert _stage_recorder.get() is None
+    result = await embedder.embed(["text"])
+    assert result is not None
+    assert _stage_recorder.get() is None
