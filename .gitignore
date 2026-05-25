@@ -27,3 +27,7 @@ venv/
 
 # Obsidian vault config
 .obsidian/
+
+# Claude Code and Serena agent state
+.claude/
+.serena/
