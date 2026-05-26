@@ -430,3 +430,14 @@ class TestNamespaceResolution:
         resp = client.get("/me", headers={"Authorization": f"Bearer {DISTINCT_API_KEY}"})
         assert resp.status_code == 200
         assert resp.json()["namespace"] == DEFAULT_NAMESPACE
+
+
+# ===========================================================================
+# _EXEMPT_PATHS — Task 5.1 (B2)
+# ===========================================================================
+
+
+def test_ready_in_exempt_paths() -> None:
+    from archon_search.server.middleware_auth import _EXEMPT_PATHS
+
+    assert "/ready" in _EXEMPT_PATHS

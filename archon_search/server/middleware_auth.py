@@ -13,7 +13,7 @@ from archon_search.constants import DEFAULT_NAMESPACE, _validate_namespace
 
 logger = logging.getLogger("archon-search")
 
-_EXEMPT_PATHS: frozenset[str] = frozenset({"/health", "/docs", "/openapi.json", "/redoc"})
+_EXEMPT_PATHS: frozenset[str] = frozenset({"/health", "/docs", "/openapi.json", "/redoc", "/ready"})
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):

@@ -355,7 +355,7 @@ Note: `state_store = request.app.state.state_store` and `state = state_store.rea
 > **Releasable**: after Task 5.2, `GET /ready` is live, unauthenticated, and fully tested.
 
 #### Task 5.1 — Add `/ready` to `_EXEMPT_PATHS`
-- [ ] **File**: `archon_search/server/middleware_auth.py`
+- [x] **File**: `archon_search/server/middleware_auth.py`
 - **Depends on**: nothing
 - **Description**:
   - Change `_EXEMPT_PATHS: frozenset[str] = frozenset({"/health", "/docs", "/openapi.json", "/redoc"})` to include `"/ready"`.
