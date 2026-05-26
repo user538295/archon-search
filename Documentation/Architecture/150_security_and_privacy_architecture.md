@@ -13,7 +13,7 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
 ## Principles
 
 1. **Local trust boundary.** The threat model assumes anything running as the same OS user is trusted; the server binds to `127.0.0.1` by default.
-2. **Bearer auth on every endpoint except `/health`.** No anonymous access to data planes.
+2. **Bearer auth on every endpoint except `/health` and `/ready`.** No anonymous access to data planes.
 3. **Privacy is structural, not procedural.** The telemetry schema cannot represent a raw query — there is no field for it and no factory that accepts one.
 4. **No outbound network calls for telemetry.** `export_enabled` is silently coerced to `false`; nothing leaves the host.
 5. **ACL is best-effort, default-open.** Documents without an explicit `_acl` are visible to all namespaces. Misconfigured ACLs fail-open with a warning, never crash.
@@ -56,7 +56,9 @@ Out of scope:
 
 ### Unauthenticated endpoints
 
-Only `GET /health` is intended to be reachable without auth on the data path. `/docs`, `/openapi.json`, and `/redoc` are also exempted by `_EXEMPT_PATHS` so OpenAPI tooling works; these expose schema only, not data.
+`GET /health` and `GET /ready` are both reachable without auth. `/docs`, `/openapi.json`, and `/redoc` are also exempted by `_EXEMPT_PATHS` so OpenAPI tooling works; these expose schema only, not data.
+
+**Threat-model rationale for unauthenticated `/ready`**: `/ready` is a readiness probe — it answers whether the service's storage layer is connected and able to serve requests. It returns `{ready: bool, checks: {storage: "ok"|"fail"}}` and nothing more: no document counts, no collection names, no version string, no user data. An attacker who can reach the loopback socket already has more sensitive information (the process is running, port is open) than `/ready` reveals. Supervisor tooling (e.g. a load-balancer health check, an install script waiting for warm-up) needs this signal without holding the API key. Withholding it would force the API key into infrastructure-level probing scripts, which is a worse security posture than exposing a no-data probe. `/health` (liveness) and `/ready` (readiness) are intentionally separate endpoints with different shapes — `/health` returns `{status, version}` and is never `503`; `/ready` returns `{ready, checks}` and returns HTTP 503 when the storage layer is unavailable.
 
 ## Authorization (ACL — `archon_search/acl.py`)
 

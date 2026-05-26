@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — B2 (additive): `GET /ready` endpoint and `readiness` field on `GET /status`
+
+**Surface**: REST (additive — new endpoint and new field on existing endpoint).
+
+**Changes**:
+- **New `GET /ready` endpoint** (unauthenticated) — returns `{"ready": bool, "checks": {"storage": "ok"|"fail"}}`. HTTP 200 when the storage layer is connected; HTTP 503 with the same `ReadinessResponse` body when not. This is a readiness probe, not a liveness probe — `/health` (`{status, version}`) remains the liveness signal. Both endpoints are unauthenticated and listed in `_EXEMPT_PATHS`.
+- **New `readiness` field on `GET /status` response** — `StatusResponse` gains an optional `readiness: ReadinessDetail | None` sub-object containing `storage_connected`, `embedder_warm`, `reranker_warm`, `jobs` (pending/running counts), `collections_indexing`, `collections_failed`, and `watcher.running`. This field is absent (`null`) when the server cannot populate it; tolerant consumers require no migration.
+
+Both changes are **additive and backward-compatible**. Existing consumers of `GET /health`, `GET /status`, or any other endpoint are unaffected.
+
+**Announced in**: this release.
+
 ### [next release] — B1 observability: `stage_timings_ms` on `POST /explain` and MCP `explain`
 
 **Surface**: REST `POST /explain` (additive new field), MCP `explain` tool (additive new field in returned dict).

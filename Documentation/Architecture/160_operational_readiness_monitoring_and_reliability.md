@@ -13,7 +13,7 @@
 1. **No formal SLOs, SLIs, or SLAs.** `archon-search` is a local service. No availability or latency objective is declared or contractually promised. Latency p50/p95 are *captured* (telemetry, eval harness) as regression guards, not as production targets.
 2. **Observability is local-only.** Health, status, indexing state, and telemetry are all served from the same process to the same operator. Nothing is exported off-box. Telemetry is opt-in and disabled by default (`Architecture/000_introduction_and_guiding_principles.md`, principle 4).
 3. **OS-native supervision.** The service is registered as a `launchd` user agent (macOS) or `systemd --user` unit (Linux). The OS — not `archon-search` — is responsible for restart-on-crash and start-at-login.
-4. **One health endpoint is unauthenticated; everything else requires bearer auth.** `GET /health` exists so a supervisor or installer can probe the port without holding the API key.
+4. **`/health` and `/ready` are unauthenticated; everything else requires bearer auth.** `GET /health` (liveness) and `GET /ready` (readiness) exist so a supervisor or installer can probe the port without holding the API key.
 5. **State recovery via re-sync, not via clever rollback.** When indexes drift, the runbook is to re-run `archon-search sync` or `archon-search collection reindex`. There is no transactional repair path. Concurrent multi-collection syncs no longer lose progress: `IndexingStateStore` (`archon_search/progress.py`) serializes all mutating writes to `.indexing_state.json` via an internal `threading.RLock` (A6 closed `CON-3`; see `Architecture/530_technical_debt_refactoring_roadmap.md`). On-disk durability under power-loss or torn writes is still open, tracked under A7 (fsync).
 
 ## Reliability targets
@@ -31,9 +31,11 @@ If a future deployment needs an SLO, declare it in this document and pick an SLI
 ```mermaid
 flowchart LR
   op[Operator / Supervisor] -->|GET /health| H[routes_health.py<br/>unauth]
+  op -->|GET /ready| R[routes_ready.py<br/>unauth]
   op -->|GET /status<br/>Bearer auth| S[routes_status.py]
   op -->|GET /indexing-state<br/>Bearer auth| I[routes_state.py]
   op -->|GET /telemetry/stats<br/>GET /telemetry/entries| T[routes_telemetry.py]
+  R --> RS[SearchStore.ping&#40;&#41;]
   S --> SS[SearchStore + IndexingStateStore]
   T --> TR[TelemetryReader<br/>~/.archon-search/search-logs/*.jsonl]
   proc[archon-search process] --> LOG[~/.archon-search/logs/archon-search.log]
@@ -43,13 +45,18 @@ flowchart LR
 
 | Endpoint                 | Auth        | Returns                                                                                                | Source                                  |
 | ------------------------ | ----------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------- |
-| `GET /health`            | None        | `{"status": "running", "version": "<vcs version>"}`. Liveness probe; no business state.                | `server/routes_health.py`               |
-| `GET /status`            | Bearer      | Top-level `running` (bool, always `true` when this handler responds), `pid`, `version`, and a per-collection list with `name`, `path`, `doc_count`, `chunk_count`, `status`, `watching`, `processed_files`, `total_files`, `eta_seconds`, `error`, `error_count`, filtered to the caller's namespace. `path`, `doc_count`, and `chunk_count` are currently always `""` / `0` placeholders. | `server/routes_status.py`               |
+| `GET /health`            | None        | `{"status": "running", "version": "<vcs version>"}`. Liveness probe; no business state. Never returns 503. | `server/routes_health.py`               |
+| `GET /ready`             | None        | `{"ready": bool, "checks": {"storage": "ok"\|"fail"}}`. Readiness probe; returns HTTP 200 when storage is connected, HTTP 503 when not. | `server/routes_ready.py`                |
+| `GET /status`            | Bearer      | Top-level `running` (bool, always `true` when this handler responds), `pid`, `version`, a per-collection list with `name`, `path`, `doc_count`, `chunk_count`, `status`, `watching`, `processed_files`, `total_files`, `eta_seconds`, `error`, `error_count` (filtered to caller's namespace), and a `readiness` sub-object (`storage_connected`, `embedder_warm`, `reranker_warm`, `jobs`, `collections_indexing`, `collections_failed`, `watcher`). `path`, `doc_count`, and `chunk_count` are currently always `""` / `0` placeholders. | `server/routes_status.py`               |
 | `GET /indexing-state`    | Bearer      | Machine-readable raw indexing state: per-collection `status`, file counters, timestamps, error, `error_count`. Empty object when no state file exists. | `server/routes_state.py`                |
 | `GET /telemetry/stats`   | Bearer      | Aggregate stats over `[since, until]`: `total_queries`, `success_rate`, p50/p95 `latency_ms`, `by_endpoint`, `by_collection`, `error_breakdown`, `skipped_lines`. `enabled: false` body when telemetry is off. | `server/routes_telemetry.py`            |
 | `GET /telemetry/entries` | Bearer      | Paginated raw entries with `collection`, `endpoint`, `status`, `error_kind` filters. Hard cap `limit ≤ 200`. | `server/routes_telemetry.py`            |
 
-`GET /health` and `GET /status` are intentionally separate. `health` is for supervisors that do not hold the API key. `status` is for an operator who does and wants per-collection progress.
+**Endpoint shape asymmetry — intentional**: `/health` is a *liveness* probe (`{status, version}`); `/ready` is a *readiness* probe (`{ready, checks}`). They serve different consumers and have different failure semantics. `/health` never returns 503 — if the process can answer at all, it is alive. `/ready` returns 503 when `SearchStore.ping()` fails, signalling that the service cannot yet serve search requests. Neither endpoint requires auth; both are safe to expose to supervisors that do not hold the API key.
+
+**Gating vs. informational**: `/ready` is the correct gate for "can I send a query yet?" checks (e.g. installer warm-up polls, load-balancer health checks). `/status` is informational — it requires auth and returns per-collection progress, watcher state, and the full `readiness` sub-object including embedder/reranker warm status and job queue depth. Use `/ready` for automated gating; use `/status` for operator inspection.
+
+**`watcher.running` flag**: the `readiness.watcher.running` field on `/status` reflects the live state of the watchdog observer. The legacy top-level `watching` field on each `StatusCollectionEntry` item is per-collection (whether that collection's path is being watched) and remains separate. Do not conflate the two — `readiness.watcher.running = false` means the watcher process is not running at all; `collections[].watching = false` means that specific collection is not under active file-watch (e.g. it was registered without a path).
 
 ### Correlation IDs and `X-Request-ID`
 
@@ -142,10 +149,11 @@ Note: `archon-search status` is purely a local OS-supervisor query — `cli/stat
 In order:
 
 1. `curl http://127.0.0.1:8765/health` — confirms the process is up. If this fails, check `~/.archon-search/logs/archon-search.log` (macOS) or `journalctl --user -u archon-search` (Linux).
-2. `curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8765/status` — inspect the per-collection block. A collection with `status: "not_yet_indexed"` or `processed_files < total_files` is still ingesting; consult `eta_seconds`. (The `archon-search status` CLI is OS-supervisor-only and does not show this.)
-3. `archon-search collection list` — confirm the expected collections actually exist in the caller's namespace. Routing only considers namespace-visible collections (`routes_status.py` filters by `request.state.namespace`).
-4. `GET /indexing-state` — machine-readable form of the same data; useful when `error_count > 0`.
-5. If indexes look stale, re-run `archon-search sync` or `archon-search collection reindex <name>`.
+2. `curl http://127.0.0.1:8765/ready` — confirms the storage layer is connected and the service can accept queries. HTTP 503 with `{"ready": false, "checks": {"storage": "fail"}}` means the LanceDB store is not reachable; restart the service or check `~/.archon-search/logs/archon-search.log`. This step requires no API key.
+3. `curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8765/status` — inspect the per-collection block. A collection with `status: "not_yet_indexed"` or `processed_files < total_files` is still ingesting; consult `eta_seconds`. (The `archon-search status` CLI is OS-supervisor-only and does not show this.)
+4. `archon-search collection list` — confirm the expected collections actually exist in the caller's namespace. Routing only considers namespace-visible collections (`routes_status.py` filters by `request.state.namespace`).
+5. `GET /indexing-state` — machine-readable form of the same data; useful when `error_count > 0`.
+6. If indexes look stale, re-run `archon-search sync` or `archon-search collection reindex <name>`.
 
 ### Service will not start
 

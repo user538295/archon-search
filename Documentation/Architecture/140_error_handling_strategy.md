@@ -45,7 +45,7 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
 `server/middleware_auth.py::APIKeyMiddleware`:
 
 - Missing `Authorization` header, wrong scheme, or token that fails `secrets.compare_digest` against both the per-namespace key map and the default API key → `401`, header `WWW-Authenticate: Bearer`, empty body.
-- Exempt paths (`/health`, `/docs`, `/openapi.json`, `/redoc`) bypass the middleware entirely.
+- Exempt paths (`/health`, `/ready`, `/docs`, `/openapi.json`, `/redoc`) bypass the middleware entirely.
 - If a resolved namespace fails `_validate_namespace`, the middleware logs and returns `500` (defensive — should not occur if config validates).
 
 The middleware iterates the full namespace map without short-circuit (`resolved_namespace = ns  # no break` — `middleware_auth.py:43`) to prevent timing-based token discovery.
@@ -62,6 +62,7 @@ Verified from `archon_search/server/routes_*.py`:
 | Slots out of range (explicit handler check) | `400` | `routes_route.py:79` | `slot_out_of_range` |
 | Bad request body — Pydantic body validation | `422` | FastAPI default | none (exception fires before the handler body; telemetry is **not** recorded) |
 | Bad request body — `routes_route` explicit 400 | `400` | `routes_route.py:76, 79` | `validation_error` (via `_redact_validation`, mapped to `empty_query` / `slot_out_of_range` / `validation_error`) |
+| `GET /ready` storage unavailable | `503` | `routes_ready.py` — returns `ReadinessResponse` body (`{"ready": false, "checks": {"storage": "fail"}}`). This is an **expected "not-ready-yet" state**, not a pipeline error. The body is `ReadinessResponse`, never `{"detail": ...}`. Contrast with 503 from `routes_search.py` which uses `JSONResponse({"detail": "service unavailable"}, status_code=503)` on meta-lookup failure. | n/a (pre-query; not logged) |
 | Collection not found | `404` | `routes_search.py:92-93` (returns `JSONResponse` directly), `routes_collections.py:180, 186, 243, 251, 309, 313` | n/a (not logged) |
 | Job not found | `404` | `routes_jobs.py:113, 115, 133, 135, 145` | n/a |
 | Collection name conflict | `409` | `routes_collections.py:130, 136, 148, 200` | n/a |
