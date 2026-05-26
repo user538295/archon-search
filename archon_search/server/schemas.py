@@ -4,7 +4,56 @@ Pure data models — no business logic.
 """
 from __future__ import annotations
 
+from enum import Enum
+
 from pydantic import BaseModel
+
+
+class CheckStatus(str, Enum):
+    """Storage check result for readiness probes."""
+
+    OK = "ok"
+    FAIL = "fail"
+
+
+class ReadinessChecks(BaseModel):
+    storage: CheckStatus
+
+
+class ReadinessResponse(BaseModel):
+    """Terse, unauthenticated response body for GET /ready."""
+
+    ready: bool
+    checks: ReadinessChecks
+
+
+class WatcherReport(BaseModel):
+    running: bool
+    watching: list[str] = []
+
+
+class JobCounts(BaseModel):
+    """Job queue depth snapshot.
+
+    ``running`` counts jobs in RUNNING status only; CANCELLING jobs are
+    excluded — a cancelling job is in the process of stopping and does not
+    represent available capacity.
+    """
+
+    pending: int
+    running: int
+
+
+class ReadinessDetail(BaseModel):
+    """Rich readiness sub-object for authenticated GET /status."""
+
+    storage_connected: bool
+    embedder_warm: bool
+    reranker_warm: bool
+    jobs: JobCounts
+    collections_indexing: int
+    collections_failed: int
+    watcher: WatcherReport
 
 
 class HealthResponse(BaseModel):
@@ -31,6 +80,7 @@ class StatusResponse(BaseModel):
     pid: int
     version: str
     collections: list[StatusCollectionEntry]
+    readiness: ReadinessDetail | None = None
 
 
 class IndexingStateCollectionEntry(BaseModel):

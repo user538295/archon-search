@@ -1,1044 +1,54 @@
 {
-  "openapi": "3.1.0",
-  "info": {
-    "title": "archon-search",
-    "description": "REST API for archon-search document search and collection management",
-    "version": "26.5.333.post1.dev34"
-  },
-  "paths": {
-    "/collections/": {
-      "get": {
-        "summary": "List Collections",
-        "description": "List all known collections with basic metadata.",
-        "operationId": "list_collections_collections__get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/CollectionSummary"
-                  },
-                  "type": "array",
-                  "title": "Response List Collections Collections  Get"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      },
-      "post": {
-        "summary": "Add Collection",
-        "description": "Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob.",
-        "operationId": "add_collection_collections__post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AddCollectionRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Ingest path failed safety validation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Store busy \u2014 reindex in progress"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/collections/{name}": {
-      "delete": {
-        "summary": "Remove Collection",
-        "description": "Remove a collection: delete config entry and drop LanceDB data.",
-        "operationId": "remove_collection_collections__name__delete",
-        "parameters": [
-          {
-            "name": "name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeleteResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Unauthorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Conflict"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      },
-      "get": {
-        "summary": "Get Collection Info",
-        "description": "Return CollectionDetail for a single collection. 404 if not found.",
-        "operationId": "get_collection_info_collections__name__get",
-        "parameters": [
-          {
-            "name": "name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CollectionDetail"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Unauthorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/collections/{name}/reindex": {
-      "post": {
-        "summary": "Reindex Collection",
-        "description": "Start a reindex job for an existing collection. 404 if not found.",
-        "operationId": "reindex_collection_collections__name__reindex_post",
-        "parameters": [
-          {
-            "name": "name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Unauthorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/health": {
-      "get": {
-        "summary": "Health",
-        "operationId": "health_health_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HealthResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/ingest": {
-      "post": {
-        "summary": "Ingest",
-        "operationId": "ingest_ingest_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IngestRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Ingest path failed safety validation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Store busy \u2014 reindex in progress"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/jobs/{job_id}": {
-      "get": {
-        "summary": "Get Job",
-        "operationId": "get_job_jobs__job_id__get",
-        "parameters": [
-          {
-            "name": "job_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Job Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Unauthorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      },
-      "delete": {
-        "summary": "Delete Job",
-        "operationId": "delete_job_jobs__job_id__delete",
-        "parameters": [
-          {
-            "name": "job_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Job Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobResponse"
-                }
-              }
-            }
-          },
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobResponse"
-                }
-              }
-            },
-            "description": "Accepted"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Unauthorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/status": {
-      "get": {
-        "summary": "Status",
-        "description": "Return rich operator-facing status including service info and per-collection progress.",
-        "operationId": "status_status_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatusResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/indexing-state": {
-      "get": {
-        "summary": "Indexing State",
-        "description": "Return raw indexing state filtered to the caller's namespace. Returns {} when no state file exists.",
-        "operationId": "indexing_state_indexing_state_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IndexingStateResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/route": {
-      "post": {
-        "summary": "Route",
-        "description": "Route a query to the appropriate search collections.\n\nReturns the pre_context block to inject before route_task(), along with\nthe resolved pinned and routable collection names and a flag indicating\nwhether the decomposer will be invoked.",
-        "operationId": "route_route_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RouteRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RouteResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/search": {
-      "post": {
-        "summary": "Search",
-        "operationId": "search_search_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SearchRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SearchResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/explain": {
-      "post": {
-        "summary": "Explain Endpoint",
-        "description": "Return the per-stage retrieval/reranking trace for a query, plus the\nrouting decision when no collection is pinned.\n\n503 is reserved for meta-lookup / router failures (mirrors A3's /search\ntaxonomy); pipeline-stage failures (store / reranker) surface as 500 with a\nstage-specific detail. The query is never echoed in the response or telemetry.",
-        "operationId": "explain_endpoint_explain_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ExplainRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ExplainResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/telemetry/stats": {
-      "get": {
-        "summary": "Get Telemetry Stats",
-        "operationId": "get_telemetry_stats_telemetry_stats_get",
-        "parameters": [
-          {
-            "name": "since",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "date"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Since"
-            }
-          },
-          {
-            "name": "until",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "date"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Until"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/StatsResponse"
-                    },
-                    {
-                      "$ref": "#/components/schemas/DisabledResponse"
-                    }
-                  ],
-                  "title": "Response Get Telemetry Stats Telemetry Stats Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/telemetry/entries": {
-      "get": {
-        "summary": "Get Telemetry Entries",
-        "operationId": "get_telemetry_entries_telemetry_entries_get",
-        "parameters": [
-          {
-            "name": "since",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "date"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Since"
-            }
-          },
-          {
-            "name": "until",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "date"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Until"
-            }
-          },
-          {
-            "name": "collection",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Collection"
-            }
-          },
-          {
-            "name": "endpoint",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/EndpointKind"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Endpoint"
-            }
-          },
-          {
-            "name": "status",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/Status"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Status"
-            }
-          },
-          {
-            "name": "error_kind",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/ErrorKind"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Error Kind"
-            }
-          },
-          {
-            "name": "offset",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "title": "Offset"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 200,
-              "minimum": 1,
-              "default": 50,
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/EntriesResponse"
-                    },
-                    {
-                      "$ref": "#/components/schemas/DisabledResponse"
-                    }
-                  ],
-                  "title": "Response Get Telemetry Entries Telemetry Entries Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    }
-  },
   "components": {
     "schemas": {
       "AddCollectionRequest": {
         "properties": {
           "path": {
-            "type": "string",
-            "title": "Path"
+            "title": "Path",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": [
           "path"
         ],
-        "title": "AddCollectionRequest"
+        "title": "AddCollectionRequest",
+        "type": "object"
       },
       "CollectionDetail": {
         "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
+          "acl_open_count": {
+            "default": 0,
+            "title": "Acl Open Count",
+            "type": "integer"
           },
-          "path": {
-            "type": "string",
-            "title": "Path"
-          },
-          "description": {
-            "type": "string",
-            "title": "Description",
-            "default": ""
-          },
-          "doc_count": {
-            "type": "integer",
-            "title": "Doc Count",
-            "default": 0
-          },
-          "chunk_count": {
-            "type": "integer",
-            "title": "Chunk Count",
-            "default": 0
-          },
-          "namespace": {
-            "type": "string",
-            "title": "Namespace"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "embedding_model": {
-            "type": "string",
-            "title": "Embedding Model"
+          "acl_protected_count": {
+            "default": 0,
+            "title": "Acl Protected Count",
+            "type": "integer"
           },
           "centroid_present": {
-            "type": "boolean",
+            "default": false,
             "title": "Centroid Present",
-            "default": false
+            "type": "boolean"
+          },
+          "chunk_count": {
+            "default": 0,
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "doc_count": {
+            "default": 0,
+            "title": "Doc Count",
+            "type": "integer"
+          },
+          "embedding_model": {
+            "title": "Embedding Model",
+            "type": "string"
           },
           "last_indexed": {
             "anyOf": [
@@ -1051,18 +61,23 @@
             ],
             "title": "Last Indexed"
           },
-          "acl_protected_count": {
-            "type": "integer",
-            "title": "Acl Protected Count",
-            "default": 0
+          "name": {
+            "title": "Name",
+            "type": "string"
           },
-          "acl_open_count": {
-            "type": "integer",
-            "title": "Acl Open Count",
-            "default": 0
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": [
           "name",
           "path",
@@ -1070,224 +85,224 @@
           "status",
           "embedding_model"
         ],
-        "title": "CollectionDetail"
+        "title": "CollectionDetail",
+        "type": "object"
       },
       "CollectionStats": {
         "properties": {
-          "total": {
-            "type": "integer",
-            "title": "Total"
-          },
           "ok": {
-            "type": "integer",
-            "title": "Ok"
+            "title": "Ok",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
           }
         },
-        "type": "object",
         "required": [
           "total",
           "ok"
         ],
-        "title": "CollectionStats"
+        "title": "CollectionStats",
+        "type": "object"
       },
       "CollectionSummary": {
         "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "path": {
-            "type": "string",
-            "title": "Path"
+          "chunk_count": {
+            "default": 0,
+            "title": "Chunk Count",
+            "type": "integer"
           },
           "description": {
-            "type": "string",
+            "default": "",
             "title": "Description",
-            "default": ""
+            "type": "string"
           },
           "doc_count": {
-            "type": "integer",
+            "default": 0,
             "title": "Doc Count",
-            "default": 0
+            "type": "integer"
           },
-          "chunk_count": {
-            "type": "integer",
-            "title": "Chunk Count",
-            "default": 0
+          "name": {
+            "title": "Name",
+            "type": "string"
           },
           "namespace": {
-            "type": "string",
-            "title": "Namespace"
+            "title": "Namespace",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
           },
           "status": {
-            "type": "string",
-            "title": "Status"
+            "title": "Status",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": [
           "name",
           "path",
           "namespace",
           "status"
         ],
-        "title": "CollectionSummary"
+        "title": "CollectionSummary",
+        "type": "object"
       },
       "DeleteResponse": {
         "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
           "deleted": {
-            "type": "boolean",
-            "title": "Deleted"
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": [
           "name",
           "deleted"
         ],
-        "title": "DeleteResponse"
+        "title": "DeleteResponse",
+        "type": "object"
       },
       "DisabledResponse": {
         "properties": {
           "enabled": {
-            "type": "boolean",
+            "default": false,
             "title": "Enabled",
-            "default": false
+            "type": "boolean"
           }
         },
-        "type": "object",
-        "title": "DisabledResponse"
+        "title": "DisabledResponse",
+        "type": "object"
       },
       "EndpointKind": {
-        "type": "string",
         "enum": [
           "search",
           "search_with_context",
           "route",
           "explain"
         ],
-        "title": "EndpointKind"
+        "title": "EndpointKind",
+        "type": "string"
       },
       "EndpointStats": {
         "properties": {
-          "total": {
-            "type": "integer",
-            "title": "Total"
+          "error": {
+            "title": "Error",
+            "type": "integer"
           },
           "ok": {
-            "type": "integer",
-            "title": "Ok"
+            "title": "Ok",
+            "type": "integer"
           },
-          "error": {
-            "type": "integer",
-            "title": "Error"
+          "total": {
+            "title": "Total",
+            "type": "integer"
           }
         },
-        "type": "object",
         "required": [
           "total",
           "ok",
           "error"
         ],
-        "title": "EndpointStats"
+        "title": "EndpointStats",
+        "type": "object"
       },
       "EntriesResponse": {
         "properties": {
-          "schema_version": {
-            "type": "integer",
-            "title": "Schema Version",
-            "default": 1
-          },
           "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
+            "title": "Enabled",
+            "type": "boolean"
           },
           "entries": {
             "items": {
               "additionalProperties": true,
               "type": "object"
             },
-            "type": "array",
-            "title": "Entries"
+            "title": "Entries",
+            "type": "array"
           },
           "next_offset": {
-            "type": "integer",
-            "title": "Next Offset"
+            "title": "Next Offset",
+            "type": "integer"
           },
-          "total_in_window": {
-            "type": "integer",
-            "title": "Total In Window"
+          "schema_version": {
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
           },
           "skipped_lines": {
-            "type": "integer",
+            "default": 0,
             "title": "Skipped Lines",
-            "default": 0
+            "type": "integer"
+          },
+          "total_in_window": {
+            "title": "Total In Window",
+            "type": "integer"
           }
         },
-        "type": "object",
         "required": [
           "enabled",
           "entries",
           "next_offset",
           "total_in_window"
         ],
-        "title": "EntriesResponse"
+        "title": "EntriesResponse",
+        "type": "object"
       },
       "ErrorBreakdown": {
         "properties": {
           "empty_query": {
-            "type": "integer",
+            "default": 0,
             "title": "Empty Query",
-            "default": 0
-          },
-          "slot_out_of_range": {
-            "type": "integer",
-            "title": "Slot Out Of Range",
-            "default": 0
-          },
-          "timeout": {
-            "type": "integer",
-            "title": "Timeout",
-            "default": 0
+            "type": "integer"
           },
           "internal_error": {
-            "type": "integer",
+            "default": 0,
             "title": "Internal Error",
-            "default": 0
-          },
-          "validation_error": {
-            "type": "integer",
-            "title": "Validation Error",
-            "default": 0
+            "type": "integer"
           },
           "other": {
-            "type": "integer",
+            "default": 0,
             "title": "Other",
-            "default": 0
+            "type": "integer"
+          },
+          "slot_out_of_range": {
+            "default": 0,
+            "title": "Slot Out Of Range",
+            "type": "integer"
+          },
+          "timeout": {
+            "default": 0,
+            "title": "Timeout",
+            "type": "integer"
+          },
+          "validation_error": {
+            "default": 0,
+            "title": "Validation Error",
+            "type": "integer"
           }
         },
-        "type": "object",
-        "title": "ErrorBreakdown"
+        "title": "ErrorBreakdown",
+        "type": "object"
       },
       "ErrorDetail": {
         "properties": {
           "detail": {
-            "type": "string",
-            "title": "Detail"
+            "title": "Detail",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": [
           "detail"
         ],
-        "title": "ErrorDetail"
+        "title": "ErrorDetail",
+        "type": "object"
       },
       "ErrorKind": {
-        "type": "string",
         "enum": [
           "empty_query",
           "slot_out_of_range",
@@ -1296,46 +311,49 @@
           "validation_error",
           "other"
         ],
-        "title": "ErrorKind"
+        "title": "ErrorKind",
+        "type": "string"
       },
       "ExplainNearMiss": {
+        "additionalProperties": false,
         "properties": {
-          "doc_id": {
-            "type": "string",
-            "title": "Doc Id"
-          },
-          "chunk_id": {
-            "type": "string",
-            "title": "Chunk Id"
-          },
-          "source_path": {
-            "type": "string",
-            "title": "Source Path"
-          },
-          "score": {
-            "type": "number",
-            "title": "Score"
+          "acl": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acl"
           },
           "breakdown": {
             "$ref": "#/components/schemas/ExplainScoreBreakdown"
           },
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
           "file_type": {
-            "type": "string",
+            "default": "",
             "title": "File Type",
-            "default": ""
+            "type": "string"
           },
           "indexed_at": {
-            "type": "string",
+            "default": "",
             "title": "Indexed At",
-            "default": ""
-          },
-          "updated_at": {
-            "type": "string",
-            "title": "Updated At",
-            "default": ""
+            "type": "string"
           },
           "ingested_by": {
-            "type": "string",
+            "default": "cli",
             "enum": [
               "cli",
               "http",
@@ -1343,7 +361,7 @@
               "reindex"
             ],
             "title": "Ingested By",
-            "default": "cli"
+            "type": "string"
           },
           "language": {
             "anyOf": [
@@ -1360,26 +378,23 @@
             "additionalProperties": {
               "type": "string"
             },
-            "type": "object",
-            "title": "Metadata"
+            "title": "Metadata",
+            "type": "object"
           },
-          "acl": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Acl"
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          },
+          "updated_at": {
+            "default": "",
+            "title": "Updated At",
+            "type": "string"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "doc_id",
           "chunk_id",
@@ -1387,14 +402,12 @@
           "score",
           "breakdown"
         ],
-        "title": "ExplainNearMiss"
+        "title": "ExplainNearMiss",
+        "type": "object"
       },
       "ExplainRequest": {
+        "additionalProperties": false,
         "properties": {
-          "query": {
-            "type": "string",
-            "title": "Query"
-          },
           "collection": {
             "anyOf": [
               {
@@ -1406,31 +419,57 @@
             ],
             "title": "Collection"
           },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "rerank": {
+            "default": true,
+            "title": "Rerank",
+            "type": "boolean"
+          },
           "top_k": {
-            "type": "integer",
+            "default": 5,
             "maximum": 100.0,
             "minimum": 1.0,
             "title": "Top K",
-            "default": 5
-          },
-          "rerank": {
-            "type": "boolean",
-            "title": "Rerank",
-            "default": true
+            "type": "integer"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "query"
         ],
-        "title": "ExplainRequest"
+        "title": "ExplainRequest",
+        "type": "object"
       },
       "ExplainResponse": {
+        "additionalProperties": false,
         "properties": {
+          "acl_filtered": {
+            "title": "Acl Filtered",
+            "type": "boolean"
+          },
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "near_misses": {
+            "items": {
+              "$ref": "#/components/schemas/ExplainNearMiss"
+            },
+            "title": "Near Misses",
+            "type": "array"
+          },
           "rerank": {
-            "type": "boolean",
-            "title": "Rerank"
+            "title": "Rerank",
+            "type": "boolean"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ExplainResult"
+            },
+            "title": "Results",
+            "type": "array"
           },
           "routing": {
             "anyOf": [
@@ -1441,28 +480,6 @@
                 "type": "null"
               }
             ]
-          },
-          "collection": {
-            "type": "string",
-            "title": "Collection"
-          },
-          "acl_filtered": {
-            "type": "boolean",
-            "title": "Acl Filtered"
-          },
-          "results": {
-            "items": {
-              "$ref": "#/components/schemas/ExplainResult"
-            },
-            "type": "array",
-            "title": "Results"
-          },
-          "near_misses": {
-            "items": {
-              "$ref": "#/components/schemas/ExplainNearMiss"
-            },
-            "type": "array",
-            "title": "Near Misses"
           },
           "stage_timings_ms": {
             "anyOf": [
@@ -1479,8 +496,6 @@
             "title": "Stage Timings Ms"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "rerank",
           "routing",
@@ -1489,50 +504,49 @@
           "results",
           "near_misses"
         ],
-        "title": "ExplainResponse"
+        "title": "ExplainResponse",
+        "type": "object"
       },
       "ExplainResult": {
+        "additionalProperties": false,
         "properties": {
-          "doc_id": {
-            "type": "string",
-            "title": "Doc Id"
-          },
-          "chunk_id": {
-            "type": "string",
-            "title": "Chunk Id"
-          },
-          "source_path": {
-            "type": "string",
-            "title": "Source Path"
-          },
-          "text": {
-            "type": "string",
-            "title": "Text"
-          },
-          "score": {
-            "type": "number",
-            "title": "Score"
+          "acl": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acl"
           },
           "breakdown": {
             "$ref": "#/components/schemas/ExplainScoreBreakdown"
           },
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
           "file_type": {
-            "type": "string",
+            "default": "",
             "title": "File Type",
-            "default": ""
+            "type": "string"
           },
           "indexed_at": {
-            "type": "string",
+            "default": "",
             "title": "Indexed At",
-            "default": ""
-          },
-          "updated_at": {
-            "type": "string",
-            "title": "Updated At",
-            "default": ""
+            "type": "string"
           },
           "ingested_by": {
-            "type": "string",
+            "default": "cli",
             "enum": [
               "cli",
               "http",
@@ -1540,7 +554,7 @@
               "reindex"
             ],
             "title": "Ingested By",
-            "default": "cli"
+            "type": "string"
           },
           "language": {
             "anyOf": [
@@ -1557,26 +571,27 @@
             "additionalProperties": {
               "type": "string"
             },
-            "type": "object",
-            "title": "Metadata"
+            "title": "Metadata",
+            "type": "object"
           },
-          "acl": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Acl"
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "updated_at": {
+            "default": "",
+            "title": "Updated At",
+            "type": "string"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "doc_id",
           "chunk_id",
@@ -1585,43 +600,12 @@
           "score",
           "breakdown"
         ],
-        "title": "ExplainResult"
+        "title": "ExplainResult",
+        "type": "object"
       },
       "ExplainScoreBreakdown": {
+        "additionalProperties": false,
         "properties": {
-          "vector_rank": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Vector Rank"
-          },
-          "vector_score": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Vector Score"
-          },
-          "vector_score_kind": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Vector Score Kind"
-          },
           "fts_rank": {
             "anyOf": [
               {
@@ -1655,10 +639,6 @@
             ],
             "title": "Fts Score Kind"
           },
-          "rrf_score": {
-            "type": "number",
-            "title": "Rrf Score"
-          },
           "reranker_score": {
             "anyOf": [
               {
@@ -1669,10 +649,45 @@
               }
             ],
             "title": "Reranker Score"
+          },
+          "rrf_score": {
+            "title": "Rrf Score",
+            "type": "number"
+          },
+          "vector_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Rank"
+          },
+          "vector_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Score"
+          },
+          "vector_score_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Score Kind"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "vector_rank",
           "vector_score",
@@ -1683,7 +698,8 @@
           "rrf_score",
           "reranker_score"
         ],
-        "title": "ExplainScoreBreakdown"
+        "title": "ExplainScoreBreakdown",
+        "type": "object"
       },
       "HTTPValidationError": {
         "properties": {
@@ -1691,46 +707,43 @@
             "items": {
               "$ref": "#/components/schemas/ValidationError"
             },
-            "type": "array",
-            "title": "Detail"
+            "title": "Detail",
+            "type": "array"
           }
         },
-        "type": "object",
-        "title": "HTTPValidationError"
+        "title": "HTTPValidationError",
+        "type": "object"
       },
       "HealthResponse": {
         "properties": {
           "status": {
-            "type": "string",
-            "title": "Status"
+            "title": "Status",
+            "type": "string"
           },
           "version": {
-            "type": "string",
-            "title": "Version"
+            "title": "Version",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": [
           "status",
           "version"
         ],
-        "title": "HealthResponse"
+        "title": "HealthResponse",
+        "type": "object"
       },
       "IndexingStateCollectionEntry": {
         "properties": {
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "processed_files": {
-            "type": "integer",
-            "title": "Processed Files",
-            "default": 0
-          },
-          "total_files": {
-            "type": "integer",
-            "title": "Total Files",
-            "default": 0
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
           },
           "error": {
             "anyOf": [
@@ -1744,9 +757,14 @@
             "title": "Error"
           },
           "error_count": {
-            "type": "integer",
+            "default": 0,
             "title": "Error Count",
-            "default": 0
+            "type": "integer"
+          },
+          "processed_files": {
+            "default": 0,
+            "title": "Processed Files",
+            "type": "integer"
           },
           "started_at": {
             "anyOf": [
@@ -1759,23 +777,21 @@
             ],
             "title": "Started At"
           },
-          "completed_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Completed At"
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "total_files": {
+            "default": 0,
+            "title": "Total Files",
+            "type": "integer"
           }
         },
-        "type": "object",
         "required": [
           "status"
         ],
-        "title": "IndexingStateCollectionEntry"
+        "title": "IndexingStateCollectionEntry",
+        "type": "object"
       },
       "IndexingStateResponse": {
         "properties": {
@@ -1783,8 +799,8 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/IndexingStateCollectionEntry"
             },
-            "type": "object",
-            "title": "Collections"
+            "title": "Collections",
+            "type": "object"
           },
           "last_updated": {
             "anyOf": [
@@ -1809,28 +825,17 @@
             "title": "Trigger"
           }
         },
-        "type": "object",
         "required": [
           "collections"
         ],
-        "title": "IndexingStateResponse"
+        "title": "IndexingStateResponse",
+        "type": "object"
       },
       "IngestRequest": {
         "properties": {
           "collection": {
-            "type": "string",
-            "title": "Collection"
-          },
-          "path": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Path"
+            "title": "Collection",
+            "type": "string"
           },
           "documents": {
             "anyOf": [
@@ -1848,36 +853,11 @@
             "title": "Documents"
           },
           "ingested_by": {
-            "type": "string",
+            "default": "http",
             "title": "Ingested By",
-            "default": "http"
-          }
-        },
-        "type": "object",
-        "required": [
-          "collection"
-        ],
-        "title": "IngestRequest"
-      },
-      "JobResponse": {
-        "properties": {
-          "job_id": {
-            "type": "string",
-            "title": "Job Id"
+            "type": "string"
           },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "created_at": {
-            "type": "string",
-            "title": "Created At"
-          },
-          "updated_at": {
-            "type": "string",
-            "title": "Updated At"
-          },
-          "result": {
+          "path": {
             "anyOf": [
               {
                 "type": "string"
@@ -1886,7 +866,39 @@
                 "type": "null"
               }
             ],
-            "title": "Result"
+            "title": "Path"
+          }
+        },
+        "required": [
+          "collection"
+        ],
+        "title": "IngestRequest",
+        "type": "object"
+      },
+      "JobCounts": {
+        "description": "Job queue depth snapshot.\n\n``running`` counts jobs in RUNNING status only; CANCELLING jobs are\nexcluded \u2014 a cancelling job is in the process of stopping and does not\nrepresent available capacity.",
+        "properties": {
+          "pending": {
+            "title": "Pending",
+            "type": "integer"
+          },
+          "running": {
+            "title": "Running",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pending",
+          "running"
+        ],
+        "title": "JobCounts",
+        "type": "object"
+      },
+      "JobResponse": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
           },
           "error": {
             "anyOf": [
@@ -1899,12 +911,34 @@
             ],
             "title": "Error"
           },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
           "namespace": {
-            "type": "string",
-            "title": "Namespace"
+            "title": "Namespace",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": [
           "job_id",
           "status",
@@ -1912,7 +946,8 @@
           "updated_at",
           "namespace"
         ],
-        "title": "JobResponse"
+        "title": "JobResponse",
+        "type": "object"
       },
       "LatencyPercentiles": {
         "properties": {
@@ -1939,18 +974,60 @@
             "title": "P95"
           }
         },
-        "type": "object",
         "required": [
           "p50",
           "p95"
         ],
-        "title": "LatencyPercentiles"
+        "title": "LatencyPercentiles",
+        "type": "object"
+      },
+      "ReadinessDetail": {
+        "description": "Rich readiness sub-object for authenticated GET /status.",
+        "properties": {
+          "collections_failed": {
+            "title": "Collections Failed",
+            "type": "integer"
+          },
+          "collections_indexing": {
+            "title": "Collections Indexing",
+            "type": "integer"
+          },
+          "embedder_warm": {
+            "title": "Embedder Warm",
+            "type": "boolean"
+          },
+          "jobs": {
+            "$ref": "#/components/schemas/JobCounts"
+          },
+          "reranker_warm": {
+            "title": "Reranker Warm",
+            "type": "boolean"
+          },
+          "storage_connected": {
+            "title": "Storage Connected",
+            "type": "boolean"
+          },
+          "watcher": {
+            "$ref": "#/components/schemas/WatcherReport"
+          }
+        },
+        "required": [
+          "storage_connected",
+          "embedder_warm",
+          "reranker_warm",
+          "jobs",
+          "collections_indexing",
+          "collections_failed",
+          "watcher"
+        ],
+        "title": "ReadinessDetail",
+        "type": "object"
       },
       "RouteRequest": {
         "properties": {
           "query": {
-            "type": "string",
-            "title": "Query"
+            "title": "Query",
+            "type": "string"
           },
           "slots": {
             "anyOf": [
@@ -1964,14 +1041,25 @@
             "title": "Slots"
           }
         },
-        "type": "object",
         "required": [
           "query"
         ],
-        "title": "RouteRequest"
+        "title": "RouteRequest",
+        "type": "object"
       },
       "RouteResponse": {
         "properties": {
+          "decomposer_invoked": {
+            "title": "Decomposer Invoked",
+            "type": "boolean"
+          },
+          "pinned_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pinned Names",
+            "type": "array"
+          },
           "pre_context": {
             "anyOf": [
               {
@@ -1983,40 +1071,26 @@
             ],
             "title": "Pre Context"
           },
-          "pinned_names": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Pinned Names"
-          },
           "routable_names": {
             "items": {
               "type": "string"
             },
-            "type": "array",
-            "title": "Routable Names"
-          },
-          "decomposer_invoked": {
-            "type": "boolean",
-            "title": "Decomposer Invoked"
+            "title": "Routable Names",
+            "type": "array"
           }
         },
-        "type": "object",
         "required": [
           "pre_context",
           "pinned_names",
           "routable_names",
           "decomposer_invoked"
         ],
-        "title": "RouteResponse"
+        "title": "RouteResponse",
+        "type": "object"
       },
       "RoutingCandidate": {
+        "additionalProperties": false,
         "properties": {
-          "collection": {
-            "type": "string",
-            "title": "Collection"
-          },
           "centroid_score": {
             "anyOf": [
               {
@@ -2027,44 +1101,46 @@
               }
             ],
             "title": "Centroid Score"
+          },
+          "collection": {
+            "title": "Collection",
+            "type": "string"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "collection",
           "centroid_score"
         ],
-        "title": "RoutingCandidate"
+        "title": "RoutingCandidate",
+        "type": "object"
       },
       "RoutingExplain": {
+        "additionalProperties": false,
         "properties": {
-          "invoked": {
-            "type": "boolean",
-            "title": "Invoked"
-          },
-          "chosen_collection": {
-            "type": "string",
-            "title": "Chosen Collection"
-          },
-          "confidence_threshold": {
-            "type": "number",
-            "title": "Confidence Threshold"
-          },
-          "chosen_below_threshold": {
-            "type": "boolean",
-            "title": "Chosen Below Threshold"
-          },
           "candidates": {
             "items": {
               "$ref": "#/components/schemas/RoutingCandidate"
             },
-            "type": "array",
-            "title": "Candidates"
+            "title": "Candidates",
+            "type": "array"
+          },
+          "chosen_below_threshold": {
+            "title": "Chosen Below Threshold",
+            "type": "boolean"
+          },
+          "chosen_collection": {
+            "title": "Chosen Collection",
+            "type": "string"
+          },
+          "confidence_threshold": {
+            "title": "Confidence Threshold",
+            "type": "number"
+          },
+          "invoked": {
+            "title": "Invoked",
+            "type": "boolean"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": [
           "invoked",
           "chosen_collection",
@@ -2072,9 +1148,12 @@
           "chosen_below_threshold",
           "candidates"
         ],
-        "title": "RoutingExplain"
+        "title": "RoutingExplain",
+        "type": "object"
       },
       "SearchFilters": {
+        "additionalProperties": false,
+        "description": "Filter dimensions applied to a hybrid search query.",
         "properties": {
           "file_type": {
             "anyOf": [
@@ -2087,37 +1166,20 @@
             ],
             "title": "File Type"
           },
-          "source_path_prefix": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Path Prefix"
-          },
-          "source_path_glob": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Path Glob"
+          "include_metadata": {
+            "default": false,
+            "title": "Include Metadata",
+            "type": "boolean"
           },
           "indexed_after": {
             "anyOf": [
               {
-                "type": "string",
-                "format": "date-time"
+                "format": "date-time",
+                "type": "string"
               },
               {
-                "type": "string",
-                "format": "date"
+                "format": "date",
+                "type": "string"
               },
               {
                 "type": "null"
@@ -2128,12 +1190,12 @@
           "indexed_before": {
             "anyOf": [
               {
-                "type": "string",
-                "format": "date-time"
+                "format": "date-time",
+                "type": "string"
               },
               {
-                "type": "string",
-                "format": "date"
+                "format": "date",
+                "type": "string"
               },
               {
                 "type": "null"
@@ -2150,36 +1212,40 @@
                 "type": "null"
               }
             ],
-            "title": "Language",
-            "description": "reserved \u2014 language extraction is not yet implemented. This field is tracked as roadmap item C2. Passing a non-empty value raises a validation error."
+            "description": "reserved \u2014 language extraction is not yet implemented. This field is tracked as roadmap item C2. Passing a non-empty value raises a validation error.",
+            "title": "Language"
           },
-          "include_metadata": {
-            "type": "boolean",
-            "title": "Include Metadata",
-            "default": false
+          "source_path_glob": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path Glob"
+          },
+          "source_path_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path Prefix"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "title": "SearchFilters",
-        "description": "Filter dimensions applied to a hybrid search query."
+        "type": "object"
       },
       "SearchRequest": {
         "properties": {
           "collection": {
-            "type": "string",
-            "title": "Collection"
-          },
-          "query": {
-            "type": "string",
-            "title": "Query"
-          },
-          "top_k": {
-            "type": "integer",
-            "maximum": 100.0,
-            "minimum": 1.0,
-            "title": "Top K",
-            "default": 5
+            "title": "Collection",
+            "type": "string"
           },
           "filters": {
             "anyOf": [
@@ -2190,96 +1256,49 @@
                 "type": "null"
               }
             ]
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "top_k": {
+            "default": 5,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "type": "integer"
           }
         },
-        "type": "object",
         "required": [
           "collection",
           "query"
         ],
-        "title": "SearchRequest"
+        "title": "SearchRequest",
+        "type": "object"
       },
       "SearchResponse": {
         "properties": {
+          "acl_filtered": {
+            "title": "Acl Filtered",
+            "type": "boolean"
+          },
           "results": {
             "items": {
               "$ref": "#/components/schemas/SearchResultSchema"
             },
-            "type": "array",
-            "title": "Results"
-          },
-          "acl_filtered": {
-            "type": "boolean",
-            "title": "Acl Filtered"
+            "title": "Results",
+            "type": "array"
           }
         },
-        "type": "object",
         "required": [
           "results",
           "acl_filtered"
         ],
-        "title": "SearchResponse"
+        "title": "SearchResponse",
+        "type": "object"
       },
       "SearchResultSchema": {
         "properties": {
-          "doc_id": {
-            "type": "string",
-            "title": "Doc Id"
-          },
-          "chunk_id": {
-            "type": "string",
-            "title": "Chunk Id"
-          },
-          "text": {
-            "type": "string",
-            "title": "Text"
-          },
-          "score": {
-            "type": "number",
-            "title": "Score"
-          },
-          "source_path": {
-            "type": "string",
-            "title": "Source Path"
-          },
-          "file_type": {
-            "type": "string",
-            "title": "File Type",
-            "default": ""
-          },
-          "language": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Language"
-          },
-          "indexed_at": {
-            "type": "string",
-            "title": "Indexed At",
-            "default": ""
-          },
-          "updated_at": {
-            "type": "string",
-            "title": "Updated At",
-            "default": ""
-          },
-          "ingested_by": {
-            "type": "string",
-            "title": "Ingested By",
-            "default": "cli"
-          },
-          "metadata": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Metadata"
-          },
           "acl": {
             "anyOf": [
               {
@@ -2293,9 +1312,66 @@
               }
             ],
             "title": "Acl"
+          },
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "file_type": {
+            "default": "",
+            "title": "File Type",
+            "type": "string"
+          },
+          "indexed_at": {
+            "default": "",
+            "title": "Indexed At",
+            "type": "string"
+          },
+          "ingested_by": {
+            "default": "cli",
+            "title": "Ingested By",
+            "type": "string"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Metadata",
+            "type": "object"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "updated_at": {
+            "default": "",
+            "title": "Updated At",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": [
           "doc_id",
           "chunk_id",
@@ -2303,18 +1379,39 @@
           "score",
           "source_path"
         ],
-        "title": "SearchResultSchema"
+        "title": "SearchResultSchema",
+        "type": "object"
       },
       "StatsResponse": {
         "properties": {
-          "schema_version": {
-            "type": "integer",
-            "title": "Schema Version",
-            "default": 1
+          "by_collection": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CollectionStats"
+            },
+            "title": "By Collection",
+            "type": "object"
+          },
+          "by_endpoint": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EndpointStats"
+            },
+            "title": "By Endpoint",
+            "type": "object"
           },
           "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "error_breakdown": {
+            "$ref": "#/components/schemas/ErrorBreakdown"
+          },
+          "latency_ms": {
+            "$ref": "#/components/schemas/LatencyPercentiles"
+          },
+          "schema_version": {
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
           },
           "since": {
             "anyOf": [
@@ -2327,21 +1424,10 @@
             ],
             "title": "Since"
           },
-          "until": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Until"
-          },
-          "total_queries": {
-            "type": "integer",
-            "title": "Total Queries",
-            "default": 0
+          "skipped_lines": {
+            "default": 0,
+            "title": "Skipped Lines",
+            "type": "integer"
           },
           "success_rate": {
             "anyOf": [
@@ -2354,96 +1440,50 @@
             ],
             "title": "Success Rate"
           },
-          "skipped_lines": {
-            "type": "integer",
-            "title": "Skipped Lines",
-            "default": 0
+          "total_queries": {
+            "default": 0,
+            "title": "Total Queries",
+            "type": "integer"
           },
-          "latency_ms": {
-            "$ref": "#/components/schemas/LatencyPercentiles"
-          },
-          "by_endpoint": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/EndpointStats"
-            },
-            "type": "object",
-            "title": "By Endpoint"
-          },
-          "by_collection": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/CollectionStats"
-            },
-            "type": "object",
-            "title": "By Collection"
-          },
-          "error_breakdown": {
-            "$ref": "#/components/schemas/ErrorBreakdown"
+          "until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until"
           }
         },
-        "type": "object",
         "required": [
           "enabled"
         ],
-        "title": "StatsResponse"
+        "title": "StatsResponse",
+        "type": "object"
       },
       "Status": {
-        "type": "string",
         "enum": [
           "ok",
           "validation_error",
           "timeout",
           "internal_error"
         ],
-        "title": "Status"
+        "title": "Status",
+        "type": "string"
       },
       "StatusCollectionEntry": {
         "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "path": {
-            "type": "string",
-            "title": "Path"
+          "chunk_count": {
+            "default": 0,
+            "title": "Chunk Count",
+            "type": "integer"
           },
           "doc_count": {
-            "type": "integer",
+            "default": 0,
             "title": "Doc Count",
-            "default": 0
-          },
-          "chunk_count": {
-            "type": "integer",
-            "title": "Chunk Count",
-            "default": 0
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "watching": {
-            "type": "boolean",
-            "title": "Watching"
-          },
-          "eta_seconds": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Eta Seconds"
-          },
-          "processed_files": {
-            "type": "integer",
-            "title": "Processed Files",
-            "default": 0
-          },
-          "total_files": {
-            "type": "integer",
-            "title": "Total Files",
-            "default": 0
+            "type": "integer"
           },
           "error": {
             "anyOf": [
@@ -2457,53 +1497,107 @@
             "title": "Error"
           },
           "error_count": {
-            "type": "integer",
+            "default": 0,
             "title": "Error Count",
-            "default": 0
+            "type": "integer"
+          },
+          "eta_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta Seconds"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "processed_files": {
+            "default": 0,
+            "title": "Processed Files",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "total_files": {
+            "default": 0,
+            "title": "Total Files",
+            "type": "integer"
+          },
+          "watching": {
+            "title": "Watching",
+            "type": "boolean"
           }
         },
-        "type": "object",
         "required": [
           "name",
           "path",
           "status",
           "watching"
         ],
-        "title": "StatusCollectionEntry"
+        "title": "StatusCollectionEntry",
+        "type": "object"
       },
       "StatusResponse": {
         "properties": {
-          "running": {
-            "type": "boolean",
-            "title": "Running"
-          },
-          "pid": {
-            "type": "integer",
-            "title": "Pid"
-          },
-          "version": {
-            "type": "string",
-            "title": "Version"
-          },
           "collections": {
             "items": {
               "$ref": "#/components/schemas/StatusCollectionEntry"
             },
-            "type": "array",
-            "title": "Collections"
+            "title": "Collections",
+            "type": "array"
+          },
+          "pid": {
+            "title": "Pid",
+            "type": "integer"
+          },
+          "readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadinessDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": [
           "running",
           "pid",
           "version",
           "collections"
         ],
-        "title": "StatusResponse"
+        "title": "StatusResponse",
+        "type": "object"
       },
       "ValidationError": {
         "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
           "loc": {
             "items": {
               "anyOf": [
@@ -2515,38 +1609,1035 @@
                 }
               ]
             },
-            "type": "array",
-            "title": "Location"
+            "title": "Location",
+            "type": "array"
           },
           "msg": {
-            "type": "string",
-            "title": "Message"
+            "title": "Message",
+            "type": "string"
           },
           "type": {
-            "type": "string",
-            "title": "Error Type"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "ctx": {
-            "type": "object",
-            "title": "Context"
+            "title": "Error Type",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": [
           "loc",
           "msg",
           "type"
         ],
-        "title": "ValidationError"
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WatcherReport": {
+        "properties": {
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "watching": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Watching",
+            "type": "array"
+          }
+        },
+        "required": [
+          "running"
+        ],
+        "title": "WatcherReport",
+        "type": "object"
       }
     },
     "securitySchemes": {
       "BearerAuth": {
-        "type": "http",
-        "scheme": "bearer"
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "REST API for archon-search document search and collection management",
+    "title": "archon-search"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/collections/": {
+      "get": {
+        "description": "List all known collections with basic metadata.",
+        "operationId": "list_collections_collections__get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CollectionSummary"
+                  },
+                  "title": "Response List Collections Collections  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Collections"
+      },
+      "post": {
+        "description": "Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob.",
+        "operationId": "add_collection_collections__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddCollectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Ingest path failed safety validation"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Store busy \u2014 reindex in progress"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Add Collection"
+      }
+    },
+    "/collections/{name}": {
+      "delete": {
+        "description": "Remove a collection: delete config entry and drop LanceDB data.",
+        "operationId": "remove_collection_collections__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Remove Collection"
+      },
+      "get": {
+        "description": "Return CollectionDetail for a single collection. 404 if not found.",
+        "operationId": "get_collection_info_collections__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Collection Info"
+      }
+    },
+    "/collections/{name}/reindex": {
+      "post": {
+        "description": "Start a reindex job for an existing collection. 404 if not found.",
+        "operationId": "reindex_collection_collections__name__reindex_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Reindex Collection"
+      }
+    },
+    "/explain": {
+      "post": {
+        "description": "Return the per-stage retrieval/reranking trace for a query, plus the\nrouting decision when no collection is pinned.\n\n503 is reserved for meta-lookup / router failures (mirrors A3's /search\ntaxonomy); pipeline-stage failures (store / reranker) surface as 500 with a\nstage-specific detail. The query is never echoed in the response or telemetry.",
+        "operationId": "explain_endpoint_explain_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplainResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Explain Endpoint"
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/indexing-state": {
+      "get": {
+        "description": "Return raw indexing state filtered to the caller's namespace. Returns {} when no state file exists.",
+        "operationId": "indexing_state_indexing_state_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexingStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Indexing State"
+      }
+    },
+    "/ingest": {
+      "post": {
+        "operationId": "ingest_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Ingest path failed safety validation"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Store busy \u2014 reindex in progress"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Ingest"
+      }
+    },
+    "/jobs/{job_id}": {
+      "delete": {
+        "operationId": "delete_job_jobs__job_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Delete Job"
+      },
+      "get": {
+        "operationId": "get_job_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Job"
+      }
+    },
+    "/route": {
+      "post": {
+        "description": "Route a query to the appropriate search collections.\n\nReturns the pre_context block to inject before route_task(), along with\nthe resolved pinned and routable collection names and a flag indicating\nwhether the decomposer will be invoked.",
+        "operationId": "route_route_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Route"
+      }
+    },
+    "/search": {
+      "post": {
+        "operationId": "search_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Search"
+      }
+    },
+    "/status": {
+      "get": {
+        "description": "Return rich operator-facing status including service info and per-collection progress.",
+        "operationId": "status_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Status"
+      }
+    },
+    "/telemetry/entries": {
+      "get": {
+        "operationId": "get_telemetry_entries_telemetry_entries_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          },
+          {
+            "in": "query",
+            "name": "collection",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Collection"
+            }
+          },
+          {
+            "in": "query",
+            "name": "endpoint",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EndpointKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Endpoint"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Status"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ErrorKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/EntriesResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DisabledResponse"
+                    }
+                  ],
+                  "title": "Response Get Telemetry Entries Telemetry Entries Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Telemetry Entries"
+      }
+    },
+    "/telemetry/stats": {
+      "get": {
+        "operationId": "get_telemetry_stats_telemetry_stats_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/StatsResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DisabledResponse"
+                    }
+                  ],
+                  "title": "Response Get Telemetry Stats Telemetry Stats Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Telemetry Stats"
       }
     }
   }

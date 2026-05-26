@@ -325,7 +325,7 @@ Note: `state_store = request.app.state.state_store` and `state = state_store.rea
 > **Releasable**: after Task 4.1, all new response models are importable and snapshot-testable.
 
 #### Task 4.1 — `CheckStatus`, `ReadinessResponse`, `ReadinessDetail`, `StatusResponse.readiness`
-- [ ] **File**: `archon_search/server/schemas.py`
+- [x] **File**: `archon_search/server/schemas.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `CheckStatus(str, Enum)` with members `OK = "ok"` and `FAIL = "fail"`.
