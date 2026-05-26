@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import dataclasses
+import threading
 
 import pytest
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import SearchResult
-from archon_search.reranker import Reranker, RerankerBackend, make_reranker
+from archon_search.reranker import ModelReranker, Reranker, RerankerBackend, make_reranker
 
 
 # ---------------------------------------------------------------------------
@@ -17,6 +18,8 @@ from archon_search.reranker import Reranker, RerankerBackend, make_reranker
 
 class _MockRerankerBackend:
     """Returns scores passed in at construction time, in order."""
+
+    is_warm: bool = False
 
     def __init__(self, scores: list[float] | None = None) -> None:
         self._scores = scores or [0.5]
@@ -161,6 +164,8 @@ async def test_P14_6_reranker_stable_order_on_equal_scores() -> None:
 async def test_P14_7_reranker_score_count_mismatch_raises_valueerror() -> None:
     """ backend returns different number of scores than candidates → ValueError."""
     class _BadCountBackend:
+        is_warm: bool = False
+
         def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
             # Returns one score regardless of how many pairs
             return [0.99]
@@ -390,3 +395,102 @@ async def test_rerank_with_trace_records_stage_when_bound() -> None:
     with bind_stage_recorder() as recorder:
         await reranker._rerank_with_trace("query", scored, top_k=2)
     assert "rerank" in recorder.stage_timings_ms
+
+
+# ===========================================================================
+# is_warm — Task 2.2 (B2)
+# ===========================================================================
+
+
+def test_model_reranker_is_warm_false_before_predict() -> None:
+    mr = ModelReranker("some-model")
+    assert mr.is_warm is False
+    assert mr._model is None
+
+
+def test_model_reranker_is_warm_true_after_model_set() -> None:
+    mr = ModelReranker("some-model")
+    mr._model = object()
+    assert mr.is_warm is True
+
+
+def test_reranker_is_warm_delegates_to_backend() -> None:
+    backend = _MockRerankerBackend()
+    backend.is_warm = False
+    reranker = Reranker(backend)
+    assert reranker.is_warm is False
+    backend.is_warm = True
+    assert reranker.is_warm is True
+
+
+def test_reading_reranker_is_warm_does_not_construct_TextCrossEncoder() -> None:
+    from unittest.mock import patch
+
+    with patch(
+        "fastembed.rerank.cross_encoder.TextCrossEncoder",
+        side_effect=RuntimeError("should not be called"),
+    ):
+        mr = ModelReranker("x")
+        result = mr.is_warm
+    assert result is False
+
+
+def test_reading_reranker_is_warm_does_not_acquire_lock() -> None:
+    import time
+
+    mr = ModelReranker("x")
+    lock_acquired = threading.Event()
+    test_done = threading.Event()
+
+    def hold_lock() -> None:
+        with mr._lock:
+            lock_acquired.set()
+            test_done.wait(timeout=5.0)
+
+    t = threading.Thread(target=hold_lock)
+    t.start()
+    lock_acquired.wait(timeout=5.0)
+
+    start = time.monotonic()
+    result = mr.is_warm
+    elapsed = time.monotonic() - start
+
+    test_done.set()
+    t.join()
+
+    assert result is False
+    assert elapsed < 0.1
+
+
+def test_mock_reranker_backend_satisfies_protocol_after_is_warm_added() -> None:
+    assert isinstance(_MockRerankerBackend(), RerankerBackend)
+
+
+def test_model_reranker_is_warm_true_after_predict() -> None:
+    from unittest.mock import MagicMock, patch
+
+    fake_model = MagicMock()
+    fake_model.rerank.return_value = [0.9]
+    mr = ModelReranker("some-model")
+    assert mr.is_warm is False
+    with patch("fastembed.rerank.cross_encoder.TextCrossEncoder", return_value=fake_model):
+        mr.predict([("query", "doc")])
+    assert mr.is_warm is True
+
+
+def test_reranker_is_warm_propagates_backend_exception() -> None:
+    """Reranker.is_warm propagates exceptions raised by the backend property."""
+
+    class _BrokenBackend:
+        is_warm: bool = False  # satisfy Protocol at class level
+
+        @property  # type: ignore[override]
+        def is_warm(self) -> bool:  # type: ignore[misc]
+            raise RuntimeError("backend broken")
+
+        def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+            return []
+
+    reranker = Reranker(_BrokenBackend())  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="backend broken"):
+        _ = reranker.is_warm

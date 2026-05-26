@@ -15,6 +15,9 @@ from archon_search.observability import record_stage
 class RerankerBackend(Protocol):
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]: ...
 
+    @property
+    def is_warm(self) -> bool: ...
+
 
 class ModelReranker:
     """Lazy-loading fastembed TextCrossEncoder backend."""
@@ -40,12 +43,20 @@ class ModelReranker:
         documents = [p[1] for p in pairs]
         return list(self._model.rerank(query, documents))
 
+    @property
+    def is_warm(self) -> bool:
+        return self._model is not None
+
 
 class Reranker:
     """Async wrapper around a RerankerBackend."""
 
     def __init__(self, backend: RerankerBackend) -> None:
         self._backend = backend
+
+    @property
+    def is_warm(self) -> bool:
+        return self._backend.is_warm
 
     async def rerank(
         self, query: str, candidates: list[SearchResult], top_k: int

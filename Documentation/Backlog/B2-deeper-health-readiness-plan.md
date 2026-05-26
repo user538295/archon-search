@@ -263,7 +263,7 @@ Note: `state_store = request.app.state.state_store` and `state = state_store.rea
   - Checkpoint: `uv run pytest tests/test_embedder.py -x -v`
 
 #### Task 2.2 — `is_warm` on `ModelReranker` and `Reranker`
-- [ ] **File**: `archon_search/reranker.py`
+- [x] **File**: `archon_search/reranker.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `is_warm` as a `bool` property to `RerankerBackend` Protocol: `@property def is_warm(self) -> bool: ...`

@@ -35,6 +35,8 @@ class _MockEmbedderBackend:
 
 
 class _MockRerankerBackend:
+    is_warm: bool = False
+
     def predict(self, pairs):
         return [0.5] * len(pairs)
 

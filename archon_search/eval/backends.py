@@ -77,6 +77,8 @@ class EvalRerankerBackend:
     Higher score = more relevant.
     """
 
+    is_warm: bool = False
+
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
         scores: list[float] = []
         for query, doc in pairs:
