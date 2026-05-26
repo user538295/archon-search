@@ -14,6 +14,15 @@
         "title": "AddCollectionRequest",
         "type": "object"
       },
+      "CheckStatus": {
+        "description": "Storage check result for readiness probes.",
+        "enum": [
+          "ok",
+          "fail"
+        ],
+        "title": "CheckStatus",
+        "type": "string"
+      },
       "CollectionDetail": {
         "properties": {
           "acl_open_count": {
@@ -983,6 +992,18 @@
         "title": "LatencyPercentiles",
         "type": "object"
       },
+      "ReadinessChecks": {
+        "properties": {
+          "storage": {
+            "$ref": "#/components/schemas/CheckStatus"
+          }
+        },
+        "required": [
+          "storage"
+        ],
+        "title": "ReadinessChecks",
+        "type": "object"
+      },
       "ReadinessDetail": {
         "description": "Rich readiness sub-object for authenticated GET /status.",
         "properties": {
@@ -1025,6 +1046,24 @@
           "watcher"
         ],
         "title": "ReadinessDetail",
+        "type": "object"
+      },
+      "ReadinessResponse": {
+        "description": "Terse, unauthenticated response body for GET /ready.",
+        "properties": {
+          "checks": {
+            "$ref": "#/components/schemas/ReadinessChecks"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ready",
+          "checks"
+        ],
+        "title": "ReadinessResponse",
         "type": "object"
       },
       "RouteRequest": {
@@ -2280,6 +2319,34 @@
           }
         ],
         "summary": "Get Job"
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Ready"
       }
     },
     "/route": {

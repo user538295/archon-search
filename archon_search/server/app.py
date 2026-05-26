@@ -35,6 +35,7 @@ from archon_search.server.routes_collections import router as collections_router
 from archon_search.server.routes_explain import router as explain_router
 from archon_search.server.routes_health import router as health_router
 from archon_search.server.routes_jobs import router as jobs_router
+from archon_search.server.routes_ready import router as ready_router
 from archon_search.server.routes_route import router as route_router
 from archon_search.server.routes_search import router as search_router
 from archon_search.server.routes_state import router as state_router
@@ -133,6 +134,7 @@ def create_app(
     app.state._background_tasks: set = set()
     app.state.state_store = IndexingStateStore(config.db_path)
     app.state.search_store = SearchStore(config.db_path)
+    app.state.watcher_manager = None
     app.state.embedder = Embedder(ModelEmbedder(config.embedding_model, providers=config.providers or None))
     app.state.pipeline = SearchPipeline(
         store=app.state.search_store,
@@ -145,6 +147,7 @@ def create_app(
     )
     app.include_router(collections_router)
     app.include_router(health_router)
+    app.include_router(ready_router)
     app.include_router(jobs_router)
     app.include_router(status_router)
     app.include_router(state_router)

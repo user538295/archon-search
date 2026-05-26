@@ -367,7 +367,7 @@ Note: `state_store = request.app.state.state_store` and `state = state_store.rea
   - Unit: `test_exempt_paths_all_have_matching_routes` — call `create_app(config, job_store)` to obtain a configured FastAPI instance (do NOT import a module-level `app` — `app.py` exports `create_app()`, not a module-level variable); assert every path in `_EXEMPT_PATHS` matches at least one route in `[r.path for r in app.routes]`. **Fixture setup**: use the same `create_app(...)` call pattern as other route tests — typically: `cfg = SearchConfig(); cfg.db_path = str(tmp_path / "search"); job_store = JobStore(path=tmp_path / "jobs.json"); app = create_app(cfg, job_store)`. Check whether `conftest.py` already provides an `app` or `test_client` fixture before writing a new one. **Note**: this test must run AFTER Task 5.2 — if run before `routes_ready.py` exists, `/ready` won't be in `[r.path for r in app.routes]` and the test will fail. Place in `tests/test_middleware_auth.py`. Checkpoint: `uv run pytest tests/test_middleware_auth.py -x -v`
 
 #### Task 5.2 — `GET /ready` route handler and `app.state.watcher_manager` slot
-- [ ] **File**: `archon_search/server/routes_ready.py` (new file), `archon_search/server/app.py`
+- [x] **File**: `archon_search/server/routes_ready.py` (new file), `archon_search/server/app.py`
 - **Depends on**: Task 1.2, Task 4.1, Task 5.1
 - **Description**:
   - **New file** `archon_search/server/routes_ready.py`:

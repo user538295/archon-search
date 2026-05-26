@@ -441,3 +441,18 @@ def test_ready_in_exempt_paths() -> None:
     from archon_search.server.middleware_auth import _EXEMPT_PATHS
 
     assert "/ready" in _EXEMPT_PATHS
+
+
+def test_exempt_paths_all_have_matching_routes(tmp_path: Path) -> None:
+    """Every path in _EXEMPT_PATHS must correspond to at least one registered route."""
+    from archon_search.config import SearchConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
+    from archon_search.server.middleware_auth import _EXEMPT_PATHS
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, JobStore(path=tmp_path / "jobs.json"))
+    route_paths = {r.path for r in app.routes}
+    for exempt in _EXEMPT_PATHS:
+        assert exempt in route_paths, f"{exempt!r} is in _EXEMPT_PATHS but has no matching route"
