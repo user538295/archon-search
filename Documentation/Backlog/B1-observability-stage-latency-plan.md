@@ -592,7 +592,7 @@ class ExplainResponse(BaseModel):
   - Checkpoint: `uv run pytest tests/server/test_routes_search.py tests/server/test_routes_route.py -v -k "stage_timings"`
 
 #### Task 5.2 — Structured-log emission in MCP ingest tools and CLI ingest paths
-- [ ] **Files**: `archon_search/server/mcp.py`, `archon_search/cli/ingest.py`, `archon_search/cli/collection.py`
+- [x] **Files**: `archon_search/server/mcp.py`, `archon_search/cli/ingest.py`, `archon_search/cli/collection.py`
 - **Depends on**: Task 1.1, Task 2.2, Task 3.5
 - **Description**:
   - In `mcp.py` `ingest_file` tool (line ~332):

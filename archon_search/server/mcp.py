@@ -367,14 +367,30 @@ def create_app(
         collection: str | None = None,
     ) -> dict[str, Any]:
         """Ingest a single file into the RAG store."""
+        timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         try:
             validated = validate_ingest_path(path)
         except PathUnsafeError as e:
             return McpErrorResponse(error=_path_unsafe_message(e.reason), code="path_unsafe")
         try:
-            result = await pipeline.ingest_file(
-                validated, collection or default_collection, ingested_by="http",
-            )
+            with ExitStack() as stack:
+                recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
+                t0 = time.perf_counter()
+                result = await pipeline.ingest_file(
+                    validated, collection or default_collection, ingested_by="http",
+                )
+                if recorder is not None:
+                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    logger.info(
+                        "stage timings",
+                        extra={
+                            "event_type": "stage_timings",
+                            "correlation_id": _correlation_id.get(),
+                            "endpoint": "ingest",
+                            "collection": collection or default_collection,
+                            "stage_timings_ms": recorder.stage_timings_ms,
+                        },
+                    )
             return asdict(result)
         except StoreBusyError as exc:
             return McpErrorResponse(error=str(exc), code="store_busy")
@@ -390,6 +406,7 @@ def create_app(
         ctx: Context | None = None,
     ) -> list[dict[str, Any]]:
         """Ingest all files in a directory into the RAG store."""
+        timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         try:
             validated = validate_ingest_path(path)
         except PathUnsafeError as e:
@@ -399,13 +416,29 @@ def create_app(
                 if ctx is not None:
                     await ctx.report_progress(done, total)
 
-            results = await pipeline.ingest_directory(
-                validated,
-                collection or default_collection,
-                glob_pattern=glob_pattern,
-                progress_cb=progress_cb,
-                ingested_by="http",
-            )
+            with ExitStack() as stack:
+                recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
+                t0 = time.perf_counter()
+                results = await pipeline.ingest_directory(
+                    validated,
+                    collection or default_collection,
+                    glob_pattern=glob_pattern,
+                    progress_cb=progress_cb,
+                    ingested_by="http",
+                )
+                if recorder is not None:
+                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    aggregated = recorder.stage_sums_ms
+                    logger.info(
+                        "stage timings",
+                        extra={
+                            "event_type": "stage_timings",
+                            "correlation_id": _correlation_id.get(),
+                            "endpoint": "ingest",
+                            "collection": collection or default_collection,
+                            "stage_timings_ms": aggregated,
+                        },
+                    )
             return [asdict(r) for r in results]
         except StoreBusyError as exc:
             return McpErrorResponse(error=str(exc), code="store_busy")

@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from pathlib import Path
 
 import click
 
 from archon_search.config import load_config
+from archon_search.observability import bind_stage_recorder, new_correlation_id
 from archon_search.pipeline import create_pipeline
+
+logger = logging.getLogger("archon.search")
 
 
 @click.command()
@@ -30,9 +35,27 @@ def ingest(ingest_path: Path | None, collection: str | None, config_path: Path |
 
     async def _run() -> None:
         pipeline = create_pipeline(cfg)
+        timings_enabled = getattr(getattr(cfg, "observability", None), "stage_timings_enabled", True)
         try:
             await pipeline.store.connect()
-            results = await pipeline.ingest_directory(ingest_path, collection_name)
+            if timings_enabled:
+                cid = new_correlation_id()
+                with bind_stage_recorder() as recorder:
+                    t0 = time.perf_counter()
+                    results = await pipeline.ingest_directory(ingest_path, collection_name)
+                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    logger.info(
+                        "stage timings",
+                        extra={
+                            "event_type": "stage_timings",
+                            "correlation_id": cid,
+                            "endpoint": "ingest",
+                            "collection": collection_name,
+                            "stage_timings_ms": recorder.stage_sums_ms,
+                        },
+                    )
+            else:
+                results = await pipeline.ingest_directory(ingest_path, collection_name)
             ok = sum(1 for r in results if r.status == "ok")
             errors = sum(1 for r in results if r.status == "error")
             click.echo(f"Ingest complete: {ok} ingested, {errors} errors.")

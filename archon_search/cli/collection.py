@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from pathlib import Path
 
 import click
 import tomlkit
 
 from archon_search.config import get_default_config_path, load_config
+from archon_search.observability import bind_stage_recorder, new_correlation_id
 from archon_search.pipeline import create_pipeline
+
+logger = logging.getLogger("archon.search")
 
 
 @click.group()
@@ -84,9 +89,27 @@ def add(path: str, config_path: Path | None) -> None:
 
     async def _run() -> None:
         pipeline = create_pipeline(cfg)
+        timings_enabled = getattr(getattr(cfg, "observability", None), "stage_timings_enabled", True)
         try:
             await pipeline.store.connect()
-            result = await pipeline.ingest_directory(Path(path).expanduser(), collection_name)
+            if timings_enabled:
+                cid = new_correlation_id()
+                with bind_stage_recorder() as recorder:
+                    t0 = time.perf_counter()
+                    result = await pipeline.ingest_directory(Path(path).expanduser(), collection_name)
+                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    logger.info(
+                        "stage timings",
+                        extra={
+                            "event_type": "stage_timings",
+                            "correlation_id": cid,
+                            "endpoint": "ingest",
+                            "collection": collection_name,
+                            "stage_timings_ms": recorder.stage_sums_ms,
+                        },
+                    )
+            else:
+                result = await pipeline.ingest_directory(Path(path).expanduser(), collection_name)
             click.echo(f"Added collection '{collection_name}': {len(result)} files ingested")
         finally:
             await pipeline.store.disconnect()
@@ -297,9 +320,29 @@ def reindex(collection_name: str, config_path: Path | None) -> None:
             except Exception:
                 pass
             # Reindex
-            results = await pipeline.ingest_directory(
-                Path(source_path).expanduser(), collection_name, force_regenerate_description=True
-            )
+            timings_enabled = getattr(getattr(cfg, "observability", None), "stage_timings_enabled", True)
+            if timings_enabled:
+                cid = new_correlation_id()
+                with bind_stage_recorder() as recorder:
+                    t0 = time.perf_counter()
+                    results = await pipeline.ingest_directory(
+                        Path(source_path).expanduser(), collection_name, force_regenerate_description=True
+                    )
+                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    logger.info(
+                        "stage timings",
+                        extra={
+                            "event_type": "stage_timings",
+                            "correlation_id": cid,
+                            "endpoint": "ingest",
+                            "collection": collection_name,
+                            "stage_timings_ms": recorder.stage_sums_ms,
+                        },
+                    )
+            else:
+                results = await pipeline.ingest_directory(
+                    Path(source_path).expanduser(), collection_name, force_regenerate_description=True
+                )
             ok = sum(1 for r in results if r.status == "ok")
             errors = sum(1 for r in results if r.status == "error")
             click.echo(f"Reindex complete for '{collection_name}': {ok} ingested, {errors} errors.")
