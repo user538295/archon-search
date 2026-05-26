@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, SearchResult, normalize_iso_utc
-from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, _validate_namespace
+from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, PING_TIMEOUT_SECONDS, PING_TTL_SECONDS, _validate_namespace
 from archon_search.observability import record_stage, _stage_recorder
 from archon_search.store_filters import build_where, _compute_fetch, _sql_quote_str
 
@@ -162,6 +162,7 @@ class SearchStore:
         # ``SearchCollectionSync._collection_locks`` (same key space, different
         # call paths).
         self._collection_locks: dict[str, asyncio.Lock] = {}
+        self._ping_cache: tuple[float, bool] | None = None
 
     def _lock_for(self, collection: str) -> asyncio.Lock:
         """Lazily create and return the lock for *collection*."""
@@ -178,14 +179,39 @@ class SearchStore:
     async def connect(self) -> None:
         import lancedb  # noqa: PLC0415
 
+        self._ping_cache = None
         self._db_path.mkdir(parents=True, exist_ok=True)
         self._db = await lancedb.connect_async(str(self._db_path))
 
     async def disconnect(self) -> None:
+        self._ping_cache = None
         db = self._db
         self._db = None
         if db is not None:
             db.close()
+
+    async def ping(self) -> bool:
+        """Return True if the store is reachable, False otherwise.
+
+        Uses an instance-level TTL cache (PING_TTL_SECONDS) to avoid hammering
+        the storage backend. CancelledError propagates unchanged — cancellation
+        does not write a stale False into the cache.
+        """
+        if self._db is None:
+            return False
+        now = time.monotonic()
+        if self._ping_cache is not None and now - self._ping_cache[0] < PING_TTL_SECONDS:
+            return self._ping_cache[1]
+        try:
+            result = await asyncio.wait_for(self._db.list_tables(), timeout=PING_TIMEOUT_SECONDS)
+            _ = result.tables
+            self._ping_cache = (time.monotonic(), True)
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._ping_cache = (time.monotonic(), False)
+            return False
 
     # ------------------------------------------------------------------
     # Guard

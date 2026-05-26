@@ -204,7 +204,7 @@ Note: `state_store = request.app.state.state_store` and `state = state_store.rea
   - Checkpoint: `uv run pytest tests/test_constants.py -x -v`
 
 #### Task 1.2 — `SearchStore.ping()` with TTL cache
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Add instance-level `self._ping_cache: tuple[float, bool] | None = None` (monotonic timestamp + bool) initialised in `SearchStore.__init__`. Use `time.monotonic()` for the timestamp.
