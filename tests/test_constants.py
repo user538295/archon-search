@@ -2,7 +2,21 @@
 
 import pytest
 
-from archon_search.constants import _validate_namespace
+from archon_search.constants import (
+    PING_TIMEOUT_SECONDS,
+    PING_TTL_SECONDS,
+    _validate_namespace,
+)
+
+
+def test_ping_timeout_seconds_is_float() -> None:
+    assert isinstance(PING_TIMEOUT_SECONDS, float)
+    assert PING_TIMEOUT_SECONDS > 0
+
+
+def test_ping_ttl_seconds_is_float() -> None:
+    assert isinstance(PING_TTL_SECONDS, float)
+    assert PING_TTL_SECONDS > 0
 
 
 def test_validate_namespace_valid_names() -> None:

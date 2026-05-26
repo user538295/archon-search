@@ -18,6 +18,12 @@ INGESTED_BY_VALUES: Final[tuple[str, ...]] = ("cli", "http", "watcher", "reindex
 # from this value (rounded up to integer seconds per RFC 7231).
 INGEST_LOCK_TIMEOUT_S: Final[float] = 30.0
 
+# asyncio.wait_for timeout used by SearchStore.ping() (B2 Task 1.1).
+PING_TIMEOUT_SECONDS: Final[float] = 1.0
+
+# In-process cache TTL for the ping result (B2 Task 1.1).
+PING_TTL_SECONDS: Final[float] = 1.0
+
 # Pinned dated version for internal fast-model tasks (description generation).
 DEFAULT_FAST_MODEL: str = "claude-haiku-4-5-20251001"
 
