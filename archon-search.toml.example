@@ -54,6 +54,23 @@ watch = false
 level = "INFO"
 log_file = "~/.archon-search/logs/archon-search.log"
 
+[observability]
+# Correlation-ID propagation and per-stage latency recording.
+#
+# When stage_timings_enabled = true (the default), each handled request binds
+# a StageRecorder that accumulates blocked-coroutine wall times (perf_counter)
+# for individual pipeline stages (embed, route, vector, fts, fuse, rerank,
+# context, parse, persist). The timings appear in structured log lines as stage_timings_ms
+# and in the response body of POST /explain and the MCP explain tool.
+# Set to false to suppress stage_timings_ms from all responses.
+stage_timings_enabled = true
+
+# Name of the HTTP header used to carry the correlation ID.
+# The middleware reads this header on inbound requests (validating it against
+# ^[A-Za-z0-9._-]{1,128}$) and writes it on every response, including /health
+# and 401 responses. Must be a non-empty string.
+request_id_header = "X-Request-ID"
+
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #

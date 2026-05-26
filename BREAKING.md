@@ -8,6 +8,24 @@
 
 ## Changelog
 
+### [next release] — B1 observability: `stage_timings_ms` on `POST /explain` and MCP `explain`
+
+**Surface**: REST `POST /explain` (additive new field), MCP `explain` tool (additive new field in returned dict).
+
+**Change**: When `[observability].stage_timings_enabled = true` (the default), the `ExplainResponse` returned by `POST /explain` and the `explain` MCP tool gains a `stage_timings_ms: dict[str, float]` field containing per-stage blocked-coroutine wall times in milliseconds. When `stage_timings_enabled = false`, the field is absent entirely (not `null`).
+
+This is a **new optional field**; it does not appear on any other endpoint or MCP tool.
+
+**Affected clients**:
+- Tolerant JSON consumers (e.g., `response.json()["stage_timings_ms"]` with a `.get()` fallback): no migration needed.
+- Pydantic models or other strict-schema validators with `extra="forbid"` on the `ExplainResponse` shape will **reject** responses when timings are enabled. Either relax the model or set `stage_timings_enabled = false` in `archon-search.toml`.
+
+**Migration**:
+- To suppress the field: set `[observability] stage_timings_enabled = false` in `~/.archon-search/archon-search.toml`.
+- To tolerate it in strict validators: add `stage_timings_ms: dict[str, float] | None = None` to your client-side schema.
+
+**Announced in**: this release.
+
 ### [next release] — A2 query-side filters
 
 **Surface**: REST (additive, non-breaking for tolerant JSON consumers); MCP (additive, non-breaking — all new params are optional with sensible defaults).

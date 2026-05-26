@@ -22,6 +22,16 @@
 - On success, the resolved namespace is attached to `request.state.namespace` and used for filtering by every handler.
 - Failure responses return `401` with `WWW-Authenticate: Bearer`.
 
+## `X-Request-ID` response header
+
+Every HTTP response carries an `X-Request-ID` header (set by `RequestContextMiddleware` in `server/middleware_context.py`). This includes `401`, `422`, `GET /health`, and all authenticated endpoints.
+
+- If the inbound request supplies an `X-Request-ID` header whose value matches `^[A-Za-z0-9._-]{1,128}$`, the same value is echoed back in the response.
+- Otherwise a fresh `uuid4().hex` is minted for that request and returned.
+- The header name is configurable via `[observability].request_id_header` in `archon-search.toml` (default `"X-Request-ID"`).
+
+Clients should use this value to correlate their request with log lines emitted by the server (each structured log line carries `correlation_id`).
+
 ## REST endpoints
 
 The machine-readable contract is `GET /openapi.json`. Tables below trace every endpoint back to its route module under `archon_search/server/`.
@@ -171,7 +181,15 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
       "metadata": {},
       "acl": null
     }
-  ]
+  ],
+  "stage_timings_ms": {
+    "embed": 4.2,
+    "route": 1.1,
+    "vector": 8.7,
+    "fts": 3.3,
+    "fuse": 2.1,
+    "rerank": 12.5
+  }
 }
 ```
 
@@ -184,6 +202,7 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
 - Metadata fields (`file_type`, `indexed_at`, `updated_at`, `ingested_by`, `language`, `metadata`, `acl`) are a **superset of `/search`** — they appear on both `results[]` and `near_misses[]`.
 - The input `query` is **never echoed** in the response body or in telemetry.
 - ACL filtering applies identically to `/search`; filtered results are excluded from both `results` and `near_misses`. Collection visibility in `routing.candidates` is bounded by the caller's namespace (the same ACL boundary that gates `results`).
+- `stage_timings_ms` is a `dict[str, float]` of stage name → elapsed milliseconds (blocked-coroutine wall time). It is present when `[observability].stage_timings_enabled = true` (the default) and absent when timings are disabled. Clients using strict schema validation (e.g., Pydantic with `extra="forbid"`) must account for this field when timings are enabled. See `BREAKING.md` for the compatibility note.
 
 **Error taxonomy:**
 
@@ -215,7 +234,7 @@ Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mount
 | --- | --- | --- | --- |
 | `search` | Hybrid vector + FTS search, rerank, ACL filter. | `query: str`, `collection: str \| None`, `include_metadata: bool = false`, `file_type: str \| None`, `source_path_prefix: str \| None`, `source_path_glob: str \| None`, `indexed_after: str \| None`, `indexed_before: str \| None`, `language: str \| None` (reserved — non-empty raises validation error) | `{"results": [SearchResult...], "acl_filtered": bool}` — new shape per `BREAKING.md`. On validation error: `{error, code: "validation_error"}`. On internal error: `{error, code: "internal_error"}`. |
 | `search_with_context` | Search plus surrounding chunks for each hit. | `query`, `collection?`, `context_window: int = 1`, `include_metadata: bool = false`, `file_type: str \| None`, `source_path_prefix: str \| None`, `source_path_glob: str \| None`, `indexed_after: str \| None`, `indexed_before: str \| None`, `language: str \| None` (reserved) | `list[{result, context_before, context_after}]`. On error: `{error, code}`. |
-| `explain` | Return the per-stage retrieval/reranking trace for a query, plus the routing decision when no collection is pinned. Operates in the default namespace only. The query is never echoed in the response or telemetry. | `query: str`, `collection: str \| None`, `top_k: int = 5`, `rerank: bool = True` | `ExplainResponse` dict (same structure as REST `POST /explain`; serialised via `model_dump(mode="json", exclude_none=False)`). On error: `{error, code}`. When `config` is absent from `create_app`, collectionless calls fall back to `default_collection` (no routing). |
+| `explain` | Return the per-stage retrieval/reranking trace for a query, plus the routing decision when no collection is pinned. Operates in the default namespace only. The query is never echoed in the response or telemetry. | `query: str`, `collection: str \| None`, `top_k: int = 5`, `rerank: bool = True` | `ExplainResponse` dict (same structure as REST `POST /explain`; serialised via `model_dump(mode="json", exclude_none=False)`). Includes `stage_timings_ms` when `[observability].stage_timings_enabled = true`. On error: `{error, code}`. When `config` is absent from `create_app`, collectionless calls fall back to `default_collection` (no routing). |
 | `ingest_file` | Ingest one file. | `path: str`, `collection?` | Ingest result dict. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`. |
 | `ingest_directory` | Ingest a directory tree (reports progress via `ctx`). | `path`, `glob_pattern = "**/*"`, `collection?` | `list[ingest result]`. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`. |
 | `list_collections` | List collections with counts (centroid omitted). | — | `list[dict]` — `asdict(CollectionMeta)` with `centroid` popped (not a typed `CollectionMeta`). |
@@ -253,6 +272,15 @@ Entry point: `archon-search` (`archon_search/cli/main.py`, Click group). Most su
 | `config` | `show` | Print effective config (defaults when no file exists) (`cli/config_cmd.py`). | `--config` |
 | `config` | `get <section.field>` | Read one dotted key. Requires exactly a two-part `section.field` key; other formats error out. | `--config` |
 | `config` | `set <section.field> <value>` | Write one dotted key (bool/int/float coercion). | `--config` |
+
+## `[observability]` config section
+
+Controls correlation-ID propagation and stage-latency recording. Both fields have defaults that take effect when the section is absent from `archon-search.toml`.
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `stage_timings_enabled` | `bool` | `true` | When `true`, every handled request binds a `StageRecorder`; per-stage wall times appear in structured log lines and in the `stage_timings_ms` field on `POST /explain` / MCP `explain` responses. When `false`, no `StageRecorder` is bound and `stage_timings_ms` is absent from all responses. |
+| `request_id_header` | `str` | `"X-Request-ID"` | Name of the HTTP header used to carry the correlation ID inbound and outbound. Both the inbound read and the response write use this name (lowercased for header matching). Must be a non-empty string. |
 
 ## Authoritative contract
 

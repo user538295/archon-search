@@ -647,7 +647,7 @@ class ExplainResponse(BaseModel):
 ### Phase 6 — Final verification & documentation update
 
 #### Task 6.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover and update all affected documentation:

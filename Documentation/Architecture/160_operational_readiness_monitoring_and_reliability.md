@@ -51,6 +51,18 @@ flowchart LR
 
 `GET /health` and `GET /status` are intentionally separate. `health` is for supervisors that do not hold the API key. `status` is for an operator who does and wants per-collection progress.
 
+### Correlation IDs and `X-Request-ID`
+
+`RequestContextMiddleware` (`archon_search/server/middleware_context.py`) runs on every HTTP request. It reads the inbound `X-Request-ID` header (or the header name configured via `[observability].request_id_header`), validates it against the regex `^[A-Za-z0-9._-]{1,128}$`, and either accepts the caller-supplied value or mints a fresh `uuid4().hex`. The resolved ID is:
+
+- Written back as the `X-Request-ID` response header on **every** response (including `/health`, `401`, and `422`).
+- Stored in the `correlation_id` ContextVar (`archon_search/observability.py`), which is read by structured-log emit sites in `/search`, `/route`, `/explain`, and the MCP `search`, `search_with_context`, `explain`, `ingest_file`, and `ingest_directory` tools.
+- Recorded on each `TelemetryEntry` (when telemetry is enabled) via the `correlation_id` field.
+
+Clients that want to correlate their log lines with server-side log lines should send a stable `X-Request-ID` (one per logical request). Clients that do not supply one will still receive a server-minted ID in the response they can use for retroactive correlation.
+
+The header name can be changed from the default `"X-Request-ID"` via `[observability].request_id_header` in `archon-search.toml`. Both the inbound check and the response header use the configured name, lowercased.
+
 ### Log file
 
 On macOS the server writes a single rolling log to `~/.archon-search/logs/archon-search.log`. Two independent code paths touch this path and they are **not kept in sync**:
@@ -73,6 +85,14 @@ When `telemetry.enabled = true` in `~/.archon-search/archon-search.toml`:
 - **Structural invariant**: telemetry entries cannot carry the raw query string. The factory methods in `telemetry/entry.py` do not accept a `query` parameter. Do not add one.
 
 `export_enabled = true` is coerced to `false` with a warning at config load (v1); there is no remote sink.
+
+### Stage-latency surface (`stage_timings_ms`)
+
+When `[observability].stage_timings_enabled = true` (the default), `bind_stage_recorder()` wraps the active request with a `StageRecorder` (`archon_search/observability.py`). Individual pipeline stages — embedder, router, store, reranker — are each wrapped with `record_stage("<stage_name>")`, which records blocked-coroutine wall time using `time.perf_counter()`.
+
+At the end of each handled request the structured log line emitted by the route includes a `stage_timings_ms` key with a `dict[str, float]` of stage names to milliseconds. For `POST /explain` (REST) and the `explain` MCP tool, `stage_timings_ms` is also **included in the response body** when timings are enabled; when `stage_timings_enabled = false` the field is absent from the response entirely.
+
+**Interpretation note**: the recorded durations are blocked-coroutine wall time, not pure stage CPU time. They include any event-loop scheduling latency that accumulates between the `yield` in the calling coroutine and the actual stage execution. Do not interpret them as CPU profiles; treat them as relative ordering and rough magnitude indicators for identifying which stage dominates latency on a given query.
 
 ## Service install and lifecycle
 
