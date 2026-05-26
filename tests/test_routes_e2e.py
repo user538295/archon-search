@@ -57,6 +57,7 @@ def _make_client(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
     mock_store._lock_for = MagicMock(return_value=asyncio.Lock())
     app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -731,6 +732,7 @@ def _make_two_namespace_clients(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
     mock_store._lock_for = MagicMock(return_value=asyncio.Lock())
     app.state.search_store = mock_store
     # The Pipeline keeps its own reference to the real SearchStore at construction.

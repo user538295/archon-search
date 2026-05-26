@@ -200,6 +200,7 @@ def _make_full_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
     app.state.search_store = mock_store
     return TestClient(app, raise_server_exceptions=False), VALID_KEY
 

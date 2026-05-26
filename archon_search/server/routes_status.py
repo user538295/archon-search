@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 
 from archon_search.config import SearchConfig
 from archon_search.progress import compute_eta_seconds
+from archon_search.server.readiness import collect_readiness
 from archon_search.server.schemas import ErrorDetail, StatusCollectionEntry, StatusResponse
 from archon_search.sync import path_to_collection_name
 
@@ -78,9 +79,11 @@ async def status(request: Request) -> StatusResponse:
             )
         )
 
+    readiness = await collect_readiness(request.app.state, state)
     return StatusResponse(
         running=True,
         pid=pid,
         version=_VERSION,
         collections=collection_entries,
+        readiness=readiness,
     )

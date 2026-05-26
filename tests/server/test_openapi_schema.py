@@ -167,6 +167,7 @@ def test_status_endpoint_returns_typed_response(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
     full_app.state.search_store = mock_store
 
     client = TestClient(full_app, raise_server_exceptions=False)

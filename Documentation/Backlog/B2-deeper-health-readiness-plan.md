@@ -422,7 +422,7 @@ Note: `state_store = request.app.state.state_store` and `state = state_store.rea
 > **Releasable**: after Task 6.1, authenticated `GET /status` includes the full `readiness` sub-object.
 
 #### Task 6.1 — Add `readiness` sub-object to `/status` handler
-- [ ] **Files**: `archon_search/server/readiness.py` (new), `archon_search/server/routes_status.py`
+- [x] **Files**: `archon_search/server/readiness.py` (new), `archon_search/server/routes_status.py`
 - **Depends on**: Task 1.2, Task 2.1, Task 2.2, Task 2.3, Task 3.1, Task 4.1, Task 5.2
 - **Description**:
   - **New file `archon_search/server/readiness.py`**: contains two items:
