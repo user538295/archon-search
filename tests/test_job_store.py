@@ -396,3 +396,74 @@ def test_job_store_load_pre_5c_json(tmp_path: Path) -> None:
     job = s.get("aaaa-bbbb")
     assert job is not None
     assert job.namespace == DEFAULT_NAMESPACE
+
+
+# ===========================================================================
+# count_by_status — Task 3.1 (B2)
+# ===========================================================================
+
+
+def test_count_by_status_empty_store(tmp_path: Path) -> None:
+    store = JobStore(path=tmp_path / "jobs.json")
+    counts = store.count_by_status()
+    for status in JobStatus:
+        assert counts[status] == 0, f"Expected 0 for {status}, got {counts[status]}"
+
+
+def test_count_by_status_includes_all_status_members(tmp_path: Path) -> None:
+    store = JobStore(path=tmp_path / "jobs.json")
+    counts = store.count_by_status()
+    assert set(counts.keys()) == set(JobStatus)
+
+
+def test_count_by_status_mixed(tmp_path: Path) -> None:
+    store = JobStore(path=tmp_path / "jobs.json")
+    # Create 2 PENDING jobs
+    j1 = store.create()
+    j2 = store.create()
+    # Move 1 to RUNNING
+    store.update(j1.job_id, status=JobStatus.RUNNING)
+    # Create 1 DONE job
+    j3 = store.create()
+    store.update(j3.job_id, status=JobStatus.DONE)
+    # Create 1 FAILED job
+    j4 = store.create()
+    store.update(j4.job_id, status=JobStatus.FAILED)
+    # Create 1 CANCELLED job
+    j5 = store.create()
+    store.update(j5.job_id, status=JobStatus.CANCELLED)
+
+    # Create 1 CANCELLING job (valid transient state)
+    j6 = store.create()
+    store.update(j6.job_id, status=JobStatus.CANCELLING)
+
+    counts = store.count_by_status()
+    assert counts[JobStatus.PENDING] == 1  # j2 still PENDING
+    assert counts[JobStatus.RUNNING] == 1  # j1 moved to RUNNING
+    assert counts[JobStatus.DONE] == 1
+    assert counts[JobStatus.FAILED] == 1
+    assert counts[JobStatus.CANCELLED] == 1
+    assert counts[JobStatus.CANCELLING] == 1  # j6 in CANCELLING state
+
+
+def test_count_by_status_excludes_evicted_jobs(tmp_path: Path) -> None:
+    """Evicted jobs (older than 7 days) must not appear in count_by_status."""
+    jobs_path = tmp_path / "jobs.json"
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    data = [
+        {
+            "job_id": str(uuid.uuid4()),
+            "status": "DONE",
+            "created_at": old_ts,
+            "updated_at": old_ts,
+            "result": None,
+            "error": None,
+            "namespace": "default",
+        }
+    ]
+    jobs_path.write_text(json.dumps(data))
+    # Loading triggers _evict_old; the aged job must be removed
+    store = JobStore(path=jobs_path)
+    counts = store.count_by_status()
+    for status in JobStatus:
+        assert counts[status] == 0, f"Expected 0 for {status} after eviction, got {counts[status]}"

@@ -5,6 +5,7 @@ import dataclasses
 import json
 import logging
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -79,6 +80,22 @@ class JobStore:
 
     def list(self) -> list[IngestJob]:
         return list(self._jobs.values())
+
+    def count_by_status(self) -> dict[JobStatus, int]:
+        """Return a count of jobs for every JobStatus member, zero-filled.
+
+        Safe to call without a lock — this is a synchronous method with no
+        ``await`` points; asyncio's single-thread scheduling guarantee prevents
+        concurrent coroutine mutation during iteration.
+
+        Note: counts all ``JobStatus`` members including ``CANCELLING``; callers
+        that expose ``/status`` should surface only ``PENDING`` and ``RUNNING``.
+        ``CANCELLING`` jobs are excluded from the public ``running`` count —
+        a cancelling job is in the process of stopping and does not represent
+        available capacity.
+        """
+        counts: Counter[JobStatus] = Counter(j.status for j in self._jobs.values())
+        return {s: counts.get(s, 0) for s in JobStatus}
 
     # ------------------------------------------------------------------
     # Internal helpers

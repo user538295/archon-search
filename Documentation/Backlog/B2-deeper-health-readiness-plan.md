@@ -304,7 +304,7 @@ Note: `state_store = request.app.state.state_store` and `state = state_store.rea
 > **Releasable**: after Task 3.1, the aggregation logic is tested in isolation and ready to be called from route handlers.
 
 #### Task 3.1 — `pending` / `running` count helper (inline aggregation)
-- [ ] **File**: `archon_search/jobs/store.py`
+- [x] **File**: `archon_search/jobs/store.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `def count_by_status(self) -> dict[JobStatus, int]` to `JobStore`. Returns a dict mapping every `JobStatus` member to its count (zero-filled for members with no jobs). Implementation: `from collections import Counter; counts = Counter(j.status for j in self._jobs.values()); return {s: counts.get(s, 0) for s in JobStatus}`.
