@@ -98,6 +98,7 @@ def create_app(
         language: str | None = None,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search."""
+        timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
         try:
             try:
@@ -112,7 +113,22 @@ def create_app(
                 )
             except ValidationError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
-            result_obj = await pipeline.search(query, collection or default_collection, filters=filters)
+            with ExitStack() as stack:
+                recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
+                t0 = time.perf_counter()
+                result_obj = await pipeline.search(query, collection or default_collection, filters=filters)
+                if recorder is not None:
+                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    logger.info(
+                        "stage timings",
+                        extra={
+                            "event_type": "stage_timings",
+                            "correlation_id": _correlation_id.get(),
+                            "endpoint": "search",
+                            "collection": collection or default_collection,
+                            "stage_timings_ms": recorder.stage_timings_ms,
+                        },
+                    )
             if writer is not None:
                 try:
                     writer.enqueue(
@@ -167,6 +183,7 @@ def create_app(
         language: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search and return surrounding chunks for richer context."""
+        timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
         try:
             try:
@@ -181,9 +198,24 @@ def create_app(
                 )
             except ValidationError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
-            results = await pipeline.search_with_context(
-                query, collection or default_collection, context_window, filters=filters
-            )
+            with ExitStack() as stack:
+                recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
+                t0 = time.perf_counter()
+                results = await pipeline.search_with_context(
+                    query, collection or default_collection, context_window, filters=filters
+                )
+                if recorder is not None:
+                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    logger.info(
+                        "stage timings",
+                        extra={
+                            "event_type": "stage_timings",
+                            "correlation_id": _correlation_id.get(),
+                            "endpoint": "search_with_context",
+                            "collection": collection or default_collection,
+                            "stage_timings_ms": recorder.stage_timings_ms,
+                        },
+                    )
             if writer is not None:
                 try:
                     writer.enqueue(

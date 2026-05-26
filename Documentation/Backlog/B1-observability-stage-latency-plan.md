@@ -628,7 +628,7 @@ class ExplainResponse(BaseModel):
   - Checkpoint (CLI): `uv run pytest tests/cli/ -v -k "stage_timings"`
 
 #### Task 5.3 — Structured-log emission in MCP `search` and `search_with_context` tools
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 1.1, Task 2.2, Task 3.1–3.5, Task 4.2 (Task 4.2 must be complete for MCP tool enqueue sites to carry `correlation_id`)
 - **Description**:
   - In `mcp.py` `search` tool: wrap `pipeline.search(...)` with `ExitStack` + conditional `bind_stage_recorder()` (same pattern as Task 5.1 REST `/search` handler). Record `t0 = time.perf_counter()` before the call. After `pipeline.search` returns, call `recorder.record("total", (time.perf_counter() - t0) * 1000.0)` and emit one structured log record: `event_type="stage_timings"`, `endpoint="search"`, `collection=body.collection`, `stage_timings_ms=recorder.stage_timings_ms`. Use `correlation_id.get()` from the ContextVar (set by `RequestContextMiddleware` on the MCP app).
