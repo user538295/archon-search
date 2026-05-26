@@ -31,6 +31,8 @@ class MockEmbedderBackend:
 class MockRerankerBackend:
     """Returns 0.5 score for all pairs."""
 
+    is_warm: bool = False
+
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
         return [0.5] * len(pairs)
 
@@ -2523,6 +2525,8 @@ async def test_pipeline_search_filter_then_reranker_order() -> None:
     reranker_inputs: list[list] = []
 
     class SpyRerankerBackend:
+        is_warm: bool = False
+
         def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
             reranker_inputs.append([p[1] for p in pairs])
             return [0.5] * len(pairs)
@@ -2699,3 +2703,84 @@ async def test_pipeline_warns_when_store_returns_zero_results_with_filters(caplo
     attrition_msg = next(m for m in warning_messages if "filter+ACL combined attrition" in m)
     assert "0/" in attrition_msg, f"Expected '0/' in: {attrition_msg}"
     assert "acl_denied=0" in attrition_msg
+
+
+# ===========================================================================
+# is_warm pipeline properties — Task 2.3 (B2)
+# ===========================================================================
+
+
+def test_pipeline_reranker_is_warm_false_when_cold() -> None:
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    backend = MockRerankerBackend()
+    backend.is_warm = False
+    pipeline = SearchPipeline(
+        store=None,  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=Reranker(backend),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    assert pipeline.reranker_is_warm is False
+
+
+def test_pipeline_reranker_is_warm_true_when_warm() -> None:
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    backend = MockRerankerBackend()
+    backend.is_warm = True
+    pipeline = SearchPipeline(
+        store=None,  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=Reranker(backend),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    assert pipeline.reranker_is_warm is True
+
+
+def test_pipeline_embedder_is_warm_false_when_cold() -> None:
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    emb_backend = MockEmbedderBackend()
+    emb_backend.is_warm = False
+    pipeline = SearchPipeline(
+        store=None,  # type: ignore[arg-type]
+        embedder=Embedder(emb_backend),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    assert pipeline.embedder_is_warm is False
+
+
+def test_pipeline_embedder_is_warm_true_when_warm() -> None:
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    emb_backend = MockEmbedderBackend()
+    emb_backend.is_warm = True
+    pipeline = SearchPipeline(
+        store=None,  # type: ignore[arg-type]
+        embedder=Embedder(emb_backend),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    assert pipeline.embedder_is_warm is True

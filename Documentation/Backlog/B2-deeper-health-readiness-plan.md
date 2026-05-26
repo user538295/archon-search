@@ -284,7 +284,7 @@ Note: `state_store = request.app.state.state_store` and `state = state_store.rea
   - Checkpoint: `uv run pytest tests/test_reranker.py -x -v`
 
 #### Task 2.3 — `SearchPipeline.reranker_is_warm` and `SearchPipeline.embedder_is_warm` properties
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 2.1, Task 2.2
 - **Description**:
   - Add `@property def reranker_is_warm(self) -> bool: return self._reranker.is_warm` to `SearchPipeline`.

@@ -149,6 +149,18 @@ class SearchPipeline:
         self._top_k_return = top_k_return
 
     # ------------------------------------------------------------------
+    # Warm-status accessors (used by health/readiness route handlers)
+    # ------------------------------------------------------------------
+
+    @property
+    def reranker_is_warm(self) -> bool:
+        return self._reranker.is_warm
+
+    @property
+    def embedder_is_warm(self) -> bool:
+        return self._embedder.is_warm
+
+    # ------------------------------------------------------------------
     # Ingest
     # ------------------------------------------------------------------
 
