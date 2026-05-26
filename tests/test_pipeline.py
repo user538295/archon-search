@@ -22,6 +22,7 @@ class MockEmbedderBackend:
     """Returns dim=4 vectors for all texts."""
 
     model_name: str = "mock-embedder"
+    is_warm: bool = False
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         return [[0.1] * 4 for _ in texts]
@@ -673,6 +674,7 @@ async def test_ingest_centroid_replaced_on_reingest(connected_store, col_name, t
     # Swap embedder to one returning [0.5]*4
     class AltEmbedderBackend:
         model_name: str = "alt-embedder"
+        is_warm: bool = False
 
         def encode(self, texts: list[str]) -> list[list[float]]:
             return [[0.5] * 4 for _ in texts]
@@ -701,6 +703,7 @@ async def test_ingest_centroid_averages_heterogeneous_embeddings(connected_store
         """Alternate between two distinct 2-d vectors per call batch."""
 
         model_name: str = "hetero-embedder"
+        is_warm: bool = False
 
         def encode(self, texts: list[str]) -> list[list[float]]:
             nonlocal call_count

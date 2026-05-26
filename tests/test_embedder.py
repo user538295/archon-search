@@ -19,6 +19,7 @@ class _MockBackend:
     """Deterministic test backend — returns [float(i)] * dim vectors."""
 
     model_name: str = "mock-backend"
+    is_warm: bool = False
 
     def __init__(self, dim: int = 4) -> None:
         self.dim = dim
@@ -134,6 +135,7 @@ class _WrongCountBackend:
     """Returns one fewer vector than texts (simulates a broken backend)."""
 
     model_name: str = "wrong-count"
+    is_warm: bool = False
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         # Return n-1 vectors to simulate a backend bug
@@ -144,6 +146,7 @@ class _EmptyResultBackend:
     """Returns empty list for every encode call."""
 
     model_name: str = "empty-result"
+    is_warm: bool = False
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         return []
@@ -195,6 +198,7 @@ async def test_P14_4_embedder_backend_exception_propagates() -> None:
     """ backend.encode raises → exception propagates from embed."""
     class _ExplodingBackend:
         model_name: str = "exploding"
+        is_warm: bool = False
 
         def encode(self, texts: list[str]) -> list[list[float]]:
             raise ValueError("backend exploded")
@@ -283,3 +287,97 @@ async def test_embed_noop_when_unbound() -> None:
     result = await embedder.embed(["text"])
     assert result is not None
     assert _stage_recorder.get() is None
+
+
+# ---------------------------------------------------------------------------
+# is_warm tests — Task 2.1 (B2)
+# ---------------------------------------------------------------------------
+
+
+def test_model_embedder_is_warm_false_before_encode() -> None:
+    from archon_search.embedder import ModelEmbedder
+
+    me = ModelEmbedder("some-model")
+    assert me.is_warm is False
+    assert me._model is None  # reading is_warm did not load the model
+
+
+def test_model_embedder_is_warm_true_after_model_set() -> None:
+    from archon_search.embedder import ModelEmbedder
+
+    me = ModelEmbedder("some-model")
+    me._model = object()
+    assert me.is_warm is True
+
+
+def test_embedder_is_warm_delegates_to_backend() -> None:
+    backend = _MockBackend()
+    backend.is_warm = False
+    embedder = Embedder(backend)
+    assert embedder.is_warm is False
+    backend.is_warm = True
+    assert embedder.is_warm is True
+
+
+def test_reading_is_warm_does_not_construct_TextEmbedding() -> None:
+    from unittest.mock import patch
+
+    from archon_search.embedder import ModelEmbedder
+
+    with patch("fastembed.TextEmbedding", side_effect=RuntimeError("should not be called")):
+        me = ModelEmbedder("x")
+        result = me.is_warm  # must not raise
+    assert result is False
+
+
+def test_reading_is_warm_does_not_acquire_lock() -> None:
+    import time
+
+    from archon_search.embedder import ModelEmbedder
+
+    me = ModelEmbedder("x")
+    lock_acquired = threading.Event()
+    test_done = threading.Event()
+
+    def hold_lock():
+        with me._lock:
+            lock_acquired.set()
+            test_done.wait(timeout=5.0)
+
+    t = threading.Thread(target=hold_lock)
+    t.start()
+    lock_acquired.wait(timeout=5.0)
+
+    start = time.monotonic()
+    result = me.is_warm  # must not block waiting for lock
+    elapsed = time.monotonic() - start
+
+    test_done.set()
+    t.join()
+
+    assert result is False
+    assert elapsed < 0.1  # completed without waiting for lock
+
+
+def test_mock_backend_satisfies_protocol_after_is_warm_added() -> None:
+    assert isinstance(_MockBackend(), EmbedderBackend)
+
+
+def test_model_embedder_is_warm_true_after_encode() -> None:
+    """is_warm transitions False→True when encode() loads the model."""
+    from unittest.mock import MagicMock, patch
+
+    from archon_search.embedder import ModelEmbedder
+
+    fake_embedding = MagicMock()
+    fake_embedding.tolist.return_value = [0.1, 0.2]
+    fake_model = MagicMock()
+    fake_model.embed.return_value = [fake_embedding]
+
+    me = ModelEmbedder("some-model")
+    assert me.is_warm is False
+
+    with patch("fastembed.TextEmbedding", return_value=fake_model):
+        me.encode(["hello"])
+
+    assert me.is_warm is True

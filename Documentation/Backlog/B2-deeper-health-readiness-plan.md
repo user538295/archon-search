@@ -241,7 +241,7 @@ Note: `state_store = request.app.state.state_store` and `state = state_store.rea
 > **Releasable**: after Task 2.3, all warm-status accessors are testable and the "reading `is_warm` never loads the model" invariant is enforced.
 
 #### Task 2.1 — `is_warm` on `ModelEmbedder` and `Embedder`
-- [ ] **File**: `archon_search/embedder.py`
+- [x] **File**: `archon_search/embedder.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `is_warm` as a `bool` property to `EmbedderBackend` Protocol: `@property def is_warm(self) -> bool: ...`

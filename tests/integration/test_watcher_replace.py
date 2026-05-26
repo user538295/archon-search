@@ -28,6 +28,7 @@ from archon_search.store import SearchStore
 
 class _MockEmbedderBackend:
     model_name: str = "mock-embedder"
+    is_warm: bool = False
 
     def encode(self, texts):
         return [[0.1] * 4 for _ in texts]

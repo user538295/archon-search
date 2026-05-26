@@ -70,6 +70,7 @@ def _make_mcp_app(pipeline: Any, *, config: SearchConfig | None = None, writer: 
 
 class MockEmbedderBackend:
     model_name: str = "mock-embedder"
+    is_warm: bool = False
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         return [[0.1, 0.2, 0.3, 0.4] for _ in texts]

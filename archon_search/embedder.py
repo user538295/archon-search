@@ -11,6 +11,10 @@ from archon_search.observability import record_stage
 @runtime_checkable
 class EmbedderBackend(Protocol):
     model_name: str
+
+    @property
+    def is_warm(self) -> bool: ...
+
     def encode(self, texts: list[str]) -> list[list[float]]: ...
 
 
@@ -22,6 +26,10 @@ class ModelEmbedder:
         self._providers = providers or None  # None = CPU default in fastembed
         self._model: Any = None  # loaded on first encode()
         self._lock = threading.Lock()
+
+    @property
+    def is_warm(self) -> bool:
+        return self._model is not None
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         if self._model is None:
@@ -44,6 +52,10 @@ class Embedder:
     @property
     def model_name(self) -> str:
         return getattr(self._backend, "model_name", "")
+
+    @property
+    def is_warm(self) -> bool:
+        return self._backend.is_warm
 
     @property
     def embedding_dim(self) -> int:

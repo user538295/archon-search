@@ -33,6 +33,7 @@ class _MockEmbedder:
 
     model_name: str = "mock-embedder"
     embedding_dim: int = 4
+    is_warm: bool = False
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         return [[0.25] * 4 for _ in texts]

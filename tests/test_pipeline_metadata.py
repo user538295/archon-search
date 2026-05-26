@@ -21,6 +21,7 @@ from archon_search.reranker import Reranker
 # cross-file fixture coupling).
 class _MockEmbedderBackend:
     model_name: str = "mock-embedder"
+    is_warm: bool = False
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         return [[0.1] * 4 for _ in texts]

@@ -607,6 +607,7 @@ class TestSearchCollectionSyncIntegration:
         # Stub embedder — uses synchronous encode() as required by EmbedderBackend protocol
         class StubEmbedderBackend(EmbedderBackend):
             embedding_dim = 4
+            is_warm: bool = False
 
             def encode(self, texts: list[str]) -> list[list[float]]:
                 return [list(np.zeros(4, dtype=float)) for _ in texts]

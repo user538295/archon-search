@@ -51,6 +51,7 @@ class EvalEmbedderBackend:
     """
 
     model_name: str = "eval-sha256-v1"
+    is_warm: bool = False
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         result: list[list[float]] = []

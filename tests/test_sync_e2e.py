@@ -25,6 +25,7 @@ from archon_search.sync import SearchCollectionSync
 
 class MockEmbedderBackend:
     model_name: str = "mock-embedder"
+    is_warm: bool = False
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         import numpy as np
