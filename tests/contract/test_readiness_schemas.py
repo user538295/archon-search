@@ -144,3 +144,41 @@ def test_readiness_detail_typical_snapshot() -> None:
         '"jobs": {"pending": 1, "running": 2}, "reranker_warm": true, '
         '"storage_connected": true, "watcher": {"running": true, "watching": ["a", "b"]}}'
     )
+
+
+def test_job_counts_rejects_negative_pending() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from archon_search.server.schemas import JobCounts
+
+    with pytest.raises(ValidationError):
+        JobCounts(pending=-1, running=0)
+
+
+def test_job_counts_rejects_negative_running() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from archon_search.server.schemas import JobCounts
+
+    with pytest.raises(ValidationError):
+        JobCounts(pending=0, running=-1)
+
+
+def test_readiness_detail_rejects_negative_counts() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from archon_search.server.schemas import JobCounts, ReadinessDetail, WatcherReport
+
+    with pytest.raises(ValidationError):
+        ReadinessDetail(
+            storage_connected=True,
+            embedder_warm=True,
+            reranker_warm=True,
+            jobs=JobCounts(pending=0, running=0),
+            collections_indexing=-1,
+            collections_failed=0,
+            watcher=WatcherReport(running=False),
+        )

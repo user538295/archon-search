@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CheckStatus(str, Enum):
@@ -40,8 +40,8 @@ class JobCounts(BaseModel):
     represent available capacity.
     """
 
-    pending: int
-    running: int
+    pending: int = Field(ge=0)
+    running: int = Field(ge=0)
 
 
 class ReadinessDetail(BaseModel):
@@ -51,8 +51,8 @@ class ReadinessDetail(BaseModel):
     embedder_warm: bool
     reranker_warm: bool
     jobs: JobCounts
-    collections_indexing: int
-    collections_failed: int
+    collections_indexing: int = Field(ge=0)
+    collections_failed: int = Field(ge=0)
     watcher: WatcherReport
 
 

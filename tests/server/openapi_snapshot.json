@@ -879,10 +879,12 @@
         "description": "Job queue depth snapshot.\n\n``running`` counts jobs in RUNNING status only; CANCELLING jobs are\nexcluded \u2014 a cancelling job is in the process of stopping and does not\nrepresent available capacity.",
         "properties": {
           "pending": {
+            "minimum": 0.0,
             "title": "Pending",
             "type": "integer"
           },
           "running": {
+            "minimum": 0.0,
             "title": "Running",
             "type": "integer"
           }
@@ -985,10 +987,12 @@
         "description": "Rich readiness sub-object for authenticated GET /status.",
         "properties": {
           "collections_failed": {
+            "minimum": 0.0,
             "title": "Collections Failed",
             "type": "integer"
           },
           "collections_indexing": {
+            "minimum": 0.0,
             "title": "Collections Indexing",
             "type": "integer"
           },
