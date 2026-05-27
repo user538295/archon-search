@@ -44,6 +44,10 @@ class SearchConfig:
     providers: list[str] = field(default_factory=list)
     top_k_retrieve: int = 15
     top_k_return: int = 5
+    # [search] — multi-collection fan-out execution bounds (B3)
+    max_fanout: int = 8
+    fanout_leg_trim: int = 40
+    fanout_timeout_seconds: float = 30.0
     # [routing]
     routing_shortlist_size: int = 8
     routing_confidence_threshold: float = 0.30
@@ -173,6 +177,27 @@ def load_config(path: Path | None = None) -> SearchConfig:
         if top_k_return <= 0:
             raise ConfigError(f"top_k_return must be > 0, got {top_k_return}")
         config.top_k_return = top_k_return
+
+    search = doc.get("search", {})
+    if "max_fanout" in search:
+        max_fanout = _coerce_int(search["max_fanout"], "max_fanout")
+        if max_fanout < 1:
+            raise ConfigError(f"max_fanout must be >= 1, got {max_fanout}")
+        config.max_fanout = max_fanout
+    if "fanout_leg_trim" in search:
+        fanout_leg_trim = _coerce_int(search["fanout_leg_trim"], "fanout_leg_trim")
+        if fanout_leg_trim < 1:
+            raise ConfigError(f"fanout_leg_trim must be >= 1, got {fanout_leg_trim}")
+        config.fanout_leg_trim = fanout_leg_trim
+    if "fanout_timeout_seconds" in search:
+        fanout_timeout_seconds = _coerce_float(
+            search["fanout_timeout_seconds"], "fanout_timeout_seconds"
+        )
+        if fanout_timeout_seconds <= 0:
+            raise ConfigError(
+                f"fanout_timeout_seconds must be > 0, got {fanout_timeout_seconds}"
+            )
+        config.fanout_timeout_seconds = fanout_timeout_seconds
 
     routing = doc.get("routing", {})
     if "routing_shortlist_size" in routing:

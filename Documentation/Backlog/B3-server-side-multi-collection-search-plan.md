@@ -273,7 +273,7 @@ collection: str = ""  # new additive field
 
 #### Task 3.1 — New config keys for fan-out and `SearchPipeline` constructor update
 
-- [ ] **File**: `archon_search/config.py`, `archon_search/pipeline.py`
+- [x] **File**: `archon_search/config.py`, `archon_search/pipeline.py`
 - **Depends on**: nothing (can run in parallel with Phase 2)
 - **Description**:
   - **Sub-task 3.1a — `SearchPipeline` constructor parameters**: Update `SearchPipeline.__init__` to accept three new scalar parameters: `max_fanout: int`, `fanout_leg_trim: int`, and `fanout_timeout_seconds: float`. Store them as instance attributes: `self._max_fanout`, `self._fanout_leg_trim`, and `self._fanout_timeout_seconds`. Update the `create_pipeline` factory function (search for `create_pipeline` in `pipeline.py`) to read these from config (`config.max_fanout`, `config.fanout_leg_trim`, `config.fanout_timeout_seconds`) and pass them to the constructor. All references in Task 3.2 use `self._max_fanout`, `self._fanout_leg_trim`, `self._fanout_timeout_seconds` — never `self._config.*`.

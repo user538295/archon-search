@@ -140,6 +140,9 @@ class SearchPipeline:
         parser: DocumentParser,
         top_k_retrieve: int,
         top_k_return: int,
+        max_fanout: int = 8,
+        fanout_leg_trim: int = 40,
+        fanout_timeout_seconds: float = 30.0,
     ) -> None:
         self.store = store
         self._embedder = embedder
@@ -148,6 +151,9 @@ class SearchPipeline:
         self._parser = parser
         self._top_k_retrieve = top_k_retrieve
         self._top_k_return = top_k_return
+        self._max_fanout = max_fanout
+        self._fanout_leg_trim = fanout_leg_trim
+        self._fanout_timeout_seconds = fanout_timeout_seconds
 
     # ------------------------------------------------------------------
     # Warm-status accessors (used by health/readiness route handlers)
@@ -576,4 +582,7 @@ def create_pipeline(
         parser=parser,
         top_k_retrieve=cfg.top_k_retrieve,
         top_k_return=cfg.top_k_return,
+        max_fanout=cfg.max_fanout,
+        fanout_leg_trim=cfg.fanout_leg_trim,
+        fanout_timeout_seconds=cfg.fanout_timeout_seconds,
     )

@@ -108,6 +108,81 @@ def test_load_config_defaults_for_all_sections() -> None:
     assert config.level == "INFO"
 
 
+def test_max_fanout_default() -> None:
+    assert SearchConfig().max_fanout == 8
+
+
+def test_fanout_leg_trim_default() -> None:
+    assert SearchConfig().fanout_leg_trim == 40
+
+
+def test_fanout_timeout_seconds_default() -> None:
+    assert SearchConfig().fanout_timeout_seconds == 30.0
+
+
+def test_max_fanout_loaded_from_toml(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[search]\nmax_fanout = 4\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.max_fanout == 4
+
+
+def test_fanout_leg_trim_loaded_from_toml(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[search]\nfanout_leg_trim = 12\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.fanout_leg_trim == 12
+
+
+def test_fanout_timeout_seconds_loaded_from_toml(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[search]\nfanout_timeout_seconds = 5.5\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.fanout_timeout_seconds == 5.5
+
+
+def test_max_fanout_zero_raises_config_error(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[search]\nmax_fanout = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="max_fanout must be"):
+        load_config(path=toml_file)
+
+
+def test_max_fanout_negative_raises_config_error(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[search]\nmax_fanout = -1\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="max_fanout must be"):
+        load_config(path=toml_file)
+
+
+def test_fanout_leg_trim_zero_raises_config_error(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[search]\nfanout_leg_trim = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="fanout_leg_trim must be"):
+        load_config(path=toml_file)
+
+
+def test_fanout_leg_trim_negative_raises_config_error(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[search]\nfanout_leg_trim = -1\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="fanout_leg_trim must be"):
+        load_config(path=toml_file)
+
+
+def test_fanout_timeout_zero_raises_config_error(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[search]\nfanout_timeout_seconds = 0.0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="fanout_timeout_seconds must be"):
+        load_config(path=toml_file)
+
+
+def test_fanout_timeout_negative_raises_config_error(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[search]\nfanout_timeout_seconds = -1.0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="fanout_timeout_seconds must be"):
+        load_config(path=toml_file)
+
+
 def test_load_config_corrupt_toml_raises_config_error(tmp_path: Path) -> None:
     toml_file = tmp_path / "bad.toml"
     toml_file.write_text("[invalid\ngarbage ===\n", encoding="utf-8")
