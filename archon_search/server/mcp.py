@@ -154,6 +154,21 @@ def create_app(
                 if not include_metadata:
                     d["metadata"] = {}
                 results.append(d)
+            if writer is not None:
+                try:
+                    excluded_count = len(result_obj.excluded_collections)
+                    writer.enqueue(
+                        TelemetryEntry.from_search_multi_result(
+                            collections=deduped,
+                            fanout_count=len(deduped) - excluded_count,
+                            result_count=len(result_obj.results),
+                            latency_ms=(monotonic() - start) * 1000.0,
+                            excluded_count=excluded_count,
+                            correlation_id=_correlation_id.get(),
+                        )
+                    )
+                except Exception:
+                    logger.warning("telemetry: search_multi entry enqueue failed", exc_info=True)
             return {
                 "results": results,
                 "acl_filtered": result_obj.acl_filtered,

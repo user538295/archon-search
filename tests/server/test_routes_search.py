@@ -941,3 +941,32 @@ def test_search_response_json_includes_collection_key(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.json()["results"][0]["collection"] == "a"
+
+
+def test_search_handler_multi_collection_emits_search_multi_telemetry(tmp_path: Path) -> None:
+    """The multi-collection /search path enqueues a search_multi telemetry entry
+    with fanout_count = requested - excluded and the correct excluded_count."""
+    from archon_search._types import ExcludedCollection
+    from archon_search.telemetry.entry import EndpointKind
+
+    app, client = _make_app(tmp_path)
+    writer = MagicMock()
+    app.state.telemetry_writer = writer
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(
+            results=[_make_search_result(1)],
+            acl_filtered=False,
+            excluded_collections=[ExcludedCollection(name="c", reason="embedding_model_mismatch")],
+        )
+    )
+
+    response = client.post("/search", json={"collections": ["a", "b", "c"], "query": "q"})
+
+    assert response.status_code == 200
+    writer.enqueue.assert_called_once()
+    entry = writer.enqueue.call_args.args[0]
+    assert entry.endpoint == EndpointKind.search_multi
+    assert entry.fanout_count == 2  # 3 requested - 1 excluded
+    assert entry.excluded_count == 1
+    assert entry.result_count == 1
+    assert entry.collections == ["a", "b", "c"]

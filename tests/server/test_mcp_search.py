@@ -437,3 +437,34 @@ async def test_mcp_search_fanout_timeout_returns_timeout() -> None:
         collections=["a", "b"], search_many_raises=FanoutTimeoutError()
     )
     assert result["code"] == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_multi_emits_search_multi_telemetry() -> None:
+    """The MCP search multi path enqueues a search_multi telemetry entry with
+    fanout_count = requested - excluded and the correct excluded_count."""
+    from archon_search._types import ExcludedCollection
+    from archon_search.telemetry.entry import EndpointKind
+
+    pipeline = MagicMock()
+    pipeline.search_many = AsyncMock(
+        return_value=SearchPipelineResult(
+            results=[_make_result()],
+            acl_filtered=False,
+            excluded_collections=[ExcludedCollection(name="c", reason="embedding_model_mismatch")],
+        )
+    )
+    writer = MagicMock()
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default", writer=writer)
+        await app.tools["search"](query="q", collections=["a", "b", "c"])
+
+    writer.enqueue.assert_called_once()
+    entry = writer.enqueue.call_args.args[0]
+    assert entry.endpoint == EndpointKind.search_multi
+    assert entry.fanout_count == 2
+    assert entry.excluded_count == 1
+    assert entry.collections == ["a", "b", "c"]

@@ -476,7 +476,7 @@ collection: str = ""  # new additive field
 
 #### Task 7.1 — `fanout_collections` telemetry and per-leg timings
 
-- [ ] **File**: `archon_search/telemetry/entry.py`, `archon_search/server/routes_search.py`, `archon_search/server/mcp.py`, `archon_search/pipeline.py`
+- [x] **File**: `archon_search/telemetry/entry.py`, `archon_search/server/routes_search.py`, `archon_search/server/mcp.py`, `archon_search/pipeline.py`
 - **Depends on**: Task 5.1, Task 6.1
 - **Description**:
   - Add `EndpointKind.search_multi = "search_multi"` to `EndpointKind` (`telemetry/entry.py`).

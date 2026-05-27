@@ -61,6 +61,7 @@ class FilterFlags(BaseModel):
 class EndpointKind(StrEnum):
     search = "search"
     search_with_context = "search_with_context"
+    search_multi = "search_multi"
     route = "route"
     explain = "explain"
 
@@ -93,6 +94,8 @@ DOCUMENTED_SCHEMA_FIELDS: frozenset[str] = frozenset(
         "truncated",
         "collections",
         "decomposer_invoked",
+        "fanout_count",
+        "excluded_count",
         "error_kind",
         "filter_flags",
         "correlation_id",
@@ -116,6 +119,9 @@ class TelemetryEntry(BaseModel):
 
     collections: list[str] | None = None
     decomposer_invoked: bool | None = None
+
+    fanout_count: int | None = None
+    excluded_count: int | None = None
 
     error_kind: ErrorKind | None = None
 
@@ -156,6 +162,36 @@ class TelemetryEntry(BaseModel):
             result_count=len(result_doc_ids),
             result_doc_ids=result_doc_ids,
             filter_flags=filter_flags if filter_flags is not None else FilterFlags(),
+            correlation_id=correlation_id,
+        )
+
+    @classmethod
+    def from_search_multi_result(
+        cls,
+        *,
+        collections: list[str],
+        fanout_count: int,
+        result_count: int,
+        latency_ms: float,
+        excluded_count: int,
+        correlation_id: str | None = None,
+    ) -> TelemetryEntry:
+        """Telemetry for a multi-collection (fan-out) search.
+
+        ``fanout_count`` is the number of collections actually searched (after
+        model-mismatch exclusions). No ``query`` parameter — the no-raw-query
+        structural invariant is preserved.
+        """
+        return cls(
+            query_id=cls._new_query_id(),
+            timestamp=cls._now_iso(),
+            endpoint="search_multi",
+            latency_ms=latency_ms,
+            status="ok",
+            collections=collections,
+            fanout_count=fanout_count,
+            result_count=result_count,
+            excluded_count=excluded_count,
             correlation_id=correlation_id,
         )
 

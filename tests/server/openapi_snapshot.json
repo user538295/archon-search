@@ -191,6 +191,7 @@
         "enum": [
           "search",
           "search_with_context",
+          "search_multi",
           "route",
           "explain"
         ],

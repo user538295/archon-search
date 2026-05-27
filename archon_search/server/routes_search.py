@@ -145,6 +145,21 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         except FanoutTimeoutError:
             raise HTTPException(status_code=504, detail="Search timed out")
         schemas = [SearchResultSchema.from_result(r) for r in result.results]
+        if writer is not None:
+            try:
+                excluded_count = len(result.excluded_collections)
+                writer.enqueue(
+                    TelemetryEntry.from_search_multi_result(
+                        collections=body.collections,
+                        fanout_count=len(body.collections) - excluded_count,
+                        result_count=len(result.results),
+                        latency_ms=(monotonic() - start) * 1000.0,
+                        excluded_count=excluded_count,
+                        correlation_id=_correlation_id.get(),
+                    )
+                )
+            except Exception:
+                logger.warning("telemetry: search_multi entry enqueue failed", exc_info=True)
         return SearchResponse(
             results=schemas,
             acl_filtered=result.acl_filtered,

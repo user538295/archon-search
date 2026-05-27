@@ -165,6 +165,7 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
     Every documented field must appear in at least one emitted entry variant:
     - search ok        → collection, result_count, result_doc_ids
     - route ok         → collections, decomposer_invoked
+    - search_multi ok  → fanout_count, excluded_count
     - any error        → error_kind
     - oversized search → truncated (set to True, so it's serialized)
     - all entries      → query_id, timestamp, endpoint, latency_ms, status
@@ -240,6 +241,16 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
             result_doc_ids=["x" * 50] * 1000,
         )
         writer.enqueue(big_entry)
+
+        # search_multi entry — provides: fanout_count, excluded_count keys in JSONL.
+        multi_entry = TelemetryEntry.from_search_multi_result(
+            collections=["col1", "col2"],
+            fanout_count=1,
+            result_count=3,
+            latency_ms=5.0,
+            excluded_count=1,
+        )
+        writer.enqueue(multi_entry)
 
         # correlation_id entry — provides: correlation_id key in JSONL.
         # Constructed directly because middleware is not active in the test harness.

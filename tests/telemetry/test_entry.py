@@ -279,3 +279,40 @@ def test_correlation_id_in_documented_schema_fields() -> None:
     from archon_search.telemetry.entry import DOCUMENTED_SCHEMA_FIELDS
 
     assert "correlation_id" in DOCUMENTED_SCHEMA_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# B3 Task 7.1 — from_search_multi_result factory (no-raw-query invariant)
+# ---------------------------------------------------------------------------
+
+
+def test_from_search_multi_result_no_query_param() -> None:
+    import inspect
+
+    params = inspect.signature(TelemetryEntry.from_search_multi_result).parameters
+    assert "query" not in params
+    with pytest.raises(TypeError):
+        TelemetryEntry.from_search_multi_result(
+            collections=["a"],
+            fanout_count=1,
+            result_count=1,
+            latency_ms=10.0,
+            excluded_count=0,
+            query="test",  # type: ignore[call-arg]
+        )
+
+
+def test_from_search_multi_result_records_fanout_count() -> None:
+    entry = TelemetryEntry.from_search_multi_result(
+        collections=["a", "b"],
+        fanout_count=2,
+        result_count=5,
+        latency_ms=100.0,
+        excluded_count=0,
+    )
+    assert entry.fanout_count == 2
+    assert entry.collections == ["a", "b"]
+    assert entry.result_count == 5
+    assert entry.excluded_count == 0
+    assert entry.endpoint == "search_multi"
+    assert entry.status == "ok"
