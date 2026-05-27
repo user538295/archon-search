@@ -1935,6 +1935,88 @@ def test_hybrid_search_trace_orders_equal_scores_deterministically(tmp_path: Pat
     assert ids_1 == ids_2, f"Non-deterministic ordering: {ids_1} vs {ids_2}"
 
 
+# ---------------------------------------------------------------------------
+# Retrieval sort tie-break reconciliation — Task 2.3 (B3)
+# ---------------------------------------------------------------------------
+
+
+def _tie_break_mock_store(tmp_path: Path) -> tuple[SearchStore, str]:
+    """Build a mocked store where one chunk is vector-only and one is FTS-only,
+    both at local rank 0 → identical RRF score. The vector-only chunk has the
+    HIGHER chunk_id so insertion order (vec first) differs from the (-score,
+    chunk_id) tie-break order, exposing whether the tie-break is applied.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = SearchStore(tmp_path / "db")
+    mock_db = MagicMock()
+    mock_table = MagicMock()
+
+    doc_id = "a" * 64
+    chunk_lo = f"{doc_id}-000000"  # FTS-only, lower chunk_id
+    chunk_hi = f"{doc_id}-000001"  # vector-only, higher chunk_id, inserted first
+
+    vec_rows = [
+        {"doc_id": doc_id, "chunk_id": chunk_hi, "text": "vec", "source_path": "/tmp/a.md", "_distance": 0.3},
+    ]
+    fts_rows = [
+        {"doc_id": doc_id, "chunk_id": chunk_lo, "text": "fts", "source_path": "/tmp/a.md", "_score": 1.0},
+    ]
+
+    mock_table.vector_search = MagicMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=vec_rows))))
+    )
+    mock_table.search = AsyncMock(
+        return_value=MagicMock(limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=fts_rows))))
+    )
+
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["my-col"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._db = mock_db
+    return store, doc_id
+
+
+def test_hybrid_search_sort_is_deterministic_on_score_ties(tmp_path: Path) -> None:
+    """Production hybrid_search breaks RRF-score ties by ascending chunk_id."""
+    import asyncio
+
+    store, doc_id = _tie_break_mock_store(tmp_path)
+    chunk_lo = f"{doc_id}-000000"
+    chunk_hi = f"{doc_id}-000001"
+
+    results_1 = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "x", top_k=20))
+    results_2 = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "x", top_k=20))
+
+    ids_1 = [r.chunk_id for r in results_1]
+    ids_2 = [r.chunk_id for r in results_2]
+    # Equal RRF scores → ascending chunk_id tie-break (not insertion order).
+    assert ids_1 == [chunk_lo, chunk_hi], ids_1
+    assert ids_1 == ids_2, f"Non-deterministic ordering: {ids_1} vs {ids_2}"
+
+
+def test_hybrid_search_with_trace_sort_matches_production_sort(tmp_path: Path) -> None:
+    """Trace and production retrieval paths produce the same chunk_id ordering on ties."""
+    import asyncio
+
+    from archon_search.store import _hybrid_search_with_trace
+
+    store_prod, doc_id = _tie_break_mock_store(tmp_path)
+    store_trace, _ = _tie_break_mock_store(tmp_path)
+    chunk_lo = f"{doc_id}-000000"
+    chunk_hi = f"{doc_id}-000001"
+
+    prod = asyncio.run(store_prod.hybrid_search("my-col", [0.0] * _DIM, "x", top_k=20))
+    trace = asyncio.run(_hybrid_search_with_trace(store_trace, "my-col", [0.0] * _DIM, "x", 20))
+
+    prod_ids = [r.chunk_id for r in prod]
+    trace_ids = [c.chunk_id for c in trace]
+    # Pin the expected order so this fails if BOTH paths regress identically.
+    assert prod_ids == [chunk_lo, chunk_hi], prod_ids
+    assert prod_ids == trace_ids
+
+
 def test_mcp_search_response_schema_matches_public_contract_without_eval_provenance() -> None:
     """Serialized public SearchResult payloads match the public contract and exclude eval-only provenance."""
     from dataclasses import asdict

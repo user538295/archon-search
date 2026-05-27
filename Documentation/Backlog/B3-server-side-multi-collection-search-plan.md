@@ -252,7 +252,7 @@ collection: str = ""  # new additive field
 
 #### Task 2.3 — Reconcile retrieval sort tie-break to `(-rrf_score, chunk_id)`
 
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 2.2
 - **Description**:
   - In `hybrid_search` production path, the candidates dict is converted to a list and sorted. Locate the sort (search for `.sort(` in `hybrid_search` after score computation). Currently it sorts by score descending with no explicit tie-break. Add `.sort(key=lambda r: (-r.score, r.chunk_id))` (or equivalent) — identical to the trace path's `(-rrf_score, chunk_id)` sort.

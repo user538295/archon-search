@@ -793,7 +793,9 @@ class SearchStore:
                     score += _rrf_score(fts_rank[chunk_id])
                 scored.append((score, row))
 
-            scored.sort(key=lambda x: x[0], reverse=True)
+            # Tie-break on chunk_id (ascending) to match the trace path's
+            # (-rrf_score, chunk_id) order; deterministic on exact score ties.
+            scored.sort(key=lambda x: (-x[0], x[1]["chunk_id"]))
 
         # fnmatch has no path semantics: * matches / and ** is identical to *;
         # source_path_glob matches the full source_path; combine with source_path_prefix for
