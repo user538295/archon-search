@@ -1,52 +1,46 @@
-"""Documentation contract tests for ADR 10 and README privacy section ."""
+"""Documentation contract tests for the telemetry ADR, the security/privacy
+architecture doc, the documentation index, and the README privacy section."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
+# Repo root is two parents up from tests/telemetry/.
+_REPO_ROOT = Path(__file__).parents[2]
 
-# Standalone repo: repo root is two parents up from tests/telemetry/.
-# Monorepo (pre-extraction) used parents[4]; that path no longer exists here.
 ADR_PATH = (
-    Path(__file__).parents[2]
+    _REPO_ROOT
     / "Documentation"
     / "ADRs"
-    / "10_search_query_telemetry.md"
+    / "05_opt_in_local_telemetry_no_raw_query.md"
 )
 
-README_PATH = Path(__file__).parents[2] / "README.md"
+README_PATH = _REPO_ROOT / "README.md"
 
 REQUIRED_HEADINGS = [
-    "## Status",
     "## Context",
     "## Decision",
     "## Consequences",
-    "## Privacy",
-    "## Why `export_enabled` is not a security boundary",
-    "## Open questions / hooks",
+    "## Alternatives Considered",
 ]
 
-REQUIRED_SUBSTRING = "absence of export code"
 
-
-def test_adr_10_exists_and_documents_required_sections() -> None:
-    if not ADR_PATH.exists():
-        pytest.skip(f"ADR not present in standalone repo: {ADR_PATH}")
+def test_adr_telemetry_exists_and_documents_required_sections() -> None:
+    assert ADR_PATH.exists(), f"Telemetry ADR not found at {ADR_PATH}"
 
     text = ADR_PATH.read_text(encoding="utf-8")
 
     for heading in REQUIRED_HEADINGS:
         assert heading in text, f"Required heading missing: {heading!r}"
 
-    assert REQUIRED_SUBSTRING in text, (
-        f"Required substring missing: {REQUIRED_SUBSTRING!r}"
+    # The ADR's substantive privacy invariants.
+    assert "opt-in" in text, "ADR must state telemetry is opt-in"
+    assert "local-only" in text, "ADR must state telemetry is local-only"
+    assert "raw query" in text, "ADR must document the no-raw-query guarantee"
+    assert "export_enabled" in text, (
+        "ADR must document that export_enabled is not honored in v1"
     )
-
-    assert "### Path-derived" in text, "Privacy subsection '### Path-derived' missing"
-    assert "omit** the raw query string" in text, (
-        "Privacy claim about omitting raw query string missing"
-    )
+    assert "doc_id" in text, "ADR must document the doc_id path-leak risk"
 
 
 def test_readme_contains_path_derived_doc_id_warning() -> None:
@@ -65,46 +59,38 @@ def test_readme_documents_opt_in_default() -> None:
     )
 
 
-def test_readme_links_to_adr_10() -> None:
-    """README links to ADR 10 only when the ADR file exists alongside the README.
-    Skip cleanly in a standalone repo where the monorepo's Documentation/ADRs/
-    tree is not present (the ADR text was never carried into this repo).
-    """
-    if not ADR_PATH.exists():
-        pytest.skip(f"ADR not present in standalone repo: {ADR_PATH}")
-    assert README_PATH.exists(), f"README not found at {README_PATH}"
-    text = README_PATH.read_text(encoding="utf-8")
-    assert "ADRs/10_search_query_telemetry.md" in text, (
-        "README must link to ADR 10 (ADRs/10_search_query_telemetry.md)"
-    )
-
-
 ARCH_DOC_PATH = (
-    Path(__file__).parents[2]
+    _REPO_ROOT
     / "Documentation"
     / "Architecture"
-    / "180_search_architecture.md"
+    / "150_security_and_privacy_architecture.md"
 )
 
 DOC_INDEX_PATH = (
-    Path(__file__).parents[2]
+    _REPO_ROOT
     / "Documentation"
+    / "Architecture"
     / "990_documentation_index_and_contribution_guide.md"
 )
 
 
-def test_arch_doc_mentions_telemetry_section() -> None:
-    if not ARCH_DOC_PATH.exists():
-        pytest.skip(f"Architecture doc not present in standalone repo: {ARCH_DOC_PATH}")
+def test_security_arch_doc_documents_telemetry_privacy() -> None:
+    assert ARCH_DOC_PATH.exists(), f"Security/privacy doc not found at {ARCH_DOC_PATH}"
     arch_doc = ARCH_DOC_PATH.read_text(encoding="utf-8")
-    assert "## Telemetry " in arch_doc
-    assert "ADRs/10_search_query_telemetry.md" in arch_doc
-    assert "TelemetryWriter" in arch_doc
+    assert "## Privacy" in arch_doc, "doc must have a Privacy section"
+    assert "raw query" in arch_doc, "doc must document the no-raw-query guarantee"
+    assert "TelemetryEntry" in arch_doc, "doc must reference TelemetryEntry"
+    assert "export_enabled" in arch_doc, (
+        "doc must document that export_enabled is coerced to false"
+    )
 
 
-def test_doc_index_includes_telemetry_plan_and_adr() -> None:
-    if not DOC_INDEX_PATH.exists():
-        pytest.skip(f"Doc index not present in standalone repo: {DOC_INDEX_PATH}")
+def test_doc_index_includes_telemetry_adr_and_guide() -> None:
+    assert DOC_INDEX_PATH.exists(), f"Doc index not found at {DOC_INDEX_PATH}"
     index = DOC_INDEX_PATH.read_text(encoding="utf-8")
-    assert "| `Documentation/Backlog/.md`" in index
-    assert "| `Documentation/ADRs/10_search_query_telemetry.md`" in index
+    assert "ADRs/05_opt_in_local_telemetry_no_raw_query.md" in index, (
+        "doc index must reference the telemetry ADR"
+    )
+    assert "UserManual/06_telemetry.md" in index, (
+        "doc index must reference the telemetry user guide"
+    )
