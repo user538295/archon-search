@@ -58,9 +58,29 @@ The machine-readable contract is `GET /openapi.json`. Tables below trace every e
 
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
-| POST | `/search` | Hybrid vector + FTS search over one collection, rerank, ACL filter. | `SearchRequest` (`routes_search.py`) — `{collection, query, top_k, filters?}`. **`top_k` is ignored** at runtime (see BREAKING.md); pipeline uses `config.top_k_return`. The field is still validated (`ge=1, le=100`), so `top_k=0` or `top_k>100` returns `422`. `collection` and `query` are stripped and must be non-empty. `filters` is an optional `SearchFilters` object (see below); omitting it is equivalent to `null`. | `SearchResponse` — `{results: [SearchResultSchema{doc_id, chunk_id, text, score, source_path, file_type, language, indexed_at, updated_at, ingested_by, metadata, acl}], acl_filtered: bool}` |
+| POST | `/search` | Hybrid vector + FTS search over one collection (or a multi-collection fan-out), rerank, ACL filter. | `SearchRequest` (`routes_search.py`) — `{collection?, collections?, query, top_k, filters?}`. Exactly one of `collection` / `collections` must be supplied (both or neither → `422`). **`top_k` is ignored** at runtime (see BREAKING.md); pipeline uses `config.top_k_return`. The field is still validated (`ge=1, le=100`), so `top_k=0` or `top_k>100` returns `422`. `collection` and `query` are stripped and must be non-empty. `filters` is an optional `SearchFilters` object (see below); omitting it is equivalent to `null`. | `SearchResponse` — `{results: [SearchResultSchema{doc_id, chunk_id, text, score, source_path, file_type, language, indexed_at, updated_at, ingested_by, metadata, acl, collection}], acl_filtered: bool, excluded_collections: [{name, reason}]}` |
 
 Returns `404` when the collection is not visible to the caller's namespace; `503` when meta lookup fails. Pipeline stage exceptions (embedder, store, reranker) return `500` with a plain-text body `Internal Server Error` (Content-Type `text/plain`) — the route bare-re-raises and Starlette's `ServerErrorMiddleware` renders the default response, so this is **not** a JSON envelope and callers must not `.json()`-parse the 500 body. A hung pipeline call returns `504` with `{"detail": "Search timed out"}` after ~30 s. `200` with `results: []` means the pipeline ran successfully but found no matching documents. A malformed `filters` object returns `422`.
+
+Two additive response fields landed with B3 (multi-collection search) and are present on **both** the single- and multi-collection paths: every `SearchResultSchema` now carries `collection` (its origin collection — `""` on pre-B3-shaped rows), and `SearchResponse` now carries `excluded_collections` (empty on the single-collection path). For tolerant JSON consumers these are non-breaking additive keys; see `BREAKING.md` "[next release] — B3 multi-collection search".
+
+#### Multi-collection fan-out (`collections`) — B3
+
+Supply `collections: list[str]` instead of `collection` to fan a single query out across an explicit set of collections in one request. The query is embedded once, each collection is retrieved in parallel, the candidate pools are merged with provenance, and one global rerank pass produces a unified, globally comparable result list. The architecture is in [`120_services_and_integration_architecture.md`](./120_services_and_integration_architecture.md) ("Multi-collection search fan-out"); concurrency/cost in [`210_performance_and_scalability.md`](./210_performance_and_scalability.md).
+
+| Aspect | Behavior |
+|---|---|
+| Mutual exclusivity | Exactly one of `collection` / `collections` — both or neither → `422`. |
+| `collections` validation | 1–8 entries (`_FANOUT_VALIDATION_LIMIT`, matching `max_fanout` default), per-item stripped + non-empty, deduplicated preserving first-seen order. Empty list, whitespace-only entry, or over-limit → `422`. |
+| `filters` + `collections` | Rejected with `422` (`"filters are not supported for multi-collection search in v1"`) — the trace retrieval path used by the fan-out has no SQL-predicate support in v1. |
+| Result provenance | Each result's `collection` field names its origin collection. |
+| Excluded collections | `excluded_collections` reports collections dropped from the fan-out (currently reason `embedding_model_mismatch`). If *all* requested collections are excluded, the response is `200` with `results: []` and a fully populated `excluded_collections`. |
+| `404` | Any requested collection missing from the caller's namespace → `404` `{"detail": "collection not found"}` (no cross-namespace existence leak; v1 never skips silently). |
+| `503` | Metadata-lookup failure → `503` `{"detail": "service unavailable"}`. |
+| `504` | Whole-fan-out timeout (`fanout_timeout_seconds`, default 30 s) → `504` `{"detail": "Search timed out"}`. |
+| `500` | Any single retrieval leg failing cancels its siblings and surfaces as `500`. |
+
+> **Note**: `collections` is the *execution* surface. Computing which collections to pass is collection-selection intelligence delivered by B4 ([`Documentation/Backlog/B4-stronger-collection-routing-plan.md`](../Backlog/B4-stronger-collection-routing-plan.md)); B4's shortlist feeds B3's `collections` parameter.
 
 #### `SearchFilters` (A2 — `archon_search/filters.py`)
 
@@ -110,7 +130,7 @@ All paths under `/collections`. Namespace gating: cross-namespace access surface
 
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
-| POST | `/explain` | Return the full per-stage retrieval/reranking score breakdown for a query, plus the routing decision when no collection is pinned. Debug endpoint for understanding why results appear (or don't). | `ExplainRequest` (`routes_explain.py`) — `{query, collection?, top_k(1-100, default 5), rerank(default true)}`. Extra fields are **rejected** (`extra="forbid"`). `query` must be non-empty. | `ExplainResponse` — see schema below. |
+| POST | `/explain` | Return the full per-stage retrieval/reranking score breakdown for a query, plus the routing decision when no collection is pinned. Debug endpoint for understanding why results appear (or don't). | `ExplainRequest` (`routes_explain.py`) — `{query, collection?, collections?, top_k(1-100, default 5), rerank(default true)}`. Extra fields are **rejected** (`extra="forbid"`). `query` must be non-empty. | `ExplainResponse` — see schema below. |
 
 All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce `422`.
 
@@ -119,9 +139,10 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `query` | `str` | required | Must be non-empty after stripping. |
-| `collection` | `str \| null` | `null` | Pin to a specific collection; omit to invoke routing. |
+| `collection` | `str \| null` | `null` | Pin to a specific collection. Mutually exclusive with `collections`; omit both to invoke routing. |
+| `collections` | `list[str] \| null` | `null` | Multi-collection fan-out (B3): 1–8 entries, stripped + non-empty, deduplicated. Routing is bypassed. Mutually exclusive with `collection` (both → `422`). |
 | `top_k` | `int` | `5` | Results to return; `ge=1, le=100`. |
-| `rerank` | `bool` | `true` | Run cross-encoder reranker. `false` → scores sorted by `rrf_score`. |
+| `rerank` | `bool` | `true` | Run cross-encoder reranker. `false` → scores sorted by `rrf_score`. With `collections` of length > 1, `rerank=false` is rejected with `422` (`"reranking cannot be disabled for multi-collection search in v1"`); a single-item `collections` list with `rerank=false` is allowed (treated like the single-collection path). |
 
 **Response schema (`ExplainResponse`):**
 
@@ -163,7 +184,8 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
       "ingested_by": "cli",
       "language": null,
       "metadata": {},
-      "acl": null
+      "acl": null,
+      "collection": "docs"
     }
   ],
   "near_misses": [
@@ -179,9 +201,11 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
       "ingested_by": "cli",
       "language": null,
       "metadata": {},
-      "acl": null
+      "acl": null,
+      "collection": "docs"
     }
   ],
+  "excluded_collections": [],
   "stage_timings_ms": {
     "embed": 4.2,
     "route": 1.1,
@@ -197,6 +221,7 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
 
 - `routing` is `null` when `collection` is pinned in the request. When collectionless, it carries the full routing decision including all caller-namespace collections — the confidence-threshold gate is **bypassed** so every collection in the namespace appears in `candidates`, sorted by `centroid_score` descending with alphabetical tie-break. `centroid_score` is `null` for collections with a mismatched embedding model or no centroid.
 - `results[]` carry `text`; `near_misses[]` structurally **omit `text`** (the `ExplainNearMiss` Pydantic model has no `text` field). Near-misses are capped at 20.
+- Both `ExplainResult` and `ExplainNearMiss` carry a `collection` field (B3) naming the origin collection (`""` on the single-collection path). The top-level response also carries `excluded_collections` (`[{name, reason}]`), empty except on a multi-collection fan-out. On the multi-collection path `routing` is `null` and the top-level `collection` is `""` (routing is bypassed; provenance is per-result instead).
 - `score` is `reranker_score` when `rerank=true`, otherwise `rrf_score`. `breakdown.reranker_score` is `null` when `rerank=false`.
 - `vector_score_kind` is `"distance"` (LanceDB cosine distance — lower is closer). `fts_score_kind` is `"bm25"` when the score is available; `null` when LanceDB omits `_score` from the row.
 - Metadata fields (`file_type`, `indexed_at`, `updated_at`, `ingested_by`, `language`, `metadata`, `acl`) are a **superset of `/search`** — they appear on both `results[]` and `near_misses[]`.
@@ -208,8 +233,9 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
 
 | Condition | Status | Body |
 |---|---|---|
-| Empty query / `top_k` out of `[1, 100]` / extra request fields | `422` | Pydantic validation detail |
-| Pinned `collection` not found | `404` | `{"detail": "collection not found"}` |
+| Empty query / `top_k` out of `[1, 100]` / extra request fields / both `collection` and `collections` set / `rerank=false` with > 1 `collections` | `422` | Pydantic validation detail |
+| Pinned `collection` not found, or any requested `collections` entry not in namespace | `404` | `{"detail": "collection not found"}` |
+| Multi-collection fan-out timeout (`fanout_timeout_seconds`) | `504` | `{"detail": "Search timed out"}` |
 | Collectionless + no collections in namespace | `404` | `{"detail": "no collections available"}` |
 | Meta-lookup or router failure | `503` | `{"detail": "service unavailable"}` |
 | Pipeline-stage failure (store / reranker) | `500` | `{"detail": "<stage> error: <ExceptionType>"}` |
@@ -232,9 +258,9 @@ Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mount
 
 | Tool name | Purpose | Arguments | Returns |
 | --- | --- | --- | --- |
-| `search` | Hybrid vector + FTS search, rerank, ACL filter. | `query: str`, `collection: str \| None`, `include_metadata: bool = false`, `file_type: str \| None`, `source_path_prefix: str \| None`, `source_path_glob: str \| None`, `indexed_after: str \| None`, `indexed_before: str \| None`, `language: str \| None` (reserved — non-empty raises validation error) | `{"results": [SearchResult...], "acl_filtered": bool}` — new shape per `BREAKING.md`. On validation error: `{error, code: "validation_error"}`. On internal error: `{error, code: "internal_error"}`. |
+| `search` | Hybrid vector + FTS search (single-collection or multi-collection fan-out), rerank, ACL filter. | `query: str`, `collection: str \| None`, `collections: list[str] \| None` (B3 — fan-out; exactly one of `collection` / `collections`, else falls back to `default_collection`; 1–8 entries, stripped + deduped), `include_metadata: bool = false`, `file_type: str \| None`, `source_path_prefix: str \| None`, `source_path_glob: str \| None`, `indexed_after: str \| None`, `indexed_before: str \| None`, `language: str \| None` (reserved — non-empty raises validation error) | `{"results": [SearchResult...], "acl_filtered": bool, "excluded_collections": [{name, reason}]}` — new shape per `BREAKING.md`. Each `SearchResult` carries a `collection` key (B3). On validation error: `{error, code: "validation_error"}`. On internal error: `{error, code: "internal_error"}`; collection not found: `{error, code: "not_found"}`. |
 | `search_with_context` | Search plus surrounding chunks for each hit. | `query`, `collection?`, `context_window: int = 1`, `include_metadata: bool = false`, `file_type: str \| None`, `source_path_prefix: str \| None`, `source_path_glob: str \| None`, `indexed_after: str \| None`, `indexed_before: str \| None`, `language: str \| None` (reserved) | `list[{result, context_before, context_after}]`. On error: `{error, code}`. |
-| `explain` | Return the per-stage retrieval/reranking trace for a query, plus the routing decision when no collection is pinned. Operates in the default namespace only. The query is never echoed in the response or telemetry. | `query: str`, `collection: str \| None`, `top_k: int = 5`, `rerank: bool = True` | `ExplainResponse` dict (same structure as REST `POST /explain`; serialised via `model_dump(mode="json", exclude_none=False)`). Includes `stage_timings_ms` when `[observability].stage_timings_enabled = true`. On error: `{error, code}`. When `config` is absent from `create_app`, collectionless calls fall back to `default_collection` (no routing). |
+| `explain` | Return the per-stage retrieval/reranking trace for a query, plus the routing decision when no collection is pinned. Operates in the default namespace only. The query is never echoed in the response or telemetry. | `query: str`, `collection: str \| None`, `collections: list[str] \| None` (B3 — multi-collection fan-out; routing bypassed; `rerank=false` with > 1 collection → `{error, code: "validation_error"}`), `top_k: int = 5`, `rerank: bool = True` | `ExplainResponse` dict (same structure as REST `POST /explain`; serialised via `model_dump(mode="json", exclude_none=False)`). `results`/`near_misses` entries carry a `collection` key and the response carries `excluded_collections` (B3). Includes `stage_timings_ms` when `[observability].stage_timings_enabled = true`. On error: `{error, code}`. When `config` is absent from `create_app`, collectionless calls fall back to `default_collection` (no routing). |
 | `ingest_file` | Ingest one file. | `path: str`, `collection?` | Ingest result dict. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`. |
 | `ingest_directory` | Ingest a directory tree (reports progress via `ctx`). | `path`, `glob_pattern = "**/*"`, `collection?` | `list[ingest result]`. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`. |
 | `list_collections` | List collections with counts (centroid omitted). | — | `list[dict]` — `asdict(CollectionMeta)` with `centroid` popped (not a typed `CollectionMeta`). |
@@ -247,6 +273,7 @@ Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mount
 
 - `search` returns `{"results": [...], "acl_filtered": bool}` — no longer a bare list. Consumers must access `response["results"]`.
 - REST `/search` per-request `top_k` is now ignored; configure `[search] top_k_return` instead.
+- B3 adds additive keys to the `search` and `explain` tool outputs: every result gains `collection`, and the response gains `excluded_collections`. For tolerant JSON consumers these are non-breaking; for **strict-validating MCP clients** (`extra="forbid"` schemas) the new keys are a true contract change — relax the client schema. `SearchRequest.collection` also moves from required to optional (exactly-one-of with `collections`). See `BREAKING.md` "[next release] — B3 multi-collection search".
 
 The REST control plane and the MCP tool surface are served by the same FastAPI app and share auth. The REST endpoints above and the MCP tools in this table are intentionally not 1:1 — MCP exposes ingest/list/delete document operations, REST exposes the job-oriented control plane.
 

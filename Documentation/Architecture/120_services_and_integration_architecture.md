@@ -27,13 +27,36 @@ Built by `archon_search.server.app.create_app`. The lifespan handler connects `S
 | Health | `server/routes_health.py` | `GET /health` |
 | Status | `server/routes_status.py` | `GET /status` |
 | State | `server/routes_state.py` | `GET /indexing-state` |
-| Search | `server/routes_search.py` | `POST /search` |
+| Search | `server/routes_search.py` | `POST /search` (single-collection or multi-collection fan-out — see below) |
 | Route | `server/routes_route.py` | `POST /route` |
 | Collections | `server/routes_collections.py` | `GET /collections/`, `POST /collections/` (202), `GET /collections/{name}`, `DELETE /collections/{name}`, `POST /collections/{name}/reindex` (202) |
 | Jobs / Ingest | `server/routes_jobs.py` | `POST /ingest` (202), `GET /jobs/{job_id}`, `DELETE /jobs/{job_id}` |
 | Telemetry | `server/routes_telemetry.py` | `GET /telemetry/stats`, `GET /telemetry/entries` |
 
 Error envelopes use `schemas.ErrorDetail`. 401 returns `WWW-Authenticate: Bearer` from the middleware. Job-issuing routes return `schemas.JobResponse`.
+
+### Multi-collection search fan-out (B3)
+
+`POST /search` and the MCP `search` tool accept either `collection` (single-collection, unchanged) or `collections: list[str]` (a fan-out across an explicit set of collections in one request). The two are mutually exclusive — the request validator rejects both-or-neither. When `collections` is present, the route delegates to `SearchPipeline.search_many`; `POST /explain` / MCP `explain` route the multi-collection case to `SearchPipeline.explain(collections=...)`. B3 is the **execution primitive only** — the caller supplies the collection set explicitly. Supplying the *right* shortlist (collection-selection intelligence) is B4's job; see [`Documentation/Backlog/B4-stronger-collection-routing-plan.md`](../Backlog/B4-stronger-collection-routing-plan.md). B3 and B4 compose: B4 produces the shortlist that B3's `collections` parameter consumes.
+
+The fan-out path (`pipeline.search_many`, implemented via the shared `_fanout_merge_acl` helper) is:
+
+1. **Embed once.** A single `embed_one(query)` produces one query vector reused by every leg — N collections cost one embedding, not N.
+2. **Metadata lookup + partition.** Load all namespace-scoped collection metas. Requested names missing from the namespace raise `CollectionNotFoundError` (→ HTTP 404 — no cross-namespace existence leak). Collections whose stored `embedding_model` differs from the live embedder are dropped and reported in `excluded_collections` (reason `embedding_model_mismatch`). If *every* requested collection is excluded, the result is an empty list with a populated `excluded_collections` (a valid HTTP 200, not an error).
+3. **Parallel legs.** Each in-scope collection runs `store.hybrid_search_with_trace` (candidate depth `max(top_k_retrieve * 3, 20)`) as a task inside an `asyncio.TaskGroup`, the whole group wrapped in an `asyncio.timeout(fanout_timeout_seconds)`.
+4. **Per-leg RRF trim.** Each leg's candidates are sorted by `(-rrf_score, chunk_id)` and trimmed to `fanout_leg_trim`. This trim is a hard recall ceiling — the reranker cannot recover candidates dropped here.
+5. **Deterministic merge.** Trimmed legs are concatenated in **ascending collection-name order**, so the merged pool is reproducible.
+6. **Single ACL pass.** `apply_acl_filter` runs once over the merged pool (pre-rerank). `acl_filtered` is a pool-wide boolean — it does not say which collection was filtered.
+7. **Single global rerank.** One cross-encoder pass over the merged pool produces globally comparable scores; survivors are converted to `SearchResult`, each tagged with its source `collection` (provenance set at the row-to-`SearchResult` site, so `search_with_context` inherits it).
+
+Failure mapping (verified against `routes_search.py` / `routes_explain.py`):
+
+- Whole-fan-out timeout (`FanoutTimeoutError` from the `asyncio.timeout` context) → **504** `{"detail": "Search timed out"}`.
+- Any single leg raising → siblings are cancelled by the `TaskGroup`; the first leg exception is re-raised as a plain exception so the route's existing **500** mapping fires.
+- Metadata-lookup failure (`MetadataLookupError`) → **503** `{"detail": "service unavailable"}`.
+- Model-mismatched collections are **not** an error — they are excluded and reported in `excluded_collections`.
+
+Telemetry for the fan-out path uses `TelemetryEntry.from_search_multi_result` (`EndpointKind.search_multi`): it records `collections`, `fanout_count` (legs actually searched after exclusions), `result_count`, and `excluded_count` — never the query text (the no-raw-query invariant holds).
 
 ### MCP endpoint
 
@@ -43,9 +66,9 @@ Tools registered in `server/mcp.py` (verified against source):
 
 | Tool | Pipeline method | Notes |
 |---|---|---|
-| `search` | `SearchPipeline.search` | Returns `{results, acl_filtered}`. |
+| `search` | `SearchPipeline.search` / `SearchPipeline.search_many` | Returns `{results, acl_filtered, excluded_collections}`. Passing `collections` (instead of `collection`) routes to the multi-collection fan-out (`search_many`). |
 | `search_with_context` | `SearchPipeline.search_with_context` | Returns each hit plus `context_before` / `context_after`. |
-| `explain` | `SearchPipeline.explain` | Per-stage score breakdown (`results` + `near_misses`) plus the routing decision; mirrors REST `POST /explain`. |
+| `explain` | `SearchPipeline.explain` | Per-stage score breakdown (`results` + `near_misses`) plus the routing decision; mirrors REST `POST /explain`. Accepts `collections` for a multi-collection fan-out (routing is bypassed; legs are merged into one reranked pool). |
 | `ingest_file` | `SearchPipeline.ingest_file` | Synchronous from the client's view. |
 | `ingest_directory` | `SearchPipeline.ingest_directory` | Streams progress via an inner `progress_cb`. |
 | `list_collections` | `SearchPipeline.list_collections` | |

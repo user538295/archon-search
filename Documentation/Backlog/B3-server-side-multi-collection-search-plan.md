@@ -2,7 +2,7 @@
 
 **Purpose**: Ship a server-side primitive that embeds a query once, fans out hybrid retrieval across an explicit set of collections in parallel, merges the candidate pools with full provenance, and runs one global rerank pass — returning a single unified result list in which every result is tagged with its source collection.
 **Audience**: archon-search contributors implementing B3 and reviewers of the resulting PRs.
-**Status**: To Do
+**Status**: Done
 
 > **Note**: Line number references in this plan are approximate and may be stale. Use the function/class names to locate the relevant code.
 
@@ -499,7 +499,7 @@ collection: str = ""  # new additive field
 
 #### Task 8.1 — Final verification & documentation update
 
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - **Eval fixture**: add a multi-collection merge fixture under `tests/eval/` — a fixed two-collection corpus with deterministic candidates and known merge/rerank ordering. The fixture tests merge correctness (provenance tags, dedup behavior, rerank produces correct ordering) NOT routing selection (that is B4). Follow the fixture schema documented in `tests/eval/README.md`. Run `uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py`; thresholds unchanged unless waived per `tests/eval/README.md`.
