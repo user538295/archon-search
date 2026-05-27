@@ -240,6 +240,7 @@ def test_explain_response_round_trips_brief_example() -> None:
                 "breakdown": {**breakdown, "reranker_score": 0.42},
             }
         ],
+        "excluded_collections": [],
         "stage_timings_ms": None,
     }
     resp = ExplainResponse.model_validate(payload)

@@ -64,6 +64,14 @@ class ExplainPipelineResult:
     top_results: list[ScoredSearchCandidate]
     near_misses: list[ScoredSearchCandidate]
     acl_filtered: bool
+    excluded_collections: list[ExcludedCollection] = field(default_factory=list)
+
+
+class ExplainMultiCollectionNoRerankError(Exception):
+    """rerank=False is not permitted for multi-collection explain in v1."""
+
+    def __init__(self) -> None:
+        super().__init__("reranking cannot be disabled for multi-collection search in v1")
 
 
 class ExplainStageError(Exception):
@@ -417,8 +425,9 @@ class SearchPipeline:
     async def explain(
         self,
         query: str,
-        collection: str,
+        collection: str | None = None,
         *,
+        collections: list[str] | None = None,
         top_k: int = 5,
         rerank: bool = True,
         namespace: str = DEFAULT_NAMESPACE,
@@ -428,7 +437,77 @@ class SearchPipeline:
         ``rerank=True``, rerank the entire ACL-filtered pool so near-misses carry real
         reranker scores.  Top-k equality with ``search`` holds only when corpus ≤
         ``top_k_retrieve`` (identical pools) and all reranker scores are distinct.
+
+        Pass ``collections`` (instead of ``collection``) to explain a multi-collection
+        fan-out: legs are merged, ACL-filtered, and reranked as a single pool, with
+        per-collection provenance preserved on each candidate.  The route layer resolves
+        routing before calling this method, so exactly one of ``collection`` /
+        ``collections`` must be supplied.
         """
+        if collection is not None and collections is not None:
+            raise ValueError("supply either collection or collections, not both")
+        if collection is None and collections is None:
+            raise ValueError("supply either collection or collections")
+
+        def _final_score(c: ScoredSearchCandidate) -> float:
+            rs = c.score_breakdown.reranker_score
+            return rs if rs is not None else c.score_breakdown.rrf_score
+
+        if collections is not None:
+            if rerank is False and len(collections) > 1:
+                raise ExplainMultiCollectionNoRerankError()
+
+            vector = query_vector if query_vector is not None else await self._embedder.embed_one(query)
+
+            # Metadata lookup, validation, namespace + model partitioning
+            # (mirrors search_many step 2).
+            try:
+                all_meta = await self.get_all_collections_meta(namespace)
+            except Exception as exc:
+                raise MetadataLookupError(exc) from exc
+
+            meta_by_name = {m.name: m for m in all_meta}
+            missing = [name for name in collections if name not in meta_by_name]
+            if missing:
+                raise CollectionNotFoundError(missing)
+
+            excluded: list[ExcludedCollection] = []
+            collections_in_scope: list[str] = []
+            for name in collections:
+                if meta_by_name[name].embedding_model != self._embedder.model_name:
+                    excluded.append(ExcludedCollection(name=name, reason="embedding_model_mismatch"))
+                else:
+                    collections_in_scope.append(name)
+
+            if not collections_in_scope:
+                return ExplainPipelineResult(
+                    top_results=[],
+                    near_misses=[],
+                    acl_filtered=False,
+                    excluded_collections=excluded,
+                )
+
+            candidate_depth = max(self._top_k_retrieve * 3, 20)
+            merged, acl_filtered, _leg_times = await self._fanout_merge_acl(
+                query, vector, collections_in_scope, namespace, candidate_depth
+            )
+
+            if rerank:
+                candidates = await self._reranker.rerank_candidates(
+                    query, merged, top_k=len(merged)
+                )
+            else:
+                candidates = merged
+
+            candidates.sort(key=lambda c: (-_final_score(c), c.doc_id, c.chunk_id))
+
+            return ExplainPipelineResult(
+                top_results=candidates[:top_k],
+                near_misses=candidates[top_k : top_k + 20],
+                acl_filtered=acl_filtered,
+                excluded_collections=excluded,
+            )
+
         vector = query_vector if query_vector is not None else await self._embedder.embed_one(query)
 
         candidate_depth = max(self._top_k_retrieve * 3, 20)
@@ -448,10 +527,6 @@ class SearchPipeline:
                 )
             except Exception as exc:
                 raise ExplainStageError("reranker", exc) from exc
-
-        def _final_score(c: ScoredSearchCandidate) -> float:
-            rs = c.score_breakdown.reranker_score
-            return rs if rs is not None else c.score_breakdown.rrf_score
 
         candidates.sort(key=lambda c: (-_final_score(c), c.doc_id, c.chunk_id))
 

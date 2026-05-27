@@ -21,6 +21,7 @@ from archon_search.filters import SearchFilters
 from archon_search.key_manager import load_or_generate_key
 from archon_search.pipeline import (
     CollectionNotFoundError,
+    ExplainMultiCollectionNoRerankError,
     ExplainStageError,
     FanoutTimeoutError,
     MetadataLookupError,
@@ -333,6 +334,7 @@ def create_app(
     async def explain(
         query: str,
         collection: str | None = None,
+        collections: list[str] | None = None,
         top_k: int = 5,
         rerank: bool = True,
     ) -> dict[str, Any]:
@@ -340,6 +342,62 @@ def create_app(
         routing decision when no collection is pinned. Operates in the default
         namespace only. The query is never echoed in the response or telemetry."""
         start = monotonic()
+
+        # Multi-collection fan-out path (B3). The single/routing path below is unchanged.
+        if collection is not None and collections is not None:
+            return McpErrorResponse(
+                error="supply either collection or collections, not both",
+                code="validation_error",
+            )
+        if collections is not None:
+            if len(collections) == 0:
+                return McpErrorResponse(error="collections must not be empty", code="validation_error")
+            deduped: list[str] = []
+            for name in collections:
+                stripped = name.strip()
+                if not stripped:
+                    return McpErrorResponse(
+                        error="collection names must not be whitespace", code="validation_error"
+                    )
+                if stripped not in deduped:
+                    deduped.append(stripped)
+            if len(deduped) > _FANOUT_VALIDATION_LIMIT:
+                return McpErrorResponse(
+                    error=f"collections length exceeds {_FANOUT_VALIDATION_LIMIT}",
+                    code="validation_error",
+                )
+            if rerank is False and len(deduped) > 1:
+                return McpErrorResponse(
+                    error="reranking cannot be disabled for multi-collection search in v1",
+                    code="validation_error",
+                )
+            try:
+                result = await pipeline.explain(
+                    query, collections=deduped, top_k=top_k, rerank=rerank, namespace=DEFAULT_NAMESPACE
+                )
+            except CollectionNotFoundError:
+                return McpErrorResponse(error="collection not found", code="not_found")
+            except FanoutTimeoutError:
+                return McpErrorResponse(error="search timed out", code="timeout")
+            except MetadataLookupError:
+                return McpErrorResponse(error="service unavailable", code="internal_error")
+            except ExplainMultiCollectionNoRerankError as exc:
+                return McpErrorResponse(error=str(exc), code="validation_error")
+            except ExplainStageError as exc:
+                logger.warning("explain stage %s failed: %s", exc.stage, exc.original, exc_info=exc.original)
+                return McpErrorResponse(
+                    error=f"{exc.stage} error: {type(exc.original).__name__}", code="internal_error"
+                )
+            except Exception:
+                logger.exception("multi-collection explain failed")
+                return McpErrorResponse(error="explain failed", code="internal_error")
+            response = ExplainResponse.from_pipeline_result(
+                rerank=rerank, collection="", routing=None, result=result, stage_timings_ms=None
+            )
+            result_dict = response.model_dump(mode="json", exclude_none=False)
+            result_dict.pop("stage_timings_ms", None)
+            return result_dict
+
         try:
             req = ExplainRequest(query=query, collection=collection, top_k=top_k, rerank=rerank)
         except ValidationError:

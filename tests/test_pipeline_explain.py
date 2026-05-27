@@ -459,3 +459,174 @@ async def test_explain_does_not_call_private_rerank_with_trace(
     await pipeline.explain("common alpha beta", col_name, top_k=5, rerank=True)
 
     alias_spy.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Multi-collection explain (B3 Task 6.1)
+# ---------------------------------------------------------------------------
+
+
+def _scored(collection: str, doc_id: str, chunk_id: str, rrf_score: float = 0.5) -> ScoredSearchCandidate:
+    from archon_search._diagnostics import SearchScoreBreakdown
+
+    return ScoredSearchCandidate(
+        doc_id=doc_id,
+        chunk_id=chunk_id,
+        text=f"text-{chunk_id}",
+        source_path=f"/path/to/{doc_id}.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=0,
+            vector_score=0.9,
+            vector_score_kind="distance",
+            fts_rank=None,
+            fts_score=None,
+            fts_score_kind=None,
+            rrf_score=rrf_score,
+            reranker_score=None,
+        ),
+        collection=collection,
+    )
+
+
+def _meta(name: str, *, embedding_model: str = "mock-embedder", namespace: str = DEFAULT_NAMESPACE):
+    from archon_search.collection_meta import CollectionMeta
+
+    return CollectionMeta(name=name, embedding_model=embedding_model, namespace=namespace)
+
+
+def _explain_multi_pipeline(
+    *,
+    leg_map: dict | None = None,
+    meta_list: list | None = None,
+    top_k_retrieve: int = 10,
+    top_k_return: int = 5,
+):
+    """Build a SearchPipeline with a MagicMock store wired for fan-out explain."""
+    from unittest.mock import AsyncMock
+
+    store = MagicMock()
+    leg_map = leg_map or {}
+
+    async def _hybrid(collection, vector, query_text, candidate_depth):
+        return list(leg_map.get(collection, []))
+
+    store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid)
+
+    embedder = Embedder(MockEmbedderBackend())
+    embedder.embed_one = AsyncMock(return_value=[0.1] * 4)  # type: ignore[method-assign]
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=embedder,
+        reranker=Reranker(DistinctTextRerankerBackend()),
+        chunker=MagicMock(),
+        parser=MagicMock(),
+        top_k_retrieve=top_k_retrieve,
+        top_k_return=top_k_return,
+    )
+    if meta_list is not None:
+        pipeline.get_all_collections_meta = AsyncMock(return_value=meta_list)  # type: ignore[method-assign]
+    return pipeline, store
+
+
+@pytest.mark.asyncio
+async def test_pipeline_explain_multi_collection_fans_out() -> None:
+    """explain(collections=[A, B]) calls hybrid_search_with_trace once per collection."""
+    leg_map = {
+        "A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")],
+        "B": [_scored("B", "b" * 64, f"{'b' * 64}-000000")],
+    }
+    pipeline, store = _explain_multi_pipeline(leg_map=leg_map, meta_list=[_meta("A"), _meta("B")])
+
+    result = await pipeline.explain("q", collections=["A", "B"])
+
+    assert isinstance(result, ExplainPipelineResult)
+    assert store.hybrid_search_with_trace.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_pipeline_explain_multi_reranks_once() -> None:
+    """explain(collections=[A, B]) reranks the merged pool exactly once."""
+    from unittest.mock import AsyncMock
+
+    leg_map = {
+        "A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")],
+        "B": [_scored("B", "b" * 64, f"{'b' * 64}-000000")],
+    }
+    pipeline, _store = _explain_multi_pipeline(leg_map=leg_map, meta_list=[_meta("A"), _meta("B")])
+    spy = AsyncMock(side_effect=pipeline._reranker.rerank_candidates)
+    pipeline._reranker.rerank_candidates = spy  # type: ignore[method-assign]
+
+    await pipeline.explain("q", collections=["A", "B"])
+
+    assert spy.await_count == 1
+    merged = spy.await_args.args[1] if len(spy.await_args.args) > 1 else spy.await_args.kwargs["candidates"]
+    assert len(merged) == 2
+
+
+@pytest.mark.asyncio
+async def test_pipeline_explain_multi_carries_collection_provenance() -> None:
+    """Multi-collection explain results carry per-collection provenance."""
+    leg_map = {
+        "A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")],
+        "B": [_scored("B", "b" * 64, f"{'b' * 64}-000000")],
+    }
+    pipeline, _store = _explain_multi_pipeline(leg_map=leg_map, meta_list=[_meta("A"), _meta("B")])
+
+    result = await pipeline.explain("q", collections=["A", "B"])
+
+    by_doc = {c.doc_id: c.collection for c in result.top_results}
+    assert by_doc["a" * 64] == "A"
+    assert by_doc["b" * 64] == "B"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_explain_multi_model_mismatch_excludes() -> None:
+    """Model-mismatched collections are excluded and surfaced on the result."""
+    leg_map = {"A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")]}
+    pipeline, _store = _explain_multi_pipeline(
+        leg_map=leg_map,
+        meta_list=[_meta("A"), _meta("B", embedding_model="other-model")],
+    )
+
+    result = await pipeline.explain("q", collections=["A", "B"])
+
+    assert [e.name for e in result.excluded_collections] == ["B"]
+    assert result.excluded_collections[0].reason == "embedding_model_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_explain_multi_rerank_false_raises() -> None:
+    """rerank=False with >1 collection raises ExplainMultiCollectionNoRerankError."""
+    from archon_search.pipeline import ExplainMultiCollectionNoRerankError
+
+    pipeline, _store = _explain_multi_pipeline(meta_list=[_meta("A"), _meta("B")])
+
+    with pytest.raises(ExplainMultiCollectionNoRerankError):
+        await pipeline.explain("q", collections=["A", "B"], rerank=False)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_explain_both_collection_and_collections_raises() -> None:
+    """Supplying both collection and collections is a ValueError."""
+    pipeline, _store = _explain_multi_pipeline(meta_list=[_meta("A")])
+    with pytest.raises(ValueError):
+        await pipeline.explain("q", "A", collections=["A"])
+
+
+@pytest.mark.asyncio
+async def test_pipeline_explain_neither_collection_nor_collections_raises() -> None:
+    """Supplying neither collection nor collections is a ValueError (route resolves first)."""
+    pipeline, _store = _explain_multi_pipeline(meta_list=[_meta("A")])
+    with pytest.raises(ValueError):
+        await pipeline.explain("q")
+
+
+@pytest.mark.asyncio
+async def test_pipeline_explain_missing_collection_raises_not_found() -> None:
+    """A requested collection absent from metadata raises CollectionNotFoundError."""
+    from archon_search.pipeline import CollectionNotFoundError
+
+    pipeline, _store = _explain_multi_pipeline(meta_list=[_meta("A")])
+    with pytest.raises(CollectionNotFoundError):
+        await pipeline.explain("q", collections=["A", "MISSING"])

@@ -155,6 +155,86 @@ def _make_explain_result(n_top: int = 2, n_near: int = 1) -> ExplainPipelineResu
 
 
 # ---------------------------------------------------------------------------
+# MULTI-COLLECTION SCHEMA TESTS (B3 Task 6.1)
+# ---------------------------------------------------------------------------
+
+
+def test_explain_rerank_false_multi_collections_is_422_rest() -> None:
+    """rerank=False with >1 collection → ValidationError at the request schema."""
+    import pydantic
+
+    from archon_search.server.routes_explain import ExplainRequest
+
+    with pytest.raises(pydantic.ValidationError):
+        ExplainRequest(query="q", collections=["a", "b"], rerank=False)
+
+
+def test_explain_rerank_false_single_collection_is_valid() -> None:
+    """rerank=False is allowed for a single pinned collection and a single-item list."""
+    from archon_search.server.routes_explain import ExplainRequest
+
+    req1 = ExplainRequest(query="q", collection="x", rerank=False)
+    assert req1.collection == "x"
+    req2 = ExplainRequest(query="q", collections=["x"], rerank=False)
+    assert req2.collections == ["x"]
+
+
+def test_explain_both_collection_and_collections_is_422() -> None:
+    """Supplying both collection and collections → ValidationError."""
+    import pydantic
+
+    from archon_search.server.routes_explain import ExplainRequest
+
+    with pytest.raises(pydantic.ValidationError):
+        ExplainRequest(query="q", collection="x", collections=["y"])
+
+
+def test_explain_neither_collection_nor_collections_is_valid() -> None:
+    """Neither set stays valid (routing mode)."""
+    from archon_search.server.routes_explain import ExplainRequest
+
+    req = ExplainRequest(query="q")
+    assert req.collection is None
+    assert req.collections is None
+
+
+def test_explain_collections_dedup_before_rerank_guard() -> None:
+    """['a','a'] dedups to ['a'] (len 1), so rerank=False stays valid."""
+    from archon_search.server.routes_explain import ExplainRequest
+
+    req = ExplainRequest(query="q", collections=["a", "a"], rerank=False)
+    assert req.collections == ["a"]
+
+
+def test_explain_collections_blank_item_is_422() -> None:
+    """A blank collection name in the list → ValidationError."""
+    import pydantic
+
+    from archon_search.server.routes_explain import ExplainRequest
+
+    with pytest.raises(pydantic.ValidationError):
+        ExplainRequest(query="q", collections=["a", "  "])
+
+
+def test_explain_result_carries_collection() -> None:
+    """ExplainResult.from_candidate populates collection from the candidate."""
+    from archon_search.server.routes_explain import ExplainResult
+
+    cand = _make_scored_candidate(0)  # collection="docs"
+    out = ExplainResult.from_candidate(cand)
+    assert out.collection == "docs"
+
+
+def test_explain_near_miss_carries_collection() -> None:
+    """ExplainNearMiss.from_candidate populates collection from the candidate."""
+    from archon_search.server.routes_explain import ExplainNearMiss
+
+    cand = _make_scored_candidate(1)  # collection="docs"
+    out = ExplainNearMiss.from_candidate(cand)
+    assert out.collection == "docs"
+
+
+# ---------------------------------------------------------------------------
 # UNIT TESTS
 # ---------------------------------------------------------------------------
 
@@ -1925,3 +2005,65 @@ async def test_rest_mcp_explain_key_parity(tmp_path: Path) -> None:
     )
 
     await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# B3 Task 6.1 — multi-collection /explain (REST integration)
+# ---------------------------------------------------------------------------
+
+
+def _scored_with_collection(idx: int, collection: str) -> ScoredSearchCandidate:
+    doc_id = _make_doc_id(idx)
+    return ScoredSearchCandidate(
+        doc_id=doc_id,
+        chunk_id=f"{doc_id}-{idx:06d}",
+        text=f"text {idx}",
+        source_path=f"/tmp/doc{idx}.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=idx + 1,
+            vector_score=0.5,
+            vector_score_kind="distance",
+            fts_rank=None,
+            fts_score=None,
+            fts_score_kind=None,
+            rrf_score=0.9 - idx * 0.05,
+            reranker_score=0.8 - idx * 0.05,
+        ),
+        collection=collection,
+    )
+
+
+def test_post_explain_multi_collection_returns_200_with_provenance(tmp_path: Path) -> None:
+    """POST /explain with collections returns 200; each result carries its source collection."""
+    from archon_search._types import ExcludedCollection
+
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    pipeline.explain = AsyncMock(
+        return_value=ExplainPipelineResult(
+            top_results=[_scored_with_collection(0, "A"), _scored_with_collection(1, "B")],
+            near_misses=[],
+            acl_filtered=False,
+            excluded_collections=[ExcludedCollection(name="C", reason="embedding_model_mismatch")],
+        )
+    )
+    app.state.pipeline = pipeline
+
+    response = client.post("/explain", json={"query": "hello", "collections": ["A", "B"]})
+
+    assert response.status_code == 200
+    data = response.json()
+    cols = {r["collection"] for r in data["results"]}
+    assert cols == {"A", "B"}
+    assert {"name": "C", "reason": "embedding_model_mismatch"} in data["excluded_collections"]
+    # search_many's routing is bypassed: pipeline.explain called with collections kwarg.
+    assert pipeline.explain.await_args.kwargs["collections"] == ["A", "B"]
+
+
+def test_post_explain_rerank_false_multi_collections_http_422(tmp_path: Path) -> None:
+    """rerank=false + multiple collections is rejected at the HTTP layer with 422."""
+    _app, client = _make_app(tmp_path)
+    response = client.post(
+        "/explain", json={"query": "hello", "collections": ["A", "B"], "rerank": False}
+    )
+    assert response.status_code == 422

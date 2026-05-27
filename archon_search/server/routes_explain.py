@@ -21,13 +21,19 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from archon_search._types import IngestedBy
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
-from archon_search.pipeline import ExplainStageError
+from archon_search.pipeline import (
+    CollectionNotFoundError,
+    ExplainStageError,
+    FanoutTimeoutError,
+    MetadataLookupError,
+)
 from archon_search.router import MultiCollectionRouter
-from archon_search.server.schemas import ExcludedCollectionSchema  # noqa: F401  (used by later tasks)
+from archon_search.server.routes_search import _FANOUT_VALIDATION_LIMIT
+from archon_search.server.schemas import ExcludedCollectionSchema
 from archon_search.telemetry.entry import TelemetryEntry
 
 if TYPE_CHECKING:
@@ -86,6 +92,7 @@ class ExplainResult(BaseModel):
     language: str | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
     acl: list[str] | None = None
+    collection: str = ""
 
     @classmethod
     def from_candidate(cls, c: ScoredSearchCandidate) -> ExplainResult:
@@ -103,6 +110,7 @@ class ExplainResult(BaseModel):
             language=c.language,
             metadata=c.metadata,
             acl=c.acl,
+            collection=c.collection,
         )
 
 
@@ -121,6 +129,7 @@ class ExplainNearMiss(BaseModel):
     language: str | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
     acl: list[str] | None = None
+    collection: str = ""
     # NOTE: no `text` field. Absence is structural.
 
     @classmethod
@@ -138,6 +147,7 @@ class ExplainNearMiss(BaseModel):
             language=c.language,
             metadata=c.metadata,
             acl=c.acl,
+            collection=c.collection,
         )
 
 
@@ -163,6 +173,7 @@ class ExplainRequest(BaseModel):
 
     query: str
     collection: str | None = None
+    collections: list[str] | None = None
     top_k: int = Field(default=5, ge=1, le=100)
     rerank: bool = True
 
@@ -184,16 +195,48 @@ class ExplainRequest(BaseModel):
             raise ValueError("collection must not be empty")
         return stripped
 
+    @field_validator("collections")
+    @classmethod
+    def _collections_clean(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        if len(v) == 0:
+            raise ValueError("collections must not be empty")
+        deduped: list[str] = []
+        for name in v:
+            stripped = name.strip()
+            if not stripped:
+                raise ValueError("collection names must not be empty or whitespace")
+            if stripped not in deduped:
+                deduped.append(stripped)
+        if len(deduped) > _FANOUT_VALIDATION_LIMIT:
+            raise ValueError(
+                f"collections length exceeds maximum of {_FANOUT_VALIDATION_LIMIT}"
+            )
+        return deduped
+
+    @model_validator(mode="after")
+    def _validate_collection_selection(self) -> "ExplainRequest":
+        if self.collection is not None and self.collections is not None:
+            raise ValueError("supply either collection or collections, not both")
+        # Neither set stays valid: explain falls back to centroid routing.
+        if self.collections is not None and self.rerank is False and len(self.collections) > 1:
+            raise ValueError(
+                "reranking cannot be disabled for multi-collection search in v1"
+            )
+        return self
+
 
 class ExplainResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rerank: bool
     routing: RoutingExplain | None
-    collection: str
+    collection: str = ""
     acl_filtered: bool
     results: list[ExplainResult]
     near_misses: list[ExplainNearMiss]
+    excluded_collections: list[ExcludedCollectionSchema] = Field(default_factory=list)
     stage_timings_ms: dict[str, float] | None = None
 
     @classmethod
@@ -213,6 +256,10 @@ class ExplainResponse(BaseModel):
             acl_filtered=result.acl_filtered,
             results=[ExplainResult.from_candidate(c) for c in result.top_results],
             near_misses=[ExplainNearMiss.from_candidate(c) for c in result.near_misses],
+            excluded_collections=[
+                ExcludedCollectionSchema(name=e.name, reason=e.reason)
+                for e in result.excluded_collections
+            ],
             stage_timings_ms=stage_timings_ms,
         )
 
@@ -270,6 +317,60 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
     with ExitStack() as stack:
         recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
         t0 = time.perf_counter()
+
+        if body.collections is not None:
+            # Multi-collection fan-out path (B3). Routing is bypassed; the pipeline
+            # resolves scope/exclusions and merges legs into a single reranked pool.
+            try:
+                result = await pipeline.explain(
+                    body.query,
+                    collections=body.collections,
+                    top_k=body.top_k,
+                    rerank=body.rerank,
+                    namespace=ns,
+                )
+            except CollectionNotFoundError:
+                return JSONResponse({"detail": "collection not found"}, status_code=404)
+            except MetadataLookupError:
+                _emit_err()
+                return JSONResponse({"detail": "service unavailable"}, status_code=503)
+            except FanoutTimeoutError:
+                _emit_err()
+                return JSONResponse({"detail": "Search timed out"}, status_code=504)
+            except ExplainStageError as exc:
+                logger.warning("explain stage %s failed: %s", exc.stage, exc.original, exc_info=exc.original)
+                _emit_err()
+                return JSONResponse(
+                    {"detail": f"{exc.stage} error: {type(exc.original).__name__}"}, status_code=500
+                )
+            except Exception as exc:
+                logger.error("multi-collection explain failed: %s", exc, exc_info=True)
+                _emit_err()
+                return JSONResponse({"detail": "explain failed"}, status_code=500)
+
+            if recorder is not None:
+                recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                logger.info(
+                    "stage timings",
+                    extra={
+                        "event_type": "stage_timings",
+                        "correlation_id": _correlation_id.get(),
+                        "endpoint": "explain",
+                        "collection": "",
+                        "stage_timings_ms": recorder.stage_timings_ms,
+                    },
+                )
+
+            stage_timings = recorder.stage_timings_ms if recorder is not None else None
+            response = ExplainResponse.from_pipeline_result(
+                rerank=body.rerank, collection="", routing=None, result=result,
+                stage_timings_ms=stage_timings,
+            )
+            _emit_ok("", len(response.results))
+            result_dict = response.model_dump(mode="json")
+            if stage_timings is None:
+                result_dict.pop("stage_timings_ms", None)
+            return JSONResponse(content=result_dict, status_code=200)
 
         if body.collection is not None:
             try:

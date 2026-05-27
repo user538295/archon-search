@@ -439,7 +439,7 @@ collection: str = ""  # new additive field
 
 #### Task 6.1 — Extend `SearchPipeline.explain` and A4 schemas for multi-collection
 
-- [ ] **File**: `archon_search/pipeline.py`, `archon_search/server/routes_explain.py`, `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/pipeline.py`, `archon_search/server/routes_explain.py`, `archon_search/server/mcp.py`
 - **Depends on**: Task 3.2
 - **Description**:
   - `SearchPipeline.explain` gains `collections: list[str] | None = None`. When `collections` is set:

@@ -152,6 +152,62 @@ async def test_mcp_explain_rejects_empty_query() -> None:
 
 
 @pytest.mark.asyncio
+async def test_explain_rerank_false_multi_mcp_returns_error() -> None:
+    """MCP explain with collections=[a,b] and rerank=False → validation_error."""
+    pipeline = MagicMock()
+    app = _make_mcp_app(pipeline)
+    result = await app.tools["explain"](query="q", collections=["a", "b"], rerank=False)
+    assert result["code"] == "validation_error"
+    assert result["error"] == "reranking cannot be disabled for multi-collection search in v1"
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_both_collection_and_collections_returns_error() -> None:
+    """Supplying both collection and collections → validation_error."""
+    pipeline = MagicMock()
+    app = _make_mcp_app(pipeline)
+    result = await app.tools["explain"](query="q", collection="x", collections=["y"])
+    assert result["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_multi_collection_happy_path() -> None:
+    """MCP explain with collections returns results carrying per-collection provenance."""
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search.pipeline import ExplainPipelineResult
+
+    def _cand(doc: str, collection: str) -> ScoredSearchCandidate:
+        return ScoredSearchCandidate(
+            doc_id=doc * 64,
+            chunk_id=f"{doc * 64}-000000",
+            text="t",
+            source_path=f"/tmp/{doc}.md",
+            score_breakdown=SearchScoreBreakdown(
+                vector_rank=0, vector_score=0.5, vector_score_kind="distance",
+                fts_rank=None, fts_score=None, fts_score_kind=None,
+                rrf_score=0.5, reranker_score=0.7,
+            ),
+            collection=collection,
+        )
+
+    pipeline = MagicMock()
+    pipeline.explain = AsyncMock(
+        return_value=ExplainPipelineResult(
+            top_results=[_cand("a", "A"), _cand("b", "B")],
+            near_misses=[],
+            acl_filtered=False,
+        )
+    )
+    app = _make_mcp_app(pipeline)
+
+    result = await app.tools["explain"](query="q", collections=["A", "B"])
+
+    assert "error" not in result
+    assert {r["collection"] for r in result["results"]} == {"A", "B"}
+    assert pipeline.explain.await_args.kwargs["collections"] == ["A", "B"]
+
+
+@pytest.mark.asyncio
 async def test_mcp_explain_missing_collection_returns_not_found() -> None:
     """Unknown pinned collection → not_found."""
     pipeline = MagicMock()

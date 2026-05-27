@@ -365,6 +365,11 @@
             "title": "Chunk Id",
             "type": "string"
           },
+          "collection": {
+            "default": "",
+            "title": "Collection",
+            "type": "string"
+          },
           "doc_id": {
             "title": "Doc Id",
             "type": "string"
@@ -446,6 +451,20 @@
             ],
             "title": "Collection"
           },
+          "collections": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collections"
+          },
           "query": {
             "title": "Query",
             "type": "string"
@@ -477,8 +496,16 @@
             "type": "boolean"
           },
           "collection": {
+            "default": "",
             "title": "Collection",
             "type": "string"
+          },
+          "excluded_collections": {
+            "items": {
+              "$ref": "#/components/schemas/ExcludedCollectionSchema"
+            },
+            "title": "Excluded Collections",
+            "type": "array"
           },
           "near_misses": {
             "items": {
@@ -526,7 +553,6 @@
         "required": [
           "rerank",
           "routing",
-          "collection",
           "acl_filtered",
           "results",
           "near_misses"
@@ -556,6 +582,11 @@
           },
           "chunk_id": {
             "title": "Chunk Id",
+            "type": "string"
+          },
+          "collection": {
+            "default": "",
+            "title": "Collection",
             "type": "string"
           },
           "doc_id": {
