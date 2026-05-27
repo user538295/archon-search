@@ -98,6 +98,8 @@ async def test_mcp_search_strips_metadata_when_include_metadata_false() -> None:
     assert len(payload["results"]) == 1
     # empty dict not key-absent, consistent with REST surface
     assert payload["results"][0]["metadata"] == {}
+    # Single-collection responses carry the additive excluded_collections envelope (empty).
+    assert payload["excluded_collections"] == []
 
 
 @pytest.mark.asyncio
@@ -304,3 +306,134 @@ async def test_mcp_search_tool_input_schema_is_superset_of_search_filters() -> N
         assert not missing, (
             f"Tool {tool_name!r} input schema is missing SearchFilters fields: {missing}"
         )
+
+
+# ---------------------------------------------------------------------------
+# B3 Task 5.1 — multi-collection `collections` parameter on MCP search
+# ---------------------------------------------------------------------------
+
+
+async def _call_mcp_search_multi(
+    *,
+    collection: str | None = None,
+    collections: list[str] | None = None,
+    search_many_return: SearchPipelineResult | None = None,
+    search_many_raises: Exception | None = None,
+):
+    """Invoke the MCP search tool with a pipeline whose search_many is mocked."""
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    if search_many_raises is not None:
+        pipeline.search_many = AsyncMock(side_effect=search_many_raises)
+    else:
+        pipeline.search_many = AsyncMock(
+            return_value=search_many_return or SearchPipelineResult(results=[], acl_filtered=False)
+        )
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = app.tools["search"]
+        result = await fn(query="hello", collection=collection, collections=collections)
+    return pipeline, result
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_both_collection_fields_is_error() -> None:
+    pipeline, result = await _call_mcp_search_multi(collection="x", collections=["y"])
+    assert result["code"] == "validation_error"
+    pipeline.search_many.assert_not_awaited()
+    pipeline.search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_empty_collections_is_error() -> None:
+    pipeline, result = await _call_mcp_search_multi(collections=[])
+    assert result["code"] == "validation_error"
+    pipeline.search_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_whitespace_collection_is_error() -> None:
+    pipeline, result = await _call_mcp_search_multi(collections=["  "])
+    assert result["code"] == "validation_error"
+    pipeline.search_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_over_limit_collections_is_error() -> None:
+    pipeline, result = await _call_mcp_search_multi(collections=[f"c{i}" for i in range(9)])
+    assert result["code"] == "validation_error"
+    pipeline.search_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_deduplicates_collections() -> None:
+    pipeline, _result = await _call_mcp_search_multi(collections=["a", "a", "b"])
+    pipeline.search_many.assert_awaited_once()
+    passed = pipeline.search_many.await_args.args[1]
+    assert passed == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_meta_lookup_failure_returns_internal_error() -> None:
+    from archon_search.pipeline import MetadataLookupError
+
+    _pipeline, result = await _call_mcp_search_multi(
+        collections=["a"], search_many_raises=MetadataLookupError(RuntimeError("x"))
+    )
+    assert result["code"] == "internal_error"
+    assert result["error"] == "service unavailable"
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_collections_calls_search_many() -> None:
+    pipeline, _result = await _call_mcp_search_multi(collections=["a", "b"])
+    pipeline.search_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_result_includes_collection_key() -> None:
+    r = _make_result()
+    r.collection = "a"
+    _pipeline, result = await _call_mcp_search_multi(
+        collections=["a"],
+        search_many_return=SearchPipelineResult(results=[r], acl_filtered=False),
+    )
+    assert result["results"][0]["collection"] == "a"
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_result_includes_excluded_collections_key() -> None:
+    from archon_search._types import ExcludedCollection
+
+    _pipeline, result = await _call_mcp_search_multi(
+        collections=["a", "b"],
+        search_many_return=SearchPipelineResult(
+            results=[],
+            acl_filtered=False,
+            excluded_collections=[ExcludedCollection(name="b", reason="embedding_model_mismatch")],
+        ),
+    )
+    assert {"name": "b", "reason": "embedding_model_mismatch"} in result["excluded_collections"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_missing_collection_returns_not_found() -> None:
+    from archon_search.pipeline import CollectionNotFoundError
+
+    _pipeline, result = await _call_mcp_search_multi(
+        collections=["x"], search_many_raises=CollectionNotFoundError(["x"])
+    )
+    assert result["code"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_fanout_timeout_returns_timeout() -> None:
+    from archon_search.pipeline import FanoutTimeoutError
+
+    _pipeline, result = await _call_mcp_search_multi(
+        collections=["a", "b"], search_many_raises=FanoutTimeoutError()
+    )
+    assert result["code"] == "timeout"

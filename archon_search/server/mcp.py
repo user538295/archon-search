@@ -19,7 +19,13 @@ from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.filters import SearchFilters
 from archon_search.key_manager import load_or_generate_key
-from archon_search.pipeline import ExplainStageError, SearchPipeline
+from archon_search.pipeline import (
+    CollectionNotFoundError,
+    ExplainStageError,
+    FanoutTimeoutError,
+    MetadataLookupError,
+    SearchPipeline,
+)
 from archon_search.progress import IndexingState, IndexingStatus
 from archon_search.router import MultiCollectionRouter
 from archon_search.server.middleware_auth import APIKeyMiddleware
@@ -29,6 +35,7 @@ from archon_search.server.routes_explain import (
     RoutingCandidate,
     RoutingExplain,
 )
+from archon_search.server.routes_search import _FANOUT_VALIDATION_LIMIT
 from archon_search.store import StoreBusyError
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
@@ -89,6 +96,7 @@ def create_app(
     async def search(
         query: str,
         collection: str | None = None,
+        collections: list[str] | None = None,
         include_metadata: bool = False,
         file_type: str | None = None,
         source_path_prefix: str | None = None,
@@ -100,6 +108,59 @@ def create_app(
         """Search for relevant document chunks using hybrid vector + FTS search."""
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
+
+        # Multi-collection fan-out path (B3). The single-collection path below is
+        # unchanged; when neither field is set it falls back to default_collection.
+        if collection is not None and collections is not None:
+            return McpErrorResponse(
+                error="supply either collection or collections, not both",
+                code="validation_error",
+            )
+        if collections is not None:
+            if len(collections) == 0:
+                return McpErrorResponse(error="collections must not be empty", code="validation_error")
+            deduped: list[str] = []
+            for name in collections:
+                stripped = name.strip()
+                if not stripped:
+                    return McpErrorResponse(
+                        error="collection names must not be whitespace", code="validation_error"
+                    )
+                if stripped not in deduped:
+                    deduped.append(stripped)
+            if len(deduped) > _FANOUT_VALIDATION_LIMIT:
+                return McpErrorResponse(
+                    error=f"collections length exceeds {_FANOUT_VALIDATION_LIMIT}",
+                    code="validation_error",
+                )
+            try:
+                result_obj = await pipeline.search_many(query, deduped)
+            except CollectionNotFoundError:
+                return McpErrorResponse(error="collection not found", code="not_found")
+            except FanoutTimeoutError:
+                return McpErrorResponse(error="search timed out", code="timeout")
+            except MetadataLookupError:
+                # Transient infrastructure error (store unavailable); mirror REST's
+                # 503 semantics with a clean message rather than leaking the cause.
+                return McpErrorResponse(error="service unavailable", code="internal_error")
+            except Exception as exc:
+                logger.exception("multi-collection search failed")
+                return McpErrorResponse(error=str(exc), code="internal_error")
+            results = []
+            for r in result_obj.results:
+                d = asdict(r)
+                d.pop("vector", None)
+                if not include_metadata:
+                    d["metadata"] = {}
+                results.append(d)
+            return {
+                "results": results,
+                "acl_filtered": result_obj.acl_filtered,
+                "excluded_collections": [
+                    {"name": e.name, "reason": e.reason} for e in result_obj.excluded_collections
+                ],
+            }
+
         try:
             try:
                 filters = SearchFilters(
@@ -151,7 +212,13 @@ def create_app(
                     # empty dict not key-absent, consistent with REST surface
                     d["metadata"] = {}
                 results.append(d)
-            return {"results": results, "acl_filtered": result_obj.acl_filtered}
+            return {
+                "results": results,
+                "acl_filtered": result_obj.acl_filtered,
+                "excluded_collections": [
+                    {"name": e.name, "reason": e.reason} for e in result_obj.excluded_collections
+                ],
+            }
         except Exception as exc:
             if writer is not None:
                 try:

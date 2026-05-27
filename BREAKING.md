@@ -8,6 +8,25 @@
 
 ## Changelog
 
+### [next release] — B3 multi-collection search
+
+**Surface**: REST `POST /search` and `POST /explain` (additive responses + request-schema change); MCP `search`/`explain` tools (additive response-shape change for strict clients).
+
+**Request — additive/optional on both surfaces**:
+- `POST /search` and the MCP `search` tool gain an optional `collections: list[str]` field for fanning out a single query across multiple collections in one request. `POST /explain` and the MCP `explain` tool gain the same field.
+
+**Request-schema change (REST `/search`)**:
+- `SearchRequest.collection` changes from required (`str`) to optional (`str | None = None`). Exactly one of `collection` / `collections` must be supplied. Existing clients that omit `collection` now receive a different 422 message (`"supply either collection or collections"` instead of Pydantic's `"field required"`); clients that explicitly send `collection: null` get the same new error. This is a request-schema behavioral change for clients that relied on the old validation message. The MCP `search` tool preserves its existing `default_collection` fallback when neither field is supplied.
+
+**Response — additive keys**:
+- Every result in `POST /search` / `POST /explain` (REST) and the `search`/`explain` MCP tools gains a `collection` key naming its origin collection. Each response gains an `excluded_collections` list (entries `{"name", "reason"}`) reporting collections dropped from a multi-collection request (e.g. embedding-model mismatch).
+- For tolerant JSON consumers (REST), these are non-breaking additive keys. For **strict-validating MCP clients** (schemas with `extra="forbid"`), the new `collection` and `excluded_collections` keys are a true contract change — the same class as A1's additive-key break. Relax the client schema to tolerate the new keys.
+
+**`/explain` multi-collection constraint**:
+- `POST /explain` (and MCP `explain`) with `rerank=false` AND more than one collection returns 422 / a `validation_error` with message `"reranking cannot be disabled for multi-collection search in v1"`. Single-collection `rerank=false` is unchanged.
+
+**Announced in**: this release.
+
 ### [next release] — B2 (additive): `GET /ready` endpoint and `readiness` field on `GET /status`
 
 **Surface**: REST (additive — new endpoint and new field on existing endpoint).

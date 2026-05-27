@@ -407,7 +407,7 @@ collection: str = ""  # new additive field
 
 #### Task 5.1 — MCP `search` tool: `collections` parameter and `BREAKING.md`
 
-- [ ] **File**: `archon_search/server/mcp.py`, `BREAKING.md`
+- [x] **File**: `archon_search/server/mcp.py`, `BREAKING.md`
 - **Depends on**: Task 4.1
 - **Description**:
   - In the MCP `search` tool function (search for the MCP `search` tool function in `mcp.py`), add `collections: list[str] | None = None` parameter alongside the existing `collection: str | None = None`.
