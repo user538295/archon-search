@@ -298,7 +298,7 @@ collection: str = ""  # new additive field
 
 #### Task 3.2 — Implement `SearchPipeline.search_many`
 
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 2.3, Task 3.1
 - **Description**:
   - Add `search_many(self, query: str, collections: list[str], namespace: str = DEFAULT_NAMESPACE) -> SearchPipelineResult` to `SearchPipeline`.

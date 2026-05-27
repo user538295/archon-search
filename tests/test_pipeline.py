@@ -2894,3 +2894,380 @@ def test_pipeline_embedder_is_warm_true_when_warm() -> None:
         top_k_return=5,
     )
     assert pipeline.embedder_is_warm is True
+
+
+# ===========================================================================
+# search_many (B3 Task 3.2) — multi-collection fan-out
+# ===========================================================================
+
+
+def _scored(collection: str, doc_id: str, chunk_id: str, rrf_score: float = 0.5):
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+
+    return ScoredSearchCandidate(
+        doc_id=doc_id,
+        chunk_id=chunk_id,
+        text=f"text-{chunk_id}",
+        source_path=f"/path/to/{doc_id}.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=0,
+            vector_score=0.9,
+            vector_score_kind="distance",
+            fts_rank=None,
+            fts_score=None,
+            fts_score_kind=None,
+            rrf_score=rrf_score,
+            reranker_score=None,
+        ),
+        collection=collection,
+    )
+
+
+def _meta(name: str, *, embedding_model: str = "mock-embedder", namespace: str = "default"):
+    from archon_search.collection_meta import CollectionMeta
+
+    return CollectionMeta(name=name, embedding_model=embedding_model, namespace=namespace)
+
+
+def _search_many_pipeline(
+    *,
+    leg_map: dict | None = None,
+    meta_list: list | None = None,
+    fanout_leg_trim: int = 40,
+    top_k_return: int = 5,
+    top_k_retrieve: int = 10,
+    fanout_timeout_seconds: float = 30.0,
+):
+    """Build a SearchPipeline with a MagicMock store wired for fan-out.
+
+    ``leg_map`` maps collection-name -> list[ScoredSearchCandidate]; the
+    store's hybrid_search_with_trace dispatches per collection.
+    """
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    leg_map = leg_map or {}
+
+    async def _hybrid(collection, vector, query_text, candidate_depth):
+        return list(leg_map.get(collection, []))
+
+    store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid)
+
+    embedder = make_embedder()
+    embedder.embed_one = AsyncMock(return_value=[0.1] * 4)  # type: ignore[method-assign]
+
+    reranker = make_reranker()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=embedder,
+        reranker=reranker,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=top_k_retrieve,
+        top_k_return=top_k_return,
+        fanout_leg_trim=fanout_leg_trim,
+        fanout_timeout_seconds=fanout_timeout_seconds,
+    )
+    if meta_list is not None:
+        pipeline.get_all_collections_meta = AsyncMock(return_value=meta_list)  # type: ignore[method-assign]
+    return pipeline, store, embedder, reranker
+
+
+@pytest.mark.asyncio
+async def test_search_many_embeds_once() -> None:
+    cols = ["A", "B", "C"]
+    leg_map = {c: [_scored(c, "d" * 64, f"{'d' * 64}-000000")] for c in cols}
+    pipeline, store, embedder, reranker = _search_many_pipeline(
+        leg_map=leg_map, meta_list=[_meta(c) for c in cols]
+    )
+    await pipeline.search_many("q", cols)
+    assert embedder.embed_one.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_search_many_reranks_once() -> None:
+    cols = ["A", "B"]
+    leg_map = {
+        "A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")],
+        "B": [_scored("B", "b" * 64, f"{'b' * 64}-000000")],
+    }
+    pipeline, store, embedder, reranker = _search_many_pipeline(
+        leg_map=leg_map, meta_list=[_meta("A"), _meta("B")]
+    )
+    spy = AsyncMock(side_effect=reranker.rerank_candidates)
+    reranker.rerank_candidates = spy  # type: ignore[method-assign]
+
+    await pipeline.search_many("q", cols)
+
+    assert spy.await_count == 1
+    merged_passed = spy.await_args.args[1] if len(spy.await_args.args) > 1 else spy.await_args.kwargs["candidates"]
+    # merged pool == sum of trimmed per-leg pools (1 + 1)
+    assert len(merged_passed) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_many_result_carries_collection_provenance() -> None:
+    leg_map = {
+        "A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")],
+        "B": [_scored("B", "b" * 64, f"{'b' * 64}-000000")],
+    }
+    pipeline, *_ = _search_many_pipeline(leg_map=leg_map, meta_list=[_meta("A"), _meta("B")])
+    result = await pipeline.search_many("q", ["A", "B"])
+    by_doc = {r.doc_id: r.collection for r in result.results}
+    assert by_doc["a" * 64] == "A"
+    assert by_doc["b" * 64] == "B"
+
+
+@pytest.mark.asyncio
+async def test_search_many_merge_order_deterministic() -> None:
+    """Merge concatenates legs in ascending collection-name order, regardless of
+    the order collections are requested."""
+    leg_map = {
+        "A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")],
+        "B": [_scored("B", "b" * 64, f"{'b' * 64}-000000")],
+    }
+    pipeline, _store, _embedder, reranker = _search_many_pipeline(
+        leg_map=leg_map, meta_list=[_meta("A"), _meta("B")]
+    )
+    spy = AsyncMock(side_effect=reranker.rerank_candidates)
+    reranker.rerank_candidates = spy  # type: ignore[method-assign]
+
+    # Request in reverse (non-alphabetical) order.
+    await pipeline.search_many("q", ["B", "A"])
+
+    merged = spy.await_args.args[1]
+    # Merge must be alphabetical by collection name (A before B), not request order.
+    assert [c.collection for c in merged] == ["A", "B"]
+
+
+@pytest.mark.asyncio
+async def test_search_many_namespace_scope_excludes_out_of_namespace() -> None:
+    """A collection that exists only in namespace B is invisible from namespace A:
+    it is never searched, and requesting it from A raises CollectionNotFoundError
+    (no cross-namespace existence leak)."""
+    from archon_search.pipeline import CollectionNotFoundError
+
+    leg_map = {"A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")]}
+    pipeline, store, *_ = _search_many_pipeline(leg_map=leg_map, meta_list=None)
+    # Back the REAL pipeline.get_all_collections_meta with a store returning both
+    # A (namespace A) and B (namespace B); the pipeline filters by namespace.
+    store.get_all_collections_meta = AsyncMock(
+        return_value=[_meta("A", namespace="A"), _meta("B", namespace="B")]
+    )
+
+    await pipeline.search_many("q", ["A"], namespace="A")
+    called_cols = {c.args[0] for c in store.hybrid_search_with_trace.call_args_list}
+    assert called_cols == {"A"}
+
+    # B lives in namespace B → not found from namespace A (strict 404, no leak).
+    with pytest.raises(CollectionNotFoundError):
+        await pipeline.search_many("q", ["B"], namespace="A")
+
+
+@pytest.mark.asyncio
+async def test_search_many_missing_collection_raises_collection_not_found() -> None:
+    from archon_search.pipeline import CollectionNotFoundError
+
+    pipeline, *_ = _search_many_pipeline(leg_map={}, meta_list=[_meta("A")])
+    with pytest.raises(CollectionNotFoundError):
+        await pipeline.search_many("q", ["A", "MISSING"])
+
+
+@pytest.mark.asyncio
+async def test_search_many_model_mismatch_excludes_and_reports() -> None:
+    from archon_search._types import ExcludedCollection
+
+    leg_map = {"A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")]}
+    pipeline, store, *_ = _search_many_pipeline(
+        leg_map=leg_map,
+        meta_list=[_meta("A"), _meta("B", embedding_model="other-model")],
+    )
+    result = await pipeline.search_many("q", ["A", "B"])
+    assert ExcludedCollection(name="B", reason="embedding_model_mismatch") in result.excluded_collections
+    called_cols = {c.args[0] for c in store.hybrid_search_with_trace.call_args_list}
+    assert "B" not in called_cols
+
+
+@pytest.mark.asyncio
+async def test_search_many_leg_failure_cancels_siblings_and_raises() -> None:
+    cancelled = asyncio.Event()
+
+    async def _hybrid(collection, vector, query_text, candidate_depth):
+        if collection == "A":
+            raise RuntimeError("leg failed")
+        try:
+            await asyncio.sleep(999)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return []
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid)
+    embedder = make_embedder()
+    embedder.embed_one = AsyncMock(return_value=[0.1] * 4)  # type: ignore[method-assign]
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=embedder,
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    pipeline.get_all_collections_meta = AsyncMock(return_value=[_meta("A"), _meta("B")])  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="leg failed"):
+        await pipeline.search_many("q", ["A", "B"])
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_search_many_timeout_raises_fanout_timeout_error() -> None:
+    from time import monotonic
+
+    from archon_search.pipeline import FanoutTimeoutError
+
+    async def _hybrid(collection, vector, query_text, candidate_depth):
+        await asyncio.sleep(999)
+        return []
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid)
+    embedder = make_embedder()
+    embedder.embed_one = AsyncMock(return_value=[0.1] * 4)  # type: ignore[method-assign]
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=embedder,
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+        fanout_timeout_seconds=0.001,
+    )
+    pipeline.get_all_collections_meta = AsyncMock(return_value=[_meta("A"), _meta("B")])  # type: ignore[method-assign]
+
+    t0 = monotonic()
+    with pytest.raises(FanoutTimeoutError):
+        await pipeline.search_many("q", ["A", "B"])
+    assert (monotonic() - t0) < 2.0
+
+
+@pytest.mark.asyncio
+async def test_same_chunk_id_in_two_collections_both_survive() -> None:
+    shared_chunk = f"{'a' * 64}-000000"
+    leg_map = {
+        "A": [_scored("A", "a" * 64, shared_chunk)],
+        "B": [_scored("B", "a" * 64, shared_chunk)],
+    }
+    pipeline, store, embedder, reranker = _search_many_pipeline(
+        leg_map=leg_map, meta_list=[_meta("A"), _meta("B")]
+    )
+    spy = AsyncMock(side_effect=reranker.rerank_candidates)
+    reranker.rerank_candidates = spy  # type: ignore[method-assign]
+
+    await pipeline.search_many("q", ["A", "B"])
+
+    merged_passed = spy.await_args.args[1]
+    collections = sorted(c.collection for c in merged_passed)
+    assert collections == ["A", "B"]
+
+
+@pytest.mark.asyncio
+async def test_search_many_all_collections_model_mismatched_returns_empty() -> None:
+    from archon_search.pipeline import SearchPipelineResult
+
+    pipeline, store, *_ = _search_many_pipeline(
+        leg_map={},
+        meta_list=[
+            _meta("A", embedding_model="other-model"),
+            _meta("B", embedding_model="other-model"),
+        ],
+    )
+    result = await pipeline.search_many("q", ["A", "B"])
+    assert isinstance(result, SearchPipelineResult)
+    assert result.results == []
+    assert {e.name for e in result.excluded_collections} == {"A", "B"}
+    assert store.hybrid_search_with_trace.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_search_many_leg_trim_below_top_k_return() -> None:
+    leg_map = {
+        "A": [_scored("A", "a" * 64, f"{'a' * 64}-{i:06d}", rrf_score=1.0 - i * 0.01) for i in range(10)],
+        "B": [_scored("B", "b" * 64, f"{'b' * 64}-{i:06d}", rrf_score=1.0 - i * 0.01) for i in range(10)],
+    }
+    pipeline, *_ = _search_many_pipeline(
+        leg_map=leg_map, meta_list=[_meta("A"), _meta("B")], fanout_leg_trim=1, top_k_return=5
+    )
+    result = await pipeline.search_many("q", ["A", "B"])
+    assert len(result.results) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_many_meta_lookup_raises_propagates() -> None:
+    from archon_search.pipeline import MetadataLookupError
+
+    pipeline, *_ = _search_many_pipeline(leg_map={})
+    pipeline.get_all_collections_meta = AsyncMock(side_effect=RuntimeError("store error"))  # type: ignore[method-assign]
+    with pytest.raises(MetadataLookupError):
+        await pipeline.search_many("q", ["A"])
+
+
+@pytest.mark.asyncio
+async def test_search_many_heterogeneous_leg_pool_sizes() -> None:
+    leg_map = {
+        "A": [_scored("A", "a" * 64, f"{'a' * 64}-{i:06d}", rrf_score=1.0 - i * 0.001) for i in range(40)],
+        "B": [],
+    }
+    pipeline, *_ = _search_many_pipeline(
+        leg_map=leg_map, meta_list=[_meta("A"), _meta("B")], fanout_leg_trim=40, top_k_return=50
+    )
+    result = await pipeline.search_many("q", ["A", "B"])
+    assert all(r.collection == "A" for r in result.results)
+    assert len(result.results) == 40
+
+
+@pytest.mark.asyncio
+async def test_search_many_populates_fanout_timings() -> None:
+    """Result carries FanoutTimings with one leg_times entry per searched
+    collection plus a non-negative rerank time."""
+    leg_map = {
+        "A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")],
+        "B": [_scored("B", "b" * 64, f"{'b' * 64}-000000")],
+    }
+    pipeline, *_ = _search_many_pipeline(leg_map=leg_map, meta_list=[_meta("A"), _meta("B")])
+    result = await pipeline.search_many("q", ["A", "B"])
+
+    assert result.fanout_timings is not None
+    assert set(result.fanout_timings.leg_times) == {"A", "B"}
+    assert all(v >= 0 for v in result.fanout_timings.leg_times.values())
+    assert result.fanout_timings.rerank_time_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_search_many_acl_filtered_propagates() -> None:
+    """When ACL drops a candidate from the merged pool, acl_filtered is True."""
+    a_open = _scored("A", "a" * 64, f"{'a' * 64}-000000")  # acl=None → open
+    b_denied = _scored("B", "b" * 64, f"{'b' * 64}-000000")
+    b_denied.acl = ["other-namespace"]  # not the search namespace → dropped
+    leg_map = {"A": [a_open], "B": [b_denied]}
+    pipeline, *_ = _search_many_pipeline(leg_map=leg_map, meta_list=[_meta("A"), _meta("B")])
+
+    result = await pipeline.search_many("q", ["A", "B"], namespace="default")
+
+    assert result.acl_filtered is True
+    # The denied candidate must not survive into results.
+    assert all(r.collection != "B" for r in result.results)

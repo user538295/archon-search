@@ -1,16 +1,18 @@
 """SearchPipeline — orchestrates ingest, search, and context retrieval."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from archon_search._diagnostics import ScoredSearchCandidate
-from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, IngestedBy, IngestResult, SearchResult
+from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, FanoutTimings, IngestedBy, IngestResult, SearchResult
 from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.observability import record_stage
 from archon_search.filters import SearchFilters
@@ -34,6 +36,27 @@ class SearchPipelineResult:
     results: list[SearchResult]
     acl_filtered: bool
     excluded_collections: list[ExcludedCollection] = field(default_factory=list)
+    fanout_timings: FanoutTimings | None = None
+
+
+class CollectionNotFoundError(Exception):
+    """One or more requested collections were absent from the namespace metadata."""
+
+    def __init__(self, names: list[str]) -> None:
+        self.names = names
+        super().__init__(f"collections not found: {names!r}")
+
+
+class FanoutTimeoutError(Exception):
+    """The multi-collection fan-out exceeded its wall-clock budget."""
+
+
+class MetadataLookupError(Exception):
+    """Loading collection metadata for the fan-out failed."""
+
+    def __init__(self, cause: Exception) -> None:
+        self.cause = cause
+        super().__init__(f"metadata lookup failed: {cause}")
 
 
 @dataclass
@@ -439,6 +462,137 @@ class SearchPipeline:
             top_results=top_results,
             near_misses=near_misses,
             acl_filtered=acl_filtered,
+        )
+
+    async def search_many(
+        self,
+        query: str,
+        collections: list[str],
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> SearchPipelineResult:
+        """Embed the query once, fan out hybrid retrieval across ``collections`` in
+        parallel, merge with provenance, run a single global rerank pass, and return a
+        unified result."""
+        # Step 1: embed exactly once.
+        vector = await self._embedder.embed_one(query)
+
+        # Step 2: metadata lookup, validation, namespace + model partitioning.
+        try:
+            all_meta = await self.get_all_collections_meta(namespace)
+        except Exception as exc:
+            raise MetadataLookupError(exc) from exc
+
+        meta_by_name = {m.name: m for m in all_meta}
+        missing = [name for name in collections if name not in meta_by_name]
+        if missing:
+            raise CollectionNotFoundError(missing)
+
+        excluded_collections: list[ExcludedCollection] = []
+        collections_in_scope: list[str] = []
+        for name in collections:
+            if meta_by_name[name].embedding_model != self._embedder.model_name:
+                excluded_collections.append(
+                    ExcludedCollection(name=name, reason="embedding_model_mismatch")
+                )
+            else:
+                collections_in_scope.append(name)
+
+        if not collections_in_scope:
+            return SearchPipelineResult(
+                results=[],
+                acl_filtered=False,
+                excluded_collections=excluded_collections,
+            )
+
+        # Step 3: fan-out + per-leg trim + merge + ACL.
+        candidate_depth = max(self._top_k_retrieve * 3, 20)
+        merged, acl_filtered, leg_times = await self._fanout_merge_acl(
+            query, vector, collections_in_scope, namespace, candidate_depth
+        )
+
+        # Step 7: single global rerank pass.
+        t0 = monotonic()
+        ranked = await self._reranker.rerank_candidates(query, merged, top_k=self._top_k_return)
+        rerank_time_ms = (monotonic() - t0) * 1000.0
+
+        # Step 8: convert to public results.
+        results = [self._candidate_to_search_result(c) for c in ranked]
+
+        fanout_timings = FanoutTimings(leg_times=leg_times, rerank_time_ms=rerank_time_ms)
+        return SearchPipelineResult(
+            results=results,
+            acl_filtered=acl_filtered,
+            excluded_collections=excluded_collections,
+            fanout_timings=fanout_timings,
+        )
+
+    async def _fanout_merge_acl(
+        self,
+        query: str,
+        vector,  # type: ignore[no-untyped-def]
+        collections_in_scope: list[str],
+        namespace: str,
+        candidate_depth: int,
+    ) -> tuple[list[ScoredSearchCandidate], bool, dict[str, float]]:
+        async def _leg(coll: str):  # type: ignore[no-untyped-def]
+            t0 = monotonic()
+            cands = await self.store.hybrid_search_with_trace(
+                coll, vector, query, candidate_depth=candidate_depth
+            )
+            return coll, cands, (monotonic() - t0) * 1000.0
+
+        try:
+            async with asyncio.timeout(self._fanout_timeout_seconds):
+                try:
+                    async with asyncio.TaskGroup() as tg:
+                        tasks = [tg.create_task(_leg(c)) for c in collections_in_scope]
+                except* Exception as eg:
+                    logger.error(
+                        "search_many fan-out: %d legs failed: %s", len(eg.exceptions), eg
+                    )
+                    # Re-raise the first leg failure as a plain exception (not an
+                    # ExceptionGroup) so the route layer's 500 mapping fires; chain
+                    # to the group to preserve sibling context.
+                    raise eg.exceptions[0] from eg
+        except TimeoutError:
+            raise FanoutTimeoutError()
+
+        leg_results = [t.result() for t in tasks]
+
+        trim = max(self._fanout_leg_trim, 1)
+        trimmed: dict[str, list[ScoredSearchCandidate]] = {}
+        leg_times: dict[str, float] = {}
+        for coll, cands, leg_ms in leg_results:
+            cands_sorted = sorted(
+                cands, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
+            )
+            trimmed[coll] = cands_sorted[:trim]
+            leg_times[coll] = leg_ms
+
+        merged: list[ScoredSearchCandidate] = []
+        for coll in sorted(trimmed):
+            merged.extend(trimmed[coll])
+
+        merged, acl_filtered = apply_acl_filter(merged, lambda c: c.acl, namespace)
+        return merged, acl_filtered, leg_times
+
+    def _candidate_to_search_result(self, c: ScoredSearchCandidate) -> SearchResult:
+        score = c.score_breakdown.reranker_score
+        assert score is not None
+        return SearchResult(
+            doc_id=c.doc_id,
+            chunk_id=c.chunk_id,
+            text=c.text,
+            score=score,
+            source_path=c.source_path,
+            file_type=c.file_type,
+            language=c.language,
+            indexed_at=c.indexed_at,
+            updated_at=c.updated_at,
+            ingested_by=c.ingested_by,
+            metadata=c.metadata,
+            acl=c.acl,
+            collection=c.collection,
         )
 
     async def search_with_context(

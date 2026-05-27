@@ -106,6 +106,12 @@ class ExcludedCollection:
 
 
 @dataclass
+class FanoutTimings:
+    leg_times: dict[str, float]
+    rerank_time_ms: float
+
+
+@dataclass
 class DocumentInfo:
     doc_id: str
     source_path: str
