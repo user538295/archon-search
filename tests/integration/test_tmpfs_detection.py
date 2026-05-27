@@ -32,6 +32,10 @@ _MOUNTINFO_EXT4_OVER_TMP = (
 @pytest.mark.integration
 def test_tmp_is_tmpfs_detects_tmpfs_mount(monkeypatch):
     monkeypatch.setattr(_helpers.sys, "platform", "linux")
+    # Neutralise symlink resolution: on macOS `/tmp` resolves to `/private/tmp`,
+    # which would break the fixture's `/tmp` prefix match. On Linux this is a
+    # no-op. The test targets the prefix/fstype logic, not real symlinks.
+    monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: self)
     with mock.patch(
         "tests.integration._helpers._read_mountinfo",
         return_value=_MOUNTINFO_TMPFS_OVER_TMP,
@@ -43,6 +47,7 @@ def test_tmp_is_tmpfs_detects_tmpfs_mount(monkeypatch):
 @pytest.mark.integration
 def test_tmp_is_tmpfs_detects_ext4_mount(monkeypatch):
     monkeypatch.setattr(_helpers.sys, "platform", "linux")
+    monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: self)
     with mock.patch(
         "tests.integration._helpers._read_mountinfo",
         return_value=_MOUNTINFO_EXT4_OVER_TMP,

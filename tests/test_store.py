@@ -2995,13 +2995,16 @@ async def test_hybrid_search_indexed_after_filter(
     """indexed_after filter is inclusive at boundary."""
     from datetime import date
 
+    from archon_search._types import normalize_iso_utc
     from archon_search.filters import SearchFilters
 
     doc_old = _doc_id()
     doc_new = _doc_id()
 
-    old_at = "2025-01-01T00:00:00+00:00"
-    new_at = "2026-06-01T00:00:00+00:00"
+    # Store indexed_at in the fixed-width UTC form production normalizes to; the
+    # date filter compares lexicographically against the same normalized form.
+    old_at = normalize_iso_utc("2025-01-01T00:00:00+00:00")
+    new_at = normalize_iso_utc("2026-06-01T00:00:00+00:00")
 
     old_chunk = ChunkRecord(
         doc_id=doc_old,
@@ -3022,6 +3025,7 @@ async def test_hybrid_search_indexed_after_filter(
 
     await connected_store.ensure_collection(col_name, _DIM)
     await connected_store.ingest_chunks(col_name, [old_chunk, new_chunk])
+    await connected_store.rebuild_fts_index(col_name)
 
     # Boundary: exactly new_at should be included
     results = await connected_store.hybrid_search(

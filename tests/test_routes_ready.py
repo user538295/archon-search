@@ -134,7 +134,9 @@ def test_ready_returns_503_after_store_disconnect(tmp_path: Path) -> None:
         await store.connect()
         await store.disconnect()
 
-    asyncio.get_event_loop().run_until_complete(setup())
+    # asyncio.run (not get_event_loop().run_until_complete): the latter raises
+    # "no current event loop" in MainThread when a prior async test closed the loop.
+    asyncio.run(setup())
     client = TestClient(app)
     response = client.get("/ready")
     assert response.status_code == 503

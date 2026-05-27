@@ -133,49 +133,43 @@ def test_telemetry_entry_rejects_raw_filter_values_as_kwargs() -> None:
 @pytest.mark.integration
 def test_search_writes_filter_flags_to_jsonl(tmp_path: Path) -> None:
     """REST /search with a filter writes filter_flags booleans to JSONL."""
-    import asyncio
-    from fastapi.testclient import TestClient
-    from archon_search.server.app import create_app as create_rest_app
-    from archon_search.telemetry.writer import TelemetryWriter
+    import os
     from unittest.mock import AsyncMock, MagicMock
 
-    log_dir = tmp_path / "logs"
-    log_dir.mkdir()
-    writer = TelemetryWriter(log_dir=log_dir, enabled=True)
-    writer.start()
+    from fastapi.testclient import TestClient
 
-    try:
-        pipeline = MagicMock()
-        # search returns a result object
-        from archon_search._types import SearchResult as SR
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig, TelemetryConfig
+    from archon_search.jobs.store import JobStore
+    from archon_search.pipeline import SearchPipelineResult
+    from archon_search.server.app import create_app
 
-        fake_result = MagicMock()
-        fake_result.results = []
-        fake_result.acl_filtered = False
-        pipeline.search = AsyncMock(return_value=fake_result)
+    log_dir = tmp_path / "search-logs"
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.telemetry = TelemetryConfig(enabled=True, retention_days=30, log_dir=str(log_dir))
+    job_store = JobStore(path=tmp_path / "jobs.json")
 
-        fake_meta = MagicMock()
-        pipeline.get_collection_meta = AsyncMock(return_value=fake_meta)
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.get_collection_meta = AsyncMock(
+        return_value=CollectionMeta(name="docs", namespace="default")
+    )
 
-        app = create_rest_app(pipeline=pipeline, writer=writer)
-
-        # Patch the API key check so TestClient works without auth
-        from archon_search.server.middleware_auth import APIKeyMiddleware
-        # Remove middleware for test: use internal client that bypasses it
-        with TestClient(app, raise_server_exceptions=True) as client:
-            resp = client.post(
-                "/search",
-                json={
-                    "collection": "docs",
-                    "query": "hello",
-                    "filters": {"file_type": "md", "include_metadata": True},
-                },
-                headers={"Authorization": "Bearer test-key"},
-            )
-    finally:
-        import time
-        time.sleep(0.1)  # let writer flush
-        writer.stop()
+    app = create_app(config, job_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    # Context-manager form runs the lifespan, which starts the telemetry writer
+    # (telemetry enabled) and exits drain the writer so the JSONL is flushed.
+    with TestClient(app, headers={"Authorization": f"Bearer {key}"}, raise_server_exceptions=False) as client:
+        app.state.pipeline = pipeline
+        resp = client.post(
+            "/search",
+            json={
+                "collection": "docs",
+                "query": "hello",
+                "filters": {"file_type": "md", "include_metadata": True},
+            },
+        )
 
     assert resp.status_code == 200, f"Expected 200 from /search, got {resp.status_code}: {resp.text}"
 

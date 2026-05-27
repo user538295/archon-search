@@ -622,6 +622,7 @@ def test_openapi_schema_language_description_says_reserved_c2(tmp_path: Path) ->
 async def test_search_filter_excludes_everything_returns_200_empty(tmp_path: Path) -> None:
     """Filters that exclude all rows → 200 with empty results list."""
     from archon_search._types import ChunkRecord
+    from archon_search.collection_meta import CollectionMeta
     from archon_search.embedder import Embedder, ModelEmbedder
     from archon_search.store import SearchStore
 
@@ -644,18 +645,21 @@ async def test_search_filter_excludes_everything_returns_200_empty(tmp_path: Pat
         indexed_at="2025-01-01T00:00:00",
         file_type="md",
     )
+    await store.ensure_collection("filtercol", len(vector))
     await store.ingest_chunks("filtercol", [chunk])
+    await store.update_collection_meta(
+        CollectionMeta(name="filtercol", embedding_model=config.embedding_model, namespace="default")
+    )
     await store.disconnect()
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
-
-    response = client.post(
-        "/search",
-        json={"collection": "filtercol", "query": "hello world", "filters": {"file_type": "pdf"}},
-    )
+    with TestClient(app, headers={"Authorization": f"Bearer {key}"}) as client:
+        response = client.post(
+            "/search",
+            json={"collection": "filtercol", "query": "hello world", "filters": {"file_type": "pdf"}},
+        )
     assert response.status_code == 200
     assert response.json()["results"] == []
 
@@ -664,6 +668,7 @@ async def test_search_filter_excludes_everything_returns_200_empty(tmp_path: Pat
 async def test_include_metadata_false_suppresses_metadata_end_to_end(tmp_path: Path) -> None:
     """include_metadata=False suppresses metadata; True makes it present."""
     from archon_search._types import ChunkRecord
+    from archon_search.collection_meta import CollectionMeta
     from archon_search.embedder import Embedder, ModelEmbedder
     from archon_search.store import SearchStore
 
@@ -686,26 +691,29 @@ async def test_include_metadata_false_suppresses_metadata_end_to_end(tmp_path: P
         indexed_at="2025-01-01T00:00:00",
         metadata={"author": "tester"},
     )
+    await store.ensure_collection("metacol", len(vector))
     await store.ingest_chunks("metacol", [chunk])
+    await store.update_collection_meta(
+        CollectionMeta(name="metacol", embedding_model=config.embedding_model, namespace="default")
+    )
     await store.disconnect()
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    with TestClient(app, headers={"Authorization": f"Bearer {key}"}) as client:
+        # Without include_metadata — metadata should be empty (suppressed)
+        resp_no_meta = client.post("/search", json={"collection": "metacol", "query": "metadata test"})
+        assert resp_no_meta.status_code == 200
+        results_no_meta = resp_no_meta.json()["results"]
+        assert len(results_no_meta) >= 1
+        assert results_no_meta[0]["metadata"] == {}
 
-    # Without include_metadata — metadata should be empty (suppressed)
-    resp_no_meta = client.post("/search", json={"collection": "metacol", "query": "metadata test"})
-    assert resp_no_meta.status_code == 200
-    results_no_meta = resp_no_meta.json()["results"]
-    assert len(results_no_meta) >= 1
-    assert results_no_meta[0]["metadata"] == {}
-
-    # With include_metadata=True — metadata should be present
-    resp_with_meta = client.post(
-        "/search",
-        json={"collection": "metacol", "query": "metadata test", "filters": {"include_metadata": True}},
-    )
+        # With include_metadata=True — metadata should be present
+        resp_with_meta = client.post(
+            "/search",
+            json={"collection": "metacol", "query": "metadata test", "filters": {"include_metadata": True}},
+        )
     assert resp_with_meta.status_code == 200
     results_with_meta = resp_with_meta.json()["results"]
     assert len(results_with_meta) >= 1
@@ -716,6 +724,7 @@ async def test_include_metadata_false_suppresses_metadata_end_to_end(tmp_path: P
 async def test_search_end_to_end(tmp_path: Path) -> None:
     """Full pipeline: ingest → search → result appears."""
     from archon_search._types import ChunkRecord
+    from archon_search.collection_meta import CollectionMeta
     from archon_search.embedder import Embedder, ModelEmbedder
     from archon_search.store import SearchStore
 
@@ -737,15 +746,19 @@ async def test_search_end_to_end(tmp_path: Path) -> None:
         source_path="/docs/hello.md",
         indexed_at="2025-01-01T00:00:00",
     )
+    await store.ensure_collection("testcol", len(vector))
     await store.ingest_chunks("testcol", [chunk])
+    await store.update_collection_meta(
+        CollectionMeta(name="testcol", embedding_model=config.embedding_model, namespace="default")
+    )
     await store.disconnect()
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
-
-    response = client.post("/search", json={"collection": "testcol", "query": "hello world"})
+    # Context-manager form runs the lifespan, which connects app.state.search_store.
+    with TestClient(app, headers={"Authorization": f"Bearer {key}"}) as client:
+        response = client.post("/search", json={"collection": "testcol", "query": "hello world"})
     assert response.status_code == 200
     data = response.json()
     results = data["results"]
