@@ -27,6 +27,7 @@ from archon_search._types import IngestedBy
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.pipeline import ExplainStageError
 from archon_search.router import MultiCollectionRouter
+from archon_search.server.schemas import ExcludedCollectionSchema  # noqa: F401  (used by later tasks)
 from archon_search.telemetry.entry import TelemetryEntry
 
 if TYPE_CHECKING:

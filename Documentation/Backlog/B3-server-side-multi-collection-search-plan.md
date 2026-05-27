@@ -193,7 +193,7 @@ collection: str = ""  # new additive field
 
 #### Task 1.1 — Add `SearchResult.collection` and populate it at the store row-to-result site
 
-- [ ] **File**: `archon_search/_types.py`, `archon_search/store.py`, `archon_search/server/schemas.py`, `archon_search/server/routes_search.py`, `archon_search/server/routes_explain.py`
+- [x] **File**: `archon_search/_types.py`, `archon_search/store.py`, `archon_search/server/schemas.py`, `archon_search/server/routes_search.py`, `archon_search/server/routes_explain.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `collection: str = ""` field to `SearchResult` dataclass (`_types.py`). Default empty string ensures backward compat at call sites that construct `SearchResult` directly (tests, eval fixtures).

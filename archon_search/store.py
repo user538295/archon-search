@@ -829,6 +829,7 @@ class SearchStore:
                     ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
                     metadata=parse_metadata(row.get("metadata") or "{}"),
                     acl=row_acl,
+                    collection=collection,
                 )
             )
 

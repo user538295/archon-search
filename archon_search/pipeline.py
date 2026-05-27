@@ -4,13 +4,13 @@ from __future__ import annotations
 import hashlib
 import inspect
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from archon_search._diagnostics import ScoredSearchCandidate
-from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestedBy, IngestResult, SearchResult
+from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, IngestedBy, IngestResult, SearchResult
 from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.observability import record_stage
 from archon_search.filters import SearchFilters
@@ -33,6 +33,7 @@ logger = logging.getLogger("archon")
 class SearchPipelineResult:
     results: list[SearchResult]
     acl_filtered: bool
+    excluded_collections: list[ExcludedCollection] = field(default_factory=list)
 
 
 @dataclass

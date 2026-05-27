@@ -201,6 +201,33 @@ def test_search_result_language_carried_when_set():
     assert result.language == "en"
 
 
+def test_search_result_has_collection_field():
+    r = SearchResult(
+        doc_id="abc",
+        chunk_id="abc-000000",
+        text="hello",
+        score=0.9,
+        source_path="/tmp/file.txt",
+        collection="col_a",
+    )
+    assert r.collection == "col_a"
+
+
+def test_search_result_collection_defaults_to_empty_string():
+    r = SearchResult(
+        doc_id="abc", chunk_id="abc-000000", text="hello", score=0.9, source_path="/tmp/file.txt"
+    )
+    assert r.collection == ""
+
+
+def test_excluded_collection_carries_name_and_reason():
+    from archon_search._types import ExcludedCollection
+
+    ec = ExcludedCollection(name="col_b", reason="acl")
+    assert ec.name == "col_b"
+    assert ec.reason == "acl"
+
+
 def test_search_result_ingested_by_remains_ingested_by_literal():
     import typing
     hints = typing.get_type_hints(SearchResult)

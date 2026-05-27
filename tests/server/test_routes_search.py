@@ -136,6 +136,37 @@ def test_search_returns_acl_filtered_flag(tmp_path: Path) -> None:
     assert response.json()["acl_filtered"] is True
 
 
+def test_search_response_carries_collection_provenance(tmp_path: Path) -> None:
+    """The collection field on SearchResult must round-trip through the HTTP JSON body."""
+    result = SearchResult(
+        doc_id="a" * 64,
+        chunk_id="a" * 64 + "-000001",
+        text="result text",
+        score=0.9,
+        source_path="/path/to/doc.md",
+        collection="my-col",
+    )
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=[result])
+
+    response = client.post("/search", json={"collection": "my-col", "query": "q"})
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["collection"] == "my-col"
+
+
+def test_search_response_excluded_collections_empty_on_single_collection(tmp_path: Path) -> None:
+    """Single-collection /search must emit an empty excluded_collections envelope."""
+    results = [_make_search_result(1)]
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=results)
+
+    response = client.post("/search", json={"collection": "col", "query": "q"})
+
+    assert response.status_code == 200
+    assert response.json()["excluded_collections"] == []
+
+
 def test_search_collection_not_found_returns_404(tmp_path: Path) -> None:
     """When get_collection_meta returns None, 404 is returned."""
     app, client = _make_app(tmp_path)

@@ -22,6 +22,7 @@ _EXPECTED_FIELDS = {
     "ingested_by",
     "metadata",
     "acl",
+    "collection",  # B3 addition — multi-collection provenance
 }
 
 

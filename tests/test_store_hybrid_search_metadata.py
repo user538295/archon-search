@@ -77,6 +77,16 @@ async def test_hybrid_search_updated_at_falls_back_to_indexed_at(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_hybrid_search_populates_collection(connected_store, col_name):
+    """Every returned SearchResult must carry the collection it was queried in."""
+    chunk = _chunk(ingested_by="cli")
+    results = await _seed_and_search(connected_store, col_name, chunk)
+    assert results
+    assert results[0].collection == col_name
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_hybrid_search_normalizes_legacy_ingested_by_to_cli(
     connected_store, col_name
 ):

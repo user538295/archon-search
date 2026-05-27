@@ -11,7 +11,7 @@ import json
 import pytest
 
 from archon_search._types import SearchResult
-from archon_search.server.routes_search import SearchResultSchema
+from archon_search.server.routes_search import SearchResponse, SearchResultSchema
 
 
 def test_search_result_schema_contains_every_search_result_field() -> None:
@@ -35,6 +35,30 @@ def test_search_result_schema_from_result_preserves_acl_none_and_empty_list(acl)
     )
     schema = SearchResultSchema.from_result(r)
     assert schema.acl == acl
+
+
+def test_field_parity_search_result_vs_schema() -> None:
+    """The new ``collection`` provenance field must be present on both the
+    dataclass and the REST schema."""
+    assert "collection" in SearchResult.__dataclass_fields__
+    assert "collection" in SearchResultSchema.model_fields
+
+
+def test_search_result_schema_from_result_includes_collection() -> None:
+    r = SearchResult(
+        doc_id="d",
+        chunk_id="c",
+        text="t",
+        score=0.5,
+        source_path="/tmp/x.md",
+        collection="col_a",
+    )
+    assert SearchResultSchema.from_result(r).collection == r.collection
+
+
+def test_search_response_includes_excluded_collections_field() -> None:
+    resp = SearchResponse(results=[], acl_filtered=False)
+    assert resp.excluded_collections == []
 
 
 def test_search_result_schema_includes_metadata() -> None:

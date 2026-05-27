@@ -96,6 +96,13 @@ class SearchResult:
     ingested_by: IngestedBy = "cli"
     metadata: dict[str, str] = field(default_factory=dict)
     acl: list[str] | None = None
+    collection: str = ""
+
+
+@dataclass
+class ExcludedCollection:
+    name: str
+    reason: str
 
 
 @dataclass

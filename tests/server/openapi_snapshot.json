@@ -323,6 +323,24 @@
         "title": "ErrorKind",
         "type": "string"
       },
+      "ExcludedCollectionSchema": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "reason"
+        ],
+        "title": "ExcludedCollectionSchema",
+        "type": "object"
+      },
       "ExplainNearMiss": {
         "additionalProperties": false,
         "properties": {
@@ -1325,6 +1343,13 @@
             "title": "Acl Filtered",
             "type": "boolean"
           },
+          "excluded_collections": {
+            "items": {
+              "$ref": "#/components/schemas/ExcludedCollectionSchema"
+            },
+            "title": "Excluded Collections",
+            "type": "array"
+          },
           "results": {
             "items": {
               "$ref": "#/components/schemas/SearchResultSchema"
@@ -1358,6 +1383,11 @@
           },
           "chunk_id": {
             "title": "Chunk Id",
+            "type": "string"
+          },
+          "collection": {
+            "default": "",
+            "title": "Collection",
             "type": "string"
           },
           "doc_id": {

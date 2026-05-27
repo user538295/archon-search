@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from archon_search._types import SearchResult
 from archon_search.filters import SearchFilters
+from archon_search.server.schemas import ExcludedCollectionSchema
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
@@ -60,6 +61,7 @@ class SearchResultSchema(BaseModel):
     ingested_by: str = "cli"
     metadata: dict[str, str] = Field(default_factory=dict)
     acl: list[str] | None = None
+    collection: str = ""
 
     @classmethod
     def from_result(cls, r: SearchResult) -> "SearchResultSchema":
@@ -76,12 +78,14 @@ class SearchResultSchema(BaseModel):
             ingested_by=r.ingested_by,
             metadata=r.metadata,
             acl=r.acl,
+            collection=r.collection,
         )
 
 
 class SearchResponse(BaseModel):
     results: list[SearchResultSchema]
     acl_filtered: bool
+    excluded_collections: list[ExcludedCollectionSchema] = Field(default_factory=list)
 
 
 @router.post("/search", response_model=SearchResponse)
@@ -149,6 +153,10 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             return SearchResponse(
                 results=schemas,
                 acl_filtered=result.acl_filtered,
+                excluded_collections=[
+                    ExcludedCollectionSchema(name=e.name, reason=e.reason)
+                    for e in result.excluded_collections
+                ],
             )
         except asyncio.TimeoutError:
             _emit_timings()

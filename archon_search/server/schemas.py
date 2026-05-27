@@ -134,3 +134,8 @@ class DeleteResponse(BaseModel):
 
 class ErrorDetail(BaseModel):
     detail: str
+
+
+class ExcludedCollectionSchema(BaseModel):
+    name: str
+    reason: str

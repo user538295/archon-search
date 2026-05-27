@@ -1954,7 +1954,7 @@ def test_mcp_search_response_schema_matches_public_contract_without_eval_provena
     assert set(payload.keys()) == {
         "doc_id", "chunk_id", "text", "score", "source_path",
         "file_type", "language", "indexed_at", "updated_at", "ingested_by", "metadata",
-        "acl",
+        "acl", "collection",
     }
     # No eval provenance keys
     for forbidden in ("vector_score", "fts_score", "vector_rank", "fts_rank", "score_breakdown"):
@@ -1983,7 +1983,7 @@ def test_mcp_search_with_context_response_schema_matches_public_contract_without
         assert set(payload.keys()) == {
             "doc_id", "chunk_id", "text", "score", "source_path",
             "file_type", "language", "indexed_at", "updated_at", "ingested_by", "metadata",
-            "acl",
+            "acl", "collection",
         }
         for forbidden in ("vector_score", "fts_score", "vector_rank", "fts_rank", "score_breakdown"):
             assert forbidden not in payload
