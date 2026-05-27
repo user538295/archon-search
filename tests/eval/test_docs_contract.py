@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 README = Path(__file__).parent / "README.md"
 
 
@@ -60,120 +58,14 @@ def test_eval_readme_mentions_eval_backend_latency_limits() -> None:
     )
 
 
-# -------------------- : package + roadmap docs --------------------
+# -------------------- package README --------------------
 
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[2]  # packages/archon-search/
-PACKAGE_README = PACKAGE_ROOT / "README.md"
-
-
-def _find_archon_repo_root() -> Path | None:
-    """Walk upward looking for the the host application repo root (parent of packages/)."""
-    current = PACKAGE_ROOT
-    for _ in range(6):
-        current = current.parent
-        if (current / "Documentation").is_dir() and (current / "packages").is_dir():
-            return current
-    return None
-
-
-def _read_lower(path: Path) -> str:
-    assert path.exists(), f"Missing file: {path}"
-    return path.read_text(encoding="utf-8").lower()
-
-
-# --- Package-local tests (always run) ---
+PACKAGE_README = Path(__file__).resolve().parents[2] / "README.md"
 
 
 def test_package_readme_mentions_eval_command() -> None:
-    text = _read_lower(PACKAGE_README)
+    assert PACKAGE_README.exists(), f"Missing package README: {PACKAGE_README}"
+    text = PACKAGE_README.read_text(encoding="utf-8").lower()
     assert "pytest -m eval" in text
     assert "--thresholds-path" in text
-
-
-def test_package_doc_tests_do_not_require_archon_documentation_when_extracted() -> None:
-    """the host application-repo doc checks must skip cleanly when run outside the source repo."""
-    repo_root = _find_archon_repo_root()
-    if repo_root is None:
-        pytest.skip("the host application Documentation/ not present — package is extracted")
-    assert (repo_root / "Documentation").is_dir()
-
-
-# --- the host application-repo tests (gated on Documentation/ presence) ---
-
-
-def _archon_docs_or_skip() -> Path:
-    repo_root = _find_archon_repo_root()
-    if repo_root is None:
-        pytest.skip("the host application Documentation/ not present")
-    return repo_root / "Documentation"
-
-
-def test_roadmap_docs_reference_eval_harness() -> None:
-    docs = _archon_docs_or_skip()
-    text = (docs / "Architecture" / "180_search_architecture.md").read_text(
-        encoding="utf-8"
-    ).lower()
-    assert ("eval" in text) or ("evaluation harness" in text)
-    assert "feat-039" in text
-
-
-def _feat037_path_or_skip(docs: Path) -> Path:
-    """Locate roadmap doc; skip if absent (renamed/moved in main)."""
-    path = docs / "Backlog" / ".md"
-    if not path.exists():
-        pytest.skip(f" roadmap doc not present at {path}")
-    return path
-
-
-def test_roadmap_docs_keep_data_collection_followup_open() -> None:
-    docs = _archon_docs_or_skip()
-    text = _feat037_path_or_skip(docs).read_text(encoding="utf-8").lower()
-    assert ("data-collection" in text) or ("data collection" in text)
-    # Indicator that the loop is still open
-    assert ("[ ]" in text) or ("follow-up" in text) or ("open" in text) or (
-        "deferred" in text
-    )
-
-
-def test_roadmap_docs_document_path_filtered_pr_eval_gate() -> None:
-    docs = _archon_docs_or_skip()
-    feat037 = _feat037_path_or_skip(docs).read_text(encoding="utf-8").lower()
-    arch180_path = docs / "Architecture" / "180_search_architecture.md"
-    if not arch180_path.exists():
-        pytest.skip(f"Architecture doc not present at {arch180_path}")
-    arch180 = arch180_path.read_text(encoding="utf-8").lower()
-    combined = feat037 + "\n" + arch180
-    assert "pr" in combined
-    assert "eval" in combined
-    assert ("path-filtered" in combined) or ("path filter" in combined)
-
-
-def test_roadmap_docs_mark_feat_039_partial_if_pr_gate_missing() -> None:
-    """PR gate IS implemented — must have a status word near item 4."""
-    docs = _archon_docs_or_skip()
-    text = _feat037_path_or_skip(docs).read_text(encoding="utf-8").lower()
-    assert ("delivered" in text) or ("feat-039 (partial)" in text) or (
-        "partially delivered" in text
-    )
-
-
-def test_roadmap_docs_keep_archon_routing_eval_followup_open_when_needed() -> None:
-    """Routing is Search-owned per — no separate the host application routing eval needed."""
-    docs = _archon_docs_or_skip()
-    text = (docs / "Architecture" / "180_search_architecture.md").read_text(
-        encoding="utf-8"
-    ).lower()
-    # Either the doc explicitly states routing is Search-owned, or skips.
-    assert ("search-owned" in text) or ("routing is search-owned" in text) or (
-        "routable" in text and "feat-038" in text
-    )
-
-
-def test_documentation_index_includes_new_followup_backlog_items() -> None:
-    docs = _archon_docs_or_skip()
-    text = (docs / "990_documentation_index_and_contribution_guide.md").read_text(
-        encoding="utf-8"
-    )
-    assert "packages/archon-search/README.md" in text
-    assert "packages/archon-search/tests/eval/README.md" in text

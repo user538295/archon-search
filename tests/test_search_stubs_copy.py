@@ -6,17 +6,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import pytest
-
 PACKAGE_TESTS_DIR = Path(__file__).parent
 STUBS_FILE = PACKAGE_TESTS_DIR / "_search_stubs.py"
-
-# Standalone-package note: in the source repo, this points at tests/_search_stubs.py at
-# the repo root. In the standalone archon-search repo (post-extraction) there
-# is no parent project, so the "root" stubs file doesn't exist — tests that
-# compare against it skip cleanly.
-ROOT_TESTS_DIR = Path(__file__).parents[3] / "tests"
-ROOT_STUBS_FILE = ROOT_TESTS_DIR / "_search_stubs.py"
 
 _ROOT_COMMENT_PREFIX = "# Canonical copy"
 
@@ -81,39 +72,6 @@ def test_search_stubs_importable_via_sys_path() -> None:
             sys.path.remove(pkg_tests_str)
         sys.modules.pop("_search_stubs", None)
         sys.modules.pop(unique_name, None)
-
-
-def test_package_copy_content_identical_to_root() -> None:
-    """Package copy must be content-identical to root original (ignoring root's top comment)."""
-    if not ROOT_STUBS_FILE.exists():
-        pytest.skip(
-            f"Monorepo root stubs file not present (standalone repo): {ROOT_STUBS_FILE}"
-        )
-
-    root_lines = ROOT_STUBS_FILE.read_text(encoding="utf-8").splitlines(keepends=True)
-    pkg_content = STUBS_FILE.read_text(encoding="utf-8")
-
-    # Strip the root-only comment line before comparing
-    if root_lines and root_lines[0].startswith(_ROOT_COMMENT_PREFIX):
-        root_lines = root_lines[1:]
-    root_content_stripped = "".join(root_lines)
-
-    assert root_content_stripped == pkg_content, (
-        "Package copy of _search_stubs.py is not content-identical to the root original "
-        "(after stripping the root-only comment line)."
-    )
-
-
-def test_root_stubs_starts_with_canonical_comment() -> None:
-    """Root _search_stubs.py must start with the 'Canonical copy' redirect comment."""
-    if not ROOT_STUBS_FILE.exists():
-        pytest.skip(
-            f"Monorepo root stubs file not present (standalone repo): {ROOT_STUBS_FILE}"
-        )
-    root_first_line = ROOT_STUBS_FILE.read_text(encoding="utf-8").splitlines()[0]
-    assert root_first_line.startswith(_ROOT_COMMENT_PREFIX), (
-        f"Root stubs file must start with '{_ROOT_COMMENT_PREFIX}', got: {root_first_line!r}"
-    )
 
 
 def test_package_copy_does_not_start_with_canonical_comment() -> None:
