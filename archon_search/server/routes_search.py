@@ -9,10 +9,15 @@ from time import monotonic
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from archon_search._types import SearchResult
 from archon_search.filters import SearchFilters
+from archon_search.pipeline import (
+    CollectionNotFoundError,
+    FanoutTimeoutError,
+    MetadataLookupError,
+)
 from archon_search.server.schemas import ExcludedCollectionSchema
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
@@ -20,20 +25,25 @@ from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 # TODO: make configurable via config.py (see /route for parity)
 _SEARCH_TIMEOUT_SECONDS = 30.0
 
+_FANOUT_VALIDATION_LIMIT = 8  # Pydantic-layer cap; must match SearchConfig.max_fanout default. See B3 known limitations.
+
 logger = logging.getLogger("archon.search")
 
 router = APIRouter()
 
 
 class SearchRequest(BaseModel):
-    collection: str
+    collection: str | None = None
+    collections: list[str] | None = None
     query: str
     top_k: int = Field(default=5, ge=1, le=100)
     filters: SearchFilters | None = None
 
     @field_validator("collection")
     @classmethod
-    def collection_nonempty(cls, v: str) -> str:
+    def collection_nonempty(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
         stripped = v.strip()
         if not stripped:
             raise ValueError("collection must not be empty")
@@ -46,6 +56,34 @@ class SearchRequest(BaseModel):
         if not stripped:
             raise ValueError("query must not be empty")
         return stripped
+
+    @model_validator(mode="after")
+    def _validate_collection_selection(self) -> "SearchRequest":
+        if self.collection is not None and self.collections is not None:
+            raise ValueError("supply either collection or collections, not both")
+        if self.collection is None and self.collections is None:
+            raise ValueError("supply either collection or collections")
+        if self.collections is not None:
+            if len(self.collections) == 0:
+                raise ValueError("collections must not be empty")
+            stripped: list[str] = []
+            for name in self.collections:
+                s = name.strip()
+                if not s:
+                    raise ValueError("collection names must not be empty or whitespace")
+                stripped.append(s)
+            deduped: list[str] = []
+            for s in stripped:
+                if s not in deduped:
+                    deduped.append(s)
+            self.collections = deduped
+            if len(self.collections) > _FANOUT_VALIDATION_LIMIT:
+                raise ValueError(
+                    f"collections length exceeds maximum of {_FANOUT_VALIDATION_LIMIT}"
+                )
+            if self.filters is not None:
+                raise ValueError("filters are not supported for multi-collection search in v1")
+        return self
 
 
 class SearchResultSchema(BaseModel):
@@ -96,6 +134,25 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     config = request.app.state.config
     start = monotonic()
     timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
+
+    if body.collections is not None:
+        try:
+            result = await pipeline.search_many(body.query, body.collections, namespace=ns)
+        except CollectionNotFoundError:
+            return JSONResponse({"detail": "collection not found"}, status_code=404)
+        except MetadataLookupError:
+            return JSONResponse({"detail": "service unavailable"}, status_code=503)
+        except FanoutTimeoutError:
+            raise HTTPException(status_code=504, detail="Search timed out")
+        schemas = [SearchResultSchema.from_result(r) for r in result.results]
+        return SearchResponse(
+            results=schemas,
+            acl_filtered=result.acl_filtered,
+            excluded_collections=[
+                ExcludedCollectionSchema(name=e.name, reason=e.reason)
+                for e in result.excluded_collections
+            ],
+        )
 
     try:
         meta = await pipeline.get_collection_meta(body.collection, namespace=ns)

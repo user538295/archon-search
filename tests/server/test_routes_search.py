@@ -751,3 +751,193 @@ async def test_search_end_to_end(tmp_path: Path) -> None:
     results = data["results"]
     assert len(results) >= 1
     assert results[0]["source_path"] == "/docs/hello.md"
+
+
+# ---------------------------------------------------------------------------
+# B3 Task 4.1: multi-collection search (SearchRequest validator + handler)
+# ---------------------------------------------------------------------------
+
+from pydantic import ValidationError
+
+from archon_search._types import ExcludedCollection
+from archon_search.filters import SearchFilters
+from archon_search.pipeline import (
+    CollectionNotFoundError,
+    FanoutTimeoutError,
+    MetadataLookupError,
+)
+from archon_search.server.routes_search import (
+    _FANOUT_VALIDATION_LIMIT,
+    SearchRequest,
+)
+from archon_search.server.schemas import ExcludedCollectionSchema  # noqa: F401
+
+
+# --- validator unit tests --------------------------------------------------
+
+
+def test_search_request_both_fields_is_422() -> None:
+    with pytest.raises(ValidationError):
+        SearchRequest(collection="x", collections=["y"], query="q")
+
+
+def test_search_request_neither_field_is_422() -> None:
+    with pytest.raises(ValidationError):
+        SearchRequest(query="q")
+
+
+def test_search_request_empty_collections_is_422() -> None:
+    with pytest.raises(ValidationError):
+        SearchRequest(collections=[], query="q")
+
+
+def test_search_request_over_max_fanout_is_422() -> None:
+    with pytest.raises(ValidationError):
+        SearchRequest(collections=[f"c{i}" for i in range(9)], query="q")
+
+
+def test_search_request_whitespace_entry_is_422() -> None:
+    with pytest.raises(ValidationError):
+        SearchRequest(collections=["  "], query="q")
+
+
+def test_search_request_deduplicates() -> None:
+    req = SearchRequest(collections=["a", "a", "b"], query="q")
+    assert req.collections == ["a", "b"]
+
+
+def test_search_request_strips_then_dedupes() -> None:
+    """Whitespace is stripped per-item before dedup, so ' a' and 'a ' collapse."""
+    req = SearchRequest(collections=[" a", "a ", " b "], query="q")
+    assert req.collections == ["a", "b"]
+
+
+def test_search_request_exactly_max_fanout_is_valid() -> None:
+    req = SearchRequest(collections=[f"c{i}" for i in range(8)], query="q")
+    assert len(req.collections) == 8
+
+
+def test_search_request_single_collection_still_valid() -> None:
+    req = SearchRequest(collection="x", query="q")
+    assert req.collection == "x"
+    assert req.collections is None
+
+
+def test_search_request_single_item_collections_is_valid() -> None:
+    req = SearchRequest(collections=["x"], query="q")
+    assert len(req.collections) == 1
+
+
+def test_search_request_collections_with_filters_is_422() -> None:
+    with pytest.raises(ValidationError, match="filters"):
+        SearchRequest(collections=["x"], query="q", filters=SearchFilters(file_type="md"))
+
+
+def test_fanout_validation_limit_matches_config_default() -> None:
+    assert _FANOUT_VALIDATION_LIMIT == SearchConfig().max_fanout
+
+
+# --- handler integration tests ---------------------------------------------
+
+
+def _make_multi_pipeline_mock(
+    *,
+    search_many_return: SearchPipelineResult | None = None,
+    search_many_raises: Exception | None = None,
+) -> MagicMock:
+    pipeline = MagicMock()
+    if search_many_raises is not None:
+        pipeline.search_many = AsyncMock(side_effect=search_many_raises)
+    else:
+        pipeline.search_many = AsyncMock(
+            return_value=search_many_return
+            or SearchPipelineResult(results=[], acl_filtered=False)
+        )
+    return pipeline
+
+
+def test_search_handler_multi_collection_calls_search_many(tmp_path: Path) -> None:
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+
+    response = client.post("/search", json={"collections": ["a", "b"], "query": "q"})
+
+    assert response.status_code == 200
+    app.state.pipeline.search_many.assert_called_once()
+    # The multi-collection branch must NOT run the single-collection meta pre-check.
+    app.state.pipeline.get_collection_meta.assert_not_called()
+
+
+def test_search_handler_missing_collection_returns_404(tmp_path: Path) -> None:
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_raises=CollectionNotFoundError(["x"])
+    )
+
+    response = client.post("/search", json={"collections": ["x"], "query": "q"})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "collection not found"
+
+
+def test_search_handler_fanout_timeout_returns_504(tmp_path: Path) -> None:
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(search_many_raises=FanoutTimeoutError())
+
+    response = client.post("/search", json={"collections": ["a", "b"], "query": "q"})
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "Search timed out"
+
+
+def test_search_handler_meta_lookup_failure_returns_503(tmp_path: Path) -> None:
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_raises=MetadataLookupError(RuntimeError("x"))
+    )
+
+    response = client.post("/search", json={"collections": ["a", "b"], "query": "q"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "service unavailable"
+
+
+def test_search_response_includes_excluded_collections(tmp_path: Path) -> None:
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(
+            results=[],
+            acl_filtered=False,
+            excluded_collections=[
+                ExcludedCollection(name="b", reason="embedding_model_mismatch")
+            ],
+        )
+    )
+
+    response = client.post("/search", json={"collections": ["a", "b"], "query": "q"})
+
+    assert response.status_code == 200
+    excluded = response.json()["excluded_collections"]
+    assert {"name": "b", "reason": "embedding_model_mismatch"} in excluded
+
+
+def test_search_response_json_includes_collection_key(tmp_path: Path) -> None:
+    result = SearchResult(
+        doc_id="a" * 64,
+        chunk_id="a" * 64 + "-000001",
+        text="text",
+        score=0.5,
+        source_path="/path/doc.md",
+        collection="a",
+    )
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(results=[result], acl_filtered=False)
+    )
+
+    response = client.post("/search", json={"collections": ["a"], "query": "q"})
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["collection"] == "a"

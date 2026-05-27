@@ -94,6 +94,16 @@ def create_app(
         await app.state.search_store.migrate_namespace()
         await app.state.search_store.migrate_acl()
 
+        # Startup: warn if the multi-collection fan-out validation cap is out of
+        # sync with the configured max_fanout.
+        from archon_search.server.routes_search import _FANOUT_VALIDATION_LIMIT
+        if config.max_fanout != _FANOUT_VALIDATION_LIMIT:
+            logger.warning(
+                "max_fanout config (%d) differs from _FANOUT_VALIDATION_LIMIT constant (%d) in routes_search.py; "
+                "update the constant or requests with >%d collections will be rejected",
+                config.max_fanout, _FANOUT_VALIDATION_LIMIT, _FANOUT_VALIDATION_LIMIT,
+            )
+
         # Startup: initialise telemetry if enabled
         if config.telemetry.enabled:
             log_dir = Path(config.telemetry.log_dir).expanduser()

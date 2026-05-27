@@ -1305,8 +1305,29 @@
       "SearchRequest": {
         "properties": {
           "collection": {
-            "title": "Collection",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection"
+          },
+          "collections": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collections"
           },
           "filters": {
             "anyOf": [
@@ -1331,7 +1352,6 @@
           }
         },
         "required": [
-          "collection",
           "query"
         ],
         "title": "SearchRequest",

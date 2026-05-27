@@ -358,7 +358,7 @@ collection: str = ""  # new additive field
 
 #### Task 4.1 — `SearchRequest` validator and handler update
 
-- [ ] **File**: `archon_search/server/routes_search.py`
+- [x] **File**: `archon_search/server/routes_search.py`
 - **Depends on**: Task 3.2
 - **Description**:
   - Change `SearchRequest.collection: str` to `collection: str | None = None`. Keep `collection_nonempty` validator but guard it with `if v is not None`.
