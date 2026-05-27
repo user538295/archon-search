@@ -420,8 +420,42 @@ async def test_explain_wraps_reranker_failure_in_stage_error(connected_store, co
     async def _boom(*args, **kwargs):
         raise RuntimeError("rerank boom")
 
-    monkeypatch.setattr(pipeline._reranker, "_rerank_with_trace", _boom)
+    monkeypatch.setattr(pipeline._reranker, "rerank_candidates", _boom)
     with pytest.raises(ExplainStageError) as excinfo:
         await pipeline.explain("common alpha beta", col_name, top_k=5, rerank=True)
     assert excinfo.value.stage == "reranker"
     assert str(excinfo.value).startswith("reranker error:")
+
+
+@pytest.mark.asyncio
+async def test_explain_uses_rerank_candidates(connected_store, col_name, monkeypatch):
+    """explain() invokes the unified rerank_candidates surface exactly once."""
+    from unittest.mock import AsyncMock
+
+    pipeline = _make_pipeline(connected_store, top_k_retrieve=10, top_k_return=5)
+    await _ingest(connected_store, col_name, _make_records(5))
+
+    spy = AsyncMock(side_effect=pipeline._reranker.rerank_candidates)
+    monkeypatch.setattr(pipeline._reranker, "rerank_candidates", spy)
+
+    await pipeline.explain("common alpha beta", col_name, top_k=5, rerank=True)
+
+    spy.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_explain_does_not_call_private_rerank_with_trace(
+    connected_store, col_name, monkeypatch
+):
+    """explain() does the rerank work via rerank_candidates, not the private alias."""
+    from unittest.mock import AsyncMock
+
+    pipeline = _make_pipeline(connected_store, top_k_retrieve=10, top_k_return=5)
+    await _ingest(connected_store, col_name, _make_records(5))
+
+    alias_spy = AsyncMock(side_effect=pipeline._reranker._rerank_with_trace)
+    monkeypatch.setattr(pipeline._reranker, "_rerank_with_trace", alias_spy)
+
+    await pipeline.explain("common alpha beta", col_name, top_k=5, rerank=True)
+
+    alias_spy.assert_not_called()

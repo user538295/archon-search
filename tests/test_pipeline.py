@@ -1613,7 +1613,7 @@ async def test_eval_trace_returns_pre_and_post_rerank_results(tmp_path):
 
     with (
         patch("archon_search.eval._tracing._hybrid_search_with_trace", new=AsyncMock(return_value=pre_candidates)),
-        patch.object(pipeline._reranker, "_rerank_with_trace", new=AsyncMock(return_value=post_candidates)),
+        patch.object(pipeline._reranker, "rerank_candidates", new=AsyncMock(return_value=post_candidates)),
     ):
         pre, post = await collect_search_trace(
             pipeline, "test query", "test-col",
@@ -1657,7 +1657,7 @@ async def test_eval_trace_uses_service_query_path_with_trace_enabled(tmp_path):
 
     with (
         patch("archon_search.eval._tracing._hybrid_search_with_trace", new=hybrid_mock),
-        patch.object(pipeline._reranker, "_rerank_with_trace", new=rerank_mock),
+        patch.object(pipeline._reranker, "rerank_candidates", new=rerank_mock),
     ):
         await collect_search_trace(
             pipeline, "my query", "test-col",
@@ -1675,6 +1675,43 @@ async def test_eval_trace_uses_service_query_path_with_trace_enabled(tmp_path):
     # Verify reranker trace was called with return_depth
     rerank_mock.assert_awaited_once()
     assert rerank_mock.call_args.args[2] == 3  # return_depth
+
+
+@pytest.mark.asyncio
+async def test_eval_trace_does_not_call_private_rerank_with_trace(tmp_path):
+    """collect_search_trace reranks via rerank_candidates, not the private alias."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.eval._tracing import collect_search_trace
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    doc_id = "c" * 64
+    pre_candidates = [_make_scored_candidate(doc_id, f"{doc_id}-000000")]
+
+    pipeline = SearchPipeline(
+        store=MagicMock(),
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    alias_spy = AsyncMock(side_effect=pipeline._reranker._rerank_with_trace)
+
+    with (
+        patch("archon_search.eval._tracing._hybrid_search_with_trace", new=AsyncMock(return_value=pre_candidates)),
+        patch.object(pipeline._reranker, "_rerank_with_trace", new=alias_spy),
+    ):
+        await collect_search_trace(
+            pipeline, "my query", "test-col",
+            candidate_depth=15, return_depth=3, metric_depth=5,
+        )
+
+    alias_spy.assert_not_called()
 
 
 @pytest.mark.asyncio

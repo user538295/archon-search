@@ -238,13 +238,13 @@ collection: str = ""  # new additive field
 
 #### Task 2.2 — Migrate A4 `explain()` and `eval/_tracing.py` to `rerank_candidates`
 
-- [ ] **File**: `archon_search/pipeline.py`, `archon_search/eval/_tracing.py`
+- [x] **File**: `archon_search/pipeline.py`, `archon_search/eval/_tracing.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - In `SearchPipeline.explain()` (search for `explain` method in `pipeline.py`): replace `self._reranker._rerank_with_trace(...)` with `self._reranker.rerank_candidates(...)`. Signature is identical; no behavior change.
   - In `archon_search/eval/_tracing.py` (around lines 102, 107): replace any direct calls to `reranker._rerank_with_trace` with `reranker.rerank_candidates`. If `_tracing.py` calls `_hybrid_search_with_trace` as the module-level function (not the instance method), leave it — that is a separate path. Only the reranker call site is changed here.
   - The A4 `explain()` behavior is identical; no test changes needed beyond confirming existing A4 tests still pass.
-  - **Releasable**: the unified `rerank_candidates` is the sole reranker surface used by both search and explain paths.
+  - **Releasable**: the unified `rerank_candidates` is the sole reranker surface used by the explain and eval-trace paths. The single-collection `search()` path still uses `rerank()` (takes `list[SearchResult]`) and is unaffected by this task; `search_many` adopts `rerank_candidates` when it lands (Task 3.2).
 - **Tests (TDD)** — `tests/test_pipeline.py`, `tests/eval/test_eval_suite.py` (run without `-m eval` just to confirm no import errors):
   - Unit: `test_explain_uses_rerank_candidates` — spy on `reranker.rerank_candidates`; call `pipeline.explain(...)`; assert spy called once
   - Unit: `test_explain_does_not_call_private_rerank_with_trace` — assert `reranker._rerank_with_trace` spy NOT called directly by `explain()` (it may be called as alias, but `rerank_candidates` must be the one that does the work)

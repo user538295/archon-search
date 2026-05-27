@@ -414,7 +414,7 @@ class SearchPipeline:
 
         if rerank:
             try:
-                candidates = await self._reranker._rerank_with_trace(
+                candidates = await self._reranker.rerank_candidates(
                     query, candidates, top_k=len(candidates)
                 )
             except Exception as exc:

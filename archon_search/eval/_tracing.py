@@ -103,8 +103,8 @@ async def collect_search_trace(
         store, collection, query_vector, query, candidate_depth
     )
 
-    # Rerank using the pipeline's own reranker trace method
-    post_candidates = await reranker._rerank_with_trace(query, pre_candidates, return_depth)
+    # Rerank using the pipeline's own unified candidate rerank surface
+    post_candidates = await reranker.rerank_candidates(query, pre_candidates, return_depth)
 
     pre_results = [_candidate_to_eval_result(c) for c in pre_candidates]
     post_results = [_candidate_to_eval_result(c) for c in post_candidates]
