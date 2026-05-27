@@ -398,6 +398,73 @@ async def test_rerank_with_trace_records_stage_when_bound() -> None:
 
 
 # ===========================================================================
+# rerank_candidates — Task 2.1 (B3): unified production-grade candidate surface
+# ===========================================================================
+
+
+def test_rerank_candidates_is_public() -> None:
+    """rerank_candidates is a public method (no leading underscore)."""
+    assert hasattr(Reranker, "rerank_candidates")
+    assert not Reranker.rerank_candidates.__name__.startswith("_")
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_returns_scored_candidates() -> None:
+    """rerank_candidates returns ScoredSearchCandidates sorted by reranker_score desc."""
+    backend = _MockRerankerBackend(scores=[0.3, 0.9])
+    reranker = Reranker(backend)
+    candidates = [
+        _make_scored_candidate("doc0", "text 0", rrf_score=0.5),
+        _make_scored_candidate("doc1", "text 1", rrf_score=0.7),
+    ]
+
+    result = await reranker.rerank_candidates("query", candidates, top_k=2)
+
+    assert all(isinstance(c, ScoredSearchCandidate) for c in result)
+    assert result[0].doc_id == "doc1"
+    assert result[0].score_breakdown.reranker_score == pytest.approx(0.9)
+    assert result[1].doc_id == "doc0"
+    assert result[1].score_breakdown.reranker_score == pytest.approx(0.3)
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_stable_sort_on_equal_scores() -> None:
+    """Equal reranker scores preserve input order (stable sort)."""
+    backend = _MockRerankerBackend(scores=[0.5])  # all equal
+    reranker = Reranker(backend)
+    candidates = [
+        _make_scored_candidate("doc0", "text 0", rrf_score=0.1),
+        _make_scored_candidate("doc1", "text 1", rrf_score=0.2),
+        _make_scored_candidate("doc2", "text 2", rrf_score=0.3),
+    ]
+
+    result = await reranker.rerank_candidates("query", candidates, top_k=3)
+
+    assert [r.doc_id for r in result] == ["doc0", "doc1", "doc2"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_with_trace_alias_delegates() -> None:
+    """_rerank_with_trace delegates to rerank_candidates (same instance)."""
+    from unittest.mock import patch
+
+    backend = _MockRerankerBackend(scores=[0.9, 0.3])
+    reranker = Reranker(backend)
+    candidates = [
+        _make_scored_candidate("doc0", "text 0", rrf_score=0.5),
+        _make_scored_candidate("doc1", "text 1", rrf_score=0.7),
+    ]
+
+    with patch.object(
+        reranker, "rerank_candidates", wraps=reranker.rerank_candidates
+    ) as spy:
+        result = await reranker._rerank_with_trace("query", candidates, top_k=2)
+
+    spy.assert_called_once_with("query", candidates, 2)
+    assert [c.doc_id for c in result] == ["doc0", "doc1"]
+
+
+# ===========================================================================
 # is_warm — Task 2.2 (B2)
 # ===========================================================================
 

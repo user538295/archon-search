@@ -78,16 +78,17 @@ class Reranker:
 
         return sorted(candidates, key=lambda c: c.score, reverse=True)[:top_k]
 
-    async def _rerank_with_trace(
+    async def rerank_candidates(
         self,
         query: str,
         candidates: list[ScoredSearchCandidate],
         top_k: int,
     ) -> list[ScoredSearchCandidate]:
-        """Eval trace path: rerank ScoredSearchCandidates, preserving score provenance.
+        """Rerank ScoredSearchCandidates, preserving score provenance.
 
-        Returns new ScoredSearchCandidate objects with reranker_score populated.
-        Input candidates are NOT mutated.
+        Unified production-grade candidate rerank surface (used by both search
+        and explain paths). Returns new ScoredSearchCandidate objects with
+        reranker_score populated. Input candidates are NOT mutated.
         """
         if not candidates:
             return []
@@ -112,6 +113,15 @@ class Reranker:
         # Stable sort by reranker_score descending (Python sort is stable → equal scores keep input order)
         traced.sort(key=lambda c: c.score_breakdown.reranker_score if c.score_breakdown.reranker_score is not None else 0.0, reverse=True)
         return traced[:top_k]
+
+    async def _rerank_with_trace(
+        self,
+        query: str,
+        candidates: list[ScoredSearchCandidate],
+        top_k: int,
+    ) -> list[ScoredSearchCandidate]:
+        """Backward-compat alias for :meth:`rerank_candidates`."""
+        return await self.rerank_candidates(query, candidates, top_k)
 
 
 def make_reranker(model_name: str, providers: list[str] | None = None) -> Reranker:

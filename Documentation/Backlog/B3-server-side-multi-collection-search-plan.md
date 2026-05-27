@@ -221,7 +221,7 @@ collection: str = ""  # new additive field
 
 #### Task 2.1 — Promote `_rerank_with_trace` to `rerank_candidates` on `Reranker`
 
-- [ ] **File**: `archon_search/reranker.py`
+- [x] **File**: `archon_search/reranker.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Rename `_rerank_with_trace` to `rerank_candidates` (public production method). Signature stays identical: `async def rerank_candidates(self, query: str, candidates: list[ScoredSearchCandidate], top_k: int) -> list[ScoredSearchCandidate]`.
