@@ -77,6 +77,8 @@ class MockEmbedderBackend:
 
 
 class DistinctTextRerankerBackend:
+    is_warm: bool = False
+
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
         return [int(hashlib.sha256(t.encode()).hexdigest(), 16) % 100000 / 100000 for _, t in pairs]
 

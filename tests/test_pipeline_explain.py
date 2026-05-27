@@ -33,12 +33,16 @@ class MockEmbedderBackend:
 class MockRerankerBackend:
     """Returns 0.5 for all pairs (used in tie-break tests)."""
 
+    is_warm: bool = False
+
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
         return [0.5] * len(pairs)
 
 
 class DistinctTextRerankerBackend:
     """Returns a distinct, text-deterministic score per candidate text."""
+
+    is_warm: bool = False
 
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
         return [

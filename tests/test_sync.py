@@ -613,6 +613,8 @@ class TestSearchCollectionSyncIntegration:
                 return [list(np.zeros(4, dtype=float)) for _ in texts]
 
         class StubRerankerBackend(RerankerBackend):
+            is_warm: bool = False
+
             def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
                 return [0.5] * len(pairs)
 

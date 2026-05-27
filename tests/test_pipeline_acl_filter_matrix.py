@@ -45,6 +45,8 @@ class _MockEmbedder:
 class _MockReranker:
     """Thin wrapper that matches Reranker's public interface."""
 
+    is_warm: bool = False
+
     async def rerank(self, query: str, candidates: list, top_k: int) -> list:
         return candidates[:top_k]
 
