@@ -85,6 +85,14 @@ class EvalMetrics:
             correct collection.  ``None`` when no routing queries were present.
         latency_p50_ms: 50th-percentile (median) query latency in ms.
         latency_p95_ms: 95th-percentile query latency in ms.
+        routing_mrr_centroid: Mean Reciprocal Rank over routing-scope traces
+            run under the centroid strategy.  ``None`` when no eligible traces.
+        routing_mrr_hybrid: Mean Reciprocal Rank over routing-scope traces run
+            under the hybrid strategy.  ``None`` when not yet computed.
+        routing_precision_at_1_centroid: Precision@1 for centroid routing.
+            ``None`` when no eligible traces.
+        routing_precision_at_1_hybrid: Precision@1 for hybrid routing.
+            ``None`` when not yet computed.
     """
 
     recall_at_1: float
@@ -97,3 +105,7 @@ class EvalMetrics:
     routing_accuracy: float | None
     latency_p50_ms: float
     latency_p95_ms: float
+    routing_mrr_centroid: float | None = None
+    routing_mrr_hybrid: float | None = None
+    routing_precision_at_1_centroid: float | None = None
+    routing_precision_at_1_hybrid: float | None = None

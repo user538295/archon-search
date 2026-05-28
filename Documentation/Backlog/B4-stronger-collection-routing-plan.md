@@ -222,7 +222,7 @@ async def _run_router_for_query(
   - Checkpoint: `uv run pytest tests/eval/test_types.py -x`
 
 #### Task 1.2 — Add rank-sensitive routing metrics to `EvalMetrics` and `metrics.py`
-- [ ] **File**: `archon_search/eval/types.py`, `archon_search/eval/metrics.py`
+- [x] **File**: `archon_search/eval/types.py`, `archon_search/eval/metrics.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - `EvalMetrics` gains four new optional fields: `routing_mrr_centroid: float | None = None`, `routing_mrr_hybrid: float | None = None`, `routing_precision_at_1_centroid: float | None = None`, `routing_precision_at_1_hybrid: float | None = None`.

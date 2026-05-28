@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,100 @@ def compute_routing_accuracy(
 
     correct = sum(1 for t in non_bypassed if t.router_correct)
     return correct / len(non_bypassed)
+
+
+def compute_routing_mrr(
+    traces: list[QueryEvalTrace],
+    gold_fn: Callable[[str], set[str]],
+) -> float | None:
+    """Compute Mean Reciprocal Rank over routing-scope traces.
+
+    Filters to traces with ``metric_scope == "routing"`` and non-None
+    ``ranked_collections``.  For each eligible trace, the reciprocal rank is
+    ``1 / position`` of the first gold collection (1-based), or ``0.0`` when
+    the gold set is not found in the ranked list.
+
+    Traces where ``gold_fn`` returns an empty set are skipped (same convention
+    as ``compute_mrr`` for retrieval — prevents fixture bugs from silently
+    dragging down the metric).
+
+    Uses ``gold_fn: Callable[[str], set[str]]`` rather than
+    ``list[RelevanceLabel]`` because routing gold truth maps query_id to a set
+    of collection names, not to per-document relevance grades.
+
+    Args:
+        traces: Query execution traces.
+        gold_fn: Callable mapping ``query_id`` to the set of gold collection names.
+            Returns an empty set for unknown queries; such traces are skipped.
+
+    Returns:
+        Macro-averaged MRR in [0.0, 1.0], or ``None`` when no eligible traces.
+    """
+    eligible = [
+        t for t in traces
+        if t.metric_scope == "routing" and t.ranked_collections is not None
+    ]
+    if not eligible:
+        return None
+
+    rr_values: list[float] = []
+    for trace in eligible:
+        gold = gold_fn(trace.query_id)
+        if not gold:
+            continue
+        rr = 0.0
+        for pos, col in enumerate(trace.ranked_collections, start=1):
+            if col in gold:
+                rr = 1.0 / pos
+                break
+        rr_values.append(rr)
+
+    return sum(rr_values) / len(rr_values) if rr_values else None
+
+
+def compute_routing_precision_at_1(
+    traces: list[QueryEvalTrace],
+    gold_fn: Callable[[str], set[str]],
+) -> float | None:
+    """Compute Precision@1 over routing-scope traces.
+
+    Filters to traces with ``metric_scope == "routing"`` and non-None
+    ``ranked_collections``.  P@1 = fraction of eligible traces where the
+    top-ranked collection is in the gold set.  An empty ``ranked_collections``
+    list counts as a miss (P@1 = 0.0 for that trace), not a skip.
+
+    Traces where ``gold_fn`` returns an empty set are skipped (same convention
+    as retrieval metrics — prevents fixture bugs from silently dragging down
+    the metric).
+
+    Uses ``gold_fn: Callable[[str], set[str]]`` rather than
+    ``list[RelevanceLabel]`` because routing gold truth maps query_id to a set
+    of collection names, not to per-document relevance grades.
+
+    Args:
+        traces: Query execution traces.
+        gold_fn: Callable mapping ``query_id`` to the set of gold collection names.
+            Returns an empty set for unknown queries; such traces are skipped.
+
+    Returns:
+        Macro-averaged P@1 in [0.0, 1.0], or ``None`` when no eligible traces.
+    """
+    eligible = [
+        t for t in traces
+        if t.metric_scope == "routing" and t.ranked_collections is not None
+    ]
+    if not eligible:
+        return None
+
+    hits: list[float] = []
+    for trace in eligible:
+        gold = gold_fn(trace.query_id)
+        if not gold:
+            continue
+        top = trace.ranked_collections[0] if trace.ranked_collections else None
+        hits.append(1.0 if top is not None and top in gold else 0.0)
+
+    return sum(hits) / len(hits) if hits else None
 
 
 def compute_latency_percentiles(latencies_ms: list[float]) -> tuple[float, float]:

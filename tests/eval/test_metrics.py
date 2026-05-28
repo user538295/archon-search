@@ -20,6 +20,8 @@ from archon_search.eval.metrics import (
     compute_recall_at_k,
     compute_reranker_lift,
     compute_routing_accuracy,
+    compute_routing_mrr,
+    compute_routing_precision_at_1,
     deduplicate_to_doc_rankings,
 )
 from archon_search.eval.types import EvalSearchResult, QueryEvalTrace
@@ -737,3 +739,163 @@ def test_compute_latency_percentiles_exact_integer_boundary() -> None:
     latencies20 = [float(i) for i in range(1, 21)]  # 1.0 .. 20.0
     _, p95_20 = compute_latency_percentiles(latencies20)
     assert p95_20 == pytest.approx(19.0)
+
+
+# ---------------------------------------------------------------------------
+# Routing MRR and Precision@1
+# ---------------------------------------------------------------------------
+
+def _make_routing_trace(
+    query_id: str,
+    ranked_collections: list[str] | None,
+    metric_scope: str = "routing",
+) -> QueryEvalTrace:
+    return QueryEvalTrace(
+        query_id=query_id,
+        query_text=f"query {query_id}",
+        collection=None,
+        metric_scope=metric_scope,
+        ranked_collections=ranked_collections,
+    )
+
+
+def _gold(mapping: dict[str, set[str]]):
+    """Return a gold_fn closure from a query_id → gold collection set mapping."""
+    def gold_fn(query_id: str) -> set[str]:
+        return mapping.get(query_id, set())
+    return gold_fn
+
+
+def test_routing_mrr_top1_gold() -> None:
+    """Gold collection at rank 1 → MRR = 1.0."""
+    traces = [_make_routing_trace("q1", ["docs", "code", "mixed"])]
+    gold = _gold({"q1": {"docs"}})
+    assert compute_routing_mrr(traces, gold) == pytest.approx(1.0)
+
+
+def test_routing_mrr_top2_gold() -> None:
+    """Gold collection at rank 2 → MRR = 0.5."""
+    traces = [_make_routing_trace("q1", ["code", "docs", "mixed"])]
+    gold = _gold({"q1": {"docs"}})
+    assert compute_routing_mrr(traces, gold) == pytest.approx(0.5)
+
+
+def test_routing_mrr_gold_not_found() -> None:
+    """Gold not in ranked list → reciprocal rank = 0 → MRR = 0.0."""
+    traces = [_make_routing_trace("q1", ["code", "mixed"])]
+    gold = _gold({"q1": {"faq"}})
+    assert compute_routing_mrr(traces, gold) == pytest.approx(0.0)
+
+
+def test_routing_mrr_none_when_no_routing_traces() -> None:
+    """No routing-scope traces → returns None."""
+    traces = [_make_routing_trace("q1", ["docs"], metric_scope="retrieval")]
+    gold = _gold({"q1": {"docs"}})
+    assert compute_routing_mrr(traces, gold) is None
+
+
+def test_routing_mrr_none_when_ranked_collections_is_none() -> None:
+    """Routing traces with ranked_collections=None are excluded → returns None."""
+    traces = [_make_routing_trace("q1", None)]
+    gold = _gold({"q1": {"docs"}})
+    assert compute_routing_mrr(traces, gold) is None
+
+
+def test_routing_mrr_changes_when_order_changes() -> None:
+    """MRR differs when gold rank changes — pins rank-sensitivity property."""
+    gold = _gold({"q1": {"docs"}})
+    traces_rank1 = [_make_routing_trace("q1", ["docs", "code"])]
+    traces_rank2 = [_make_routing_trace("q1", ["code", "docs"])]
+    mrr_rank1 = compute_routing_mrr(traces_rank1, gold)
+    mrr_rank2 = compute_routing_mrr(traces_rank2, gold)
+    assert mrr_rank1 != mrr_rank2
+    assert mrr_rank1 == pytest.approx(1.0)
+    assert mrr_rank2 == pytest.approx(0.5)
+
+
+def test_routing_mrr_multi_query_average() -> None:
+    """MRR is macro-averaged across eligible traces."""
+    traces = [
+        _make_routing_trace("q1", ["docs", "code"]),   # gold at rank 1 → RR=1.0
+        _make_routing_trace("q2", ["code", "docs"]),   # gold at rank 2 → RR=0.5
+    ]
+    gold = _gold({"q1": {"docs"}, "q2": {"docs"}})
+    assert compute_routing_mrr(traces, gold) == pytest.approx(0.75)
+
+
+def test_routing_p1_gold_at_top() -> None:
+    """Gold collection is rank-1 → P@1 = 1.0."""
+    traces = [_make_routing_trace("q1", ["docs", "code"])]
+    gold = _gold({"q1": {"docs"}})
+    assert compute_routing_precision_at_1(traces, gold) == pytest.approx(1.0)
+
+
+def test_routing_p1_gold_not_top() -> None:
+    """Gold collection is not rank-1 → P@1 = 0.0."""
+    traces = [_make_routing_trace("q1", ["code", "docs"])]
+    gold = _gold({"q1": {"docs"}})
+    assert compute_routing_precision_at_1(traces, gold) == pytest.approx(0.0)
+
+
+def test_routing_p1_none_when_empty_traces() -> None:
+    """No eligible traces → returns None."""
+    assert compute_routing_precision_at_1([], _gold({})) is None
+
+
+def test_routing_p1_none_when_all_ranked_collections_none() -> None:
+    """All routing traces have ranked_collections=None → returns None."""
+    traces = [_make_routing_trace("q1", None)]
+    gold = _gold({"q1": {"docs"}})
+    assert compute_routing_precision_at_1(traces, gold) is None
+
+
+def test_routing_p1_none_when_ranked_collections_empty() -> None:
+    """Trace with ranked_collections=[] has no rank-1 entry — counted as miss, not skipped."""
+    traces = [_make_routing_trace("q1", [])]
+    gold = _gold({"q1": {"docs"}})
+    # Empty ranked_collections: no rank-1 entry → P@1 = 0.0 (not None), but
+    # all-empty should still yield a valid 0.0. Test that it does NOT raise.
+    result = compute_routing_precision_at_1(traces, gold)
+    assert result == pytest.approx(0.0)
+
+
+def test_routing_mrr_empty_ranked_collections_counts_as_miss() -> None:
+    """ranked_collections=[] is eligible but scores 0.0 (no gold match possible)."""
+    traces = [_make_routing_trace("q1", [])]
+    gold = _gold({"q1": {"docs"}})
+    assert compute_routing_mrr(traces, gold) == pytest.approx(0.0)
+
+
+def test_routing_mrr_skips_trace_with_empty_gold() -> None:
+    """Traces where gold_fn returns empty set are skipped — not counted as miss."""
+    traces = [
+        _make_routing_trace("q1", ["docs", "code"]),  # no gold → skipped
+        _make_routing_trace("q2", ["docs", "code"]),  # gold at rank 1 → RR=1.0
+    ]
+    gold = _gold({"q2": {"docs"}})  # q1 has no gold entry
+    assert compute_routing_mrr(traces, gold) == pytest.approx(1.0)
+
+
+def test_routing_mrr_none_when_all_gold_empty() -> None:
+    """All eligible traces have empty gold → no rr_values → returns None."""
+    traces = [_make_routing_trace("q1", ["docs"])]
+    gold = _gold({})  # no gold for any query
+    assert compute_routing_mrr(traces, gold) is None
+
+
+def test_routing_p1_skips_trace_with_empty_gold() -> None:
+    """Traces where gold_fn returns empty set are skipped."""
+    traces = [
+        _make_routing_trace("q1", ["code"]),  # no gold → skipped
+        _make_routing_trace("q2", ["docs"]),  # gold at top → hit
+    ]
+    gold = _gold({"q2": {"docs"}})
+    assert compute_routing_precision_at_1(traces, gold) == pytest.approx(1.0)
+
+
+def test_routing_mrr_multi_gold_first_hit_wins() -> None:
+    """With multiple gold collections, MRR uses position of the first hit."""
+    traces = [_make_routing_trace("q1", ["mixed", "docs", "faq"])]
+    gold = _gold({"q1": {"docs", "faq"}})  # both docs (rank 2) and faq (rank 3) are gold
+    # First gold hit is "docs" at rank 2 → RR = 0.5
+    assert compute_routing_mrr(traces, gold) == pytest.approx(0.5)
