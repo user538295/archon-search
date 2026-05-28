@@ -8,6 +8,28 @@
 
 ## Changelog
 
+### [next release] — B4 hybrid collection routing
+
+**Surface**: MCP `get_collection_meta`, `get_collections_meta`, and `list_collections` tools.
+
+**`get_collection_meta` — additive output key (breaking for strict-validating clients)**:
+- The single-collection `get_collection_meta` tool now returns `description_embedding: list[float] | null` on the `CollectionMeta` dict. The field is `null` when no embedding has been computed (e.g., immediately after upgrade before the startup migration runs). For **tolerant JSON consumers**: non-breaking additive key. For **strict-validating MCP clients** (`extra="forbid"` schemas): the new key is a true contract change — relax the client schema or handle the new field.
+
+**`get_collections_meta` — additive optional INPUT parameter**:
+- Gains an optional `include_description_embedding: bool = False` parameter. When `false` (the default), `description_embedding` is stripped from every `CollectionMeta` in the returned list. When `true`, the field is included. The `description_embedding` field was never present pre-B4, so stripping it by default is safe for existing consumers. Clients that reject unknown MCP tool input parameters may need to be updated to tolerate the new parameter.
+
+**`list_collections` — no change for existing clients**:
+- `list_collections` has always stripped `centroid` from the returned dict; it likewise strips `description_embedding`. No behavior change for existing clients — the field was never present.
+
+**REST `/route` shape unchanged**: the routing strategy and description-weight blending are internal to `MultiCollectionRouter`; the `/route` response schema (`{pre_context, pinned_names, routable_names, decomposer_invoked}`) is unchanged.
+
+**Migration**:
+- `get_collection_meta` consumers using strict schema validation: add `description_embedding: list[float] | null` to your client-side schema, or relax to tolerate unknown fields.
+- `get_collections_meta` consumers: no action needed — `description_embedding` is absent by default. To include it, pass `include_description_embedding: true`.
+- To enable hybrid routing: set `[routing] routing_strategy = "hybrid"` and optionally tune `routing_description_weight` (default `0.3`) in `archon-search.toml`.
+
+**Announced in**: this release.
+
 ### [next release] — B3 multi-collection search
 
 **Surface**: REST `POST /search` and `POST /explain` (additive responses + request-schema change); MCP `search`/`explain` tools (additive response-shape change for strict clients).

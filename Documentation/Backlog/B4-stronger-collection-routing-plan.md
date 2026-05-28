@@ -564,7 +564,7 @@ async def _run_router_for_query(
 > **Releasable**: after Task 7.1, all documentation reflects the delivered implementation and all acceptance criteria are verified.
 
 #### Task 7.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project and update every file whose content is affected by B4:

@@ -263,9 +263,9 @@ Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mount
 | `explain` | Return the per-stage retrieval/reranking trace for a query, plus the routing decision when no collection is pinned. Operates in the default namespace only. The query is never echoed in the response or telemetry. | `query: str`, `collection: str \| None`, `collections: list[str] \| None` (B3 — multi-collection fan-out; routing bypassed; `rerank=false` with > 1 collection → `{error, code: "validation_error"}`), `top_k: int = 5`, `rerank: bool = True` | `ExplainResponse` dict (same structure as REST `POST /explain`; serialised via `model_dump(mode="json", exclude_none=False)`). `results`/`near_misses` entries carry a `collection` key and the response carries `excluded_collections` (B3). Includes `stage_timings_ms` when `[observability].stage_timings_enabled = true`. On error: `{error, code}`. When `config` is absent from `create_app`, collectionless calls fall back to `default_collection` (no routing). |
 | `ingest_file` | Ingest one file. | `path: str`, `collection?` | Ingest result dict. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`. |
 | `ingest_directory` | Ingest a directory tree (reports progress via `ctx`). | `path`, `glob_pattern = "**/*"`, `collection?` | `list[ingest result]`. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`. |
-| `list_collections` | List collections with counts (centroid omitted). | — | `list[dict]` — `asdict(CollectionMeta)` with `centroid` popped (not a typed `CollectionMeta`). |
-| `get_collections_meta` | Full meta for all collections including centroid. | — | `list[CollectionMeta]` |
-| `get_collection_meta` | Full meta for one collection. | `name: str` | `CollectionMeta` or `{error, code: "not_found"}` |
+| `list_collections` | List collections with counts (centroid and `description_embedding` omitted). | — | `list[dict]` — `asdict(CollectionMeta)` with `centroid` and `description_embedding` popped (not a typed `CollectionMeta`). |
+| `get_collections_meta` | Full meta for all collections. **B4**: `description_embedding` is stripped from output by default; pass `include_description_embedding: bool = False` to opt in. | `include_description_embedding: bool = False` (optional) | `list[CollectionMeta]` (each without `description_embedding` unless `include_description_embedding=true`) |
+| `get_collection_meta` | Full meta for one collection. **B4**: returns `description_embedding: list[float] \| null` unconditionally (additive key — see `BREAKING.md` B4 entry). | `name: str` | `CollectionMeta` (including `description_embedding`) or `{error, code: "not_found"}` |
 | `list_documents` | List documents in a collection. | `collection?`, `limit: int = 100` | `list[doc dict]` |
 | `delete_document` | Delete all chunks for one document. | `doc_id: str`, `collection?` | `{"deleted": int}` |
 
@@ -299,6 +299,27 @@ Entry point: `archon-search` (`archon_search/cli/main.py`, Click group). Most su
 | `config` | `show` | Print effective config (defaults when no file exists) (`cli/config_cmd.py`). | `--config` |
 | `config` | `get <section.field>` | Read one dotted key. Requires exactly a two-part `section.field` key; other formats error out. | `--config` |
 | `config` | `set <section.field> <value>` | Write one dotted key (bool/int/float coercion). | `--config` |
+
+## `[routing]` config section (B4 additions)
+
+Controls collection-routing behaviour. All fields have defaults that take effect when the section is absent from `archon-search.toml`.
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `routing_shortlist_size` | `int` | `8` | Maximum collections to pass to the decomposer after centroid pre-ranking. |
+| `routing_confidence_threshold` | `float` | `0.30` | Minimum centroid-similarity required to include a collection in the shortlist. When no collection reaches this threshold (and at least one was scored), the shortlist is empty (unroutable query). |
+| `max_parallel_collections` | `int` | `3` | Declared config knob; currently inert (no runtime code path reads it). Tracked as debt. |
+| `routing_strategy` | `str` | `"centroid"` | Routing scoring strategy. `"centroid"` — pure centroid cosine similarity (pre-B4 behaviour, the default). `"hybrid"` — blends centroid score with description-embedding cosine score (see below). Invalid values are rejected at config load with `ConfigError`. |
+| `routing_description_weight` | `float` | `0.3` | Weight `w ∈ [0.0, 1.0]` for description-embedding cosine in hybrid routing. Ignored when `routing_strategy = "centroid"`. Values outside `[0.0, 1.0]` are rejected at config load with `ConfigError`. |
+
+**Hybrid blend formula** (activated when `routing_strategy = "hybrid"` and the collection has a valid, non-zero `description_embedding` of the correct dimension):
+
+```
+score = (1 - routing_description_weight) * centroid_score
+      +     routing_description_weight  * description_score
+```
+
+Collections without a valid `description_embedding` fall back to pure centroid scoring. See ADR-07 for the design rationale.
 
 ## `[observability]` config section
 

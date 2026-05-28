@@ -70,6 +70,12 @@ For architectural context, see [`100_system_architecture_overview.md`](./100_sys
 | EVL-2 | Eval fixtures (`documents.jsonl`, `queries.jsonl`, `labels.jsonl`) and `thresholds.toml` evolve by waiver. The maintenance burden grows with corpus size and there is no automated drift check between fixture corpus and production-shape corpora. | Testing | Low | Fixture set grows past the point a human can review threshold deltas confidently. | `tests/eval/README.md` ("threshold-lowering policy, waivers") |
 | TLG-1 | `--cov-fail-under=85` is enforced only on the default `pytest` invocation. Split-CI matrices must `coverage combine` before applying the threshold; the discipline is convention, not a check. A future split-CI workflow that forgets to combine silently reports false-green coverage. | Tooling | Med | New CI matrix added (OS, Python version) without a combine step. | `pyproject.toml` (`addopts` comment lines 55–61); [`CLAUDE.md`](../../CLAUDE.md) "Repository conventions"; [`200_testing_strategy.md`](./200_testing_strategy.md) |
 
+### Schema versioning
+
+| ID | Item | Category | Severity | Trigger | Refs |
+| --- | --- | --- | --- | --- | --- |
+| SCH-1 | The LanceDB metadata table has no `schema_version` column. Column-absent rows are tolerated at read time by treating missing columns as `None` (e.g., `description_embedding` added in B4, previously `acl`, `centroid`, `description`). Each new optional column adds another "absent = None" tolerance site with no version invariant to gate on. B4 adds one more such site (`description_embedding`); B5 (incremental centroid `sum`/`count`) and B6 may add more. Once two or more columns are absent-tolerant simultaneously, a `schema_version` marker becomes a prerequisite for safe migration ordering and for detecting partially migrated stores. | Architecture / Data | Low | B5 or B6 ship a new column; the absent-column list exceeds two entries; or a store-migration bug silently leaves a store in an intermediate state with no detectable version signal. | `archon_search/collection_meta.py` (`description_embedding`), `archon_search/store.py` (metadata table reads); `Documentation/Architecture/130_data_architecture_and_persistence.md` |
+
 ### Internal architecture
 
 | ID | Item | Category | Severity | Trigger | Refs |

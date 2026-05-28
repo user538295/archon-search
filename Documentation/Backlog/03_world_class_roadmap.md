@@ -46,25 +46,25 @@ Pure foundation-first sequencing pushes user-visible value too far out and lets 
 
 Goal: make the existing pipeline safe to extend, and ship two cheap features that operators and end users notice immediately.
 
-- [ ] **A1. Metadata schema v1 (item 3, minimum slice)** — add typed per-chunk and per-document metadata fields to the LanceDB schema, with system / filterable / ranking / audit partitions documented. Scope is intentionally narrow: only the fields needed for `A2` and item 13. Surfaced in search responses.
-- [ ] **A2. Metadata filters at search (item 7, minimum slice)** — source-path prefix/glob, `indexed-after`/`indexed-before`, file-type. Exposed on REST `/search`, MCP `search`, and the explain output (A4). Bounds-validated; uses the LanceDB `where()` API (no f-string SQL). A1 ships filterable fields populated; A2 only adds query-side wiring. **Language filtering deferred to C2** (real language detection) — A1's `language` field stays storage-only and is not exposed as a filter dimension here.
+- [x] **A1. Metadata schema v1 (item 3, minimum slice)** — add typed per-chunk and per-document metadata fields to the LanceDB schema, with system / filterable / ranking / audit partitions documented. Scope is intentionally narrow: only the fields needed for `A2` and item 13. Surfaced in search responses.
+- [x] **A2. Metadata filters at search (item 7, minimum slice)** — source-path prefix/glob, `indexed-after`/`indexed-before`, file-type. Exposed on REST `/search`, MCP `search`, and the explain output (A4). Bounds-validated; uses the LanceDB `where()` API (no f-string SQL). A1 ships filterable fields populated; A2 only adds query-side wiring. **Language filtering deferred to C2** (real language detection) — A1's `language` field stays storage-only and is not exposed as a filter dimension here.
 - [x] **A3. Hardening: search-failure semantics (`CON-5`)** ✅ — `/search` now returns HTTP 500 on pipeline stage failure (bare re-raise) and HTTP 504 on timeout; telemetry is emitted on both paths. See `BREAKING.md` `[next release]` — `POST /search` pipeline-exception behavior.
 - [x] **A4. Explain / debug endpoint (item 12)** — `POST /explain` (REST) + `explain` MCP tool (10th tool) returning vector rank, FTS rank, fused (RRF) score, reranker score, and routing path. Shipped in A4. Two roadmap sub-fields deferred: `matched_filters` → A4.1 (additive, after A2 ships); `expansion-feature usage` → A4.2 (additive, after Phase B/C HyDE / RAG Fusion ships). Unlocks every later ranking change.
 - [x] **A5. Hardening: input safety on ingest paths** ✅ — reject `..`-containing/empty/whitespace/NUL/non-absolute paths in `/collections` and `/jobs/ingest` (and MCP `ingest_file`/`ingest_directory`); replace all f-string `where()`/`delete()`/`count_rows()` builders in `store.py` with quoted helpers behind a CI guard.
   - [x] A5a — ingest path safety (`validate_ingest_path`). Note: narrowed from "symlink-escape" to `..`-traversal + trivial-junk rejection; symlink scope deferred to a future `allowed_dirs` feature.
   - [x] A5b — SQL builder defense-in-depth (`_where_eq`/`_where_in` + `tests/test_no_fstring_sql.py` guard).
   - [x] A5c — synchronous `StoreBusyError` → HTTP 503 (`Retry-After: 30`) on `/ingest` and `/collections`; MCP `code="store_busy"`.
-- [ ] **A6. Hardening: state-store + router cache locks (`CON-2`, `CON-3`)** — `asyncio.Lock` around `IndexingStateStore` mutations; router cache invalidates on ingest/reindex/description-regen. One PR, both bugs.
-- [ ] **A7. Hardening: stop writing without fsync (`PROG-1`, `TEL-2`, `SYN-1`)** — `IndexingStateStore`, telemetry writer, and sync manifest all `flush + fsync` before `os.replace`. Cheap durability win.
+- [x] **A6. Hardening: state-store + router cache locks (`CON-2`, `CON-3`)** — `asyncio.Lock` around `IndexingStateStore` mutations; router cache invalidates on ingest/reindex/description-regen. One PR, both bugs.
+- [x] **A7. Hardening: stop writing without fsync (`PROG-1`, `TEL-2`, `SYN-1`)** — `IndexingStateStore`, telemetry writer, and sync manifest all `flush + fsync` before `os.replace`. Cheap durability win.
 
 ## Phase B — Make changes measurable (observability + retrieval seams)
 
 Goal: stand up the measurement surface before adding ranking features, and ship the highest-leverage retrieval refactor.
 
-- [ ] **B1. Observability and stage-level latency (item 24)** — per-stage timings (parse, embed, route, vector, FTS, fuse, rerank, end-to-end); correlation IDs from middleware → pipeline → telemetry (`ARCH-3`). Emitted as structured logs and surfaced on `/explain`.
-- [ ] **B2. Deeper health and readiness (item 22)** — distinguish `live` vs. `ready`; cover storage connectivity, model warm-status, index build state, watcher state, queue depth. Operators need this before scaling load.
-- [ ] **B3. Server-side multi-collection search primitive (item 8)** — embed the query once; one merge + rerank pass across collections. Co-designed with `/explain` (A4) so the routing path is debuggable.
-- [ ] **B4. Stronger collection routing (item 9)** — summary-embedding + description + centroid hybrid alternatives; centroid stays the baseline. Gated by the eval harness.
+- [x] **B1. Observability and stage-level latency (item 24)** — per-stage timings (parse, embed, route, vector, FTS, fuse, rerank, end-to-end); correlation IDs from middleware → pipeline → telemetry (`ARCH-3`). Emitted as structured logs and surfaced on `/explain`.
+- [x] **B2. Deeper health and readiness (item 22)** — distinguish `live` vs. `ready`; cover storage connectivity, model warm-status, index build state, watcher state, queue depth. Operators need this before scaling load.
+- [x] **B3. Server-side multi-collection search primitive (item 8)** — embed the query once; one merge + rerank pass across collections. Co-designed with `/explain` (A4) so the routing path is debuggable.
+- [x] **B4. Stronger collection routing (item 9)** — description-embedding + centroid hybrid blend shipped; centroid remains the default (`routing_strategy = "centroid"`), hybrid is opt-in via `routing_strategy = "hybrid"` + `routing_description_weight`. One new artifact: `CollectionMeta.description_embedding` stored per-collection and used by the router in hybrid mode. Multi-centroid routing (per-cluster centroids for diffuse corpora) deferred to a future item; roadmap item 9's multi-centroid scope is narrowed to this single-artifact implementation. Gated by the eval harness (`routing_mrr_hybrid ≥ routing_mrr_centroid` baseline).
 - [ ] **B5. Hardening: incremental centroid update (`CON-4`, item 17)** — maintain `(sum, count)` on collection metadata; full recompute only on reindex. Eliminates an O(chunks) cost from every ingest.
 - [ ] **B6. Hardening: production-model eval lane (`EVL-1`, item 4 follow-up)** — `live`-marker job on tag pushes that runs the eval harness against the real embedder/reranker (not the deterministic stubs). Gated by `tests/eval/thresholds.toml`.
 - [ ] **B7. Hardening: structured logs + log rotation (item 25)** — JSON log option, telemetry JSONL rotation policy beyond retention-day pruning.
@@ -202,19 +202,19 @@ quadrantChart
 If only one ordering is used for planning, use this — each phase is a coherent shipping unit and should be closed before the next opens.
 
 **Phase A — Trust the core**
-1. ⬜ A1. Metadata schema v1 (item 3 minimum slice).
-2. ⬜ A2. Metadata filters at search (item 7).
+1. ✅ A1. Metadata schema v1 (item 3 minimum slice).
+2. ✅ A2. Metadata filters at search (item 7).
 3. ✅ A3. Search-failure semantics (`CON-5`) — shipped; see `BREAKING.md` `[next release]` — `POST /search` pipeline-exception behavior.
 4. ✅ A4. Explain / debug endpoint (item 12) — shipped; `matched_filters` deferred to A4.1 (after A2), `expansions` deferred to A4.2 (after Phase B/C).
 5. ✅ A5. Ingest path safety + SQL-builder defense-in-depth + synchronous store-busy 503 (A5a/A5b/A5c).
-6. ⬜ A6. State-store and router cache locks (`CON-2`, `CON-3`).
-7. ⬜ A7. fsync on durable writes (`PROG-1`, `TEL-2`, `SYN-1`).
+6. ✅ A6. State-store and router cache locks (`CON-2`, `CON-3`).
+7. ✅ A7. fsync on durable writes (`PROG-1`, `TEL-2`, `SYN-1`).
 
 **Phase B — Make changes measurable**
-8. ⬜ B1. Observability and stage-level latency (item 24).
-9. ⬜ B2. Deeper health and readiness (item 22).
-10. ⬜ B3. Server-side multi-collection search primitive (item 8).
-11. ⬜ B4. Stronger collection routing (item 9).
+8. ✅ B1. Observability and stage-level latency (item 24).
+9. ✅ B2. Deeper health and readiness (item 22).
+10. ✅ B3. Server-side multi-collection search primitive (item 8).
+11. ✅ B4. Stronger collection routing (item 9) — description-embedding hybrid blend; centroid default preserved; multi-centroid deferred.
 12. ⬜ B5. Incremental centroid update (item 17, `CON-4`).
 13. ⬜ B6. Production-model eval lane (`EVL-1`).
 14. ⬜ B7. Structured logs + log rotation (item 25).

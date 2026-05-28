@@ -124,13 +124,21 @@ Stages are independent classes wired by the orchestrator. The ordering `parser -
 
 `SearchStore.hybrid_search` performs vector ANN and FTS, fuses them with Reciprocal Rank Fusion, returns `top_k_retrieve` candidates. The cross-encoder reranker then narrows to `top_k_return`. ACL filtering sits between the two stages so the reranker never wastes work on chunks the namespace cannot see.
 
-### Multi-collection routing via centroid pre-ranking
+### Multi-collection routing via centroid pre-ranking (and optional hybrid blend)
 
 `MultiCollectionRouter.rank` scores each collection's stored centroid against the query embedding (cosine), applies a confidence gate, and shortlists. Collections whose `embedding_model` does not match the router's configured model (or have no centroid) are moved to an "unscored" list and appended after the scored shortlist; if no collections can be scored at all, the confidence gate is bypassed and unscored collections are returned up to `shortlist_size`. Three tiers in `get_pre_context`:
 
 - `n_routable <= 3`: no decomposer, search all.
 - `4 <= n_routable <= shortlist_size`: decomposer selects directly, no centroid ranking.
 - `n_routable > shortlist_size`: centroid pre-rank, then decomposer picks from the shortlist.
+
+**B4 — hybrid routing strategy (opt-in):** When `routing_strategy = "hybrid"` is set in `archon-search.toml`, the router blends each collection's centroid score with a description-embedding cosine score:
+
+```
+score = (1 - w) * centroid_score + w * description_score
+```
+
+where `w = routing_description_weight` (default `0.3`). The blend activates only when the collection's `description_embedding` field is non-null, non-zero, and dimensionally consistent with the query embedding. Collections without a valid `description_embedding` fall back to pure centroid scoring. The `description_embedding` artifact is computed per-collection at ingest time and stored in `CollectionMeta`. The default strategy remains `"centroid"` — no operator action is needed to preserve pre-B4 behavior. See ADR-07 for the full decision.
 
 The router calls `get_collections_meta` over JSON-RPC against the MCP endpoint — it does not import the pipeline.
 

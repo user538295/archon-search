@@ -62,13 +62,13 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 
 | Module | Purpose | Key public symbols |
 |---|---|---|
-| `archon_search/router.py` | Fetch collection metadata over JSON-RPC, score each centroid against the query embedding, apply a confidence gate, build a three-tier shortlist for the decomposer. `_score_collections` is the shared scoring helper (extracted for A4); `rank_with_scores` returns every supplied collection paired with its centroid similarity, bypassing the confidence-threshold gate — used exclusively by `/explain`. Accepts `initial_metadata` for constructor-time injection; exposes `invalidate()` to clear the cached metadata for long-lived router instances. | `MultiCollectionRouter`, `MultiCollectionRouter.rank`, `MultiCollectionRouter.rank_with_scores`, `MultiCollectionRouter._score_collections`, `MultiCollectionRouter.invalidate` |
+| `archon_search/router.py` | Fetch collection metadata over JSON-RPC, score each centroid against the query embedding, apply a confidence gate, build a three-tier shortlist for the decomposer. **B4**: accepts `strategy: Literal["centroid", "hybrid"]` and `description_weight: float` constructor parameters. Under `strategy="hybrid"`, blends centroid cosine with `description_embedding` cosine: `score = (1 - w) * centroid_score + w * description_score`; falls back to pure centroid for collections with missing or dimensionally-inconsistent `description_embedding`. `_score_collections` is the shared scoring helper (extracted for A4); `rank_with_scores` returns every supplied collection paired with its centroid similarity, bypassing the confidence-threshold gate — used exclusively by `/explain`. Accepts `initial_metadata` for constructor-time injection; exposes `invalidate()` to clear the cached metadata for long-lived router instances. | `MultiCollectionRouter`, `MultiCollectionRouter.rank`, `MultiCollectionRouter.rank_with_scores`, `MultiCollectionRouter._score_collections`, `MultiCollectionRouter.invalidate` |
 
 ## Metadata
 
 | Module | Purpose | Key public symbols |
 |---|---|---|
-| `archon_search/collection_meta.py` | Dataclass for per-collection metadata: name, centroid, description, doc/chunk counts, embedding model, timestamps, namespace. | `CollectionMeta` |
+| `archon_search/collection_meta.py` | Dataclass for per-collection metadata: name, centroid, description, doc/chunk counts, embedding model, timestamps, namespace. **B4**: adds `description_embedding: list[float] \| None = None` — stored as a JSON column in the LanceDB metadata table; absent on pre-B4 rows (column-absent tolerance reads as `None`). | `CollectionMeta` |
 | `archon_search/description_generator.py` | Decide whether to regenerate a collection description and call the model (Haiku) to generate one. | `generate_description`, `_should_regenerate` (semi-public; gating heuristic) |
 
 ## Server
