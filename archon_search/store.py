@@ -7,6 +7,7 @@ import fnmatch
 import hashlib
 import json
 import logging
+import math
 import re
 import time
 from collections.abc import Iterable
@@ -266,6 +267,7 @@ class SearchStore:
                 pa.field("name", pa.utf8()),
                 pa.field("description", pa.utf8()),
                 pa.field("centroid_json", pa.utf8()),
+                pa.field("description_embedding_json", pa.utf8()),
                 pa.field("doc_count", pa.int64()),
                 pa.field("chunk_count", pa.int64()),
                 pa.field("embedding_model", pa.utf8()),
@@ -365,6 +367,25 @@ class SearchStore:
         except json.JSONDecodeError:
             logger.warning("Malformed centroid_json for collection %r — centroid set to None", row.get("name"))
             centroid = None
+        raw_emb = row.get("description_embedding_json", "")
+        description_embedding: list[float] | None = None
+        if raw_emb:
+            try:
+                parsed = json.loads(raw_emb)
+                if not isinstance(parsed, list) or any(
+                    type(x) not in (int, float) or not math.isfinite(x) for x in parsed
+                ):
+                    logger.warning(
+                        "Malformed description_embedding_json for collection %r — description_embedding set to None",
+                        row.get("name"),
+                    )
+                else:
+                    description_embedding = [float(x) for x in parsed]
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Malformed description_embedding_json for collection %r — description_embedding set to None",
+                    row.get("name"),
+                )
         last_indexed = datetime.fromisoformat(row["last_indexed"]) if row["last_indexed"] else None
         last_described = datetime.fromisoformat(row["last_described"]) if row["last_described"] else None
         raw_described_at: int = row["described_at_doc_count"]
@@ -380,6 +401,7 @@ class SearchStore:
             last_described=last_described,
             described_at_doc_count=described_at,
             namespace=row.get("namespace") or DEFAULT_NAMESPACE,
+            description_embedding=description_embedding,
         )
 
     async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> "CollectionMeta | None":
@@ -436,6 +458,29 @@ class SearchStore:
         except Exception as exc:
             if "already exists" in str(exc).lower():
                 logger.warning("Concurrent migration: namespace column already added — %s", exc)
+                return
+            raise
+
+    async def migrate_description_embedding(self) -> None:
+        """Idempotent: adds description_embedding_json column to _archon_collection_meta if absent."""
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        table = await db.open_table(_META_TABLE)
+        schema_names = (await table.schema()).names
+        if "description_embedding_json" in schema_names:
+            return
+        try:
+            await table.add_columns({"description_embedding_json": "''"})
+            logger.info(
+                "description_embedding migration: added description_embedding_json column to %s", _META_TABLE
+            )
+        except Exception as exc:
+            if "already exists" in str(exc).lower():
+                logger.warning(
+                    "Concurrent migration: description_embedding_json column already added — %s", exc
+                )
                 return
             raise
 
@@ -502,6 +547,9 @@ class SearchStore:
                 await table.delete(_where_eq("name", meta.name))
 
         centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
+        description_embedding_json = (
+            json.dumps(meta.description_embedding) if meta.description_embedding is not None else ""
+        )
         last_indexed_str = meta.last_indexed.isoformat() if meta.last_indexed else ""
         last_described_str = meta.last_described.isoformat() if meta.last_described else ""
         described_at = meta.described_at_doc_count if meta.described_at_doc_count is not None else -1
@@ -512,6 +560,7 @@ class SearchStore:
                     "name": meta.name,
                     "description": meta.description or "",
                     "centroid_json": centroid_json,
+                    "description_embedding_json": description_embedding_json,
                     "doc_count": meta.doc_count,
                     "chunk_count": meta.chunk_count,
                     "embedding_model": meta.embedding_model,
@@ -1050,6 +1099,11 @@ class SearchStore:
         acl_open_count = int(pc.sum(pc.is_null(acl_col)).as_py() or 0)
         acl_protected_count = len(acl_col) - acl_open_count
         return (acl_protected_count, acl_open_count)
+
+
+async def migrate_description_embedding(store: SearchStore) -> None:
+    """Module-level delegate for :meth:`SearchStore.migrate_description_embedding`."""
+    await store.migrate_description_embedding()
 
 
 # ---------------------------------------------------------------------------

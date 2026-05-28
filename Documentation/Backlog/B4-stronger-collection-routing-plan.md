@@ -326,7 +326,7 @@ async def _run_router_for_query(
   - Checkpoint: `uv run pytest tests/test_collection_meta.py -x`
 
 #### Task 2.2 — Add `description_embedding_json` column to `_meta_schema` and persistence layer
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - `_meta_schema()`: add `pa.field("description_embedding_json", pa.utf8())` after `centroid_json`. The field stores a JSON-encoded `list[float]` or an empty string when `None`.

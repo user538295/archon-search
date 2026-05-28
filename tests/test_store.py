@@ -3828,6 +3828,187 @@ async def test_fetch_adjacent_chunks_returns_window(connected_store: SearchStore
     assert f"{doc_id}-000001" not in neighbor_ids, "center must be excluded"
 
 
+# ---------------------------------------------------------------------------
+# Task 2.2 — description_embedding_json column tests
+# ---------------------------------------------------------------------------
+
+
+_BASE_ROW: dict = {
+    "name": "col-emb",
+    "description": None,
+    "centroid_json": None,
+    "doc_count": 0,
+    "chunk_count": 0,
+    "embedding_model": None,
+    "last_indexed": None,
+    "last_described": None,
+    "described_at_doc_count": -1,
+    "namespace": "default",
+}
+
+
+def _row(**overrides: object) -> dict:
+    return {**_BASE_ROW, **overrides}
+
+
+def test_row_to_meta_with_description_embedding() -> None:
+    """Row with valid JSON float list → description_embedding populated."""
+    row = _row(description_embedding_json="[0.5, -0.3, 1.0]")
+    meta = SearchStore._row_to_meta(row)
+    assert meta.description_embedding is not None
+    assert len(meta.description_embedding) == 3
+    assert abs(meta.description_embedding[0] - 0.5) < 1e-9
+    assert abs(meta.description_embedding[1] - (-0.3)) < 1e-9
+    assert abs(meta.description_embedding[2] - 1.0) < 1e-9
+
+
+def test_row_to_meta_missing_key_yields_none() -> None:
+    """Row without description_embedding_json key → None, no KeyError."""
+    row = {k: v for k, v in _BASE_ROW.items() if k != "description_embedding_json"}
+    meta = SearchStore._row_to_meta(row)
+    assert meta.description_embedding is None
+
+
+def test_row_to_meta_malformed_json_yields_none_with_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """Invalid JSON string → None + WARNING logged."""
+    import logging
+
+    row = _row(description_embedding_json="not-valid-json{")
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        meta = SearchStore._row_to_meta(row)
+    assert meta.description_embedding is None
+    assert any("description_embedding_json" in r.message for r in caplog.records), (
+        f"Expected WARNING about description_embedding_json; got: {[r.message for r in caplog.records]}"
+    )
+
+
+def test_row_to_meta_empty_string_yields_none() -> None:
+    """Empty string → None (no warning)."""
+    row = _row(description_embedding_json="")
+    meta = SearchStore._row_to_meta(row)
+    assert meta.description_embedding is None
+
+
+@pytest.mark.parametrize(
+    "json_str",
+    [
+        '[0.1, "x", 0.3]',       # string element
+        "[0.1, null, 0.3]",      # JSON null (Python None)
+        "[0.1, true, 0.3]",      # JSON true (bool — must be rejected even though isinstance(True, int))
+        "[1e309]",               # overflows to float('inf') — not finite, must be rejected
+    ],
+)
+def test_row_to_meta_non_float_elements_yield_none_with_warning(
+    json_str: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Malformed element (str, null, bool) → None + WARNING logged."""
+    import logging
+
+    row = _row(description_embedding_json=json_str)
+    with caplog.at_level(logging.WARNING, logger="archon"):
+        meta = SearchStore._row_to_meta(row)
+    assert meta.description_embedding is None, f"Expected None for input {json_str!r}"
+    assert any("description_embedding_json" in r.message for r in caplog.records), (
+        f"Expected WARNING for input {json_str!r}; got: {[r.message for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_migrate_description_embedding_idempotent(tmp_path: Path) -> None:
+    """migrate_description_embedding() first call adds the column, second call is a no-op."""
+    import pyarrow as pa
+
+    from archon_search.store import migrate_description_embedding
+
+    store = SearchStore(tmp_path / "db_emb_migrate")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        # Build old schema without description_embedding_json to exercise the add_columns path.
+        old_schema = pa.schema(
+            [f for f in SearchStore._meta_schema() if f.name != "description_embedding_json"]
+        )
+        await db.create_table("_archon_collection_meta", schema=old_schema)
+        # First call must add the column.
+        await migrate_description_embedding(store)
+        tbl = await db.open_table("_archon_collection_meta")
+        assert "description_embedding_json" in (await tbl.schema()).names
+        # Second call must be a no-op (column already present).
+        await migrate_description_embedding(store)
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_description_embedding_round_trips(tmp_path: Path) -> None:
+    """Write CollectionMeta with description_embedding, read back, values match."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import migrate_description_embedding
+
+    store = SearchStore(tmp_path / "db_emb_rt")
+    await store.connect()
+    try:
+        meta = CollectionMeta(
+            name="emb-roundtrip",
+            description_embedding=[0.5, -0.3],
+        )
+        await store.update_collection_meta(meta)
+        retrieved = await store.get_collection_meta("emb-roundtrip")
+        assert retrieved is not None
+        assert retrieved.description_embedding is not None
+        assert len(retrieved.description_embedding) == 2
+        assert abs(retrieved.description_embedding[0] - 0.5) < 1e-6
+        assert abs(retrieved.description_embedding[1] - (-0.3)) < 1e-6
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_old_table_without_column_reads_none(tmp_path: Path) -> None:
+    """Meta table without description_embedding_json column → description_embedding is None."""
+    import pyarrow as pa
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    store = SearchStore(tmp_path / "db_emb_old")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        # Create meta table WITHOUT description_embedding_json column (old schema)
+        old_schema = pa.schema([
+            pa.field("name", pa.utf8()),
+            pa.field("description", pa.utf8()),
+            pa.field("centroid_json", pa.utf8()),
+            pa.field("doc_count", pa.int64()),
+            pa.field("chunk_count", pa.int64()),
+            pa.field("embedding_model", pa.utf8()),
+            pa.field("last_indexed", pa.utf8()),
+            pa.field("last_described", pa.utf8()),
+            pa.field("described_at_doc_count", pa.int64()),
+            pa.field("namespace", pa.utf8()),
+        ])
+        table = await db.create_table("_archon_collection_meta", schema=old_schema)
+        await table.add([{
+            "name": "old-col",
+            "description": "",
+            "centroid_json": "",
+            "doc_count": 0,
+            "chunk_count": 0,
+            "embedding_model": "",
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": -1,
+            "namespace": DEFAULT_NAMESPACE,
+        }])
+        retrieved = await store.get_collection_meta("old-col")
+        assert retrieved is not None
+        assert retrieved.description_embedding is None
+    finally:
+        await store.disconnect()
+
+
 @pytest.mark.asyncio
 async def test_a5b_end_to_end_flow_unchanged(connected_store: SearchStore, col_name: str) -> None:
     """Full happy-path regression: add → ingest → search → delete → search empty.
