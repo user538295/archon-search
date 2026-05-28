@@ -387,7 +387,7 @@ async def _run_router_for_query(
   - Checkpoint: `uv run pytest tests/test_pipeline.py -x -k "description_embedding"`
 
 #### Task 3.2 — Embed description in `recompute_collection_meta`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 3.1
 - **Description**:
   - In `recompute_collection_meta`, after reading `description = existing_meta.description if existing_meta else None`, add:

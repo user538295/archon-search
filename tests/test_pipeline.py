@@ -3387,3 +3387,117 @@ async def test_ingest_re_embeds_description_on_every_ingest(tmp_path) -> None:
     saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
     assert saved_meta.description_embedding == new_embed_vec
     assert saved_meta.description_embedding != prior_embedding
+
+
+# ===========================================================================
+# recompute_collection_meta — description_embedding (Task 3.2)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_recompute_populates_description_embedding() -> None:
+    """recompute_collection_meta persists description_embedding when existing meta has a description."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    embed_vec = [0.7] * 4
+    existing_meta = CollectionMeta(name="my-col", description="some desc")
+
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing_meta)
+    store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4], [0.3, 0.4, 0.5, 0.6]])
+    store.count_documents = AsyncMock(return_value=2)
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    embed_one_mock = AsyncMock(return_value=embed_vec)
+    with patch.object(pipeline._embedder, "embed_one", new=embed_one_mock):
+        await pipeline.recompute_collection_meta("my-col")
+
+    embed_one_mock.assert_awaited_once_with("some desc")
+    store.update_collection_meta.assert_awaited_once()
+    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved_meta.description_embedding == embed_vec
+
+
+@pytest.mark.asyncio
+async def test_recompute_no_description_embedding_when_description_none() -> None:
+    """recompute_collection_meta sets description_embedding=None when existing description is None."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    existing_meta = CollectionMeta(name="my-col", description=None)
+
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing_meta)
+    store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
+    store.count_documents = AsyncMock(return_value=1)
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    embed_one_mock = AsyncMock()
+    with patch.object(pipeline._embedder, "embed_one", new=embed_one_mock):
+        await pipeline.recompute_collection_meta("my-col")
+
+    embed_one_mock.assert_not_awaited()
+    store.update_collection_meta.assert_awaited_once()
+    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved_meta.description_embedding is None
+
+
+@pytest.mark.asyncio
+async def test_recompute_no_op_when_empty() -> None:
+    """recompute_collection_meta is a no-op when the collection has no vectors."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.get_all_vectors = AsyncMock(return_value=[])
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    embed_one_mock = AsyncMock()
+    with patch.object(pipeline._embedder, "embed_one", new=embed_one_mock):
+        await pipeline.recompute_collection_meta("empty-col")
+
+    embed_one_mock.assert_not_awaited()
+    store.update_collection_meta.assert_not_awaited()

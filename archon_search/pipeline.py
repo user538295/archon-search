@@ -770,6 +770,11 @@ class SearchPipeline:
         last_described = existing_meta.last_described if existing_meta else None
         described_at = existing_meta.described_at_doc_count if existing_meta else None
 
+        if description is not None:
+            description_embedding = await self._embedder.embed_one(description)
+        else:
+            description_embedding = None
+
         meta = CollectionMeta(
             name=collection,
             centroid=centroid,
@@ -781,6 +786,7 @@ class SearchPipeline:
             last_described=last_described,
             described_at_doc_count=described_at,
             namespace=namespace,
+            description_embedding=description_embedding,
         )
         await self.store.update_collection_meta(meta)
 
