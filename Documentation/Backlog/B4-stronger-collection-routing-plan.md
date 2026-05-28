@@ -314,7 +314,7 @@ async def _run_router_for_query(
 > **Releasable**: after Task 2.3, `description_embedding` round-trips through write→read and old meta tables read back as `None`. No ranking change yet.
 
 #### Task 2.1 — Add `description_embedding` field to `CollectionMeta`
-- [ ] **File**: `archon_search/collection_meta.py`
+- [x] **File**: `archon_search/collection_meta.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `description_embedding: list[float] | None = None` as a dataclass field (with default `None`, so all existing `CollectionMeta(...)` call sites continue to work unchanged).

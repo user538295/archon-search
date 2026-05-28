@@ -21,3 +21,4 @@ class CollectionMeta:
     last_described: datetime | None = None
     described_at_doc_count: int | None = None
     namespace: str = DEFAULT_NAMESPACE
+    description_embedding: list[float] | None = None
