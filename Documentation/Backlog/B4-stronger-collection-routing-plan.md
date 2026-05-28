@@ -516,7 +516,7 @@ async def _run_router_for_query(
 > **Releasable**: after Task 6.2, the eval suite runs both strategies in one corpus ingest, records all four new metric keys in the baseline, and the `thresholds.toml` hybrid floor (Δ ≥ 0) is live.
 
 #### Task 6.1 — Wire hybrid router pass into `run_eval_suite`
-- [ ] **File**: `archon_search/eval/runner.py`
+- [x] **File**: `archon_search/eval/runner.py`
 - **Depends on**: Task 1.4, Task 4.2, Task 3.2
 - **Description**:
   - **Constructor passthrough wired here**: per Task 1.4's phase-ordering note, `_run_router_for_query` accepts `strategy` / `description_weight` from Phase 1 but does NOT pass them to `MultiCollectionRouter.__init__` until this task. With Task 4.2 now complete (constructor accepts the params), update `_run_router_for_query` to pass `strategy=strategy` and `description_weight=description_weight` through to the `MultiCollectionRouter(...)` call. This is the deferred wiring from Task 1.4.

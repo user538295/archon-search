@@ -522,28 +522,26 @@ async def _run_router_for_query(
         pipeline: The active :class:`SearchPipeline` instance.
         query_text: The query string to route.
         collection_metas: All ingested :class:`CollectionMeta` objects.
-        strategy: Routing strategy name — accepted for API stability but NOT yet
-            passed to :class:`MultiCollectionRouter` (Task 4.2/6.1 wires this).
-            Only ``"centroid"`` (default) is exercised in Phase 1.
+        strategy: Routing strategy name — passed to :class:`MultiCollectionRouter`.
+            ``"centroid"`` (default) uses centroid cosine only; ``"hybrid"``
+            blends centroid and description_embedding scores.
         description_weight: Blend weight for description-embedding cosine in
-            hybrid routing — accepted for API stability but NOT yet passed to
-            the router constructor (Task 4.2/6.1 wires this).
+            hybrid routing — passed to the router constructor.
 
     Returns:
         Full score-ordered list of collection names.  With
         ``shortlist_size=len(collections)`` and ``confidence_threshold=0.0``
-        the router never truncates, so this is the complete centroid ranking —
+        the router never truncates, so this is the complete ranking —
         not just a shortlist.  ``routing_accuracy`` reads this as a set
-        (same behaviour as before); ``routing_mrr_centroid`` / P@1 centroid
-        read the positional order.
+        (same behaviour as before); ``routing_mrr_*`` / P@1 read the positional order.
     """
     from archon_search.router import MultiCollectionRouter
 
     # Eval-time router divergence from production `/route` semantics:
     # we set confidence_threshold=0.0 and shortlist_size=len(collections) so the
     # router never filters or truncates candidates. This isolates the routing
-    # signal (centroid ranking only) from production threshold tuning, which is
-    # owned by the live search service and not part of the offline contract.
+    # signal from production threshold tuning, which is owned by the live search
+    # service and not part of the offline contract.
     router = MultiCollectionRouter(
         search_url="http://invalid.example/route",  # unused — cache is pre-populated
         embedder=pipeline._embedder,
@@ -551,6 +549,8 @@ async def _run_router_for_query(
         confidence_threshold=0.0,  # accept any non-zero similarity
         embedding_model=pipeline._embedder.model_name,
         initial_metadata=list(collection_metas),
+        strategy=strategy,
+        description_weight=description_weight,
     )
     shortlist = await router.select(query_text)
     return [m.name for m in shortlist]
@@ -566,6 +566,7 @@ async def run_eval_suite(
 
     See the eval harness specification for full details.
     """
+    from archon_search.constants import DEFAULT_ROUTING_DESCRIPTION_WEIGHT
     from archon_search.eval.metrics import (
         compute_latency_percentiles,
         compute_mrr,
@@ -611,7 +612,7 @@ async def run_eval_suite(
     # from `hybrid_routing_traces`. Future maintainers should not assume the same trace
     # set feeds all routing metrics.
     centroid_routing_traces: list[QueryEvalTrace] = []
-    hybrid_routing_traces: list[QueryEvalTrace] = []  # empty in Phase 1 (Task 1.4)
+    hybrid_routing_traces: list[QueryEvalTrace] = []
 
     with tempfile.TemporaryDirectory(prefix="archon-search-eval-") as tmpdir:
         db_path = Path(tmpdir) / "lancedb"
@@ -619,6 +620,9 @@ async def run_eval_suite(
         try:
             await _ingest_corpus(pipeline, corpus_root, corpus)
 
+            # Fetched after `_ingest_corpus` → `recompute_collection_meta`;
+            # `description_embedding` is now load-bearing for hybrid routing,
+            # do not move this fetch earlier.
             collection_metas = await pipeline.get_all_collections_meta()
 
             for q in corpus.queries:
@@ -687,6 +691,26 @@ async def run_eval_suite(
                     )
                     traces.append(routing_trace)
                     centroid_routing_traces.append(routing_trace)
+
+                    # Second pass: hybrid routing for MRR/P@1 hybrid metrics.
+                    hybrid_ranked = await _run_router_for_query(
+                        pipeline, q.text, collection_metas,
+                        strategy="hybrid",
+                        description_weight=DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
+                    )
+                    hybrid_router_correct = bool(set(hybrid_ranked) & gold) if gold else False
+                    hybrid_trace = QueryEvalTrace(
+                        query_id=q.query_id,
+                        query_text=q.text,
+                        collection=None,
+                        metric_scope="routing",
+                        results=[],
+                        pre_rerank_results=[],
+                        router_correct=hybrid_router_correct,
+                        ranked_collections=hybrid_ranked,
+                        latency_ms=0.0,
+                    )
+                    hybrid_routing_traces.append(hybrid_trace)
         finally:
             try:
                 await pipeline.store.disconnect()
@@ -725,8 +749,8 @@ async def run_eval_suite(
 
     routing_mrr_centroid = compute_routing_mrr(centroid_routing_traces, _gold_fn)
     routing_precision_at_1_centroid = compute_routing_precision_at_1(centroid_routing_traces, _gold_fn)
-    routing_mrr_hybrid: float | None = None
-    routing_precision_at_1_hybrid: float | None = None
+    routing_mrr_hybrid = compute_routing_mrr(hybrid_routing_traces, _gold_fn)
+    routing_precision_at_1_hybrid = compute_routing_precision_at_1(hybrid_routing_traces, _gold_fn)
 
     latencies = [t.latency_ms for t in retrieval_traces]
     p50, p95 = compute_latency_percentiles(latencies)
@@ -787,9 +811,9 @@ _QUALITY_FLOOR_FIELDS = (
     "ndcg_at_10",
     "routing_accuracy",
     "routing_mrr_centroid",
-    # routing_mrr_hybrid, routing_precision_at_1_centroid, routing_precision_at_1_hybrid:
-    # fields are present in EvalQualityFloors for forward compat but NOT gated here
-    # (intentional interim state per Task 1.4 spec).
+    "routing_mrr_hybrid",
+    "routing_precision_at_1_centroid",
+    "routing_precision_at_1_hybrid",
 )
 
 
@@ -1003,10 +1027,12 @@ def render_report(report: EvalReport) -> str:
     if metrics.routing_accuracy is None:
         lines.append("  routing_accuracy: skipped (no routing-scope queries or routing disabled)")
 
-    # Routing MRR centroid (primary) and P@1 centroid (secondary)
+    # Routing MRR and P@1 — centroid and hybrid
     mrr_c = metrics.routing_mrr_centroid
     p1_c = metrics.routing_precision_at_1_centroid
-    mrr_c_line = f"  {'routing_mrr_centroid':18s} = {_fmt(mrr_c)}"
+    mrr_h = metrics.routing_mrr_hybrid
+    p1_h = metrics.routing_precision_at_1_hybrid
+    mrr_c_line = f"  {'routing_mrr_centroid':24s} = {_fmt(mrr_c)}"
     if baseline is not None:
         bv = baseline.metrics.get("routing_mrr_centroid")
         if bv is not None and isinstance(mrr_c, (int, float)):
@@ -1014,7 +1040,30 @@ def render_report(report: EvalReport) -> str:
         elif bv is not None:
             mrr_c_line += f"  (baseline={_fmt(bv)})"
     lines.append(mrr_c_line)
-    lines.append(f"  {'routing_p@1_centroid':18s} = {_fmt(p1_c)}")
+    p1_c_line = f"  {'routing_p@1_centroid':24s} = {_fmt(p1_c)}"
+    if baseline is not None:
+        bv = baseline.metrics.get("routing_precision_at_1_centroid")
+        if bv is not None and isinstance(p1_c, (int, float)):
+            p1_c_line += f"  (baseline={_fmt(bv)}, delta={p1_c - bv:+.4f})"
+        elif bv is not None:
+            p1_c_line += f"  (baseline={_fmt(bv)})"
+    lines.append(p1_c_line)
+    mrr_h_line = f"  {'routing_mrr_hybrid':24s} = {_fmt(mrr_h)}"
+    if baseline is not None:
+        bv = baseline.metrics.get("routing_mrr_hybrid")
+        if bv is not None and isinstance(mrr_h, (int, float)):
+            mrr_h_line += f"  (baseline={_fmt(bv)}, delta={mrr_h - bv:+.4f})"
+        elif bv is not None:
+            mrr_h_line += f"  (baseline={_fmt(bv)})"
+    lines.append(mrr_h_line)
+    p1_h_line = f"  {'routing_p@1_hybrid':24s} = {_fmt(p1_h)}"
+    if baseline is not None:
+        bv = baseline.metrics.get("routing_precision_at_1_hybrid")
+        if bv is not None and isinstance(p1_h, (int, float)):
+            p1_h_line += f"  (baseline={_fmt(bv)}, delta={p1_h - bv:+.4f})"
+        elif bv is not None:
+            p1_h_line += f"  (baseline={_fmt(bv)})"
+    lines.append(p1_h_line)
 
     lines.append("")
     lines.append("Latency (ms):")

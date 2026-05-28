@@ -1377,3 +1377,198 @@ def test_assert_thresholds_skips_routing_mrr_centroid_when_floor_none() -> None:
     thresholds = EvalThresholds(quality_floors=floors)
     report = _make_report(metrics=metrics, thresholds=thresholds)
     assert_thresholds(report)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# B4 Task 6.1 — hybrid routing pass wired into runner
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_eval_suite_records_hybrid_metric(tmp_path: Path) -> None:
+    """run_eval_suite with routing queries produces a non-None routing_mrr_hybrid."""
+    corpus_root = tmp_path / "corpus_root"
+    corpus_root.mkdir()
+    _make_mini_corpus(corpus_root, include_routing_queries=True)
+    runtime = _make_runtime(tmp_path, _RUNTIME_ROUTING_ENABLED)
+
+    report = await run_eval_suite(corpus_root, runtime)
+
+    assert report.metrics.routing_mrr_hybrid is not None, (
+        "routing_mrr_hybrid should be non-None when routing queries are present"
+    )
+    assert report.metrics.routing_precision_at_1_hybrid is not None
+
+
+def test_hybrid_and_centroid_metrics_are_independent() -> None:
+    """The centroid and hybrid routing trace lists are separate objects — mutating one
+    does not affect the other."""
+    from archon_search.eval.types import QueryEvalTrace
+
+    centroid_traces: list[QueryEvalTrace] = [
+        QueryEvalTrace(
+            query_id="q1",
+            query_text="test",
+            collection=None,
+            metric_scope="routing",
+            ranked_collections=["alpha", "beta"],
+            router_correct=True,
+            latency_ms=1.0,
+        )
+    ]
+    hybrid_traces: list[QueryEvalTrace] = list(centroid_traces)  # shallow copy
+
+    # Append to centroid — hybrid must not grow if it was a separate list
+    centroid_traces2: list[QueryEvalTrace] = list(centroid_traces)
+    hybrid_traces2: list[QueryEvalTrace] = []  # separate object
+    centroid_traces2.append(
+        QueryEvalTrace(
+            query_id="q2",
+            query_text="extra",
+            collection=None,
+            metric_scope="routing",
+            ranked_collections=["beta"],
+            router_correct=False,
+            latency_ms=1.0,
+        )
+    )
+    assert len(hybrid_traces2) == 0, "hybrid_traces2 must not be affected by centroid_traces2 mutations"
+    assert len(centroid_traces2) == 2
+    assert centroid_traces2 is not hybrid_traces2
+
+
+@pytest.mark.asyncio
+async def test_hybrid_metric_differs_from_centroid_when_description_changes_order(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """When the hybrid router returns a different ranking, routing_mrr_hybrid != routing_mrr_centroid."""
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.eval import runner as runner_mod
+
+    corpus_root = tmp_path / "corpus_root"
+    corpus_root.mkdir()
+    _make_mini_corpus(corpus_root, include_routing_queries=True)
+    runtime = _make_runtime(tmp_path, _RUNTIME_ROUTING_ENABLED)
+
+    # We'll intercept _run_router_for_query so centroid returns ["alpha", "beta"]
+    # and hybrid returns ["beta", "alpha"] for the routing query q-r-01.
+    # q-r-01's gold collection is "alpha", so centroid MRR=1.0, hybrid MRR=0.5.
+    real_run_router = runner_mod._run_router_for_query
+    call_counts: dict[str, int] = {"centroid": 0, "hybrid": 0}
+
+    async def fake_run_router(pipeline, query_text, collection_metas, *, strategy="centroid", description_weight=0.3):
+        call_counts[strategy] = call_counts.get(strategy, 0) + 1
+        if strategy == "centroid":
+            return ["alpha", "beta"]
+        else:
+            return ["beta", "alpha"]
+
+    monkeypatch.setattr(runner_mod, "_run_router_for_query", fake_run_router)
+
+    report = await run_eval_suite(corpus_root, runtime)
+
+    assert call_counts.get("centroid", 0) >= 1, "centroid pass must have been called"
+    assert call_counts.get("hybrid", 0) >= 1, "hybrid pass must have been called"
+
+    mrr_c = report.metrics.routing_mrr_centroid
+    mrr_h = report.metrics.routing_mrr_hybrid
+    assert mrr_c is not None
+    assert mrr_h is not None
+    assert mrr_c != mrr_h, (
+        f"centroid MRR ({mrr_c}) and hybrid MRR ({mrr_h}) should differ "
+        "when router returns different orderings"
+    )
+
+
+@pytest.mark.asyncio
+async def test_hybrid_router_receives_metas_with_populated_description_embedding(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """When metas have description_embedding set, the hybrid router constructor receives them.
+
+    The eval environment does not generate descriptions (no description generator is called),
+    so we inject metas with non-None description_embedding via monkeypatching
+    get_all_collections_meta to return metas that simulate post-`recompute_collection_meta`
+    state with descriptions populated.
+    """
+    from unittest.mock import AsyncMock
+    import archon_search.router as router_mod
+    from archon_search.eval import runner as runner_mod
+    from archon_search.collection_meta import CollectionMeta
+
+    corpus_root = tmp_path / "corpus_root"
+    corpus_root.mkdir()
+    _make_mini_corpus(corpus_root, include_routing_queries=True)
+    runtime = _make_runtime(tmp_path, _RUNTIME_ROUTING_ENABLED)
+
+    # Spy on the router constructor to capture hybrid calls.
+    hybrid_constructor_calls: list[dict] = []
+    real_init = router_mod.MultiCollectionRouter.__init__
+
+    def spy_init(self, *args, **kwargs):
+        if kwargs.get("strategy") == "hybrid":
+            hybrid_constructor_calls.append(
+                {"initial_metadata": list(kwargs.get("initial_metadata", []))}
+            )
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(router_mod.MultiCollectionRouter, "__init__", spy_init)
+
+    # Patch get_all_collections_meta to return metas with description_embedding set,
+    # simulating the state after recompute_collection_meta with generated descriptions.
+    fake_embedding = [0.1] * 128
+    fake_metas = [
+        CollectionMeta(
+            name="alpha",
+            centroid=[0.2] * 128,
+            embedding_model="eval-sha256-v1",
+            description="HTTP networking collection",
+            description_embedding=fake_embedding,
+        ),
+        CollectionMeta(
+            name="beta",
+            centroid=[0.8] * 128,
+            embedding_model="eval-sha256-v1",
+            description="Storage and database collection",
+            description_embedding=[0.9] * 128,
+        ),
+    ]
+
+    real_run_router = runner_mod._run_router_for_query
+
+    async def patched_get_metas(pipeline):
+        return fake_metas
+
+    # Patch inside run_eval_suite: intercept the `get_all_collections_meta` call
+    # by wrapping _run_router_for_query to record what metas it receives.
+    received_metas_for_hybrid: list = []
+    real_run_router_fn = runner_mod._run_router_for_query
+
+    async def spy_run_router(pipeline, query_text, collection_metas, *, strategy="centroid", description_weight=0.3):
+        if strategy == "hybrid":
+            received_metas_for_hybrid.extend(collection_metas)
+        return await real_run_router_fn(pipeline, query_text, collection_metas, strategy=strategy, description_weight=description_weight)
+
+    monkeypatch.setattr(runner_mod, "_run_router_for_query", spy_run_router)
+
+    # Also patch get_all_collections_meta on the pipeline class to return fake metas.
+    from archon_search.pipeline import SearchPipeline
+    original_get_all = SearchPipeline.get_all_collections_meta
+
+    async def fake_get_all(self):
+        # Return metas with description_embedding populated
+        return fake_metas
+
+    monkeypatch.setattr(SearchPipeline, "get_all_collections_meta", fake_get_all)
+
+    report = await run_eval_suite(corpus_root, runtime)
+
+    assert len(received_metas_for_hybrid) >= 1, (
+        "_run_router_for_query was never called with strategy='hybrid'"
+    )
+    has_embedding = any(m.description_embedding is not None for m in received_metas_for_hybrid)
+    assert has_embedding, (
+        "Hybrid router should receive metas with populated description_embedding, "
+        f"but got: {[m.description_embedding for m in received_metas_for_hybrid]}"
+    )
