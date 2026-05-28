@@ -13,11 +13,11 @@
     "reranker_lift": 0.02302741700728006,
     "routing_accuracy": 0.9032258064516129,
     "routing_mrr_centroid": 0.6666666666666666,
-    "routing_mrr_hybrid": null,
+    "routing_mrr_hybrid": 0.6666666666666666,
     "routing_precision_at_1_centroid": 0.6666666666666666,
-    "routing_precision_at_1_hybrid": null
+    "routing_precision_at_1_hybrid": 0.6666666666666666
   },
   "runtime_config_hash": "71d933f9eeed1406f18cb6026d4c0d72e7a4287654100dd20a9d4385a1226589",
-  "thresholds_hash": "d9f73791b2b207caf57030e6a9f2f38be67510d7ba12201fa9a6238bd9ac6c4c",
+  "thresholds_hash": "16ff2624ecf0626e4575a37d3a350cd02739917ba9ceb1bd45f0bb841dd6233a",
   "waiver_ids": {}
 }

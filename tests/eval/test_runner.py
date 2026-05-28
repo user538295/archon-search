@@ -1379,6 +1379,20 @@ def test_assert_thresholds_skips_routing_mrr_centroid_when_floor_none() -> None:
     assert_thresholds(report)  # must not raise
 
 
+def test_assert_thresholds_fails_when_hybrid_mrr_below_centroid_floor() -> None:
+    """assert_thresholds raises when routing_mrr_hybrid is below the routing_mrr_hybrid floor.
+
+    This pins the Δ ≥ 0 merge-gate mechanism: the hybrid floor is set equal to the
+    measured centroid baseline, so hybrid must not regress below centroid.
+    """
+    floors = _make_quality_floors(routing_mrr_hybrid=0.8)
+    metrics = _make_metrics(routing_mrr_hybrid=0.5)
+    thresholds = EvalThresholds(quality_floors=floors)
+    report = _make_report(metrics=metrics, thresholds=thresholds)
+    with pytest.raises(AssertionError, match="routing_mrr_hybrid"):
+        assert_thresholds(report)
+
+
 # ---------------------------------------------------------------------------
 # B4 Task 6.1 — hybrid routing pass wired into runner
 # ---------------------------------------------------------------------------

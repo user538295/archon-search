@@ -538,7 +538,7 @@ async def _run_router_for_query(
   - Checkpoint: `uv run pytest tests/eval/test_runner.py -x -k "hybrid"`
 
 #### Task 6.2 — Regenerate baseline with hybrid metrics + add `routing_mrr_hybrid` floor
-- [ ] **File**: `tests/eval/baselines/baseline.json`, `tests/eval/baselines/baseline.md`, `tests/eval/thresholds.toml`
+- [x] **File**: `tests/eval/baselines/baseline.json`, `tests/eval/baselines/baseline.md`, `tests/eval/thresholds.toml`
 - **Depends on**: Task 6.1, Task 1.5
 - **Description**:
   - Run the calibration command from `baselines/regenerate.py` over the full expanded corpus. The baseline now records `routing_mrr_centroid`, `routing_mrr_hybrid`, `routing_precision_at_1_centroid`, `routing_precision_at_1_hybrid` as top-level keys in the flat metric dict alongside all existing keys.
