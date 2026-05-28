@@ -135,9 +135,13 @@ async def test_lifespan_calls_migrate_namespace(config: SearchConfig, job_store:
     async def fake_migrate_acl(self: SearchStore) -> None:  # type: ignore[override]
         call_order.append("migrate_acl")
 
+    async def fake_migrate_description_embedding(self: SearchStore) -> None:  # type: ignore[override]
+        call_order.append("migrate_description_embedding")
+
     with (
         patch.object(SearchStore, "connect", new=fake_connect),
         patch.object(SearchStore, "migrate_namespace", new=fake_migrate),
+        patch.object(SearchStore, "migrate_description_embedding", new=fake_migrate_description_embedding),
         patch.object(SearchStore, "migrate_acl", new=fake_migrate_acl),
         patch.object(SearchStore, "disconnect", new=fake_disconnect),
     ):
@@ -149,7 +153,10 @@ async def test_lifespan_calls_migrate_namespace(config: SearchConfig, job_store:
 
         assert "connect" in call_order
         assert "migrate_namespace" in call_order
+        assert "migrate_description_embedding" in call_order
         assert call_order.index("connect") < call_order.index("migrate_namespace")
+        assert call_order.index("migrate_namespace") < call_order.index("migrate_description_embedding")
+        assert call_order.index("migrate_description_embedding") < call_order.index("migrate_acl")
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +200,7 @@ def test_create_app_empty_namespaces_no_error(tmp_path: Path, job_store: JobStor
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
@@ -219,6 +227,7 @@ def test_health_endpoint_unauthenticated_200(tmp_path: Path, job_store: JobStore
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
@@ -248,6 +257,7 @@ def _make_test_client(tmp_path: Path, job_store: JobStore):  # type: ignore[no-u
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
@@ -265,6 +275,7 @@ def test_health_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
@@ -284,6 +295,7 @@ def test_401_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
@@ -304,6 +316,7 @@ def test_options_preflight_has_request_id(tmp_path: Path, job_store: JobStore) -
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
@@ -323,6 +336,7 @@ def test_inbound_id_echoed(tmp_path: Path, job_store: JobStore) -> None:
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):

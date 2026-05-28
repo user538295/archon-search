@@ -349,7 +349,7 @@ async def _run_router_for_query(
   - Checkpoint: `uv run pytest tests/test_store.py -x -k "description_embedding"`
 
 #### Task 2.3 — Wire `migrate_description_embedding` into startup
-- [ ] **File**: `archon_search/store.py`, `archon_search/server/app.py` (or wherever migrations are invoked at startup)
+- [x] **File**: `archon_search/store.py`, `archon_search/server/app.py` (or wherever migrations are invoked at startup)
 - **Depends on**: Task 2.2
 - **Description**:
   - Locate the startup migration sequence (where `migrate_namespace` and `migrate_acl` are called) and add `await store.migrate_description_embedding()` in the same sequence.

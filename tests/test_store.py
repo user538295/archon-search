@@ -1,6 +1,7 @@
 """packages/archon-search/tests/test_store.py — unit + integration tests for SearchStore."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import sys
 import uuid
@@ -3911,6 +3912,77 @@ def test_row_to_meta_non_float_elements_yield_none_with_warning(
     assert any("description_embedding_json" in r.message for r in caplog.records), (
         f"Expected WARNING for input {json_str!r}; got: {[r.message for r in caplog.records]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_migrate_description_embedding_noop_when_column_present(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """migrate_description_embedding() is a no-op and logs no WARNING when column already present."""
+    import logging
+
+    import pyarrow as pa
+
+    from archon_search.store import migrate_description_embedding
+
+    store = SearchStore(tmp_path / "db_emb_noop")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        # Create meta table with the column already present (current schema).
+        await db.create_table("_archon_collection_meta", schema=SearchStore._meta_schema())
+        with caplog.at_level(logging.WARNING, logger="archon_search.store"):
+            await migrate_description_embedding(store)
+        # Must not emit any WARNING about the migration.
+        assert not any(
+            "description_embedding" in r.message
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+        ), f"Unexpected WARNING logged: {[r.message for r in caplog.records]}"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_description_embedding_concurrent_calls(tmp_path: Path) -> None:
+    """Two concurrent migrate_description_embedding() calls on the same table must not raise.
+
+    NOTE: migrate_namespace does not have an equivalent concurrent test using asyncio.gather;
+    its concurrency test uses patch to simulate an already-exists error. We follow the same
+    mock-based approach here for consistency.
+    """
+    import lancedb.table
+    from unittest.mock import AsyncMock, patch
+
+    import pyarrow as pa
+
+    from archon_search.store import migrate_description_embedding
+
+    store = SearchStore(tmp_path / "db_emb_concurrent")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        old_schema = pa.schema(
+            [f for f in SearchStore._meta_schema() if f.name != "description_embedding_json"]
+        )
+        await db.create_table("_archon_collection_meta", schema=old_schema)
+        # Simulate the race: add_columns raises "already exists" as a concurrent peer would.
+        with patch.object(
+            lancedb.table.AsyncTable,
+            "add_columns",
+            new=AsyncMock(
+                side_effect=RuntimeError(
+                    "Column description_embedding_json already exists in the dataset"
+                )
+            ),
+        ):
+            # Both calls must complete without raising.
+            await asyncio.gather(
+                migrate_description_embedding(store),
+                migrate_description_embedding(store),
+            )
+    finally:
+        await store.disconnect()
 
 
 @pytest.mark.asyncio

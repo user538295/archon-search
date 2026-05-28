@@ -92,7 +92,9 @@ def create_app(
         # Startup: connect search store
         await app.state.search_store.connect()
         await app.state.search_store.migrate_namespace()
+        await app.state.search_store.migrate_description_embedding()
         await app.state.search_store.migrate_acl()
+        # All `migrate_*` calls complete before the lifespan context yields control to the request loop
 
         # Startup: warn if the multi-collection fan-out validation cap is out of
         # sync with the configured max_fanout.
