@@ -3271,3 +3271,119 @@ async def test_search_many_acl_filtered_propagates() -> None:
     assert result.acl_filtered is True
     # The denied candidate must not survive into results.
     assert all(r.collection != "B" for r in result.results)
+
+
+# ===========================================================================
+# B4 Task 3.1 — description_embedding populated at ingest
+# ===========================================================================
+
+
+def _make_stub_store_for_embedding_tests(existing_meta=None):  # type: ignore[no-untyped-def]
+    """Return a store mock suitable for description-embedding tests."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.delete_document = AsyncMock(return_value=0)
+    store.ingest_chunks = AsyncMock(return_value=1)
+    store.rebuild_fts_index = AsyncMock()
+    store.get_collection_meta = AsyncMock(return_value=existing_meta)
+    store.update_collection_meta = AsyncMock()
+    return store
+
+
+def _make_pipeline_for_embedding_tests(store):  # type: ignore[no-untyped-def]
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    return SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=64),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_populates_description_embedding(tmp_path) -> None:
+    """ingest_directory persists a CollectionMeta with description_embedding when description is set."""
+    from unittest.mock import AsyncMock, patch
+
+    from archon_search.collection_meta import CollectionMeta
+
+    store = _make_stub_store_for_embedding_tests(existing_meta=None)
+    pipeline = _make_pipeline_for_embedding_tests(store)
+
+    embed_vec = [0.1] * 32
+    (tmp_path / "doc.md").write_text("# Hello\n\nContent for embedding test.\n" * 5)
+
+    with (
+        patch("archon_search.pipeline.generate_description", return_value="test desc"),
+        patch.object(pipeline._embedder, "embed_one", new=AsyncMock(return_value=embed_vec)),
+    ):
+        await pipeline.ingest_directory(tmp_path, "my-col")
+
+    store.update_collection_meta.assert_awaited_once()
+    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved_meta.description_embedding == embed_vec
+
+
+@pytest.mark.asyncio
+async def test_ingest_description_none_sets_embedding_none(tmp_path) -> None:
+    """When generate_description returns None, description_embedding is None on persisted meta."""
+    from unittest.mock import AsyncMock, patch
+
+    from archon_search.collection_meta import CollectionMeta
+
+    store = _make_stub_store_for_embedding_tests(existing_meta=None)
+    pipeline = _make_pipeline_for_embedding_tests(store)
+
+    (tmp_path / "doc.md").write_text("# Hello\n\nContent for null embedding test.\n" * 5)
+
+    with patch("archon_search.pipeline.generate_description", return_value=None):
+        with patch.object(pipeline._embedder, "embed_one", new_callable=AsyncMock) as mock_embed:
+            await pipeline.ingest_directory(tmp_path, "my-col")
+
+    mock_embed.assert_not_awaited()
+    store.update_collection_meta.assert_awaited_once()
+    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved_meta.description_embedding is None
+
+
+@pytest.mark.asyncio
+async def test_ingest_re_embeds_description_on_every_ingest(tmp_path) -> None:
+    """Re-ingest always re-embeds the description, overwriting stale description_embedding."""
+    from unittest.mock import AsyncMock, patch
+
+    from archon_search.collection_meta import CollectionMeta
+
+    prior_embedding = [0.5] * 32
+    existing_meta = CollectionMeta(
+        name="my-col",
+        description="old desc",
+        description_embedding=prior_embedding,
+        described_at_doc_count=1,  # batch has 1 doc → 0% change → no regeneration
+    )
+    store = _make_stub_store_for_embedding_tests(existing_meta=existing_meta)
+    pipeline = _make_pipeline_for_embedding_tests(store)
+
+    new_embed_vec = [0.9] * 32
+    embed_one_mock = AsyncMock(return_value=new_embed_vec)
+
+    (tmp_path / "doc.md").write_text("# Hello\n\nContent for re-embed test.\n" * 5)
+
+    with patch.object(pipeline._embedder, "embed_one", new=embed_one_mock):
+        await pipeline.ingest_directory(tmp_path, "my-col")
+
+    # embed_one must have been called with the preserved description
+    embed_one_mock.assert_awaited_once_with("old desc")
+
+    # Persisted meta must carry the fresh embedding, not the prior [0.5]*32
+    store.update_collection_meta.assert_awaited_once()
+    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved_meta.description_embedding == new_embed_vec
+    assert saved_meta.description_embedding != prior_embedding

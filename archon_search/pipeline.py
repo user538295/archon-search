@@ -369,6 +369,15 @@ class SearchPipeline:
                     described_at = batch_doc_count
                     last_described = datetime.now(UTC)
 
+            if description is not None:
+                description_embedding = await self._embedder.embed_one(description)
+            else:
+                logger.debug(
+                    "description_embedding: description is None for collection %r — skipping",
+                    collection,
+                )
+                description_embedding = None
+
             meta = CollectionMeta(
                 name=collection,
                 centroid=centroid,
@@ -380,6 +389,7 @@ class SearchPipeline:
                 last_described=last_described,
                 described_at_doc_count=described_at,
                 namespace=namespace,
+                description_embedding=description_embedding,
             )
             await self.store.update_collection_meta(meta)
 

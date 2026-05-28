@@ -370,7 +370,7 @@ async def _run_router_for_query(
 > **Releasable**: after Task 3.2, ingesting a collection that produces a description persists a `description_embedding` of the same dimensionality as chunk vectors. No ranking change yet.
 
 #### Task 3.1 — Embed description at ingest in `pipeline.py`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 2.1, Task 2.2
 - **Description**:
   - In `ingest_files`, after the existing description generation block (line ~312–330 neighborhood), add:
