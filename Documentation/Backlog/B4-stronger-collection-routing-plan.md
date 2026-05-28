@@ -409,7 +409,7 @@ async def _run_router_for_query(
 > **Releasable**: after Task 4.2, `MultiCollectionRouter` supports `strategy="hybrid"` and blends description-embedding cosine with centroid cosine per collection, with per-collection fallback. Default config stays `"centroid"` — no behavior change for existing deployments.
 
 #### Task 4.1 — Add `description_embedding` to `_ROUTING_FIELDS` and `fetch_metadata`
-- [ ] **File**: `archon_search/router.py`
+- [x] **File**: `archon_search/router.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - Add `"description_embedding"` to `_ROUTING_FIELDS` set (module-level constant in `router.py`). This causes `fetch_metadata` to include the field when deserializing `CollectionMeta` from the JSON-RPC response.

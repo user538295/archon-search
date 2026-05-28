@@ -19,7 +19,7 @@ logger = logging.getLogger("archon")
 _FETCH_TIMEOUT = 10.0
 
 # Fields used by the router — avoids issues with datetime deserialization
-_ROUTING_FIELDS = {"name", "description", "centroid", "embedding_model", "doc_count", "chunk_count"}
+_ROUTING_FIELDS = {"name", "description", "centroid", "embedding_model", "doc_count", "chunk_count", "description_embedding"}
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -82,10 +82,13 @@ class MultiCollectionRouter:
         if self._cached_metadata is not None:
             return self._cached_metadata
 
+        arguments: dict[str, Any] = {}
+        if getattr(self, "_strategy", "centroid") == "hybrid":
+            arguments["include_description_embedding"] = True
         payload = {
             "jsonrpc": "2.0",
             "method": "tools/call",
-            "params": {"name": "get_collections_meta", "arguments": {}},
+            "params": {"name": "get_collections_meta", "arguments": arguments},
             "id": 1,
         }
         try:

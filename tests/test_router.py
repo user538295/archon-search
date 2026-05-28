@@ -742,3 +742,140 @@ async def test_run_router_for_query_uses_initial_metadata() -> None:
     # similarity, so col-a must come first.
     assert shortlist == ["col-a", "col-b"]
     embedder.embed_one.assert_awaited_once_with("test query")
+
+
+# ---------------------------------------------------------------------------
+# Task 4.1 — description_embedding in _ROUTING_FIELDS and fetch_metadata
+# ---------------------------------------------------------------------------
+
+
+def test_routing_fields_includes_description_embedding() -> None:
+    """_ROUTING_FIELDS must contain 'description_embedding' so it is passed to CollectionMeta."""
+    from archon_search.router import _ROUTING_FIELDS
+
+    assert "description_embedding" in _ROUTING_FIELDS
+
+
+@pytest.mark.asyncio
+async def test_fetch_metadata_deserializes_description_embedding() -> None:
+    """fetch_metadata returns CollectionMeta with description_embedding populated from response."""
+    router = _router()
+
+    payload = json.dumps([
+        {"name": "col-a", "embedding_model": "model-a", "description_embedding": [0.1, 0.2]}
+    ])
+    response = MagicMock()
+    response.raise_for_status = MagicMock(return_value=None)
+    response.json = MagicMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"content": [{"type": "text", "text": payload}]},
+        }
+    )
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=response)
+
+        result = await router.fetch_metadata()
+
+    assert len(result) == 1
+    assert result[0].description_embedding == [0.1, 0.2]
+
+
+@pytest.mark.asyncio
+async def test_fetch_metadata_missing_description_embedding_yields_none() -> None:
+    """fetch_metadata silently yields description_embedding=None when field is absent in response."""
+    router = _router()
+
+    payload = json.dumps([{"name": "col-a", "embedding_model": "model-a"}])
+    response = MagicMock()
+    response.raise_for_status = MagicMock(return_value=None)
+    response.json = MagicMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"content": [{"type": "text", "text": payload}]},
+        }
+    )
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=response)
+
+        result = await router.fetch_metadata()
+
+    assert len(result) == 1
+    assert result[0].description_embedding is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_metadata_passes_include_flag_under_hybrid() -> None:
+    """When _strategy == 'hybrid', fetch_metadata sends include_description_embedding: True."""
+    router = _router()
+    router._strategy = "hybrid"  # Task 4.2 will add this via __init__; manually set for now
+
+    captured_payloads: list[dict] = []
+
+    async def _capture_post(url: str, **kwargs: object) -> MagicMock:
+        captured_payloads.append(kwargs.get("json", {}))  # type: ignore[arg-type]
+        payload = json.dumps([{"name": "col-a", "embedding_model": "model-a"}])
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock(return_value=None)
+        resp.json = MagicMock(
+            return_value={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": payload}]},
+            }
+        )
+        return resp
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(side_effect=_capture_post)
+
+        await router.fetch_metadata()
+
+    assert len(captured_payloads) == 1
+    assert captured_payloads[0]["params"]["arguments"] == {"include_description_embedding": True}
+
+
+@pytest.mark.asyncio
+async def test_fetch_metadata_omits_include_flag_under_centroid() -> None:
+    """Without _strategy set (default centroid), fetch_metadata sends empty arguments dict."""
+    router = _router()  # no _strategy set → getattr defaults to 'centroid'
+
+    captured_payloads: list[dict] = []
+
+    async def _capture_post(url: str, **kwargs: object) -> MagicMock:
+        captured_payloads.append(kwargs.get("json", {}))  # type: ignore[arg-type]
+        payload = json.dumps([{"name": "col-a", "embedding_model": "model-a"}])
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock(return_value=None)
+        resp.json = MagicMock(
+            return_value={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": payload}]},
+            }
+        )
+        return resp
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(side_effect=_capture_post)
+
+        await router.fetch_metadata()
+
+    assert len(captured_payloads) == 1
+    assert captured_payloads[0]["params"]["arguments"] == {}
