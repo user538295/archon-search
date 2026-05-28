@@ -138,6 +138,54 @@ def test_query_eval_trace_router_correct_is_none_when_routing_disabled() -> None
     assert trace.router_correct is None
 
 
+def test_query_eval_trace_ranked_collections_default_none() -> None:
+    from archon_search.eval.types import QueryEvalTrace
+
+    trace = QueryEvalTrace(
+        query_id="q-route-01",
+        query_text="find something",
+        collection=None,
+        metric_scope="routing",
+    )
+    assert trace.ranked_collections is None
+
+
+def test_query_eval_trace_ranked_collections_list() -> None:
+    from archon_search.eval.types import QueryEvalTrace
+
+    trace = QueryEvalTrace(
+        query_id="q-route-02",
+        query_text="another query",
+        collection=None,
+        metric_scope="routing",
+        ranked_collections=["code", "docs", "mixed"],
+    )
+    assert trace.ranked_collections == ["code", "docs", "mixed"]
+
+
+def test_query_eval_trace_ranked_collections_empty_list_distinct_from_none() -> None:
+    from archon_search.eval.types import QueryEvalTrace
+
+    # Empty list means routing ran but produced no scored collections.
+    # None means routing did not run. These are semantically distinct.
+    trace_empty = QueryEvalTrace(
+        query_id="q-route-03",
+        query_text="empty routing result",
+        collection=None,
+        metric_scope="routing",
+        ranked_collections=[],
+    )
+    trace_none = QueryEvalTrace(
+        query_id="q-route-04",
+        query_text="routing not run",
+        collection=None,
+        metric_scope="retrieval",
+    )
+    assert trace_empty.ranked_collections == []
+    assert trace_none.ranked_collections is None
+    assert trace_empty.ranked_collections != trace_none.ranked_collections
+
+
 def test_query_eval_trace_router_correct_bool_when_routing_enabled() -> None:
     from archon_search._diagnostics import SearchScoreBreakdown
     from archon_search.eval.types import EvalSearchResult, QueryEvalTrace

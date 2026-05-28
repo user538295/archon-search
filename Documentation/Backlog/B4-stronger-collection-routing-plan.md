@@ -208,7 +208,7 @@ async def _run_router_for_query(
 > **Releasable**: after Task 1.4, the eval harness measures rank-sensitive routing quality under the existing centroid strategy. No production behavior changes.
 
 #### Task 1.1 — Extend `QueryEvalTrace` with `ranked_collections`
-- [ ] **File**: `archon_search/eval/types.py`
+- [x] **File**: `archon_search/eval/types.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `ranked_collections: list[str] | None = None` field to `QueryEvalTrace` dataclass.

@@ -48,6 +48,12 @@ class QueryEvalTrace:
         router_correct: ``True``/``False`` when routing is enabled and the
             query is non-bypassed; ``None`` when routing is disabled or the
             query bypasses routing.
+        ranked_collections: Full ranked list of collection names in
+            score-descending order when routing ran (possibly empty); ``None``
+            when routing is disabled or the query bypasses routing.  An empty
+            list is semantically distinct from ``None``: ``[]`` means routing
+            ran but produced no scored collections; ``None`` means routing did
+            not run.
         latency_ms: End-to-end query latency in milliseconds.
     """
 
@@ -58,6 +64,7 @@ class QueryEvalTrace:
     results: list[EvalSearchResult] = field(default_factory=list)
     pre_rerank_results: list[EvalSearchResult] | None = None
     router_correct: bool | None = None
+    ranked_collections: list[str] | None = None
     latency_ms: float = 0.0
 
 
