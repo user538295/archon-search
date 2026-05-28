@@ -46,6 +46,10 @@ class EvalQualityFloors:
     ndcg_at_5: float
     ndcg_at_10: float
     routing_accuracy: float | None = None
+    routing_mrr_centroid: float | None = None
+    routing_mrr_hybrid: float | None = None
+    routing_precision_at_1_centroid: float | None = None
+    routing_precision_at_1_hybrid: float | None = None
 
 
 @dataclass
@@ -102,6 +106,22 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
             f"got {type(routing_accuracy).__name__!r}"
         )
 
+    _optional_float_fields = (
+        "routing_mrr_centroid",
+        "routing_mrr_hybrid",
+        "routing_precision_at_1_centroid",
+        "routing_precision_at_1_hybrid",
+    )
+    optional_floats: dict[str, float | None] = {}
+    for opt_key in _optional_float_fields:
+        val = raw_floors.get(opt_key)
+        if val is not None and not isinstance(val, (int, float)):
+            raise ValueError(
+                f"[quality_floors].{opt_key} must be a float, "
+                f"got {type(val).__name__!r}"
+            )
+        optional_floats[opt_key] = float(val) if val is not None else None
+
     quality_floors = EvalQualityFloors(
         recall_at_1=float(raw_floors["recall_at_1"]),
         recall_at_3=float(raw_floors["recall_at_3"]),
@@ -110,6 +130,10 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         ndcg_at_5=float(raw_floors["ndcg_at_5"]),
         ndcg_at_10=float(raw_floors["ndcg_at_10"]),
         routing_accuracy=float(routing_accuracy) if routing_accuracy is not None else None,
+        routing_mrr_centroid=optional_floats["routing_mrr_centroid"],
+        routing_mrr_hybrid=optional_floats["routing_mrr_hybrid"],
+        routing_precision_at_1_centroid=optional_floats["routing_precision_at_1_centroid"],
+        routing_precision_at_1_hybrid=optional_floats["routing_precision_at_1_hybrid"],
     )
 
     # --- latency_ceilings section (optional) ----------------------------------
@@ -488,8 +512,31 @@ async def _run_router_for_query(
     pipeline,
     query_text: str,
     collection_metas,
+    *,
+    strategy: str = "centroid",
+    description_weight: float = 0.3,
 ) -> list[str]:
-    """Rank collections via centroid similarity and return shortlist names."""
+    """Rank collections via centroid similarity and return the full ranked order.
+
+    Args:
+        pipeline: The active :class:`SearchPipeline` instance.
+        query_text: The query string to route.
+        collection_metas: All ingested :class:`CollectionMeta` objects.
+        strategy: Routing strategy name — accepted for API stability but NOT yet
+            passed to :class:`MultiCollectionRouter` (Task 4.2/6.1 wires this).
+            Only ``"centroid"`` (default) is exercised in Phase 1.
+        description_weight: Blend weight for description-embedding cosine in
+            hybrid routing — accepted for API stability but NOT yet passed to
+            the router constructor (Task 4.2/6.1 wires this).
+
+    Returns:
+        Full score-ordered list of collection names.  With
+        ``shortlist_size=len(collections)`` and ``confidence_threshold=0.0``
+        the router never truncates, so this is the complete centroid ranking —
+        not just a shortlist.  ``routing_accuracy`` reads this as a set
+        (same behaviour as before); ``routing_mrr_centroid`` / P@1 centroid
+        read the positional order.
+    """
     from archon_search.router import MultiCollectionRouter
 
     # Eval-time router divergence from production `/route` semantics:
@@ -526,6 +573,8 @@ async def run_eval_suite(
         compute_recall_at_k,
         compute_reranker_lift,
         compute_routing_accuracy,
+        compute_routing_mrr,
+        compute_routing_precision_at_1,
     )
 
     corpus_root = Path(corpus_root)
@@ -556,6 +605,13 @@ async def run_eval_suite(
         )
 
     traces: list[QueryEvalTrace] = []
+    # routing_accuracy is computed from `traces` (centroid-only routing traces in v1,
+    # retained for backward compatibility), while `routing_mrr_centroid` / P@1 centroid
+    # is computed from `centroid_routing_traces` and `routing_mrr_hybrid` / P@1 hybrid
+    # from `hybrid_routing_traces`. Future maintainers should not assume the same trace
+    # set feeds all routing metrics.
+    centroid_routing_traces: list[QueryEvalTrace] = []
+    hybrid_routing_traces: list[QueryEvalTrace] = []  # empty in Phase 1 (Task 1.4)
 
     with tempfile.TemporaryDirectory(prefix="archon-search-eval-") as tmpdir:
         db_path = Path(tmpdir) / "lancedb"
@@ -613,23 +669,24 @@ async def run_eval_suite(
 
                     t0 = time.perf_counter()
                     shortlist_names = await _run_router_for_query(
-                        pipeline, q.text, collection_metas
+                        pipeline, q.text, collection_metas, strategy="centroid"
                     )
                     elapsed = (time.perf_counter() - t0) * 1000.0
                     gold = _gold_collections_for(q.query_id, corpus)
                     router_correct = bool(set(shortlist_names) & gold) if gold else False
-                    traces.append(
-                        QueryEvalTrace(
-                            query_id=q.query_id,
-                            query_text=q.text,
-                            collection=None,
-                            metric_scope="routing",
-                            results=[],
-                            pre_rerank_results=[],
-                            router_correct=router_correct,
-                            latency_ms=elapsed,
-                        )
+                    routing_trace = QueryEvalTrace(
+                        query_id=q.query_id,
+                        query_text=q.text,
+                        collection=None,
+                        metric_scope="routing",
+                        results=[],
+                        pre_rerank_results=[],
+                        router_correct=router_correct,
+                        ranked_collections=shortlist_names,
+                        latency_ms=elapsed,
                     )
+                    traces.append(routing_trace)
+                    centroid_routing_traces.append(routing_trace)
         finally:
             try:
                 await pipeline.store.disconnect()
@@ -662,6 +719,15 @@ async def run_eval_suite(
         traces, routing_contract_enabled=runtime_cfg.routing_contract_enabled
     )
 
+    # Build a gold-collections lookup for routing MRR/P@1 computation.
+    def _gold_fn(query_id: str) -> set[str]:
+        return _gold_collections_for(query_id, corpus)
+
+    routing_mrr_centroid = compute_routing_mrr(centroid_routing_traces, _gold_fn)
+    routing_precision_at_1_centroid = compute_routing_precision_at_1(centroid_routing_traces, _gold_fn)
+    routing_mrr_hybrid: float | None = None
+    routing_precision_at_1_hybrid: float | None = None
+
     latencies = [t.latency_ms for t in retrieval_traces]
     p50, p95 = compute_latency_percentiles(latencies)
 
@@ -676,6 +742,10 @@ async def run_eval_suite(
         routing_accuracy=routing_accuracy,
         latency_p50_ms=p50,
         latency_p95_ms=p95,
+        routing_mrr_centroid=routing_mrr_centroid,
+        routing_mrr_hybrid=routing_mrr_hybrid,
+        routing_precision_at_1_centroid=routing_precision_at_1_centroid,
+        routing_precision_at_1_hybrid=routing_precision_at_1_hybrid,
     )
 
     current_eval_hash = compute_eval_hash(corpus_root)
@@ -716,6 +786,10 @@ _QUALITY_FLOOR_FIELDS = (
     "ndcg_at_5",
     "ndcg_at_10",
     "routing_accuracy",
+    "routing_mrr_centroid",
+    # routing_mrr_hybrid, routing_precision_at_1_centroid, routing_precision_at_1_hybrid:
+    # fields are present in EvalQualityFloors for forward compat but NOT gated here
+    # (intentional interim state per Task 1.4 spec).
 )
 
 
@@ -928,6 +1002,19 @@ def render_report(report: EvalReport) -> str:
 
     if metrics.routing_accuracy is None:
         lines.append("  routing_accuracy: skipped (no routing-scope queries or routing disabled)")
+
+    # Routing MRR centroid (primary) and P@1 centroid (secondary)
+    mrr_c = metrics.routing_mrr_centroid
+    p1_c = metrics.routing_precision_at_1_centroid
+    mrr_c_line = f"  {'routing_mrr_centroid':18s} = {_fmt(mrr_c)}"
+    if baseline is not None:
+        bv = baseline.metrics.get("routing_mrr_centroid")
+        if bv is not None and isinstance(mrr_c, (int, float)):
+            mrr_c_line += f"  (baseline={_fmt(bv)}, delta={mrr_c - bv:+.4f})"
+        elif bv is not None:
+            mrr_c_line += f"  (baseline={_fmt(bv)})"
+    lines.append(mrr_c_line)
+    lines.append(f"  {'routing_p@1_centroid':18s} = {_fmt(p1_c)}")
 
     lines.append("")
     lines.append("Latency (ms):")

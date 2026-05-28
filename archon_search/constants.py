@@ -33,6 +33,10 @@ DEFAULT_MODEL: str = "claude-sonnet-4-6"
 # Default namespace used when no explicit namespace is specified.
 DEFAULT_NAMESPACE: str = "default"
 
+# Default blend weight for description-embedding cosine in hybrid routing.
+# Shared by router.py, config.py, and eval/runner.py to avoid hardcoding 0.3.
+DEFAULT_ROUTING_DESCRIPTION_WEIGHT: Final[float] = 0.3
+
 _NAMESPACE_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}")
 
 

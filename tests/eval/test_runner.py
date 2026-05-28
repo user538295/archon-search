@@ -435,6 +435,9 @@ async def test_eval_runner_full_chain_produces_all_metric_categories(tmp_path: P
     assert isinstance(m.latency_p95_ms, float)
     # routing_accuracy is float (contract enabled, one routing query)
     assert m.routing_accuracy is None or isinstance(m.routing_accuracy, float)
+    # routing_mrr_centroid must be a non-None float > 0 when routing queries are present
+    assert isinstance(m.routing_mrr_centroid, float)
+    assert m.routing_mrr_centroid > 0
 
 
 @pytest.mark.asyncio
@@ -981,6 +984,10 @@ def _make_metrics(
     routing_accuracy: float | None = 0.90,
     latency_p50_ms: float = 25.0,
     latency_p95_ms: float = 80.0,
+    routing_mrr_centroid: float | None = None,
+    routing_mrr_hybrid: float | None = None,
+    routing_precision_at_1_centroid: float | None = None,
+    routing_precision_at_1_hybrid: float | None = None,
 ) -> EvalMetrics:
     return EvalMetrics(
         recall_at_1=recall_at_1,
@@ -993,6 +1000,10 @@ def _make_metrics(
         routing_accuracy=routing_accuracy,
         latency_p50_ms=latency_p50_ms,
         latency_p95_ms=latency_p95_ms,
+        routing_mrr_centroid=routing_mrr_centroid,
+        routing_mrr_hybrid=routing_mrr_hybrid,
+        routing_precision_at_1_centroid=routing_precision_at_1_centroid,
+        routing_precision_at_1_hybrid=routing_precision_at_1_hybrid,
     )
 
 
@@ -1236,3 +1247,133 @@ def test_render_report_includes_all_metric_categories() -> None:
         assert key in out, f"missing {key} in rendered report"
     # routing_accuracy: either the value or an explicit skip note
     assert "routing" in out
+
+
+# ---------------------------------------------------------------------------
+# B4 Task 1.4 — ranked_collections wired into runner + centroid MRR metric
+# ---------------------------------------------------------------------------
+
+def test_routing_mrr_centroid_in_eval_metrics() -> None:
+    """EvalMetrics has routing_mrr_centroid field accessible and defaults to None."""
+    from archon_search.eval.types import EvalMetrics
+    m = _make_metrics()
+    assert hasattr(m, "routing_mrr_centroid")
+    assert m.routing_mrr_centroid is None
+
+
+def test_routing_mrr_hybrid_and_p1_fields_in_eval_metrics() -> None:
+    """EvalMetrics has all four new routing metric fields, all defaulting to None."""
+    m = _make_metrics()
+    assert m.routing_mrr_centroid is None
+    assert m.routing_mrr_hybrid is None
+    assert m.routing_precision_at_1_centroid is None
+    assert m.routing_precision_at_1_hybrid is None
+
+
+def test_load_thresholds_parses_routing_mrr_centroid(tmp_path: Path) -> None:
+    """TOML with routing_mrr_centroid floor is parsed correctly."""
+    path = _write_toml(
+        tmp_path,
+        _FULL_QUALITY + "\nrouting_mrr_centroid = 0.75\n",
+    )
+    result = load_thresholds(path)
+    assert result.quality_floors.routing_mrr_centroid == pytest.approx(0.75)
+
+
+def test_load_thresholds_routing_mrr_centroid_absent_yields_none(tmp_path: Path) -> None:
+    """When routing_mrr_centroid is absent from TOML, floor is None."""
+    path = _write_toml(tmp_path, _FULL_QUALITY)
+    result = load_thresholds(path)
+    assert result.quality_floors.routing_mrr_centroid is None
+
+
+def test_load_thresholds_parses_all_four_new_routing_fields(tmp_path: Path) -> None:
+    """All four new routing quality floor fields parse from TOML."""
+    extra = (
+        "routing_mrr_centroid = 0.70\n"
+        "routing_mrr_hybrid = 0.70\n"
+        "routing_precision_at_1_centroid = 0.60\n"
+        "routing_precision_at_1_hybrid = 0.60\n"
+    )
+    path = _write_toml(tmp_path, _FULL_QUALITY + extra)
+    floors = load_thresholds(path).quality_floors
+    assert floors.routing_mrr_centroid == pytest.approx(0.70)
+    assert floors.routing_mrr_hybrid == pytest.approx(0.70)
+    assert floors.routing_precision_at_1_centroid == pytest.approx(0.60)
+    assert floors.routing_precision_at_1_hybrid == pytest.approx(0.60)
+
+
+def test_run_router_for_query_accepts_strategy_param() -> None:
+    """_run_router_for_query accepts strategy='centroid' without raising."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from archon_search.eval.runner import _run_router_for_query
+    from archon_search.collection_meta import CollectionMeta
+
+    mock_pipeline = MagicMock()
+    mock_embedder = MagicMock()
+    mock_embedder.model_name = "eval-sha256-v1"
+    mock_pipeline._embedder = mock_embedder
+
+    metas = [
+        CollectionMeta(name="code", centroid=[0.1] * 128, embedding_model="eval-sha256-v1"),
+        CollectionMeta(name="docs", centroid=[0.5] * 128, embedding_model="eval-sha256-v1"),
+    ]
+
+    with patch("archon_search.router.MultiCollectionRouter.select", new_callable=AsyncMock) as mock_select:
+        mock_select.return_value = [metas[0]]
+        result = asyncio.run(
+            _run_router_for_query(mock_pipeline, "test query", metas, strategy="centroid")
+        )
+    assert isinstance(result, list)
+    assert all(isinstance(n, str) for n in result)
+
+
+def test_run_router_for_query_returns_full_ranked_order() -> None:
+    """With 3 collections, shortlist_size=3, confidence_threshold=0.0, all 3 names returned in score order."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from archon_search.eval.runner import _run_router_for_query
+    from archon_search.collection_meta import CollectionMeta
+
+    mock_pipeline = MagicMock()
+    mock_embedder = MagicMock()
+    mock_embedder.model_name = "eval-sha256-v1"
+    mock_pipeline._embedder = mock_embedder
+
+    metas = [
+        CollectionMeta(name="alpha", centroid=[0.9] * 128, embedding_model="eval-sha256-v1"),
+        CollectionMeta(name="beta", centroid=[0.5] * 128, embedding_model="eval-sha256-v1"),
+        CollectionMeta(name="gamma", centroid=[0.1] * 128, embedding_model="eval-sha256-v1"),
+    ]
+    # Router returns all 3 in score order (highest to lowest)
+    expected_order = [metas[0], metas[1], metas[2]]
+
+    with patch("archon_search.router.MultiCollectionRouter.select", new_callable=AsyncMock) as mock_select:
+        mock_select.return_value = expected_order
+        result = asyncio.run(
+            _run_router_for_query(mock_pipeline, "test query", metas, strategy="centroid")
+        )
+
+    assert len(result) == 3, f"Expected 3 collections, got {len(result)}"
+    assert all(isinstance(n, str) for n in result)
+    assert result == ["alpha", "beta", "gamma"], f"Expected score-ordered names, got {result}"
+
+
+def test_assert_thresholds_enforces_routing_mrr_centroid_floor() -> None:
+    """assert_thresholds fails when routing_mrr_centroid is below its floor."""
+    floors = _make_quality_floors(routing_mrr_centroid=0.80)
+    metrics = _make_metrics(routing_mrr_centroid=0.50)
+    thresholds = EvalThresholds(quality_floors=floors)
+    report = _make_report(metrics=metrics, thresholds=thresholds)
+    with pytest.raises(AssertionError, match="routing_mrr_centroid"):
+        assert_thresholds(report)
+
+
+def test_assert_thresholds_skips_routing_mrr_centroid_when_floor_none() -> None:
+    """No error when routing_mrr_centroid floor is None, even if metric is None."""
+    floors = _make_quality_floors(routing_mrr_centroid=None)
+    metrics = _make_metrics(routing_mrr_centroid=None)
+    thresholds = EvalThresholds(quality_floors=floors)
+    report = _make_report(metrics=metrics, thresholds=thresholds)
+    assert_thresholds(report)  # must not raise

@@ -268,7 +268,7 @@ async def _run_router_for_query(
   - Checkpoint: `uv run pytest tests/eval/test_corpus_contract.py tests/eval/test_fixtures.py -x`
 
 #### Task 1.4 — Wire `ranked_collections` into runner and compute centroid baseline metric
-- [ ] **File**: `archon_search/eval/runner.py`, `archon_search/eval/metrics.py`
+- [x] **File**: `archon_search/eval/runner.py`, `archon_search/eval/metrics.py`
 - **Depends on**: Task 1.1, Task 1.2, Task 1.3
 - **Description**:
   - `_run_router_for_query` gains params `strategy: str = "centroid"` and `description_weight: float = DEFAULT_ROUTING_DESCRIPTION_WEIGHT` (both keyword-only). **Phase-ordering note**: in Task 1.4 (Phase 1) these params are accepted on `_run_router_for_query` but NOT yet passed to the `MultiCollectionRouter` constructor — Phase 1 must complete before Phase 4, and `MultiCollectionRouter.__init__` does not gain the params until Task 4.2. Only the centroid path (default values) is exercised here. The constructor passthrough is wired in Task 6.1 (which depends on Task 4.2). The signature is added in Phase 1 to keep the call sites stable as the feature lands.
