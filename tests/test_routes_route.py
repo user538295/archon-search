@@ -460,6 +460,48 @@ def test_build_router_called_once_per_request(tmp_path: Path) -> None:
     assert spy.call_count == 2
 
 
+# ---------------------------------------------------------------------------
+# 15. _build_router passes strategy and description_weight from config
+# ---------------------------------------------------------------------------
+def test_build_router_passes_strategy(tmp_path: Path) -> None:
+    """_build_router must pass strategy and description_weight to MultiCollectionRouter."""
+    from unittest.mock import call
+    from archon_search.server.routes_route import _build_router
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.routing_strategy = "hybrid"
+    config.routing_description_weight = 0.7
+
+    with patch(
+        "archon_search.server.routes_route.MultiCollectionRouter"
+    ) as mock_cls:
+        mock_cls.return_value = MagicMock()
+        _build_router(config, shortlist_size=5, embedder=MagicMock())
+
+    _, kwargs = mock_cls.call_args
+    assert kwargs.get("strategy") == "hybrid"
+    assert kwargs.get("description_weight") == 0.7
+
+
+def test_build_router_default_weight_matches_constant(tmp_path: Path) -> None:
+    """With default config (empty TOML), description_weight equals the constant."""
+    from archon_search.constants import DEFAULT_ROUTING_DESCRIPTION_WEIGHT
+    from archon_search.server.routes_route import _build_router
+
+    config = SearchConfig()  # all defaults
+    config.db_path = str(tmp_path / "search")
+
+    with patch(
+        "archon_search.server.routes_route.MultiCollectionRouter"
+    ) as mock_cls:
+        mock_cls.return_value = MagicMock()
+        _build_router(config, shortlist_size=5, embedder=MagicMock())
+
+    _, kwargs = mock_cls.call_args
+    assert kwargs.get("description_weight") == DEFAULT_ROUTING_DESCRIPTION_WEIGHT
+
+
 def test_app_state_has_no_router_attribute(tmp_path: Path) -> None:
     """No router is ever stashed on app.state.
 

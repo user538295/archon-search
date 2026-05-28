@@ -51,6 +51,8 @@ def _build_router(
         shortlist_size=shortlist_size,
         confidence_threshold=config.routing_confidence_threshold,
         embedding_model=config.embedding_model,
+        strategy=config.routing_strategy,
+        description_weight=config.routing_description_weight,
     )
 
 

@@ -627,6 +627,7 @@ def create_app(
             for r in results:
                 d = asdict(r)
                 d.pop("centroid", None)
+                d.pop("description_embedding", None)
                 output.append(d)
             return output
         except Exception as exc:
@@ -634,11 +635,24 @@ def create_app(
             return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.tool()
-    async def get_collections_meta() -> list[dict[str, Any]]:
-        """Return full CollectionMeta for all collections, including centroid vectors."""
+    async def get_collections_meta(
+        include_description_embedding: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Return full CollectionMeta for all collections, including centroid vectors.
+
+        ``description_embedding`` is stripped by default because it can significantly
+        increase payload size at scale (one dense vector per collection). Pass
+        ``include_description_embedding=True`` to retain the field.
+        """
         try:
             results = await pipeline.get_all_collections_meta()
-            return [asdict(r) for r in results]
+            output = []
+            for r in results:
+                d = asdict(r)
+                if not include_description_embedding:
+                    d.pop("description_embedding", None)
+                output.append(d)
+            return output
         except Exception as exc:
             logger.exception("get_collections_meta failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
