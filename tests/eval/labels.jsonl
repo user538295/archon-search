@@ -34,3 +34,11 @@
 {"query_id": "q-route-01", "doc_id": "code-003", "grade": 1}
 {"query_id": "q-route-02", "doc_id": "mixed-003", "grade": 2}
 {"query_id": "q-route-02", "doc_id": "docs-014", "grade": 1}
+{"query_id": "q-route-03", "doc_id": "faq-001", "grade": 2}
+{"query_id": "q-route-03", "doc_id": "faq-005", "grade": 1}
+{"query_id": "q-route-04", "doc_id": "faq-002", "grade": 2}
+{"query_id": "q-route-04", "doc_id": "faq-004", "grade": 1}
+{"query_id": "q-route-05", "doc_id": "code-015", "grade": 2}
+{"query_id": "q-route-05", "doc_id": "code-012", "grade": 1}
+{"query_id": "q-route-06", "doc_id": "docs-005", "grade": 2}
+{"query_id": "q-route-06", "doc_id": "docs-003", "grade": 1}

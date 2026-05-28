@@ -25,3 +25,7 @@
 {"query_id": "q-mixed-05", "text": "health check endpoint 503 degraded subsystem", "collection": "mixed", "metric_scope": "retrieval"}
 {"query_id": "q-route-01", "text": "how to configure rate limiting for the API", "collection": null, "metric_scope": "routing"}
 {"query_id": "q-route-02", "text": "what embedding model should I use for code search", "collection": null, "metric_scope": "routing"}
+{"query_id": "q-route-03", "text": "password reset troubleshoot account locked credentials", "collection": null, "metric_scope": "routing"}
+{"query_id": "q-route-04", "text": "billing subscription invoice refund account expiry", "collection": null, "metric_scope": "routing"}
+{"query_id": "q-route-05", "text": "implement priority queue scheduler task worker", "collection": null, "metric_scope": "routing"}
+{"query_id": "q-route-06", "text": "deployment environment variables production server configuration", "collection": null, "metric_scope": "routing"}

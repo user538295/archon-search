@@ -1,3 +1,4 @@
 {"name": "code", "description": "Python source code: utilities, algorithms, async patterns, and system components"}
 {"name": "docs", "description": "Prose documentation: architecture guides, API references, configuration, deployment, and security"}
 {"name": "mixed", "description": "Mixed content: architectural decision records (ADRs) with code samples, design documents with examples"}
+{"name": "faq", "description": "Frequently asked questions covering password troubleshooting, billing and subscription management, software installation, license activation, and common error message resolutions"}

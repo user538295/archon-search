@@ -48,3 +48,8 @@
 {"doc_id": "mixed-011", "collection": "mixed", "relative_path": "mixed/release_process.md"}
 {"doc_id": "mixed-012", "collection": "mixed", "relative_path": "mixed/healthcheck_handler.py"}
 {"doc_id": "mixed-013", "collection": "mixed", "relative_path": "mixed/lancedb_store_example.py"}
+{"doc_id": "faq-001", "collection": "faq", "relative_path": "faq/password_reset.md"}
+{"doc_id": "faq-002", "collection": "faq", "relative_path": "faq/billing_subscription.md"}
+{"doc_id": "faq-003", "collection": "faq", "relative_path": "faq/installation_wizard.md"}
+{"doc_id": "faq-004", "collection": "faq", "relative_path": "faq/license_activation.md"}
+{"doc_id": "faq-005", "collection": "faq", "relative_path": "faq/common_error_messages.md"}

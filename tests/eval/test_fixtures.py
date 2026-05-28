@@ -401,3 +401,154 @@ def test_build_doc_collection_map_with_multiple_collections(tmp_path: Path) -> N
 def test_build_doc_collection_map_with_empty_corpus() -> None:
     corpus = EvalCorpus(documents=[], queries=[], labels=[])
     assert build_doc_collection_map(corpus) == {}
+
+
+# ---------------------------------------------------------------------------
+# B4 Task 1.3 — FAQ collection fixture expansion
+# ---------------------------------------------------------------------------
+
+_EVAL_DIR = Path(__file__).parent
+_CORPUS_ROOT = _EVAL_DIR
+
+
+def test_fixture_faq_collection_in_routing_collections() -> None:
+    """routing/collections.jsonl must contain a collection named 'faq'."""
+    import json
+    cols_file = _CORPUS_ROOT / "routing" / "collections.jsonl"
+    assert cols_file.exists(), f"routing/collections.jsonl not found at {cols_file}"
+    names = [json.loads(line)["name"] for line in cols_file.read_text().splitlines() if line.strip()]
+    assert "faq" in names, f"'faq' not found in routing collections: {names}"
+
+
+def test_fixture_faq_documents_present() -> None:
+    """documents.jsonl must have at least 5 entries with collection == 'faq'."""
+    import json
+    docs_file = _CORPUS_ROOT / "documents.jsonl"
+    faq_docs = [
+        json.loads(line)
+        for line in docs_file.read_text().splitlines()
+        if line.strip() and json.loads(line).get("collection") == "faq"
+    ]
+    assert len(faq_docs) >= 5, f"Expected ≥5 faq documents, got {len(faq_docs)}"
+
+
+def test_fixture_routing_queries_expanded() -> None:
+    """queries.jsonl must have ≥6 routing-scope entries after B4 expansion."""
+    import json
+    queries_file = _CORPUS_ROOT / "queries.jsonl"
+    routing = [
+        json.loads(line)
+        for line in queries_file.read_text().splitlines()
+        if line.strip() and json.loads(line).get("metric_scope") == "routing"
+    ]
+    assert len(routing) >= 6, f"Expected ≥6 routing queries, got {len(routing)}"
+
+
+def test_fixture_all_routing_collections_have_scorable_centroids() -> None:
+    """Every collection in routing/collections.jsonl must have a non-None, non-zero centroid.
+
+    Computes centroids via the deterministic SHA-256 eval embedder over corpus files.
+    This is the precondition that ensures no unscored-fallback entries contaminate
+    the ranked list during eval runs.
+    """
+    import json
+    import math
+    from archon_search.eval.backends import EvalEmbedderBackend
+
+    cols_file = _CORPUS_ROOT / "routing" / "collections.jsonl"
+    collections = [json.loads(l) for l in cols_file.read_text().splitlines() if l.strip()]
+    embedder = EvalEmbedderBackend()
+
+    for col in collections:
+        name = col["name"]
+        corpus_dir = _CORPUS_ROOT / "corpus" / name
+        assert corpus_dir.exists(), f"corpus/{name}/ directory missing"
+        files = list(corpus_dir.iterdir())
+        assert files, f"corpus/{name}/ has no files"
+
+        texts = [f.read_text(encoding="utf-8") for f in files]
+        vecs = embedder.encode(texts)
+
+        dim = len(vecs[0])
+        centroid = [sum(v[i] for v in vecs) / len(vecs) for i in range(dim)]
+        norm = math.sqrt(sum(c * c for c in centroid))
+        assert norm > 0, f"collection '{name}' has a zero-norm centroid"
+
+
+def test_fixture_faq_vocab_distinct_from_other_collections() -> None:
+    """FAQ queries must have higher centroid similarity to 'faq' than to 'code' or 'docs'.
+
+    Also verifies the FAQ description has higher cosine similarity to the FAQ
+    corpus centroid than to 'code'/'docs' corpus centroids.
+    Uses the SHA-256 bag-of-words deterministic embedder.
+    """
+    import json
+    import math
+    from archon_search.eval.backends import EvalEmbedderBackend
+
+    embedder = EvalEmbedderBackend()
+
+    def _cosine(a: list[float], b: list[float]) -> float:
+        dot = sum(x * y for x, y in zip(a, b))
+        na = math.sqrt(sum(x * x for x in a))
+        nb = math.sqrt(sum(x * x for x in b))
+        if na == 0 or nb == 0:
+            return 0.0
+        return dot / (na * nb)
+
+    def _centroid(texts: list[str]) -> list[float]:
+        vecs = embedder.encode(texts)
+        dim = len(vecs[0])
+        c = [sum(v[i] for v in vecs) / len(vecs) for i in range(dim)]
+        return c
+
+    def _corpus_texts(name: str) -> list[str]:
+        corpus_dir = _CORPUS_ROOT / "corpus" / name
+        return [f.read_text(encoding="utf-8") for f in sorted(corpus_dir.iterdir())]
+
+    faq_centroid = _centroid(_corpus_texts("faq"))
+    code_centroid = _centroid(_corpus_texts("code"))
+    docs_centroid = _centroid(_corpus_texts("docs"))
+
+    # Get FAQ routing queries
+    queries_file = _CORPUS_ROOT / "queries.jsonl"
+    routing_queries = [
+        json.loads(l)
+        for l in queries_file.read_text().splitlines()
+        if l.strip()
+    ]
+    faq_queries = [q["text"] for q in routing_queries if q.get("query_id") in {"q-route-03", "q-route-04"}]
+    assert faq_queries, "No FAQ routing queries (q-route-03, q-route-04) found"
+
+    # Note: docs/troubleshooting.md contains "troubleshoot" which overlaps with FAQ
+    # vocabulary. Under the bag-of-words SHA-256 embedder, centroid-level similarity
+    # is sufficient to discriminate because the FAQ corpus has many more troubleshoot-
+    # related tokens spread across 5 files vs the single mention in docs. This is
+    # accepted risk; production-model validation belongs to B6.
+    for qtext in faq_queries:
+        qvec = embedder.encode([qtext])[0]
+        sim_faq = _cosine(qvec, faq_centroid)
+        sim_code = _cosine(qvec, code_centroid)
+        sim_docs = _cosine(qvec, docs_centroid)
+        assert sim_faq > sim_code, (
+            f"FAQ query '{qtext}': sim_faq={sim_faq:.4f} not > sim_code={sim_code:.4f}"
+        )
+        assert sim_faq > sim_docs, (
+            f"FAQ query '{qtext}': sim_faq={sim_faq:.4f} not > sim_docs={sim_docs:.4f}"
+        )
+
+    # Verify FAQ description aligns more with FAQ centroid than code/docs
+    cols_file = _CORPUS_ROOT / "routing" / "collections.jsonl"
+    faq_col = next(
+        json.loads(l) for l in cols_file.read_text().splitlines()
+        if l.strip() and json.loads(l).get("name") == "faq"
+    )
+    desc = faq_col.get("description", "")
+    assert desc, "FAQ collection must have a 'description' field"
+    desc_vec = embedder.encode([desc])[0]
+    assert _cosine(desc_vec, faq_centroid) > _cosine(desc_vec, code_centroid), (
+        "FAQ description not more similar to faq centroid than code centroid"
+    )
+    assert _cosine(desc_vec, faq_centroid) > _cosine(desc_vec, docs_centroid), (
+        "FAQ description not more similar to faq centroid than docs centroid"
+    )

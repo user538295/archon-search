@@ -168,3 +168,37 @@ Default unmarked eval units (contract / fixture / metric tests, fast):
 ```
 uv run pytest --no-cov tests/eval/ -q
 ```
+
+## Routing fixture schema (B4)
+
+`routing/collections.jsonl` — one JSON object per line:
+
+```json
+{"name": "code", "description": "..."}
+{"name": "docs", "description": "..."}
+{"name": "mixed", "description": "..."}
+{"name": "faq", "description": "..."}
+```
+
+**Coupling rules** (all four files must be updated together):
+- `routing/collections.jsonl` — add collection `name` and `description`
+- `tests/eval/corpus/<name>/` — add ≥1 corpus file so the collection has a non-zero centroid
+- `documents.jsonl` — add entries with `"collection": "<name>"` pointing to corpus files
+- `queries.jsonl` — add routing-scope queries (`"metric_scope": "routing"`) targeting the new collection
+- `labels.jsonl` — add positive labels for every new routing query
+
+**Precondition**: every collection in `routing/collections.jsonl` must have ≥1 corpus file that produces a non-zero centroid under the deterministic SHA-256 eval embedder. Violating this causes the ranked list to contain unscored-fallback entries in arbitrary order, silently corrupting MRR. `test_fixture_all_routing_collections_have_scorable_centroids` enforces this.
+
+### Rank-sensitive routing metrics (added in B4 Task 1.2)
+
+`routing_mrr_centroid` / `routing_mrr_hybrid` — Mean Reciprocal Rank over routing-scope traces. Each routing query contributes RR = 1/position of the first gold collection in the ranked list (0.0 if not found). Macro-averaged.
+
+`routing_precision_at_1_centroid` / `routing_precision_at_1_hybrid` — fraction of routing queries where rank-1 is the gold collection.
+
+### Hybrid floor policy
+
+`routing_mrr_hybrid` floor is set to the measured `routing_mrr_centroid` baseline value (Δ ≥ 0 constraint): hybrid must be at least as good as the centroid baseline. A value below the floor fails the eval gate.
+
+### Threshold hash refresh note
+
+Adding routing queries or corpus files changes `eval_hash` and `thresholds_hash`. After B4 fixture changes, run `baselines/regenerate.py` to update both `baseline.json` and `baseline.md` before pushing.

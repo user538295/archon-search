@@ -246,7 +246,7 @@ async def _run_router_for_query(
   - Checkpoint: `uv run pytest tests/eval/test_metrics.py -x -k "routing_mrr or routing_p"`
 
 #### Task 1.3 — Expand routing fixtures (four-fixture coordinated edit)
-- [ ] **File**: `tests/eval/routing/collections.jsonl`, `tests/eval/corpus/faq/` (new directory + ≥5 files), `tests/eval/documents.jsonl`, `tests/eval/queries.jsonl`, `tests/eval/labels.jsonl`
+- [x] **File**: `tests/eval/routing/collections.jsonl`, `tests/eval/corpus/faq/` (new directory + ≥5 files), `tests/eval/documents.jsonl`, `tests/eval/queries.jsonl`, `tests/eval/labels.jsonl`
 - **Depends on**: nothing (fixture-only change)
 - **Description**:
   - Add a fourth routing collection `"faq"` with a description clearly distinct from `"code"`, `"docs"`, and `"mixed"` (e.g. `"Frequently asked questions: troubleshooting answers, how-to guides, and common error resolutions in plain language"`).
