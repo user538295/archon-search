@@ -491,7 +491,7 @@ async def _run_router_for_query(
   - Checkpoint: `uv run pytest tests/test_config.py -x -k "routing_strategy or routing_description_weight"`
 
 #### Task 5.2 — Wire new knobs through `_build_router` and MCP surface
-- [ ] **File**: `archon_search/server/routes_route.py`, `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/routes_route.py`, `archon_search/server/mcp.py`
 - **Depends on**: Task 5.1, Task 4.2
 - **Description**:
   - `_build_router` (in `routes_route.py`): pass `strategy=config.routing_strategy` and `description_weight=config.routing_description_weight` to `MultiCollectionRouter(...)`.
