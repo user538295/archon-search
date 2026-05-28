@@ -293,7 +293,7 @@ async def _run_router_for_query(
   - Checkpoint: `uv run pytest tests/eval/test_runner.py tests/eval/test_metrics.py -x --no-cov`
 
 #### Task 1.5 — Regenerate baseline for centroid routing metric + add `thresholds.toml` floor
-- [ ] **File**: `tests/eval/baselines/baseline.json`, `tests/eval/baselines/baseline.md`, `tests/eval/thresholds.toml`
+- [x] **File**: `tests/eval/baselines/baseline.json`, `tests/eval/baselines/baseline.md`, `tests/eval/thresholds.toml`
 - **Depends on**: Task 1.4
 - **Description**:
   - Run the calibration command from `baselines/regenerate.py` (or the command documented in `baseline.json`) to produce a fresh baseline that includes the new `routing_mrr_centroid` and `routing_precision_at_1_centroid` keys in the flat metric dict. Also regenerates `eval_hash`, `runtime_config_hash`, `thresholds_hash` to match the expanded fixture and updated runner.

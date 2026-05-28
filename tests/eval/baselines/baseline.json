@@ -5,15 +5,19 @@
     "latency_p50_ms": null,
     "latency_p95_ms": null,
     "mrr": 1.0,
-    "ndcg_at_10": 0.9869733570744081,
-    "ndcg_at_5": 0.9869733570744081,
+    "ndcg_at_10": 0.9793677493892313,
+    "ndcg_at_5": 0.9756955953575489,
     "recall_at_1": 0.86,
-    "recall_at_3": 0.96,
-    "recall_at_5": 1.0,
-    "reranker_lift": 0.027339482515302826,
-    "routing_accuracy": 0.9259259259259259
+    "recall_at_3": 0.94,
+    "recall_at_5": 0.98,
+    "reranker_lift": 0.02302741700728006,
+    "routing_accuracy": 0.9032258064516129,
+    "routing_mrr_centroid": 0.6666666666666666,
+    "routing_mrr_hybrid": null,
+    "routing_precision_at_1_centroid": 0.6666666666666666,
+    "routing_precision_at_1_hybrid": null
   },
   "runtime_config_hash": "71d933f9eeed1406f18cb6026d4c0d72e7a4287654100dd20a9d4385a1226589",
-  "thresholds_hash": "37be49028db48929e9ca557e6db7165a63cc4d5b0177ab2ed25ac2922f97fe9a",
+  "thresholds_hash": "d9f73791b2b207caf57030e6a9f2f38be67510d7ba12201fa9a6238bd9ac6c4c",
   "waiver_ids": {}
 }
