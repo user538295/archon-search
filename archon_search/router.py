@@ -4,11 +4,12 @@ from __future__ import annotations
 import json
 import logging
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
 from archon_search.collection_meta import CollectionMeta
+from archon_search.constants import DEFAULT_ROUTING_DESCRIPTION_WEIGHT
 from archon_search.observability import record_stage
 
 if TYPE_CHECKING:
@@ -42,12 +43,16 @@ class MultiCollectionRouter:
         confidence_threshold: float,
         embedding_model: str,
         initial_metadata: list[CollectionMeta] | None = None,
+        strategy: Literal["centroid", "hybrid"] = "centroid",
+        description_weight: float = DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
     ) -> None:
         self._search_url = search_url
         self._embedder = embedder
         self._shortlist_size = shortlist_size
         self._confidence_threshold = confidence_threshold
         self._embedding_model = embedding_model
+        self._strategy = strategy
+        self._description_weight = description_weight
 
         self._cached_metadata: list[CollectionMeta] | None = (
             list(initial_metadata) if initial_metadata is not None else None
@@ -83,7 +88,7 @@ class MultiCollectionRouter:
             return self._cached_metadata
 
         arguments: dict[str, Any] = {}
-        if getattr(self, "_strategy", "centroid") == "hybrid":
+        if self._strategy == "hybrid":
             arguments["include_description_embedding"] = True
         payload = {
             "jsonrpc": "2.0",
@@ -145,12 +150,19 @@ class MultiCollectionRouter:
         query_embedding: list[float],
         collections: list[CollectionMeta],
     ) -> list[tuple[CollectionMeta, float | None]]:
-        """Score collections by centroid cosine similarity. Shared by rank() and rank_with_scores().
+        """Score collections for routing. Shared by rank() and rank_with_scores().
 
         Scored entries (centroid present AND embedding_model matches) come first, sorted by
         similarity descending with an ascending ``meta.name`` tie-break for equal scores.
         Unscored entries (None centroid or mismatched model) are paired with ``None`` and
         appended last in ascending ``meta.name`` order.
+
+        Under ``strategy="centroid"``: score = cos(query, centroid).
+        Under ``strategy="hybrid"``: blend centroid and description_embedding when ALL hold:
+          - col.description_embedding is not None
+          - len(col.description_embedding) == len(query_embedding)
+          - col.description_embedding is not all-zeros
+          Otherwise falls back to centroid-only for that collection.
         """
         with record_stage("route"):
             scored: list[tuple[CollectionMeta, float]] = []
@@ -158,7 +170,21 @@ class MultiCollectionRouter:
 
             for col in collections:
                 if col.centroid is not None and col.embedding_model == self._embedding_model:
-                    sim = _cosine_similarity(query_embedding, col.centroid)
+                    centroid_sim = _cosine_similarity(query_embedding, col.centroid)
+                    if self._strategy == "hybrid":
+                        desc = col.description_embedding
+                        if (
+                            desc is not None
+                            and len(desc) == len(query_embedding)
+                            and any(x != 0.0 for x in desc)
+                        ):
+                            desc_sim = _cosine_similarity(query_embedding, desc)
+                            w = self._description_weight
+                            sim = (1.0 - w) * centroid_sim + w * desc_sim
+                        else:
+                            sim = centroid_sim
+                    else:
+                        sim = centroid_sim
                     scored.append((col, sim))
                 else:
                     unscored.append(col)

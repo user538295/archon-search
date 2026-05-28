@@ -26,6 +26,8 @@ def _router(
     embedding_model: str = "model-a",
     embedder: MagicMock | None = None,
     initial_metadata: list[CollectionMeta] | None = None,
+    strategy: str = "centroid",
+    description_weight: float = 0.3,
 ) -> MultiCollectionRouter:
     return MultiCollectionRouter(
         search_url="http://localhost:9999",
@@ -34,6 +36,8 @@ def _router(
         confidence_threshold=confidence_threshold,
         embedding_model=embedding_model,
         initial_metadata=initial_metadata,
+        strategy=strategy,  # type: ignore[arg-type]
+        description_weight=description_weight,
     )
 
 
@@ -851,7 +855,7 @@ async def test_fetch_metadata_passes_include_flag_under_hybrid() -> None:
 @pytest.mark.asyncio
 async def test_fetch_metadata_omits_include_flag_under_centroid() -> None:
     """Without _strategy set (default centroid), fetch_metadata sends empty arguments dict."""
-    router = _router()  # no _strategy set → getattr defaults to 'centroid'
+    router = _router(strategy="centroid")  # explicit centroid strategy
 
     captured_payloads: list[dict] = []
 
@@ -879,3 +883,220 @@ async def test_fetch_metadata_omits_include_flag_under_centroid() -> None:
 
     assert len(captured_payloads) == 1
     assert captured_payloads[0]["params"]["arguments"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Task 4.2 — hybrid routing strategy
+# ---------------------------------------------------------------------------
+
+
+def _meta_with_desc_emb(
+    name: str,
+    centroid: list[float] | None = None,
+    description_embedding: list[float] | None = None,
+    embedding_model: str = "model-a",
+) -> CollectionMeta:
+    return CollectionMeta(
+        name=name,
+        centroid=centroid,
+        embedding_model=embedding_model,
+        description_embedding=description_embedding,
+    )
+
+
+def test_centroid_strategy_identical_to_pre_b4() -> None:
+    """Centroid strategy returns exact cosine scores, ignoring description_embedding."""
+    import math
+
+    router = _router(strategy="centroid", confidence_threshold=0.0)
+    q = [1.0, 0.0, 0.0]
+    # c1 aligns with query → cosine 1.0; c2 = [0.6,0.8,0] → cosine 0.6
+    c1 = [1.0, 0.0, 0.0]
+    c2 = [0.6, 0.8, 0.0]
+    # description_embeddings point away from query; should be ignored
+    d1 = [0.0, 0.0, 1.0]
+    d2 = [0.0, 1.0, 0.0]
+    collections = [
+        _meta_with_desc_emb("col-a", centroid=c1, description_embedding=d1),
+        _meta_with_desc_emb("col-b", centroid=c2, description_embedding=d2),
+    ]
+    result = router._score_collections(q, collections)
+    # Both scored; sorted descending
+    names = [m.name for m, _ in result]
+    scores = [s for _, s in result]
+    assert names == ["col-a", "col-b"]
+    assert scores[0] is not None and abs(scores[0] - 1.0) < 1e-9
+    expected_b = 0.6 / math.sqrt(0.6**2 + 0.8**2)
+    assert scores[1] is not None and abs(scores[1] - expected_b) < 1e-9
+
+
+def test_hybrid_outranks_tight_off_topic_centroid() -> None:
+    """Hybrid: collection A with better description alignment beats B with better centroid."""
+    # query aligned with [1,0]
+    # col-a: diffuse centroid (low cosine to query) but description aligns well
+    # col-b: tight centroid scores higher alone
+    q = [1.0, 0.0]
+    col_a = _meta_with_desc_emb("col-a", centroid=[0.0, 1.0], description_embedding=[1.0, 0.0])
+    col_b = _meta_with_desc_emb("col-b", centroid=[1.0, 0.0], description_embedding=[0.0, 1.0])
+    # With w=0.8 blend:
+    # col-a: 0.2 * cos(q,c_a) + 0.8 * cos(q,d_a) = 0.2*0.0 + 0.8*1.0 = 0.8
+    # col-b: 0.2 * cos(q,c_b) + 0.8 * cos(q,d_b) = 0.2*1.0 + 0.8*0.0 = 0.2
+    router = _router(strategy="hybrid", description_weight=0.8, confidence_threshold=0.0)
+    result = router._score_collections(q, [col_a, col_b])
+    names = [m.name for m, _ in result]
+    scores = [s for _, s in result]
+    assert names[0] == "col-a", f"Expected col-a first but got {names}"
+    assert scores[0] is not None and scores[0] > scores[1]  # type: ignore[operator]
+
+
+def test_per_collection_centroid_fallback() -> None:
+    """Hybrid: collection with description_embedding=None uses centroid-only score, not unscored."""
+    q = [1.0, 0.0]
+    col_a = _meta_with_desc_emb("col-a", centroid=[1.0, 0.0], description_embedding=[0.5, 0.5])
+    col_b = _meta_with_desc_emb("col-b", centroid=[0.8, 0.6], description_embedding=None)
+    router = _router(strategy="hybrid", confidence_threshold=0.0)
+    result = router._score_collections(q, [col_a, col_b])
+    # col-b has no description_embedding but still gets a centroid score (not None)
+    score_by_name = {m.name: s for m, s in result}
+    assert score_by_name["col-b"] is not None, "col-b should be scored via centroid fallback"
+
+
+def test_hybrid_all_description_embeddings_none_degrades_to_centroid() -> None:
+    """Hybrid with all description_embedding=None → scores equal centroid scores exactly."""
+    q = [1.0, 0.0]
+    c_a = [1.0, 0.0]
+    c_b = [0.6, 0.8]
+    col_a = _meta_with_desc_emb("col-a", centroid=c_a, description_embedding=None)
+    col_b = _meta_with_desc_emb("col-b", centroid=c_b, description_embedding=None)
+
+    router_centroid = _router(strategy="centroid", confidence_threshold=0.0)
+    router_hybrid = _router(strategy="hybrid", confidence_threshold=0.0)
+
+    centroid_result = router_centroid._score_collections(q, [col_a, col_b])
+    hybrid_result = router_hybrid._score_collections(q, [col_a, col_b])
+
+    centroid_scores = {m.name: s for m, s in centroid_result}
+    hybrid_scores = {m.name: s for m, s in hybrid_result}
+
+    assert centroid_scores == hybrid_scores
+    names_centroid = [m.name for m, _ in centroid_result]
+    names_hybrid = [m.name for m, _ in hybrid_result]
+    assert names_centroid == names_hybrid
+
+
+def test_hybrid_dimensionality_mismatch_falls_back_to_centroid() -> None:
+    """Hybrid: description_embedding with wrong dimensionality → centroid-only score, no exception."""
+    q = [1.0, 0.0]
+    col_a = _meta_with_desc_emb("col-a", centroid=[1.0, 0.0], description_embedding=[0.5, 0.5, 0.7])
+    router = _router(strategy="hybrid", confidence_threshold=0.0)
+    result = router._score_collections(q, [col_a])
+    assert len(result) == 1
+    score = result[0][1]
+    assert score is not None
+    # centroid cosine of [1,0] vs [1,0] = 1.0
+    assert abs(score - 1.0) < 1e-9
+
+
+def test_hybrid_zero_norm_description_embedding_falls_back_to_centroid() -> None:
+    """Hybrid: description_embedding = all zeros → centroid-only score, no exception."""
+    q = [1.0, 0.0]
+    col_a = _meta_with_desc_emb("col-a", centroid=[1.0, 0.0], description_embedding=[0.0, 0.0])
+    router = _router(strategy="hybrid", confidence_threshold=0.0)
+    result = router._score_collections(q, [col_a])
+    score = result[0][1]
+    assert score is not None
+    assert abs(score - 1.0) < 1e-9
+
+
+def test_model_mismatch_description_embedding_ignored() -> None:
+    """Collection with description_embedding but mismatched model → goes to unscored tail."""
+    q = [1.0, 0.0]
+    col_mismatch = _meta_with_desc_emb(
+        "col-mismatch",
+        centroid=[1.0, 0.0],
+        description_embedding=[1.0, 0.0],
+        embedding_model="wrong-model",
+    )
+    router = _router(strategy="hybrid", embedding_model="model-a", confidence_threshold=0.0)
+    result = router._score_collections(q, [col_mismatch])
+    assert len(result) == 1
+    assert result[0][1] is None  # unscored because model mismatch
+
+
+def test_empty_embedding_model_remains_unscored_under_hybrid() -> None:
+    """Collection with embedding_model='' and description_embedding set → unscored tail."""
+    q = [1.0, 0.0]
+    col_empty_model = _meta_with_desc_emb(
+        "col-empty",
+        centroid=[1.0, 0.0],
+        description_embedding=[1.0, 0.0],
+        embedding_model="",
+    )
+    router = _router(strategy="hybrid", embedding_model="model-a", confidence_threshold=0.0)
+    result = router._score_collections(q, [col_empty_model])
+    assert result[0][1] is None  # unscored
+
+
+def test_weight_zero_equals_centroid() -> None:
+    """description_weight=0.0 → hybrid scores identical to centroid strategy."""
+    q = [1.0, 0.0]
+    col_a = _meta_with_desc_emb("col-a", centroid=[1.0, 0.0], description_embedding=[0.0, 1.0])
+    col_b = _meta_with_desc_emb("col-b", centroid=[0.6, 0.8], description_embedding=[1.0, 0.0])
+
+    router_centroid = _router(strategy="centroid", confidence_threshold=0.0)
+    router_hybrid_w0 = _router(strategy="hybrid", description_weight=0.0, confidence_threshold=0.0)
+
+    centroid_result = {m.name: s for m, s in router_centroid._score_collections(q, [col_a, col_b])}
+    hybrid_result = {m.name: s for m, s in router_hybrid_w0._score_collections(q, [col_a, col_b])}
+
+    for name in centroid_result:
+        assert centroid_result[name] is not None
+        assert hybrid_result[name] is not None
+        assert abs(centroid_result[name] - hybrid_result[name]) < 1e-9  # type: ignore[operator]
+
+
+def test_weight_one_pure_description_embedding() -> None:
+    """description_weight=1.0 → score = cos(q, description_embedding) when present."""
+    import math
+
+    q = [1.0, 0.0]
+    desc = [0.6, 0.8]
+    col_a = _meta_with_desc_emb("col-a", centroid=[1.0, 0.0], description_embedding=desc)
+    router = _router(strategy="hybrid", description_weight=1.0, confidence_threshold=0.0)
+    result = router._score_collections(q, [col_a])
+    score = result[0][1]
+    expected = 0.6 / math.sqrt(0.6**2 + 0.8**2)  # cos([1,0], [0.6,0.8])
+    assert score is not None and abs(score - expected) < 1e-9
+
+
+def test_confidence_gate_uses_blended_score() -> None:
+    """Confidence gate fires based on blended max score when using hybrid strategy."""
+    q = [1.0, 0.0]
+    # centroid barely above 0.0 threshold alone, but blend with description should pass threshold
+    # col-a: centroid cosine = 0.1 (low), description cosine = 1.0
+    # w=0.9: 0.1*0.1 + 0.9*1.0 = 0.91 → above threshold 0.5
+    col_a = _meta_with_desc_emb("col-a", centroid=[0.1, 0.995], description_embedding=[1.0, 0.0])
+    router = _router(strategy="hybrid", description_weight=0.9, confidence_threshold=0.5)
+    result = router.rank(q, [col_a])
+    assert len(result) == 1  # blended score passes the gate
+
+
+def test_hybrid_gate_fires_when_all_description_embeddings_none_and_centroids_below_threshold() -> None:
+    """Hybrid, all description_embedding=None, all centroid cosines below threshold → rank returns []."""
+    q = [1.0, 0.0]
+    col_a = _meta_with_desc_emb("col-a", centroid=[0.0, 1.0], description_embedding=None)
+    col_b = _meta_with_desc_emb("col-b", centroid=[0.1, 0.995], description_embedding=None)
+    router = _router(strategy="hybrid", confidence_threshold=0.5)
+    result = router.rank(q, [col_a, col_b])
+    # Both fall back to centroid; both below threshold 0.5
+    assert result == []
+
+
+def test_hybrid_does_not_spuriously_bypass_at_default_threshold() -> None:
+    """Hybrid with threshold=0.30, centroid max ≥ 0.30 → hybrid max also ≥ 0.30."""
+    q = [1.0, 0.0]
+    # centroid cosine = 0.8 → well above 0.30; blend should also be above 0.30
+    col_a = _meta_with_desc_emb("col-a", centroid=[0.8, 0.6], description_embedding=[0.5, 0.5])
+    router = _router(strategy="hybrid", confidence_threshold=0.30)
+    result = router.rank(q, [col_a])
+    assert len(result) == 1  # not spuriously bypassed

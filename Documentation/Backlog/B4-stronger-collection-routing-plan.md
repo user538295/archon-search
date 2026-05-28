@@ -425,7 +425,7 @@ async def _run_router_for_query(
   - Checkpoint: `uv run pytest tests/test_router.py -x -k "description_embedding or routing_fields or include_flag"`
 
 #### Task 4.2 — Implement `strategy` + `description_weight` in `MultiCollectionRouter`
-- [ ] **File**: `archon_search/router.py`
+- [x] **File**: `archon_search/router.py`
 - **Depends on**: Task 4.1, Task 2.1
 - **Description**:
   - Define a module-level constant in `archon_search/constants.py`: `DEFAULT_ROUTING_DESCRIPTION_WEIGHT: Final[float] = 0.3`. **Location rationale**: placing it in `constants.py` (rather than `router.py`) lets `config.py` import it without reversing the existing `config → router` import direction (`config.py` already imports nothing from `router.py`; pulling in `router.py` to read a default would create a new dependency edge). This is the single change point for the default weight; `MultiCollectionRouter.__init__`, the `SearchConfig` default, the `_run_router_for_query` default, and `archon-search.toml.example` all reference / mirror this constant rather than hardcoding `0.3`. `router.py` imports it as `from archon_search.constants import DEFAULT_ROUTING_DESCRIPTION_WEIGHT`.
