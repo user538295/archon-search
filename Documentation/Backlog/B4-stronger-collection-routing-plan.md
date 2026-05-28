@@ -470,7 +470,7 @@ async def _run_router_for_query(
 > **Releasable**: after Task 5.2, operators can set `routing_strategy = "hybrid"` in `archon-search.toml` and the server passes it through to the router. MCP payload is correctly stripped/extended.
 
 #### Task 5.1 — Config parsing for `routing_strategy` and `routing_description_weight`
-- [ ] **File**: `archon_search/config.py`
+- [x] **File**: `archon_search/config.py`
 - **Depends on**: nothing (config is independent of router implementation)
 - **Description**:
   - `SearchConfig` gains `routing_strategy: str = "centroid"` and `routing_description_weight: float = DEFAULT_ROUTING_DESCRIPTION_WEIGHT` (imported from `archon_search.constants` — see Task 4.2 for the location rationale; `config.py` must NOT import from `router.py` to avoid reversing the existing `config → router` import direction). Do not hardcode `0.3` here.

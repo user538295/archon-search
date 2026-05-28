@@ -589,3 +589,65 @@ def test_observability_section_absent_uses_defaults(tmp_path: Path) -> None:
     config = load_config(path=toml_file)
     assert config.observability.stage_timings_enabled is True
     assert config.observability.request_id_header == "X-Request-ID"
+
+
+# ---------------------------------------------------------------------------
+# routing_strategy and routing_description_weight (Task 5.1)
+# ---------------------------------------------------------------------------
+
+
+def test_routing_strategy_default(tmp_path: Path) -> None:
+    """Config loaded from empty TOML has routing_strategy == 'centroid'."""
+    config = load_config(path=tmp_path / "nonexistent.toml")
+    assert config.routing_strategy == "centroid"
+
+
+def test_routing_strategy_hybrid_parsed(tmp_path: Path) -> None:
+    """TOML with routing_strategy = 'hybrid' → config.routing_strategy == 'hybrid'."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[routing]\nrouting_strategy = "hybrid"\n', encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.routing_strategy == "hybrid"
+
+
+def test_routing_strategy_invalid_raises(tmp_path: Path) -> None:
+    """TOML with routing_strategy = 'cosine' → ConfigError."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[routing]\nrouting_strategy = "cosine"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="routing_strategy must be"):
+        load_config(path=toml_file)
+
+
+def test_routing_description_weight_default() -> None:
+    """Default routing_description_weight equals DEFAULT_ROUTING_DESCRIPTION_WEIGHT."""
+    from archon_search.constants import DEFAULT_ROUTING_DESCRIPTION_WEIGHT
+
+    config = SearchConfig()
+    assert config.routing_description_weight == DEFAULT_ROUTING_DESCRIPTION_WEIGHT
+
+
+def test_routing_description_weight_boundary_zero(tmp_path: Path) -> None:
+    """routing_description_weight = 0.0 parses without error."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[routing]\nrouting_description_weight = 0.0\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.routing_description_weight == 0.0
+
+
+def test_routing_description_weight_boundary_one(tmp_path: Path) -> None:
+    """routing_description_weight = 1.0 parses without error."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[routing]\nrouting_description_weight = 1.0\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.routing_description_weight == 1.0
+
+
+def test_routing_description_weight_out_of_range_raises(tmp_path: Path) -> None:
+    """routing_description_weight = 1.1 and -0.1 → ConfigError."""
+    for value in (1.1, -0.1):
+        toml_file = tmp_path / f"bad_{value}.toml"
+        toml_file.write_text(
+            f"[routing]\nrouting_description_weight = {value}\n", encoding="utf-8"
+        )
+        with pytest.raises(ConfigError, match="routing_description_weight must be"):
+            load_config(path=toml_file)

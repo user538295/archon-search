@@ -51,6 +51,12 @@ routing_shortlist_size = 8
 routing_confidence_threshold = 0.30
 # Maximum number of collections searched concurrently per query.
 max_parallel_collections = 3
+# Routing strategy: "centroid" (pure vector centroid similarity) or
+# "hybrid" (blends centroid score with description-embedding cosine similarity).
+routing_strategy = "centroid"
+# Weight [0.0, 1.0] for description-embedding cosine in hybrid routing.
+# Ignored when routing_strategy = "centroid".
+routing_description_weight = 0.3
 
 [collections]
 # Collections that are always included in every search, regardless of routing.

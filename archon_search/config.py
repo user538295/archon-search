@@ -9,6 +9,8 @@ from pathlib import Path
 
 import tomlkit
 
+from archon_search.constants import DEFAULT_ROUTING_DESCRIPTION_WEIGHT
+
 _logger = logging.getLogger("archon.search")
 
 
@@ -52,6 +54,8 @@ class SearchConfig:
     routing_shortlist_size: int = 8
     routing_confidence_threshold: float = 0.30
     max_parallel_collections: int = 3
+    routing_strategy: str = "centroid"
+    routing_description_weight: float = DEFAULT_ROUTING_DESCRIPTION_WEIGHT
     # [collections]
     pinned_collections: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)
@@ -215,6 +219,16 @@ def load_config(path: Path | None = None) -> SearchConfig:
         if max_parallel <= 0:
             raise ConfigError(f"max_parallel_collections must be > 0, got {max_parallel}")
         config.max_parallel_collections = max_parallel
+    if "routing_strategy" in routing:
+        strategy = str(routing["routing_strategy"])
+        if strategy not in {"centroid", "hybrid"}:
+            raise ConfigError(f"routing_strategy must be 'centroid' or 'hybrid', got {strategy!r}")
+        config.routing_strategy = strategy
+    if "routing_description_weight" in routing:
+        description_weight = _coerce_float(routing["routing_description_weight"], "routing_description_weight")
+        if not 0.0 <= description_weight <= 1.0:
+            raise ConfigError(f"routing_description_weight must be in [0.0, 1.0], got {description_weight}")
+        config.routing_description_weight = description_weight
 
     collections = doc.get("collections", {})
     if "pinned_collections" in collections:
