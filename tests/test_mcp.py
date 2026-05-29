@@ -29,17 +29,52 @@ class _StubFastMCP:
         return decorator
 
 
-if "fastmcp" not in sys.modules:
-    _fastmcp = types.ModuleType("fastmcp")
-    _fastmcp.FastMCP = _StubFastMCP  # type: ignore[attr-defined]
-    _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules["fastmcp"] = _fastmcp
+_MCP_MODULE = "archon_search.server.mcp"
+_FASTMCP_MODULE = "fastmcp"
+
+# Always load the real fastmcp classes directly from source, regardless of
+# what's in sys.modules at collection time. This survives any collection order.
+try:
+    import mcp.server.fastmcp as _mcp_server_fastmcp  # type: ignore[import]
+    _real_fastmcp_class = _mcp_server_fastmcp.FastMCP
+    _real_fastmcp_context = getattr(_mcp_server_fastmcp, "Context", None)
+except (ImportError, AttributeError):
+    _real_fastmcp_class = None
+    _real_fastmcp_context = None
+
+# Install stub into sys.modules["fastmcp"] so archon_search.server.mcp can be imported.
+if _FASTMCP_MODULE not in sys.modules:
+    _fastmcp_mod = types.ModuleType(_FASTMCP_MODULE)
+    _fastmcp_mod.FastMCP = _StubFastMCP  # type: ignore[attr-defined]
+    _fastmcp_mod.Context = type("Context", (), {})  # type: ignore[attr-defined]
+    sys.modules[_FASTMCP_MODULE] = _fastmcp_mod
 else:
-    # Already imported — patch the class so create_app picks up our stub.
-    sys.modules["fastmcp"].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
+    sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
 
 from archon_search.progress import CollectionProgress, IndexingState, IndexingStatus, IndexingStateStore
 from archon_search.server.mcp import _needs_install_trigger
+
+# Restore real FastMCP immediately after the module-level import so that other
+# test modules (test_mcp_auth.py, test_mcp_search.py) see the real class whether
+# they are collected before or after this module.
+if _real_fastmcp_class is not None:
+    sys.modules[_FASTMCP_MODULE].FastMCP = _real_fastmcp_class  # type: ignore[attr-defined]
+    if _real_fastmcp_context is not None:
+        sys.modules[_FASTMCP_MODULE].Context = _real_fastmcp_context  # type: ignore[attr-defined]
+sys.modules.pop(_MCP_MODULE, None)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _stub_fastmcp_for_module():
+    """Reinstall _StubFastMCP only for this module's test execution, then restore."""
+    sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
+    sys.modules.pop(_MCP_MODULE, None)  # force reload with stub in _get_tool_fn
+    yield
+    if _real_fastmcp_class is not None:
+        sys.modules[_FASTMCP_MODULE].FastMCP = _real_fastmcp_class  # type: ignore[attr-defined]
+        if _real_fastmcp_context is not None:
+            sys.modules[_FASTMCP_MODULE].Context = _real_fastmcp_context  # type: ignore[attr-defined]
+    sys.modules.pop(_MCP_MODULE, None)
 
 
 # ---------------------------------------------------------------------------
