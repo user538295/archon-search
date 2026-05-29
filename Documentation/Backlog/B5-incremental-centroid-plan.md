@@ -555,7 +555,7 @@ centroid_recompute_threshold: int = 10_000
 > **Releasable**: after Task 5.2 — `ingest_directory` no longer writes sum/count/centroid; `update_description` is the sole description writer; the pipeline checks the `needs_recompute` signal and calls `recompute_collection_meta` when needed.
 
 #### Task 5.1 — `store.update_description` partial-write method
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - `async def update_description(self, collection: str, description: str | None, last_described: "datetime | None", described_at_doc_count: "int | None", last_indexed: "datetime | None", namespace: str = DEFAULT_NAMESPACE) -> None`:

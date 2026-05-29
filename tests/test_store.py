@@ -5806,3 +5806,124 @@ def test_delete_by_source_path_forwards_namespace(tmp_path) -> None:
             mock_del.assert_awaited_once_with(col, expected_doc_id, namespace="ns1")
     finally:
         asyncio.run(store.disconnect())
+
+
+# ---------------------------------------------------------------------------
+# B5 Task 5.1 — store.update_description partial-write
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_description_writes_description_field(tmp_path) -> None:
+    """update_description sets the description field on an existing meta row."""
+    from archon_search.collection_meta import CollectionMeta
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        col = "desc_col"
+        await store.ensure_collection(col, _DIM)
+        await store.update_collection_meta(CollectionMeta(name=col, chunk_count=1))
+        await store.update_description(col, "my description", None, None, None)
+        meta = await store.get_collection_meta(col)
+        assert meta is not None
+        assert meta.description == "my description"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_update_description_does_not_touch_centroid_sum(tmp_path) -> None:
+    """update_description does not alter centroid_sum, chunk_count, or doc_count."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "desc_no_touch"
+        await store.ensure_collection(col, 2)
+        doc = _doc_id()
+        chunks = [_chunk(doc, 0, dim=2), _chunk(doc, 1, dim=2)]
+        await store.ingest_chunks(col, chunks, embedding_model="m")
+        meta_before = await store.get_collection_meta(col)
+        assert meta_before is not None
+        await store.update_description(col, "new desc", None, None, None)
+        meta_after = await store.get_collection_meta(col)
+        assert meta_after.centroid_sum == meta_before.centroid_sum
+        assert meta_after.chunk_count == meta_before.chunk_count
+        assert meta_after.doc_count == meta_before.doc_count
+        assert meta_after.description == "new desc"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_update_description_noop_when_no_meta_row(tmp_path) -> None:
+    """update_description with no prior meta row raises no exception and creates no row."""
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        col = "desc_no_meta"
+        await store.ensure_collection(col, _DIM)
+        await store.update_description(col, "desc", None, None, None)
+        meta = await store.get_collection_meta(col)
+        assert meta is None
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_update_description_timeout_skips_write(tmp_path, caplog) -> None:
+    """Lock held externally → update_description returns silently (no StoreBusyError) and logs warning."""
+    import logging
+    from archon_search.collection_meta import CollectionMeta
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        col = "desc_timeout"
+        await store.ensure_collection(col, _DIM)
+        doc = _doc_id()
+        await store.ingest_chunks(col, [_chunk(doc, 0)])
+        lock = store._lock_for(col)
+        await lock.acquire()
+        try:
+            with caplog.at_level(logging.WARNING, logger="archon"):
+                await store.update_description(col, "new desc", None, None, None)
+            assert any(
+                col in record.message and "lock timeout" in record.message
+                for record in caplog.records
+            )
+            meta = await store.get_collection_meta(col)
+            assert meta is None or meta.description != "new desc"
+        finally:
+            lock.release()
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_update_description_concurrent_with_ingest(tmp_path) -> None:
+    """Concurrent ingest_chunks and update_description — centroid_sum correct, description set."""
+    import asyncio
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "desc_concurrent"
+        await store.ensure_collection(col, 2)
+        doc = _doc_id()
+
+        async def do_ingest():
+            await store.ingest_chunks(col, [_chunk(doc, 0, dim=2)], embedding_model="m")
+
+        async def do_desc():
+            await store.update_description(col, "concurrent desc", None, None, None)
+
+        await asyncio.gather(do_ingest(), do_desc())
+        meta = await store.get_collection_meta(col)
+        assert meta is not None
+        assert meta.chunk_count == 1
+        assert meta.description == "concurrent desc"
+    finally:
+        await store.disconnect()

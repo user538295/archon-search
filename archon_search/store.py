@@ -703,6 +703,55 @@ class SearchStore:
         finally:
             lock.release()
 
+    async def update_description(
+        self,
+        collection: str,
+        description: "str | None",
+        last_described: "datetime | None",
+        described_at_doc_count: "int | None",
+        last_indexed: "datetime | None",
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> None:
+        """Partial-write description/timestamp fields without touching centroid fields.
+
+        On lock timeout, logs a warning and returns silently (no StoreBusyError).
+        Description is cosmetic — stalling indefinitely behind reindex_metadata is
+        worse than skipping one description update.
+        """
+        from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
+
+        self._validate_collection(collection)
+        db = self._require_connected()
+        lock = self._lock_for(collection)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            logger.warning("Collection %r lock timeout in update_description, skipping", collection)
+            return
+        try:
+            existing = await self._do_read_meta_unlocked(db, collection, namespace=namespace)
+            if existing is None:
+                return
+            updated = CollectionMeta(
+                name=existing.name,
+                description=description,
+                description_embedding=existing.description_embedding,
+                centroid=existing.centroid,
+                centroid_sum=existing.centroid_sum,
+                doc_count=existing.doc_count,
+                chunk_count=existing.chunk_count,
+                embedding_model=existing.embedding_model,
+                last_indexed=last_indexed,
+                last_described=last_described,
+                described_at_doc_count=described_at_doc_count,
+                namespace=existing.namespace,
+                mutations_since_recompute=existing.mutations_since_recompute,
+                needs_recompute=existing.needs_recompute,
+            )
+            await self._do_write_meta_unlocked(db, collection, updated)
+        finally:
+            lock.release()
+
     # ------------------------------------------------------------------
     # Private unlocked helpers (caller must hold _lock_for(collection))
     # ------------------------------------------------------------------
