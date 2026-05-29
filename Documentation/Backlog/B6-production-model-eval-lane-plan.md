@@ -210,7 +210,7 @@ async def run_eval_suite(
 - **Checkpoint**: `uv run pytest tests/eval/live/ --collect-only --no-cov` (no collection errors, no warnings)
 
 #### Task 1.4 — `tests/eval/live/test_live_eval_suite.py` v1 (run + assert metrics + print report)
-- [ ] **File**: `tests/eval/live/test_live_eval_suite.py`
+- [x] **File**: `tests/eval/live/test_live_eval_suite.py`
 - **Depends on**: Task 1.2, Task 1.3
 - **Description**:
   - Single async test `test_live_eval_suite_runs_and_generates_report`, marked `@pytest.mark.live_eval`
