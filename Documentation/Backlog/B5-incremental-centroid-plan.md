@@ -82,6 +82,7 @@ After B5: the `_archon_collection_meta` table holds a `centroid_sum_json` column
 - **Pre-B5 seed spike**: first post-B5 ingest into a collection with `centroid_sum=None` triggers one lazy `recompute_collection_meta` pass (O(n)). For collections with 1 M+ chunks, this is ~3 GB in Python. Document as expected one-time cost in the upgrade notes.
 - **A6 sequencing**: the corrected centroid is persisted correctly after B5, but long-lived router instances (eval path) only observe the correction after A6's `invalidate()` is called. The FastAPI per-request router is unaffected.
 - **`recompute_collection_meta` TOCTOU** (accepted): `recompute_collection_meta` reads all vectors and counts outside the lock (O(n) full scan), then calls `update_collection_meta` which acquires the lock only for the write. A concurrent `ingest_chunks` that completes between the read and write will have its incremental update clobbered by the recompute's whole-row upsert. The next incremental add self-corrects (accumulates on top of the post-recompute base). Holding the lock for the full O(n) scan would block all ingest for seconds — not acceptable. Accepted for v1.
+- **Mixed-workload checkpoint masking**: in an incremental sync cycle that interleaves deletes and ingests, the first ingest that observes `needs_recompute=True` triggers `recompute_collection_meta`, which resets the flag to `False` and `mutations_since_recompute` to 0. Subsequent deletes in the same cycle that would individually have re-crossed the threshold cannot re-raise the flag until they accumulate threshold mutations from scratch. Accepted — the post-loop meta read in Task 6.2 catches the residual delete-only tail when no further ingest follows. Pathological workloads (heavy interleaved delete-then-ingest at sub-threshold cadence indefinitely) would defer drift reset; mitigation is to lower `centroid_recompute_threshold` or schedule explicit `recompute_collection_meta(force=True)` via an operator hook.
 - **`ingest_file` delete→ingest transient inconsistency** (v1 accepted): `ingest_file` calls `delete_document` then `ingest_chunks` as two separate lock acquisitions. Between the two lock releases, a concurrent `ingest_file` for a different document in the same collection can read meta that reflects the subtraction but not the addition — `doc_count` and `chunk_count` are transiently 1 lower than truth. Accepted for v1: the window is sub-millisecond under normal load and the router's cosine similarity is drift-tolerant. Recovery: centroid converges on the next ingest or explicit `recompute_collection_meta`. A future v2 could address this by holding the lock across delete+ingest in `ingest_file` via `_locked_by_caller=True`.
 
 ---
@@ -215,6 +216,7 @@ centroid_recompute_threshold: int = 10_000
     - `pa.field("mutations_since_recompute", pa.int64(), nullable=True)`
     - `pa.field("needs_recompute", pa.bool_(), nullable=True)`
   - In `update_collection_meta`: encode `meta.centroid_sum` as `json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else ""` into `"centroid_sum_json"`. Write `meta.mutations_since_recompute` and `meta.needs_recompute` to their columns.
+  - **Critical**: the row dict passed to `table.add([row_dict])` inside `update_collection_meta` (`store.py:509–524`) MUST be extended with all three new column entries (`centroid_sum_json`, `mutations_since_recompute`, `needs_recompute`) — not only the schema. Extending the schema alone leaves these columns NULL on every write. Both the schema definition and the row dict construction must be updated in this task.
   - In `_row_to_meta`: parse `row["centroid_sum_json"]` with the same malformed-JSON → `None` + `logger.warning` pattern already used for `centroid_json` (`store.py:336–339`). Parse `mutations_since_recompute` as `int(row.get("mutations_since_recompute") or 0)`. Parse `needs_recompute` as `bool(row.get("needs_recompute") or False)`.
   - The `migrate_namespace`-style `add_columns` migration for pre-B5 rows is handled in Task 1.3.
   - No behaviour change for callers that pass `centroid_sum=None` (which is all callers at this point).
@@ -225,6 +227,7 @@ centroid_recompute_threshold: int = 10_000
   - Unit: `test_malformed_centroid_sum_json_parses_to_none` — manually insert a row with `centroid_sum_json="not-json"`, call `get_collection_meta`; result has `centroid_sum=None` (no exception raised).
   - Unit: `test_mutations_since_recompute_round_trips` — write `mutations_since_recompute=42`; read back as `42`.
   - Unit: `test_needs_recompute_round_trips` — write `needs_recompute=True`; read back as `True`.
+  - Unit: `test_update_collection_meta_writes_b5_columns` — call `update_collection_meta` with non-default values for `centroid_sum`, `mutations_since_recompute`, `needs_recompute`; read back the underlying row (or via `get_collection_meta`) and assert all three columns contain the supplied values, not NULL — proving the row dict (not just the schema) was extended.
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "centroid_sum or mutations_since or needs_recompute"`
 
 #### Task 1.3 — Schema migration: `add_columns` for pre-B5 meta rows
@@ -239,6 +242,7 @@ centroid_recompute_threshold: int = 10_000
     - Call `await table.add_columns({"needs_recompute": "cast(false as boolean)"})`.
     - Catch `RuntimeError` with "already exists" in message; log warning and return (concurrent migration guard).
   - Wire `migrate_centroid_sum()` into `SearchStore`'s startup sequence alongside `migrate_namespace` and `migrate_acl` (wherever those are called at server startup — verify in `server/app.py` or CLI `start` command).
+  - **Flag independence**: `migrate_centroid_sum` runs unconditionally at startup regardless of `centroid_incremental_enabled`. The migration only adds columns to the LanceDB schema; it does not write incremental state. Pre-B5 databases gain the columns whether the flag is on or off. This decouples schema-evolution from feature-rollout.
 - **Releasable**: existing pre-B5 databases gain the three new columns on next startup; schema is forward-compatible.
 - **Tests (TDD)** — `tests/test_store.py`:
   - Unit: `test_migrate_centroid_sum_adds_columns` — create a store with a `_META_TABLE` lacking `centroid_sum_json`, call `migrate_centroid_sum`, verify schema now includes the column.
@@ -260,13 +264,14 @@ centroid_recompute_threshold: int = 10_000
   - After acquiring the lock, perform the existing delete-then-insert upsert. Release on exit.
   - **Why**: after B5 the codebase has two meta-write paths — `update_collection_meta` (public) and `_do_write_meta_unlocked` (private, in-lock). The `_unlocked` suffix signals "call only while lock held." Making the public method lock-acquiring makes the naming convention true: all public store methods that write meta are locked; all `_do_*_unlocked` methods are not. **Note**: this makes individual writes atomic (no two writers hold the lock simultaneously), but does NOT eliminate the TOCTOU race in `recompute_collection_meta`'s read-compute-write cycle. `recompute_collection_meta` reads vectors OUTSIDE the lock, then acquires the lock only for the write via `update_collection_meta`. A concurrent `ingest_chunks` that completes between the read and write will have its incremental update clobbered by the recompute's whole-row upsert. This is a known limitation (see Known Limitations section) — the next incremental add self-corrects, and recompute is an authoritative full-scan so its values are correct as of the read time.
   - **`recompute_collection_meta` caller**: currently calls `update_collection_meta` outside any lock scope. After this task, `update_collection_meta` acquires the lock itself — `recompute_collection_meta` requires no changes.
-  - **REST collection-creation caller** (`routes_collections.py:170`): calls `update_collection_meta` to create initial meta rows. After this task, this call correctly acquires the lock — no changes needed at the call site.
+  - **REST collection-creation caller** (`routes_collections.py:170`): calls `update_collection_meta` to create initial meta rows. After this task, this call correctly acquires the lock — but it can now raise `StoreBusyError` on lock timeout. The handler MUST catch `StoreBusyError` and map it to HTTP 503 with a `Retry-After` header, mirroring the existing ingest path's behavior. Without this, a contended lock surfaces as HTTP 500.
   - **Do not** call `update_collection_meta` from within any lock scope (it now acquires the lock itself). Audit all call sites and verify none hold `_lock_for(collection)` already. Update any such call to use `_do_write_meta_unlocked` instead.
 - **Releasable**: `update_collection_meta` is the locked public write path; naming convention is consistent with `_do_*_unlocked` helpers.
 - **Tests (TDD)** — `tests/test_store.py`:
   - Unit: `test_update_collection_meta_acquires_lock` — mock `_lock_for`; verify lock is acquired on every `update_collection_meta` call.
   - Unit: `test_update_collection_meta_timeout_raises_store_busy` — lock held externally; `update_collection_meta` raises `StoreBusyError` after timeout.
   - Unit: `test_update_collection_meta_no_call_while_lock_held` — verify no existing code path calls `update_collection_meta` while `_lock_for(collection)` is already held (static or integration check).
+  - Unit: `test_create_collection_returns_503_on_lock_timeout` — **File**: `tests/test_routes_collections.py` (or the existing route-test file for `routes_collections.py` — pick the file matching the project's existing route-test naming convention; verify via a quick `ls tests/` inspection). Mock `store.update_collection_meta` to raise `StoreBusyError`; POST to the REST collection-creation route; assert response status is 503 with a `Retry-After` header.
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "update_collection_meta"`
 
 #### Task 2.1 — `_do_read_meta_unlocked` and `_do_write_meta_unlocked`
@@ -346,6 +351,7 @@ centroid_recompute_threshold: int = 10_000
 - **Description**:
   - `def elementwise_sum(vectors: list[list[float]]) -> list[float]`: module-level pure function in `store.py`.
   - If `vectors` is empty, return `[]` immediately (do NOT raise — callers rely on this guarantee).
+  - Dimension guard: if any vector in `vectors` has a length different from `vectors[0]`, raise `ValueError("mixed-dimension vectors")`. This catches a model-switch or corrupted-input bug at the sum step rather than producing a silently truncated/extended sum.
   - Otherwise: `return [sum(v[i] for v in vectors) for i in range(len(vectors[0]))]`.
   - No imports beyond stdlib. No side-effects.
   - **Releasable**: after this task, `elementwise_sum` is importable by Task 4.1 and Task 6.1.
@@ -353,24 +359,30 @@ centroid_recompute_threshold: int = 10_000
   - Unit: `test_elementwise_sum_correct` — two 3-dim vectors; asserts correct element-wise sum.
   - Unit: `test_elementwise_sum_single_vector` — single vector; returns same values.
   - Unit: `test_elementwise_sum_empty_list` — `elementwise_sum([])` returns `[]` (no IndexError).
+  - Unit: `test_elementwise_sum_raises_on_mixed_dimensions` — `elementwise_sum([[1.0, 2.0], [3.0, 4.0, 5.0]])` raises `ValueError("mixed-dimension vectors")`.
   - Checkpoint: `uv run pytest tests/test_store.py -k "elementwise_sum" -v`
 
 ---
 
 ### Phase 3 — Store-layer incremental add path
 > **Releasable**: ⚠️ **Phases 3–5 must ship atomically and are NOT independently releasable.** Between Phase 3 and Phase 5, the pipeline's `update_collection_meta` call at `pipeline.py:319–331` overwrites the meta row — including `centroid_sum_json` — with batch-only values after every `ingest_directory`, clobbering the incremental sum the store just wrote. Shipping Phase 3 without Phase 5 leaves the system in a state worse than pre-B5: the store writes a correct `centroid_sum` and the pipeline immediately nullifies it. Ship Phases 3, 4, and 5 together in a single release. Default pytest run must pass throughout each phase.
+>
+> **Commit granularity reconciliation**: each Phase 3–5 task gets its own commit per the project's per-task commit convention. The atomic-shipping constraint is reconciled with the per-task rule by gating all new incremental code paths behind a feature flag `centroid_incremental_enabled` (added to `SearchConfig`, default `False`). The flag wraps the new code paths in `ingest_chunks._do_update_meta_on_add`, `delete_document._do_subtract_meta_on_delete`, and the `ingest_directory` description-only write (Task 5.2). While the flag is `False`, all of Phase 3–5's tasks land as no-op-equivalents (the existing batch-overwrite path runs unchanged). The flag flips to `True` in the final Phase 5 task (Task 5.3 below), making all the new code paths live in a single small atomic commit. This preserves per-task commits without exposing the intermediate-state corruption window.
 
 #### Task 3.1 — `_do_update_meta_on_add` helper and threshold config
 - [ ] **Files**: `archon_search/store.py`, `archon_search/config.py`
 - **Depends on**: Task 2.3
 - **Description**:
   - Add to `config.py` → `SearchConfig`: `centroid_recompute_threshold: int = 10_000`. Load from TOML section `[database]` key `centroid_recompute_threshold`. The loader already reads `[database]` keys; add this alongside them.
+  - Also add `centroid_incremental_enabled: bool = False` to `SearchConfig` (loaded from `[database].centroid_incremental_enabled`). This is the feature flag introduced in the Phase 3 atomic-shipping reconciliation. All new code paths in `_do_update_meta_on_add`, `_do_subtract_meta_on_delete`, and the pipeline's `update_description` substitution are gated by this flag. Default `False` so per-task commits ship dormant; Task 5.3 flips it to `True`.
   - Validation: in `load_config()` (`config.py`), after parsing the TOML, add an explicit check: `if config.centroid_recompute_threshold < 1: raise ConfigError("centroid_recompute_threshold must be >= 1")`. This prevents division-by-zero and infinite recompute loops.
-  - `_do_update_meta_on_add(self, db, collection: str, batch_vectors: list[list[float]], distinct_doc_count: int, embedding_model: str | None, embedding_dim: int, threshold: int, namespace: str = DEFAULT_NAMESPACE) -> bool`: called while lock is held; reads meta via `_do_read_meta_unlocked(db, collection, namespace=namespace)`, validates sum, accumulates, writes meta via `_do_write_meta_unlocked`, returns `bool` — the raw `needs_recompute` signal. One-field dataclasses for internal returns are overengineered; `ingest_chunks` wraps the bool into `ChunkIngestResult`.
+  - **Config plumbing**: `SearchStore.__init__` accepts a `config: SearchConfig` parameter (already injected in the existing constructor — verify in `store.py`). `_do_update_meta_on_add` reads `self._config.centroid_incremental_enabled` and `self._config.centroid_recompute_threshold` rather than receiving them as parameters. Update the helper signature accordingly: remove the `threshold: int` parameter from `_do_update_meta_on_add` (and the corresponding `threshold=<...>` from Task 3.2's call site). If `SearchStore` does not yet take `config`, Task 3.1 adds it via constructor injection; update `pipeline.py` and any other constructor call sites accordingly.
+  - `_do_update_meta_on_add(self, db, collection: str, batch_vectors: list[list[float]], distinct_doc_count: int, embedding_model: str | None, embedding_dim: int, namespace: str = DEFAULT_NAMESPACE) -> bool`: called while lock is held; reads meta via `_do_read_meta_unlocked(db, collection, namespace=namespace)`, validates sum, accumulates, writes meta via `_do_write_meta_unlocked`, returns `bool` — the raw `needs_recompute` signal. The threshold comparison uses `self._config.centroid_recompute_threshold`. One-field dataclasses for internal returns are overengineered; `ingest_chunks` wraps the bool into `ChunkIngestResult`.
   - If `embedding_model is None` (caller did not supply a model name), skip centroid maintenance entirely and return `False` — do not trigger O(n) reseed. Once the pipeline supplies `self._embedder.model_name`, the guard fires correctly.
   - When `_do_read_meta_unlocked` returns `None` (brand-new collection with no meta row): skip `_centroid_sum_valid` entirely — the batch IS the full collection; no recompute is needed. Accumulate from (zero-vector seed, chunk_count=0, doc_count=0) and write the result. Do NOT set `needs_recompute=True` for this case.
   - Only call `_centroid_sum_valid` when an existing meta row is present (`_do_read_meta_unlocked` returns non-None).
   - If `_centroid_sum_valid` returns `False` for the stored sum, emit `logger.warning("Collection %r centroid stale, recompute queued", collection)` and return `True` (the caller — pipeline — will invoke `recompute_collection_meta`). Do NOT write a batch-only partial `centroid_sum` to meta (a partial sum is worse than no centroid — it produces a confidently wrong centroid for any concurrent router read). Instead: leave `centroid` and `centroid_sum` as `None` in the meta write, set `needs_recompute=True`, and emit `logger.warning("Collection %r centroid stale, recompute queued", collection)`. The pipeline will call `recompute_collection_meta` which computes the authoritative values.
+  - **Mutations counter on invalid stored sum**: explicitly do NOT bump `mutations_since_recompute` on this branch. The subsequent `recompute_collection_meta` call will reset the counter to 0 anyway, and that recompute will count the current batch's contribution as part of its full-scan total. Bumping the counter here would either be double-counted or immediately overwritten — leave it unchanged. `chunk_count` and `doc_count` are also left unchanged from their stored values (the pipeline's follow-up recompute reads ground truth from the chunk table). Summary of state written on this branch: `centroid_sum=None`, `centroid=None`, `needs_recompute=True`, `mutations_since_recompute=<unchanged>`, `chunk_count=<unchanged>`, `doc_count=<unchanged>`.
   - If `_batch_vectors_valid` returns `False` for the incoming batch: emit `logger.warning("Collection %r batch vectors contain NaN/inf; skipping centroid maintenance", collection)`, set `needs_recompute=True`, do NOT write any `centroid_sum` update (leave centroid and centroid_sum as they are in meta), and return `True`. **No partial accumulation** — an invalid batch is treated the same as an invalid stored sum: leave current state, queue recompute.
 - **Releasable**: config key is loadable; `_do_update_meta_on_add` (returns `bool`) is wirable in Task 3.2.
 - **Tests (TDD)** — `tests/test_store.py`, `tests/test_config.py`:
@@ -379,6 +391,7 @@ centroid_recompute_threshold: int = 10_000
   - Unit: `test_do_update_meta_on_add_accumulates_from_zero` — empty meta (zero seed) → add 3 vectors; returned meta has `chunk_count=3`, `centroid_sum` == elementwise sum.
   - Unit: `test_do_update_meta_on_add_accumulates_onto_existing` — pre-seeded meta with `centroid_sum=[1.0]` and `chunk_count=1`; add 1 vector `[3.0]`; result `centroid_sum=[4.0]`, `chunk_count=2`.
   - Unit: `test_do_update_meta_on_add_signals_recompute_on_invalid_sum` — stored meta has NaN centroid_sum; call `_do_update_meta_on_add`; assert return value is `True` AND assert that the meta row now has `centroid_sum=None` and `centroid=None` (not batch-only partial values). Verifies the plan's "leave as None, queue recompute" behavior.
+  - Unit: `test_do_update_meta_on_add_invalid_sum_does_not_bump_mutations` — stored meta has NaN centroid_sum and `mutations_since_recompute=7`; call `_do_update_meta_on_add` with a batch of 3 vectors; assert the written meta still has `mutations_since_recompute=7` (no bump), `chunk_count` and `doc_count` unchanged from stored values. Verifies the no-double-count invariant for the invalid-sum branch.
   - Unit: `test_do_update_meta_on_add_signals_recompute_at_threshold` — `mutations_since_recompute` reaches `threshold`; signal is `True`.
   - Unit: `test_do_update_meta_on_add_nan_batch_vector_triggers_recompute` — a NaN element in an input vector; returns `True`.
   - Unit: `test_do_update_meta_on_add_none_model_skips_maintenance` — `embedding_model=None`; meta unchanged, returns `False`.
@@ -389,15 +402,54 @@ centroid_recompute_threshold: int = 10_000
 - [ ] **File**: `archon_search/store.py`
 - **Depends on**: Task 3.1
 - **Description**:
-  - Inside `ingest_chunks`, after `_do_ingest` commits the chunk rows and while the lock is still held:
+  - **Flag gating contract**: when `centroid_incremental_enabled=False`, all incremental code paths are no-ops and the pre-B5 behavior is preserved (incl. retaining the old `update_collection_meta` call in `ingest_directory` and the `recompute_collection_meta` call in `sync.py`). The flag is the single source of truth for which code path runs; no other guards are needed.
+  - Inside `ingest_chunks`, after `_do_ingest` commits the chunk rows and while the lock is still held, the first action is a flag-gating early-out — when `centroid_incremental_enabled=False`, the new incremental meta-maintenance code path is skipped entirely and the result is returned with `needs_recompute=False`:
+
+    ```python
+    if not self._config.centroid_incremental_enabled:
+        # Flag disabled: skip incremental meta maintenance entirely.
+        # Pre-B5 behavior is preserved (pipeline still calls update_collection_meta in this mode).
+        return ChunkIngestResult(chunks_ingested=N, needs_recompute=False)
+    ```
+
+    When the flag is `False`, `ingest_chunks` still returns `ChunkIngestResult` (the return-type change is unconditional — see Task 3.3), but `needs_recompute=False` always, and meta-maintenance is skipped. When the flag is `True`, execution continues into the steps below:
     - Compute `batch_vectors = [list(c.vector) for c in chunks]` and `distinct_doc_ids = len({c.doc_id for c in chunks})`.
     - Guard against empty batch: if `batch_vectors` is empty, skip meta maintenance and return `ChunkIngestResult(chunks_ingested=0, needs_recompute=False)`.
-    - Call `signal = await self._do_update_meta_on_add(db, collection, batch_vectors, distinct_doc_ids, embedding_model=<caller-supplied-or-from-meta>, embedding_dim=len(batch_vectors[0]), threshold=<from store init or constant>)`.
+    - Call `signal = await self._do_update_meta_on_add(db, collection, batch_vectors, distinct_doc_ids, embedding_model=<caller-supplied-or-from-meta>, embedding_dim=len(batch_vectors[0]))`.
     - Store `signal` for the caller to retrieve (see Task 3.3).
-  - The `_locked_by_caller=True` path (caller already holds the lock — used by background task ingest jobs, though **no production caller currently passes this flag**: the only caller is `tests/test_store_lock.py`): `ingest_chunks` must be refactored to share a common post-`_do_ingest` block for meta maintenance regardless of lock source. The early `return await self._do_ingest(...)` in the `_locked_by_caller=True` branch (store.py:521-523) must be restructured: call `_do_ingest` unconditionally, then call `_do_update_meta_on_add` unconditionally (lock is already held for both paths), then release the lock only if it was acquired internally. This ensures the `_locked_by_caller=True` path also executes meta maintenance and returns a `ChunkIngestResult` (not a bare `int`).
+  - The `_locked_by_caller=True` path (caller already holds the lock — used by background task ingest jobs, though **no production caller currently passes this flag**: the only caller is `tests/test_store_lock.py`): the early `return await self._do_ingest(...)` shortcut at `store.py:521-523` must be **removed entirely**. The `_locked_by_caller=True` branch no longer takes a different code path; it only suppresses internal lock acquisition. Both paths share the following structure:
+
+    ```text
+    async def ingest_chunks(..., _locked_by_caller: bool = False, embedding_model: str | None = None):
+        lock = None if _locked_by_caller else self._lock_for(collection)
+        if lock is not None:
+            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)  # raises StoreBusyError
+        try:
+            # (a) unconditional chunk-table write — lock is held in both branches
+            chunks_ingested = await self._do_ingest(db, collection, chunks, ...)
+
+            # (b) unconditional meta maintenance — lock is held in both branches
+            signal = await self._do_update_meta_on_add(
+                db, collection, batch_vectors, distinct_doc_count,
+                embedding_model=embedding_model, embedding_dim=len(batch_vectors[0]), namespace=namespace,
+            )
+
+            # (c) construct and return the typed result
+            return ChunkIngestResult(chunks_ingested=chunks_ingested, needs_recompute=signal)
+        finally:
+            # (d) only release the lock we acquired ourselves
+            if lock is not None:
+                lock.release()
+    ```
+
+    Key invariants encoded by this structure:
+    - `_locked_by_caller=True` does NOT take an early-return shortcut — meta maintenance runs in both branches.
+    - Both branches return `ChunkIngestResult` (never a bare `int`).
+    - The lock is released exactly once, only by the branch that acquired it.
   - Brand-new collection bootstrap: if `_do_read_meta_unlocked` returns `None` (no meta row and possibly no `_META_TABLE`), treat as `(centroid_sum=None, chunk_count=0, doc_count=0)` seed — `_do_update_meta_on_add` already handles this via the `None` → zero path. `_META_TABLE` creation is handled by `_do_write_meta_unlocked` inline — it checks `list_tables()` and calls `create_table(schema)` if the table does not exist, replicating the lazy-create guard without calling `update_collection_meta` (which would deadlock by re-acquiring the lock). `_do_write_meta_unlocked` must NOT call `update_collection_meta`.
   - The `embedding_model` string: obtain it from the existing meta row if present; the caller supplies it via a new keyword argument `embedding_model: str | None = None` added to `ingest_chunks` (the pipeline already knows `self._embedder.model_name`).
   - `ingest_chunks` public signature change: add `embedding_model: str | None = None` keyword argument. When `None`, `_do_update_meta_on_add` skips centroid maintenance entirely — no O(n) reseed. This prevents an accidental full-rescan between Phase 3 (store wiring) and Phase 5 (pipeline passes the real model name). Pipeline callers in Task 5.2 will pass `self._embedder.model_name`.
+  - **Lock keying contract**: `_lock_for(collection)` keys by collection name only (NOT `(namespace, collection)`). This is a deliberate defensive choice: the LanceDB table name is `collection`, not namespaced — concurrent writers to the same physical table from different logical namespaces must still serialize at the storage layer to prevent meta-row interleaving (one namespace's read-modify-write being clobbered by another's). Two namespaces sharing a collection name share the lock and serialize against each other.
 - **Releasable**: `ingest_chunks` maintains the running sum on every add; default pytest run passes.
 - **Tests (TDD)** — `tests/test_store.py`:
   - Unit: `test_ingest_chunks_accumulates_centroid_sum_on_second_batch` — ingest batch B1 then B2; `get_collection_meta` has `centroid_sum` == elementwise sum of all B1+B2 vectors.
@@ -407,15 +459,18 @@ centroid_recompute_threshold: int = 10_000
   - Unit: `test_ingest_chunks_lock_serializes_concurrent_adds` — two concurrent `ingest_chunks` coroutines for the same collection; use **asymmetric** vectors (e.g. batch A: `[[1.0, 2.0]]`, batch B: `[[3.0, 5.0]]`) so a lost-update produces a provably wrong sum; assert both `centroid_sum == [4.0, 7.0]` **and** `chunk_count == 2` (a lost-update with symmetric vectors can accidentally satisfy the sum check but not the count).
   - Unit: `test_ingest_chunks_no_lock_re_entry` — the lock is acquired exactly once per `ingest_chunks` call (mock `_lock_for` to count acquisitions).
   - Integration: `test_ingest_chunks_locked_by_caller_accumulates_meta` — pre-acquire lock via `_lock_for(collection)`, call `ingest_chunks(..., _locked_by_caller=True, embedding_model="BAAI/bge-small-en-v1.5")`; assert return is `ChunkIngestResult` (not int); assert `centroid_sum` is updated in meta; assert lock is still held after the call (not released by `ingest_chunks`).
-  - Checkpoint: `uv run pytest tests/test_store.py -v -k "ingest_chunks"`
+  - Unit: `test_lock_for_keys_by_collection_not_namespace` — call `_lock_for("col", namespace="ns_a")` and `_lock_for("col", namespace="ns_b")` (or whatever the call shape is — by collection only); assert both return the same `asyncio.Lock` instance. Verifies the lock map is keyed by collection name alone.
+  - Integration: `test_concurrent_ingest_same_collection_different_namespaces_serialized` — launch two concurrent `ingest_chunks` coroutines for the same collection name with different namespaces; instrument the lock to record acquire/release order; assert the two operations are serialized (one acquire–release pair completes before the other begins), proving the cross-namespace defensive lock-sharing contract.
+  - Checkpoint: `uv run pytest tests/test_store.py -v -k "ingest_chunks or lock_for"`
 
 #### Task 3.3 — Surface `needs_recompute` signal to callers via `ChunkIngestResult`
-- [ ] **File**: `archon_search/store.py`
+- [ ] **Files**: `archon_search/store.py`, `archon_search/pipeline.py`
 - **Depends on**: Task 3.2
 - **Description**:
   - Change `ingest_chunks` return type from `int` (chunk count) to a new `@dataclass class ChunkIngestResult: chunks_ingested: int; needs_recompute: bool`. The name `ChunkIngestResult` avoids colliding with `_types.IngestResult(doc_id, chunks_created, status)` which already exists in the codebase.
+  - **Return-type change is unconditional and ships with Task 3.3**. Caller `pipeline.ingest_file` is updated in the SAME commit/task (3.3) to call `result = await self.store.ingest_chunks(...)` and use `result.chunks_ingested`. Task 5.2's later changes to `ingest_file` are additive (forwarding `namespace`, `embedding_model`, checking `result.needs_recompute`) — they do not re-touch the return-type unpacking.
   - Update all callers of `store.ingest_chunks` to unpack `result.chunks_ingested` instead of the bare `int`. Verified callers: only `pipeline.py:226` (`ingest_file`) calls `store.ingest_chunks` in production code. `server/routes_collections.py` does **not** call `store.ingest_chunks` — it calls `update_collection_meta` to create collection rows. Also update any test that asserts on the integer return value of `ingest_chunks`.
-  - The `needs_recompute` flag propagates to the pipeline in Task 5.2.
+  - The `needs_recompute` flag is plumbed through `ingest_file`'s local result handling but is not yet acted on (consumed for recompute) until Task 5.2.
 - **Releasable**: all callers handle the new return type; `needs_recompute` is surfaced and ready for pipeline wiring.
 - **Tests (TDD)** — `tests/test_store.py`:
   - Unit: `test_ingest_chunks_returns_chunk_ingest_result` — `ingest_chunks` returns a `ChunkIngestResult` with `.chunks_ingested` and `.needs_recompute` attributes.
@@ -458,13 +513,21 @@ centroid_recompute_threshold: int = 10_000
 - **Depends on**: Task 4.1, Task 2.2
 - **Description**:
   - In `delete_document`, add `namespace: str = DEFAULT_NAMESPACE` to the method signature (if not already present). Acquire `_lock_for(collection)` with `asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)`, raising `StoreBusyError` on timeout — mirroring `ingest_chunks` exactly. The call to `_do_subtract_meta_on_delete` must pass `namespace=namespace`.
+  - **`store.delete_by_source_path` namespace propagation**: this method also requires `namespace: str = DEFAULT_NAMESPACE` added to its signature, and MUST forward `namespace` to its internal `delete_document` call. Without this, sync-path deletes for non-default namespaces silently target the default namespace's meta row.
+  - **MCP `delete_document` handler namespace propagation**: the MCP handler in `mcp.py` MUST forward `namespace` to `store.delete_document` when supplied by the caller (mirroring the REST route's existing behavior).
   - While holding the lock:
     1. Open table; if absent, release lock and return 0.
     2. Call `del_vectors = await self._do_fetch_doc_vectors_unlocked(db, collection, doc_id)`.
     3. Count rows via `await table.count_rows(_where_eq("doc_id", doc_id))`.
     4. If count == 0: release lock and return 0.
     5. Delete rows via `await table.delete(_where_eq("doc_id", doc_id))`.
-    6. Call `await self._do_subtract_meta_on_delete(db, collection, del_vectors, namespace=namespace)`.
+    6. Flag-gated meta subtraction:
+       ```python
+       if self._config.centroid_incremental_enabled:
+           await self._do_subtract_meta_on_delete(db, collection, del_vectors, namespace=namespace)
+       # When False, delete leaves centroid stale (pre-B5 behavior) — sync.py's
+       # pre-existing recompute_collection_meta call (also gated, see C2-I-4) recovers it.
+       ```
   - `_do_subtract_meta_on_delete` reads the meta row itself to derive `embedding_model` and `embedding_dim` — no need to pass them from the caller.
   - Return type remains `int` (unchanged public interface).
   - **`StoreBusyError` caller impact**: `pipeline.ingest_file` calls `store.delete_document` at `pipeline.py:228` to purge old chunks before re-ingesting. Before B5, this was lock-free and always succeeded. After B5, it can raise `StoreBusyError` if `reindex_metadata` holds the lock. Wrap this call in `ingest_file` as: `try: await self.store.delete_document(...) except StoreBusyError: return IngestResult(doc_id=doc_id, chunks_created=0, status="error")`. Also update the MCP `delete_document` handler (`mcp.py`) to map `StoreBusyError` to `code: "store_busy"` rather than `code: "internal_error"`.
@@ -479,7 +542,12 @@ centroid_recompute_threshold: int = 10_000
   - Unit: `test_delete_document_no_full_scan_spy` — spy `get_all_vectors` and `count_documents`; `delete_document` calls neither.
   - Unit: `test_concurrent_ingest_and_delete_serializes_correctly` — run `ingest_chunks` (batch `[[1.0, 2.0], [3.0, 4.0]]`, doc A) and `delete_document` (doc A) concurrently; verify final state is consistent: either both vectors are in (delete lost the race) with correct sum, or neither is in with `centroid_sum=None` — never a half-subtracted state.
   - Integration (`@pytest.mark.integration`): `test_delete_then_verify_centroid` — real LanceDB, ingest two docs, delete one, verify centroid matches the mean of the remaining doc's vectors within tolerance.
-  - Checkpoint: `uv run pytest tests/test_store.py -v -k "delete_document"`
+  - Unit: `test_delete_by_source_path_forwards_namespace` — call `delete_by_source_path(collection, path, namespace="ns1")` with `delete_document` mocked; assert `namespace="ns1"` was passed through to `delete_document`.
+  - Unit: `test_mcp_delete_document_forwards_namespace` — invoke the MCP `delete_document` handler with `namespace="ns1"`; spy `store.delete_document`; assert `namespace="ns1"` was forwarded.
+  - Unit: `test_mcp_delete_document_maps_store_busy_to_store_busy_code` — mock `store.delete_document` to raise `StoreBusyError`; invoke MCP handler; assert the response envelope has `code: "store_busy"` (NOT `code: "internal_error"`).
+  - Integration (`@pytest.mark.integration`): `test_crash_between_chunk_write_and_meta_write_recovers_via_force_recompute` — monkeypatch `_do_write_meta_unlocked` to raise after `_do_ingest` succeeds for one batch; verify chunk rows are present but meta is stale and `needs_recompute=False` (the flag itself was never written — known limitation); then call `recompute_collection_meta(force=True)` and verify the centroid matches `elementwise_sum(all_vectors) / chunk_count` within tolerance.
+  - Unit: `test_delete_by_source_path_updates_centroid` — ingest two docs by source path, then call `delete_by_source_path` for one; assert `centroid_sum` reflects the remaining doc's vectors (proves the namespace-forwarded delete path correctly drives `_do_subtract_meta_on_delete`).
+  - Checkpoint: `uv run pytest tests/test_store.py -v -k "delete_document or delete_by_source_path or mcp_delete_document"`
 
 ---
 
@@ -498,12 +566,13 @@ centroid_recompute_threshold: int = 10_000
     - Persists via `_do_write_meta_unlocked`.
     - Releases lock.
   - This method is the only writer of description/timestamp fields from the pipeline going forward. `centroid_sum`, `chunk_count`, `doc_count`, `centroid`, `mutations_since_recompute`, `needs_recompute`, and `embedding_model` are never touched by this method.
+  - **Timeout contract (asymmetry rationale)**: store-layer write methods raise `StoreBusyError` on lock timeout by default (`delete_document`, `update_collection_meta`, `ingest_chunks`). `update_description` is the single deliberate exception — silent timeout, returns no-op. Justification: a description is cosmetic and not routing-critical; stalling on a long-running `reindex_metadata` would block the description-generation sync path indefinitely, which in turn blocks routing-critical centroid maintenance scheduled after it. The silent-timeout contract MUST be documented in the docstring of `update_description` so future contributors do not "fix" it by raising `StoreBusyError` for consistency.
 - **Releasable**: pipeline can use `update_description` safely without clobbering the store-maintained fields.
 - **Tests (TDD)** — `tests/test_store.py`:
   - Unit: `test_update_description_writes_description_field` — call `update_description` after an `ingest_chunks`; `get_collection_meta` returns the new description.
   - Unit: `test_update_description_does_not_touch_centroid_sum` — call `ingest_chunks` then `update_description`; `centroid_sum` and `chunk_count` are unchanged.
   - Unit: `test_update_description_noop_when_no_meta_row` — call `update_description` with no prior meta row; no exception, `get_collection_meta` still returns `None`.
-  - Unit: `test_update_description_timeout_skips_write` — lock held externally; `update_description` returns without writing (no `StoreBusyError`) and logs a warning.
+  - Unit: `test_update_description_timeout_skips_write` — lock held externally; `update_description` returns without writing (no `StoreBusyError`) and logs a warning. Use `caplog` to assert the warning record's message matches `"Collection %r lock timeout in update_description, skipping"` (with the collection name substituted) — proving the operator-facing log line is emitted, not just any warning.
   - Unit: `test_update_description_concurrent_with_ingest` — run `ingest_chunks` and `update_description` concurrently for the same collection; final `centroid_sum` is correct and `description` matches the `update_description` value (neither clobbered the other).
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "update_description"`
 
@@ -513,8 +582,23 @@ centroid_recompute_threshold: int = 10_000
 - **Description**:
   - Pass `embedding_model=self._embedder.model_name` to every `store.ingest_chunks` call (via `ingest_file`). Update `ingest_file` to accept and forward an `embedding_model: str` keyword argument to `store.ingest_chunks`.
   - Also add `namespace: str = DEFAULT_NAMESPACE` to `ingest_file`'s signature. `ingest_directory` already has `namespace` and must pass it to `ingest_file` in the per-file loop call at `pipeline.py:282`. Forward `namespace` to both `store.delete_document(collection, doc_id, namespace=namespace)` and `store.ingest_chunks(collection, records, ..., namespace=namespace)`, and to `recompute_collection_meta(collection, namespace=namespace)`.
-  - Remove the block in `ingest_directory` that builds `CollectionMeta` and calls `await self.store.update_collection_meta(meta)` (`pipeline.py:319–331`).
-  - Retain the description-regeneration logic (`_should_regenerate`, `generate_description`, `all_chunks`). After the per-file loop, inside the existing `if all_vectors:` guard, call `await self.store.update_description(collection, description, last_described, described_at_doc_count, last_indexed=datetime.now(UTC))` instead of `update_collection_meta`.
+  - **Call-site audit (required)**: audit every call site of `store.delete_document` and `store.delete_by_source_path` (pipeline, sync, server routes, MCP handler, CLI) and confirm each forwards a correct namespace argument. Missing-namespace propagation silently mutates the default namespace's meta row; this is the most likely class of regression introduced by Task 4.2's signature change.
+  - Flag-gated description vs. legacy meta-write branch inside the existing `if all_vectors:` guard:
+
+    ```python
+    if self._config.centroid_incremental_enabled:
+        await self.store.update_description(collection, description, last_described,
+                                            described_at_doc_count,
+                                            last_indexed=datetime.now(UTC))
+    else:
+        # Pre-B5 path: retain construction of CollectionMeta and call to update_collection_meta.
+        # Keep this branch alive until Task 5.3 flips the flag default to True and Phase 6 is in.
+        meta = CollectionMeta(...)  # as before
+        await self.store.update_collection_meta(meta)
+    ```
+
+    The legacy `CollectionMeta` construction and `update_collection_meta` call at `pipeline.py:319–331` is retained verbatim under the `else` branch; it is removed only after Task 5.3 flips the flag default and Phase 6 lands. Retain the description-regeneration logic (`_should_regenerate`, `generate_description`, `all_chunks`) unchanged — it feeds both branches.
+  - **`recompute_collection_meta` calls for the `needs_recompute` signal are inside the `if` branch only.** When the flag is `False`, neither `ingest_file` nor `ingest_directory` reads or acts on the signal (the signal is always `False` from `ingest_chunks` in that mode anyway — see Task 3.2's flag-gating contract).
   - **Wire `needs_recompute` in `ingest_file`** (not only in `ingest_directory`): `ingest_file` must check `ChunkIngestResult.needs_recompute` from `store.ingest_chunks` and, if `True`, immediately call `await self.recompute_collection_meta(collection, namespace=namespace)`. This ensures the pre-B5 seed fires on single-file REST `/ingest` calls that go through `ingest_file` directly (bypassing `ingest_directory`). `ingest_directory` also checks the aggregate signal as a secondary gate; the two calls are idempotent.
   - **Performance note**: when `needs_recompute=True` fires mid-loop inside `ingest_directory`, `recompute_collection_meta` performs an O(chunks-in-collection) full scan. This is intentional: it establishes a correct `centroid_sum` base; subsequent incremental adds by remaining files in the loop are additive on top of the accurate base. The mid-loop cost is bounded by the `centroid_recompute_threshold` (default 10,000 chunks). `ingest_directory` also checks the aggregate signal after the loop; if `ingest_file` already fired a mid-loop recompute, that recompute resets `needs_recompute=False` and `mutations_since_recompute=0`, so `recompute_collection_meta` short-circuits O(1) on the second call (Task 6.1 specifies this short-circuit).
   - Collect the aggregate `needs_recompute` signal in `ingest_directory` as well: after the per-file loop, if any file's result carries `needs_recompute=True`, call `await self.recompute_collection_meta(collection, namespace=namespace)`. (May be a no-op if `ingest_file` already fired it; `recompute_collection_meta` resets the flag.)
@@ -530,10 +614,24 @@ centroid_recompute_threshold: int = 10_000
   - Unit: `test_ingest_file_triggers_recompute_on_needs_recompute_signal` — configure `centroid_recompute_threshold=1`; single `ingest_file` call (not via `ingest_directory`) triggers `recompute_collection_meta` directly inside `ingest_file`.
   - Unit: `test_pre_b5_meta_row_seeds_on_first_ingest_file` — create a meta row manually with `centroid_sum_json=""` (simulating a pre-B5 migration default); call `ingest_file` for one document; after the call, `get_collection_meta` returns a non-None `centroid_sum`. (This tests the store+pipeline seed path without the sync/watcher machinery.)
   - Unit: `test_ingest_result_needs_recompute_not_in_rest_response` — verify that `IngestResult.needs_recompute` is not serialised into any REST or MCP response by checking that the relevant Pydantic response schemas do not include this field.
+  - Unit: `test_no_internal_fields_in_ingest_response_schema` — introspect the FastAPI ingest endpoint's Pydantic response model (`response_model` on the route or the `model_fields` of the returned schema class) and assert `needs_recompute` is NOT in `model_fields`. Guards against accidental field leakage if a future refactor uses `IngestResult` directly as a response model.
   - Unit: `test_ingest_file_forwards_namespace_to_store` — mock `store.ingest_chunks` to capture kwargs; call `ingest_file(..., namespace="ns1")`; assert `namespace="ns1"` was forwarded.
   - **Existing test update required**: `test_ingest_centroid_replaced_on_reingest` in `test_pipeline.py:663` currently verifies the defective batch-overwrite behavior (Defect 1). After Task 5.2, update this test to assert that the centroid after re-ingest reflects the authoritative centroid for the collection (via the incremental delete-then-add path), not a batch-only overwrite value.
   - Integration: `test_ingest_directory_double_recompute_idempotency` — ingest 3 files with threshold set to 2 chunks so `needs_recompute=True` fires mid-loop; verify final `centroid_sum` equals the authoritative sum of all 3 files' vectors (not just the last batch). Asserts correctness despite two `recompute_collection_meta` calls.
   - Checkpoint: `uv run pytest tests/test_pipeline.py -v -k "ingest_directory or ingest_file"` and `uv run pytest -m integration tests/ -v -k "multi_batch or reingest"`
+
+#### Task 5.3 — Flip `centroid_incremental_enabled` to `True`
+- [ ] **File**: `archon_search/config.py`
+- **Depends on**: Task 5.2
+- **Description**:
+  - Change the default value of `centroid_incremental_enabled` in `SearchConfig` from `False` to `True`. This single-line change makes every Phase 3–5 code path live simultaneously and satisfies the atomic-shipping constraint while preserving per-task commits for the prior tasks.
+  - Audit existing tests: any test that depended on the legacy batch-overwrite behavior must already have been updated by its owning task (e.g., `test_ingest_centroid_replaced_on_reingest` in Task 5.2). After flipping the flag, the default test suite must still pass.
+  - Update `archon-search.toml.example` to set `centroid_incremental_enabled = true` in `[database]` and document the flag in a comment (escape hatch: setting to `false` reverts to the pre-B5 batch-overwrite behavior for a rollback).
+- **Releasable**: B5 incremental centroid maintenance is live by default.
+- **Tests (TDD)** — `tests/test_config.py`, `tests/test_pipeline.py`:
+  - Unit: `test_centroid_incremental_enabled_default_true` — `SearchConfig()` has `centroid_incremental_enabled == True`.
+  - Integration (smoke): `test_phase_3_5_paths_live_after_flag_flip` — ingest two batches; assert `centroid_sum` is the cumulative sum (proves `_do_update_meta_on_add` ran), `update_collection_meta` was NOT called from the pipeline (proves `update_description` substitution ran), and a delete subtracts from `centroid_sum` (proves `_do_subtract_meta_on_delete` ran).
+  - Checkpoint: `uv run pytest tests/test_config.py tests/test_pipeline.py -v -k "centroid_incremental_enabled or phase_3_5"`
 
 ---
 
@@ -542,18 +640,20 @@ centroid_recompute_threshold: int = 10_000
 
 #### Task 6.1 — Extend `recompute_collection_meta` to populate `centroid_sum`
 - [ ] **Files**: `archon_search/store.py`, `archon_search/pipeline.py`
-- **Depends on**: Task 1.2, Task 2.5, Task 5.2
+- **Depends on**: Task 1.2, Task 2.5, Task 5.2, Task 5.3
 - **Description**:
   - **Dependency note**: Task 5.2 must be complete before Task 6.1 removes `_compute_centroid`, because Task 5.2 removes the `_compute_centroid` call site at `pipeline.py:304` inside `ingest_directory`. Removing `_compute_centroid` before Task 5.2 would break `ingest_directory`.
+  - **Task 5.3 dependency rationale**: Task 5.3 flips `centroid_incremental_enabled` default to True; Phase 6 sync changes assume the incremental path is the production default and would otherwise break the pre-B5 fallback chain (sync would lose centroid maintenance when the flag is False).
   - Imports `elementwise_sum` from `store.py` (defined in Task 2.5) — do NOT redefine here.
   - Import `elementwise_sum` from `store` at the top of `pipeline.py` for use in `recompute_collection_meta`.
   - In `recompute_collection_meta` (`pipeline.py:490`), after the existing `_compute_centroid(vectors)` call:
     - Compute `centroid_sum = elementwise_sum(vectors)` (same `vectors` list — one pass only; do not call `get_all_vectors` again).
     - Set `meta.centroid_sum = centroid_sum`, `meta.mutations_since_recompute = 0`, `meta.needs_recompute = False`.
-  - Guard: if `not vectors`, return early (already present at `pipeline.py:499`). In the early-return path also set `centroid_sum=None` to reset any stale sum.
+  - Guard: if `not vectors` (empty collection), the early-return path must NOT skip the meta write. Write a `CollectionMeta` row with `centroid_sum=None`, `centroid=None`, `chunk_count=0`, `doc_count=0`, `mutations_since_recompute=0`, `needs_recompute=False` — then return. Skipping the write leaves a stale `needs_recompute=True` flag in place, causing every subsequent ingest to re-trigger an O(n) recompute that re-discovers the same empty state.
   - This is the **only** O(chunks) path. It must not be called on the hot path after this task.
   - `_compute_centroid` in `pipeline.py` is superseded by `centroid = [x / chunk_count for x in centroid_sum]` after this task. Remove `_compute_centroid` and replace its call site in `recompute_collection_meta` with the inline formula. If any other caller depends on `_compute_centroid`, they must be updated too (audit via `grep _compute_centroid`).
-  - **Short-circuit guard**: at the start of `recompute_collection_meta`, read the current meta row via `store.get_collection_meta`. If meta is not None AND `meta.needs_recompute == False` AND `meta.mutations_since_recompute == 0`: return early (no-op). This prevents a second O(n) scan when `ingest_directory`'s aggregate signal check fires after `ingest_file` already triggered and completed a mid-loop recompute.
+  - **Short-circuit guard**: at the start of `recompute_collection_meta`, if `force=True`, skip the short-circuit (always run the full scan). Otherwise, if `config.centroid_incremental_enabled=False`, also skip the short-circuit (pre-B5 behavior: every call runs the full scan — `sync.py` relies on this). Otherwise, read the current meta row via `store.get_collection_meta`. If meta is not None AND `meta.needs_recompute == False` AND `meta.mutations_since_recompute == 0`: return early (no-op). This prevents a second O(n) scan when `ingest_directory`'s aggregate signal check fires after `ingest_file` already triggered and completed a mid-loop recompute.
+  - **Force bypass**: add `force: bool = False` to `recompute_collection_meta`'s signature. When `force=True`, skip the short-circuit guard entirely and always perform the O(n) full scan. **The crash-recovery path (CLI `reindex` and MCP `reindex` tool) MUST pass `force=True`** — otherwise the recovery is a no-op when the meta row's `needs_recompute=False` flag survived a crash mid-write. The automatic checkpoint paths (Task 5.2 `ingest_directory`/`ingest_file`, Task 6.2 sync) pass `force=False` and benefit from the short-circuit.
 - **Releasable**: `recompute_collection_meta` is now the authoritative drift-reset that also seeds `centroid_sum` for the incremental path.
 - **Tests (TDD)** — `tests/test_store.py` (for `elementwise_sum`), `tests/test_pipeline.py` (for `recompute_collection_meta`):
   - Unit (`test_store.py`): `test_elementwise_sum_correct` — `elementwise_sum([[1,2],[3,4]]) == [4,6]`.
@@ -561,25 +661,43 @@ centroid_recompute_threshold: int = 10_000
   - Unit: `test_recompute_writes_centroid_sum` — after `recompute_collection_meta`, `get_collection_meta` has `centroid_sum == elementwise_sum(all_vectors)`.
   - Unit: `test_recompute_resets_mutations_counter` — set `mutations_since_recompute=999`, call `recompute_collection_meta`; counter is 0.
   - Unit: `test_recompute_noop_on_empty_collection` — empty collection returns early; meta has `centroid_sum=None`.
+  - Unit: `test_recompute_empty_collection_clears_needs_recompute_flag` — pre-seed meta with `needs_recompute=True` and `mutations_since_recompute=42`; call `recompute_collection_meta(force=True)` on an empty collection; assert the meta row was written with `needs_recompute=False`, `mutations_since_recompute=0`, `centroid_sum=None`, `centroid=None`, `chunk_count=0`, `doc_count=0` — proving the empty-path performs the write rather than skipping it.
   - Unit: `test_recompute_single_get_all_vectors_call` — spy `store.get_all_vectors`; called exactly once.
   - Unit: `test_recompute_collection_meta_no_op_when_not_needed` — after a fresh recompute (needs_recompute=False, mutations=0), call recompute again; assert `get_all_vectors` is NOT called (spy). Verifies the O(1) short-circuit on second call.
+  - Unit: `test_recompute_collection_meta_force_bypasses_short_circuit` — same fixture as above (post-recompute state: `needs_recompute=False`, `mutations=0`); call `recompute_collection_meta(collection, force=True)`; assert `get_all_vectors` IS called exactly once. Verifies the crash-recovery escape hatch.
+  - Unit: `test_recompute_no_short_circuit_when_flag_disabled` — set `config.centroid_incremental_enabled=False`; pre-seed meta with `needs_recompute=False` and `mutations_since_recompute=0` (the would-be short-circuit conditions); call `recompute_collection_meta(collection)` (force=False); assert `get_all_vectors` IS called exactly once. Verifies that pre-B5 callers (e.g. `sync.py` when the flag is off) always perform the full scan regardless of meta state.
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "elementwise_sum"` and `uv run pytest tests/test_pipeline.py -v -k "recompute"`
 
 #### Task 6.2 — Remove `recompute_collection_meta` from watcher-sync hot path; add checkpoint wiring in sync
 - [ ] **File**: `archon_search/sync.py`
-- **Depends on**: Task 6.1, Task 5.2
+- **Depends on**: Task 6.1, Task 5.2, Task 5.3
 - **Description**:
-  - Remove lines `sync.py:695–703` (the `try: await self._pipeline.recompute_collection_meta(name)` block on the hot sync path).
+  - **Task 5.3 dependency rationale**: Task 5.3 flips `centroid_incremental_enabled` default to True; Phase 6 sync changes assume the incremental path is the production default and would otherwise break the pre-B5 fallback chain (sync would lose centroid maintenance when the flag is False).
+  - Remove lines `sync.py:695–703` (the `try: await self._pipeline.recompute_collection_meta(name)` block on the hot sync path) **only when `self._config.centroid_incremental_enabled` is True**. When the flag is `False`, the legacy unconditional `recompute_collection_meta(name)` call is retained verbatim (pre-B5 behavior). Pseudocode:
+
+    ```python
+    if self._config.centroid_incremental_enabled:
+        # New: only recompute when signal raised or threshold crossed
+        meta = await self._pipeline.store.get_collection_meta(name)
+        if meta and (meta.needs_recompute or meta.mutations_since_recompute >= self._config.centroid_recompute_threshold):
+            await self._pipeline.recompute_collection_meta(name)
+    else:
+        # Legacy pre-B5 path retained until Task 5.3 flips the flag default.
+        await self._pipeline.recompute_collection_meta(name)
+    ```
+
+    After Task 5.3 flips the flag default to True, the legacy branch becomes dead code. A follow-up cleanup task is out of B5 scope.
   - After the `ingest_directory` call at `sync.py:517–527`, check the returned `IngestResult` list for any `needs_recompute=True` entry. If present, call `await self._pipeline.recompute_collection_meta(name)` (with the same `try/except BLE001` error wrapper that existed at the removed site). This moves the recompute to the checkpoint-signal path, not every sync.
-  - **Incremental sync path drift-reset**: the incremental sync path (sync.py:620–700) calls `ingest_file` directly per changed file and `delete_by_source_path` per deleted file. Neither returns a `needs_recompute` signal (delete return type stays `int`). After the incremental sync loop completes, read the meta row for the collection via `await self._pipeline.store.get_collection_meta(name)` and check `meta.needs_recompute`. If `True`, call `await self._pipeline.recompute_collection_meta(name)` (within the same `try/except BLE001` wrapper at the existing sync.py:696 site that you are modifying). This restores the drift-reset mechanism that was previously provided by the unconditional `recompute_collection_meta` call.
+  - **Incremental sync path drift-reset**: the incremental sync path (sync.py:620–700) calls `ingest_file` directly per changed file and `delete_by_source_path` per deleted file. Neither returns a `needs_recompute` signal (delete return type stays `int`). After the incremental sync loop completes, the signal-gated check above (inside the `if self._config.centroid_incremental_enabled:` branch) reads the meta row for the collection via `await self._pipeline.store.get_collection_meta(name)` and checks both `meta.needs_recompute` and `meta.mutations_since_recompute >= self._config.centroid_recompute_threshold`. If either is set, it calls `await self._pipeline.recompute_collection_meta(name)` (within the same `try/except BLE001` wrapper at the existing sync.py:696 site that you are modifying). This restores the drift-reset mechanism that was previously provided by the unconditional `recompute_collection_meta` call. **Caveat**: `_do_subtract_meta_on_delete` does NOT set `needs_recompute=True` on threshold crossing (only on NaN/model-mismatch reseed). For delete-only workloads, the post-loop `meta.needs_recompute` check is effective for reseed scenarios but NOT for mutation-counter crossings — see Known Limitations ('delete-only workload signal gap'). The secondary `meta.mutations_since_recompute >= self._config.centroid_recompute_threshold` check inside the same gated branch catches that case.
   - Retain the log message "Recompute collection meta for %r after sync" but gate it behind the checkpoint condition so it only appears when a recompute actually fires.
 - **Releasable**: watcher-sync hot path is O(batch); periodic recompute fires only when the threshold is crossed.
 - **Tests (TDD)** — `tests/test_sync.py` (or new file `tests/test_sync_centroid.py`):
   - Unit: `test_sync_does_not_call_recompute_below_threshold` — mock `pipeline.recompute_collection_meta`; a sync cycle with a 3-file corpus and threshold 10 000 does not call recompute.
   - Unit: `test_sync_calls_recompute_when_signal_raised` — configure threshold=1; a sync cycle calls recompute exactly once.
-  - Unit: `test_sync_incremental_path_no_full_scan` — spy `store.get_all_vectors`; a full sync cycle (no threshold breach) issues zero calls.
+  - Unit: `test_sync_incremental_path_no_full_scan` — spy `store.get_all_vectors` AND `store.count_documents`; a full sync cycle (no threshold breach) issues zero calls to BOTH. Guards against regressions that swap one O(n) primitive for another.
   - Integration (`@pytest.mark.integration`): `test_drift_guard` — ingest B1, record `centroid_sum`; call `recompute_collection_meta` on the same table state; compare incremental `centroid` to the recomputed `centroid` within 1e-5 tolerance.
   - Integration (`@pytest.mark.integration`): `test_pre_b5_collection_seeds_on_first_ingest` — create a meta row with no `centroid_sum_json`, ingest one file; `get_collection_meta` has a non-None `centroid_sum` after.
+  - Unit: `test_sync_recompute_on_delete_threshold_crossing` — configure `centroid_recompute_threshold=5`; pre-seed meta with `mutations_since_recompute=0` and `needs_recompute=False`; simulate an incremental sync cycle that performs 5+ deletes (no ingests) so the mutation counter crosses the threshold while `needs_recompute` remains `False`; assert the post-loop secondary check fires and `recompute_collection_meta` is called exactly once. Verifies the delete-only signal-gap mitigation.
   - Checkpoint: `uv run pytest tests/test_sync.py -v` and `uv run pytest -m integration tests/ -v -k "drift_guard or pre_b5"`
 
 ---
@@ -617,7 +735,11 @@ centroid_recompute_threshold: int = 10_000
   - (i) `centroid_sum_json`, `mutations_since_recompute`, `needs_recompute` appear in `BREAKING.md` as additive internal-schema columns.
   - (j) `archon-search.toml.example` includes `centroid_recompute_threshold = 10000` in `[database]`.
   - (k) `logger.warning("Collection %r centroid stale, recompute queued", collection)` fires at every `needs_recompute=True` set site in the store layer (verified by the unit tests that assert log output on NaN/stale-sum paths).
-  - (l) `160_operational_readiness_monitoring_and_reliability.md` contains a runbook entry for stale centroid symptoms, causes, and `recompute_collection_meta` recovery. The runbook must note that `grep 'centroid stale, recompute queued' ~/.archon-search/search-logs/` is the monitoring query for operators who do not have structured log tooling.
+  - (l) `160_operational_readiness_monitoring_and_reliability.md` contains a runbook entry for stale centroid symptoms, causes, and `recompute_collection_meta` recovery. **The recovery command MUST invoke `recompute_collection_meta` with `force=True`** (via the CLI/MCP `reindex` path) — the short-circuit guard otherwise skips the rescan when a stale `needs_recompute=False` flag survived the crash window. The runbook must note that `grep 'centroid stale, recompute queued' ~/.archon-search/search-logs/` is the monitoring query for operators who do not have structured log tooling.
   - (m) Integration test `test_old_schema_upsert_preserves_new_columns` passes or explicitly documents the failure — simulates an old-binary `update_collection_meta` (using a schema without the three new columns) on a B5-migrated table and asserts whether the new columns retain their values. The BREAKING.md entry must reflect this test's actual outcome. (`tests/test_store.py`, `@pytest.mark.integration`)
-- **Tests (TDD)**: N/A — this is a verification and documentation task.
+  - (n) Integration test `test_incremental_vs_recomputed_routing_equivalence` passes — `MultiCollectionRouter.rank` produces identical top-K orderings whether collection meta was built incrementally or via `recompute_collection_meta(force=True)`. (`tests/eval/` or `tests/test_router.py`, `@pytest.mark.integration`)
+- **Additional integration tests** (added in this task):
+  - Integration (`@pytest.mark.integration`): `test_incremental_vs_recomputed_routing_equivalence` — build a corpus of N collections (N ≥ 3) twice: (a) via the incremental path only (`ingest_chunks` accumulating `centroid_sum`); (b) via `recompute_collection_meta(force=True)` only (full rescan). For a fixed query set of M queries (M ≥ 10), assert `MultiCollectionRouter.rank` produces identical top-K collection orderings (K = number of collections) under both regimes. Guards against silent routing drift between the two centroid-maintenance paths.
+  - Integration (`@pytest.mark.integration`): `test_drift_after_10k_interleaved_ops` — perform 10000 interleaved add/delete operations against one collection, mixing batches of different sizes; assert `||incremental_centroid_sum - elementwise_sum(remaining_vectors)||_inf < 1e-3` (and the derived `centroid` differs from the recomputed `centroid` by < 1e-5). Empirically justifies the default `centroid_recompute_threshold = 10_000`.
+- **Tests (TDD)**: N/A — this is a verification and documentation task (the two integration tests above are added under this task).
 - **Checkpoint**: manually confirm every acceptance criterion above is checked; run `uv run pytest` and `uv run pytest -m integration tests/`.
