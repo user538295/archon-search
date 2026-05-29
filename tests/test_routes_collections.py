@@ -1535,3 +1535,37 @@ def test_collection_reindex_oserror_returns_500_envelope(
 
     assert response.status_code == 500
     assert response.json() == {"detail": "internal error"}
+
+
+def test_create_collection_returns_503_on_lock_timeout(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ returns 503 with Retry-After when update_collection_meta raises StoreBusyError."""
+    import asyncio as _asyncio
+    from archon_search.store import StoreBusyError
+
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock(side_effect=StoreBusyError(timeout_s=30.0))
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 503
+    assert "Retry-After" in response.headers
+    # Config must be reverted — path should not be persisted on busy lock
+    updated_config: SearchConfig = app.state.config
+    assert str(src.resolve()) not in updated_config.collections

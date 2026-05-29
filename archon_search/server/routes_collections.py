@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import math
+
 from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig, save_config
@@ -19,6 +21,7 @@ from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse
+from archon_search.store import StoreBusyError
 from archon_search.sync import path_to_collection_name
 
 logger = logging.getLogger("archon-search")
@@ -152,28 +155,26 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     if any(m.name == collection_name for m in all_meta):
         return JSONResponse({"detail": "collection name already registered"}, status_code=409)
 
-    # Pre-acquire the per-collection lock BEFORE any state mutation so a 503
-    # leaves config, meta, and jobs completely untouched (no orphaned state).
-    lock_result = await acquire_collection_lock_or_503(search_store, collection_name)
-    if isinstance(lock_result, JSONResponse):
-        return lock_result
-
-    # ``lock_result`` is now either an acquired asyncio.Lock or None (store
-    # unavailable).  Track it so failure branches can release it.
-    held_lock: asyncio.Lock | None = lock_result if isinstance(lock_result, asyncio.Lock) else None
-
     config.collections.append(resolved)
     _maybe_save_config(config, request)
 
-    # Write stub meta — rollback config on failure and release the held lock.
+    # Write stub meta — update_collection_meta acquires the per-collection lock internally.
+    # StoreBusyError → 503; ValueError → 409 TOCTOU race; other → 500.
     try:
         await search_store.update_collection_meta(CollectionMeta(name=collection_name, namespace=ns))
+    except StoreBusyError as e:
+        config.collections.remove(resolved)
+        _maybe_save_config(config, request)
+        retry_after = str(math.ceil(e.timeout_s))
+        return JSONResponse(
+            {"error": "store_busy", "detail": "reindex in progress; retry after Retry-After seconds"},
+            status_code=503,
+            headers={"Retry-After": retry_after},
+        )
     except ValueError:
         # TOCTOU race: name claimed by another namespace between check and write
         config.collections.remove(resolved)
         _maybe_save_config(config, request)
-        if held_lock is not None and held_lock.locked():
-            held_lock.release()
         return JSONResponse({"detail": "collection name already registered"}, status_code=409)
     except Exception:
         config.collections.remove(resolved)
@@ -181,14 +182,29 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
             _maybe_save_config(config, request)
         except Exception:
             logger.exception("Failed to rollback config after stub meta write failure")
-        if held_lock is not None and held_lock.locked():
-            held_lock.release()
         return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    # Pre-acquire the per-collection lock for the ingest task.
+    lock_result = await acquire_collection_lock_or_503(search_store, collection_name)
+    if isinstance(lock_result, JSONResponse):
+        # Lock busy for ingest task — roll back config and meta to leave clean state.
+        config.collections.remove(resolved)
+        try:
+            _maybe_save_config(config, request)
+        except Exception:
+            logger.exception("Failed to rollback config after ingest-lock timeout")
+        try:
+            await search_store.delete_collection_meta(collection_name, ns)
+        except Exception:
+            logger.exception("Failed to rollback meta after ingest-lock timeout")
+        return lock_result
 
     ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     try:
         job = store.create(namespace=ns)
     except OSError:
+        if isinstance(lock_result, asyncio.Lock) and lock_result.locked():
+            lock_result.release()
         return JSONResponse({"detail": "internal error"}, status_code=500)
     ingest_body = IngestRequest(
         collection=collection_name, path=resolved, ingested_by=ingested_by

@@ -35,6 +35,7 @@ def _make_app_and_client(tmp_path: Path):  # type: ignore[no-untyped-def]
     mock_store = MagicMock()
     mock_store.get_all_collections_meta = AsyncMock(return_value=[])
     mock_store.update_collection_meta = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock()
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
@@ -205,8 +206,9 @@ def test_post_collections_503_leaves_no_orphaned_state(
         "503 must not leave the collection path in config.collections"
     )
 
-    # Stub meta must NOT have been written.
-    mock_store.update_collection_meta.assert_not_called()
+    # Stub meta was written then rolled back via delete_collection_meta.
+    mock_store.update_collection_meta.assert_called_once()
+    mock_store.delete_collection_meta.assert_called_once()
 
     # No new job must have been created.
     final_job_count = len(jobs._jobs) if hasattr(jobs, "_jobs") else 0

@@ -578,60 +578,68 @@ class SearchStore:
     async def update_collection_meta(self, meta: "CollectionMeta") -> None:
         _validate_namespace(meta.namespace)
         self._validate_collection(meta.name)
-        db = self._require_connected()
-        all_names: list[str] = (await db.list_tables()).tables
-        if _META_TABLE not in all_names:
-            table = await db.create_table(_META_TABLE, schema=self._meta_schema())
-        else:
-            table = await db.open_table(_META_TABLE)
-            # Upsert = delete existing row by name, then insert.
-            # name is validated against _COLLECTION_RE (alphanumeric + underscore/dash),
-            # so it is safe to use directly in the SQL filter expression.
-            rows = await table.query().to_list()
-            existing = next((r for r in rows if r["name"] == meta.name), None)
-            if existing is not None:
-                existing_ns = existing.get("namespace") or DEFAULT_NAMESPACE
-                if existing_ns != meta.namespace:
-                    logger.error(
-                        "update_collection_meta: name %r is registered under namespace %r, "
-                        "refusing to overwrite with namespace %r",
-                        meta.name, existing_ns, meta.namespace,
-                    )
-                    raise ValueError(
-                        f"Collection {meta.name!r} belongs to namespace {existing_ns!r}; "
-                        f"cannot reassign to {meta.namespace!r}"
-                    )
-                # meta.name validated upstream by _COLLECTION_RE; _where_eq is defense-in-depth
-                await table.delete(_where_eq("name", meta.name))
+        lock = self._lock_for(meta.name)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+        except asyncio.TimeoutError as e:
+            raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
+        try:
+            db = self._require_connected()
+            all_names: list[str] = (await db.list_tables()).tables
+            if _META_TABLE not in all_names:
+                table = await db.create_table(_META_TABLE, schema=self._meta_schema())
+            else:
+                table = await db.open_table(_META_TABLE)
+                # Upsert = delete existing row by name, then insert.
+                # name is validated against _COLLECTION_RE (alphanumeric + underscore/dash),
+                # so it is safe to use directly in the SQL filter expression.
+                rows = await table.query().to_list()
+                existing = next((r for r in rows if r["name"] == meta.name), None)
+                if existing is not None:
+                    existing_ns = existing.get("namespace") or DEFAULT_NAMESPACE
+                    if existing_ns != meta.namespace:
+                        logger.error(
+                            "update_collection_meta: name %r is registered under namespace %r, "
+                            "refusing to overwrite with namespace %r",
+                            meta.name, existing_ns, meta.namespace,
+                        )
+                        raise ValueError(
+                            f"Collection {meta.name!r} belongs to namespace {existing_ns!r}; "
+                            f"cannot reassign to {meta.namespace!r}"
+                        )
+                    # meta.name validated upstream by _COLLECTION_RE; _where_eq is defense-in-depth
+                    await table.delete(_where_eq("name", meta.name))
 
-        centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
-        description_embedding_json = (
-            json.dumps(meta.description_embedding) if meta.description_embedding is not None else ""
-        )
-        last_indexed_str = meta.last_indexed.isoformat() if meta.last_indexed else ""
-        last_described_str = meta.last_described.isoformat() if meta.last_described else ""
-        described_at = meta.described_at_doc_count if meta.described_at_doc_count is not None else -1
+            centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
+            description_embedding_json = (
+                json.dumps(meta.description_embedding) if meta.description_embedding is not None else ""
+            )
+            last_indexed_str = meta.last_indexed.isoformat() if meta.last_indexed else ""
+            last_described_str = meta.last_described.isoformat() if meta.last_described else ""
+            described_at = meta.described_at_doc_count if meta.described_at_doc_count is not None else -1
 
-        await table.add(
-            [
-                {
-                    "name": meta.name,
-                    "description": meta.description or "",
-                    "centroid_json": centroid_json,
-                    "description_embedding_json": description_embedding_json,
-                    "doc_count": meta.doc_count,
-                    "chunk_count": meta.chunk_count,
-                    "embedding_model": meta.embedding_model,
-                    "last_indexed": last_indexed_str,
-                    "last_described": last_described_str,
-                    "described_at_doc_count": described_at,
-                    "namespace": meta.namespace,
-                    "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
-                    "mutations_since_recompute": meta.mutations_since_recompute,
-                    "needs_recompute": meta.needs_recompute,
-                }
-            ]
-        )
+            await table.add(
+                [
+                    {
+                        "name": meta.name,
+                        "description": meta.description or "",
+                        "centroid_json": centroid_json,
+                        "description_embedding_json": description_embedding_json,
+                        "doc_count": meta.doc_count,
+                        "chunk_count": meta.chunk_count,
+                        "embedding_model": meta.embedding_model,
+                        "last_indexed": last_indexed_str,
+                        "last_described": last_described_str,
+                        "described_at_doc_count": described_at,
+                        "namespace": meta.namespace,
+                        "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
+                        "mutations_since_recompute": meta.mutations_since_recompute,
+                        "needs_recompute": meta.needs_recompute,
+                    }
+                ]
+            )
+        finally:
+            lock.release()
 
     # ------------------------------------------------------------------
     # Ingest

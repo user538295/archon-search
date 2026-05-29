@@ -4072,6 +4072,87 @@ async def test_delete_collection_meta_removes_only_named_row(connected_store: Se
 
 
 @pytest.mark.asyncio
+async def test_update_collection_meta_acquires_lock(connected_store: SearchStore) -> None:
+    """update_collection_meta acquires and releases _lock_for(collection) on every call."""
+    from unittest.mock import AsyncMock, patch
+    from archon_search.collection_meta import CollectionMeta
+    import archon_search.store as store_mod
+
+    col = "ucm-lock-check"
+    real_lock = connected_store._lock_for(col)
+    acquire_called = False
+    real_acquire = real_lock.acquire
+
+    async def tracked_acquire():
+        nonlocal acquire_called
+        acquire_called = True
+        return await real_acquire()
+
+    real_lock.acquire = tracked_acquire  # type: ignore[method-assign]
+    await connected_store.update_collection_meta(CollectionMeta(name=col))
+    assert acquire_called, "update_collection_meta must acquire the lock"
+    assert not real_lock.locked(), "lock must be released after call"
+
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_timeout_raises_store_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """update_collection_meta raises StoreBusyError when lock is held externally."""
+    import archon_search.store as store_mod
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore, StoreBusyError
+
+    monkeypatch.setattr(store_mod, "INGEST_LOCK_TIMEOUT_S", 0.1)
+
+    store = SearchStore(tmp_path / "db_ucm_busy")
+    await store.connect()
+    try:
+        col = "ucm-busy-col"
+        lock = store._lock_for(col)
+        await lock.acquire()
+        try:
+            with pytest.raises(StoreBusyError):
+                await store.update_collection_meta(CollectionMeta(name=col))
+        finally:
+            lock.release()
+    finally:
+        await store.disconnect()
+
+
+def test_update_collection_meta_no_call_while_lock_held() -> None:
+    """Static guard: no production call site holds _lock_for(collection) while calling update_collection_meta."""
+    import re
+    import textwrap
+    from pathlib import Path
+
+    source_root = Path(__file__).parent.parent / "archon_search"
+    # Collect all lines that hold a lock (via _lock_for / reindex_metadata pattern)
+    # and then call update_collection_meta without releasing first.
+    # Simple heuristic: scan each file for patterns where lock.acquire() appears
+    # before update_collection_meta in the same try block without lock.release().
+    violations = []
+    for py_file in source_root.rglob("*.py"):
+        text = py_file.read_text()
+        # Check for update_collection_meta calls inside a lock-held scope
+        # (i.e., after asyncio.wait_for(lock.acquire()) and before lock.release())
+        # Simplified: look for files where both patterns appear in the same function
+        # and update_collection_meta is NOT _do_write_meta_unlocked
+        if "update_collection_meta" not in text:
+            continue
+        # Exclude unlocked helpers (they're expected to be called while lock held)
+        lines = text.splitlines()
+        in_lock_scope = False
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if "lock.acquire()" in stripped or "lock_for(" in stripped and ".acquire" in text[text.find(stripped):text.find(stripped) + 200]:
+                in_lock_scope = True
+            if "lock.release()" in stripped or "finally:" in stripped:
+                in_lock_scope = False
+            if in_lock_scope and "update_collection_meta(" in stripped and "do_write_meta_unlocked" not in stripped:
+                violations.append(f"{py_file.name}:{i+1}: {stripped}")
+    assert violations == [], f"update_collection_meta called while lock held:\n" + "\n".join(violations)
+
+
+@pytest.mark.asyncio
 async def test_update_collection_meta_replaces_existing_row(connected_store: SearchStore) -> None:
     """update_collection_meta upserts: a second write with the same name replaces the first.
 

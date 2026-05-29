@@ -257,7 +257,7 @@ centroid_recompute_threshold: int = 10_000
 > **Releasable**: after Task 2.4 — the unlocked `_do_*` helpers exist, `update_collection_meta` is now the locked public write path, and a CI guard prevents accidental unlocked-helper misuse. No external behaviour change yet; these are private building blocks for Phases 3–4.
 
 #### Task 2.0 — Make `update_collection_meta` lock-acquiring
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Add per-collection lock acquisition to `update_collection_meta` (`store.py:449–498`): acquire `_lock_for(collection)` with `asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)`, raise `StoreBusyError` on timeout.
