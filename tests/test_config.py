@@ -663,7 +663,7 @@ def test_centroid_recompute_threshold_default() -> None:
 
 
 def test_centroid_incremental_enabled_default() -> None:
-    assert SearchConfig().centroid_incremental_enabled is False
+    assert SearchConfig().centroid_incremental_enabled is True
 
 
 def test_centroid_recompute_threshold_loaded_from_toml(tmp_path: Path) -> None:
@@ -678,6 +678,20 @@ def test_centroid_incremental_enabled_loaded_from_toml(tmp_path: Path) -> None:
     toml_file.write_text("[database]\ncentroid_incremental_enabled = true\n", encoding="utf-8")
     cfg = load_config(path=toml_file)
     assert cfg.centroid_incremental_enabled is True
+
+
+# B5 Task 5.3 — flip default to True
+def test_centroid_incremental_enabled_default_true() -> None:
+    """After Task 5.3 the default must be True (B5 incremental path is live)."""
+    assert SearchConfig().centroid_incremental_enabled is True
+
+
+def test_centroid_incremental_enabled_can_be_disabled_via_toml(tmp_path: Path) -> None:
+    """Setting false in TOML still works as a rollback escape hatch."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\ncentroid_incremental_enabled = false\n", encoding="utf-8")
+    cfg = load_config(path=toml_file)
+    assert cfg.centroid_incremental_enabled is False
 
 
 def test_centroid_recompute_threshold_validation(tmp_path: Path) -> None:

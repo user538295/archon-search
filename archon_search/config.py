@@ -58,7 +58,7 @@ class SearchConfig:
     routing_description_weight: float = DEFAULT_ROUTING_DESCRIPTION_WEIGHT
     # [database] — B5 incremental centroid
     centroid_recompute_threshold: int = 10_000
-    centroid_incremental_enabled: bool = False
+    centroid_incremental_enabled: bool = True
     # [collections]
     pinned_collections: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)

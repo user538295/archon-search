@@ -621,7 +621,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_pipeline.py -v -k "ingest_directory or ingest_file"` and `uv run pytest -m integration tests/ -v -k "multi_batch or reingest"`
 
 #### Task 5.3 — Flip `centroid_incremental_enabled` to `True`
-- [ ] **File**: `archon_search/config.py`
+- [x] **File**: `archon_search/config.py`
 - **Depends on**: Task 5.2
 - **Description**:
   - Change the default value of `centroid_incremental_enabled` in `SearchConfig` from `False` to `True`. This single-line change makes every Phase 3–5 code path live simultaneously and satisfies the atomic-shipping constraint while preserving per-task commits for the prior tasks.
