@@ -14,6 +14,10 @@ class CollectionMeta:
     name: str
     description: str | None = None
     centroid: list[float] | None = None
+    # B5 incremental maintenance — NOT persisted until Task 1.2 adds schema columns.
+    centroid_sum: list[float] | None = None
+    mutations_since_recompute: int = 0
+    needs_recompute: bool = False
     doc_count: int = 0
     chunk_count: int = 0
     embedding_model: str = ""

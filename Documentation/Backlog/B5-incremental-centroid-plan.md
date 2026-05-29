@@ -191,7 +191,7 @@ centroid_recompute_threshold: int = 10_000
 > **Releasable**: after Task 1.2 — the schema and dataclass carry the new fields; no behaviour changes yet. Default pytest run must pass.
 
 #### Task 1.1 — Add `centroid_sum`, `mutations_since_recompute`, `needs_recompute` to `CollectionMeta`
-- [ ] **File**: `archon_search/collection_meta.py`
+- [x] **File**: `archon_search/collection_meta.py`
 - **Depends on**: nothing
 - **Description**:
   - Add three fields to the `CollectionMeta` dataclass (after `centroid`):
