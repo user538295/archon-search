@@ -14,7 +14,7 @@ import pytest
 import pytest_asyncio
 
 from archon_search._types import ChunkRecord
-from archon_search.store import SearchStore
+from archon_search.store import SearchStore, _batch_vectors_valid, _centroid_sum_valid, elementwise_sum
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -4799,3 +4799,91 @@ async def test_do_fetch_doc_vectors_unlocked_invalid_collection_raises(
             await store._do_fetch_doc_vectors_unlocked(db, "_reserved-col", _doc_id())
     finally:
         await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Tests for _centroid_sum_valid and _batch_vectors_valid (Task 2.3)
+# ---------------------------------------------------------------------------
+
+
+def test_centroid_sum_valid_true_for_good_sum() -> None:
+    assert _centroid_sum_valid([1.0, 2.0, 3.0], embedding_dim=3, stored_model="m", writer_model="m") is True
+
+
+def test_centroid_sum_valid_false_for_none() -> None:
+    assert _centroid_sum_valid(None, embedding_dim=3, stored_model="m", writer_model="m") is False
+
+
+def test_centroid_sum_valid_false_for_dim_mismatch() -> None:
+    assert _centroid_sum_valid([1.0, 2.0, 3.0], embedding_dim=4, stored_model="m", writer_model="m") is False
+
+
+def test_centroid_sum_valid_false_for_model_mismatch() -> None:
+    assert _centroid_sum_valid([1.0, 2.0, 3.0], embedding_dim=3, stored_model="a", writer_model="b") is False
+
+
+def test_centroid_sum_valid_false_for_nan_element() -> None:
+    assert _centroid_sum_valid([1.0, float("nan"), 3.0], embedding_dim=3, stored_model="m", writer_model="m") is False
+
+
+def test_centroid_sum_valid_false_for_inf_element() -> None:
+    assert _centroid_sum_valid([1.0, float("inf"), 3.0], embedding_dim=3, stored_model="m", writer_model="m") is False
+
+
+def test_batch_vectors_valid_true_for_clean_batch() -> None:
+    assert _batch_vectors_valid([[1.0, 2.0], [3.0, 4.0]]) is True
+
+
+def test_batch_vectors_valid_false_for_nan_in_vector() -> None:
+    assert _batch_vectors_valid([[1.0, float("nan")], [3.0, 4.0]]) is False
+
+
+def test_centroid_sum_valid_false_for_empty_stored_model() -> None:
+    assert _centroid_sum_valid(
+        [1.0, 2.0, 3.0],
+        embedding_dim=3,
+        stored_model="",
+        writer_model="BAAI/bge-small-en-v1.5",
+    ) is False
+
+
+def test_batch_vectors_valid_true_for_empty_list() -> None:
+    """Empty batch is vacuously valid."""
+    assert _batch_vectors_valid([]) is True
+
+
+def test_batch_vectors_valid_false_for_inf_in_vector() -> None:
+    assert _batch_vectors_valid([[1.0, float("inf")], [3.0, 4.0]]) is False
+
+
+def test_centroid_sum_valid_false_for_neg_inf_element() -> None:
+    assert _centroid_sum_valid([1.0, float("-inf"), 3.0], embedding_dim=3, stored_model="m", writer_model="m") is False
+
+
+def test_centroid_sum_valid_false_for_zero_embedding_dim() -> None:
+    """embedding_dim=0 with empty centroid_sum must be rejected (0-dim embeddings are meaningless)."""
+    assert _centroid_sum_valid([], embedding_dim=0, stored_model="m", writer_model="m") is False
+
+
+# ---------------------------------------------------------------------------
+# B5 Task 2.5 — elementwise_sum
+# ---------------------------------------------------------------------------
+
+
+def test_elementwise_sum_correct() -> None:
+    result = elementwise_sum([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assert result == [5.0, 7.0, 9.0]
+
+
+def test_elementwise_sum_single_vector() -> None:
+    result = elementwise_sum([[1.0, 2.0, 3.0]])
+    assert result == [1.0, 2.0, 3.0]
+
+
+def test_elementwise_sum_empty_list() -> None:
+    assert elementwise_sum([]) == []
+
+
+def test_elementwise_sum_raises_on_mixed_dimensions() -> None:
+    with pytest.raises(ValueError, match="mixed-dimension vectors"):
+        elementwise_sum([[1.0, 2.0], [3.0, 4.0, 5.0]])

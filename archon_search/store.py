@@ -100,6 +100,54 @@ def _rrf_score(rank: int) -> float:
     return 1.0 / (_RRF_K + rank + 1)
 
 
+def _centroid_sum_valid(
+    centroid_sum: list[float] | None,
+    embedding_dim: int,
+    stored_model: str,
+    writer_model: str,
+) -> bool:
+    """Return True iff centroid_sum is safe to use for incremental updates.
+
+    All of the following must hold:
+    - centroid_sum is not None
+    - embedding_dim > 0
+    - len(centroid_sum) == embedding_dim
+    - stored_model == writer_model
+    - every element is finite (no NaN, no inf)
+    """
+    if centroid_sum is None:
+        return False
+    if embedding_dim <= 0:
+        return False
+    if len(centroid_sum) != embedding_dim:
+        return False
+    if stored_model != writer_model:
+        return False
+    return all(math.isfinite(v) for v in centroid_sum)
+
+
+def _batch_vectors_valid(vectors: list[list[float]]) -> bool:
+    """Return True iff every element in every vector is finite (no NaN, no inf).
+
+    Empty vectors list returns True (vacuously all-finite).
+    """
+    return all(math.isfinite(v) for vec in vectors for v in vec)
+
+
+def elementwise_sum(vectors: list[list[float]]) -> list[float]:
+    """Return element-wise sum of *vectors*.
+
+    Returns [] for an empty list.  Raises ValueError if vectors have mixed
+    dimensions.
+    """
+    if not vectors:
+        return []
+    dim = len(vectors[0])
+    if any(len(v) != dim for v in vectors):
+        raise ValueError("mixed-dimension vectors")
+    return [sum(v[i] for v in vectors) for i in range(dim)]
+
+
 def validate_metadata(metadata: dict[str, str]) -> None:
     """Validate metadata dict against size constraints.
 

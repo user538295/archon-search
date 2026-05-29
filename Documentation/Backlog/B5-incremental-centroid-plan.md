@@ -346,7 +346,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_no_unlocked_direct_call.py -v`
 
 #### Task 2.5 — `elementwise_sum` pure helper
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - `def elementwise_sum(vectors: list[list[float]]) -> list[float]`: module-level pure function in `store.py`.
