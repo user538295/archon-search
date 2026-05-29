@@ -20,6 +20,7 @@ from archon_search.eval._hashing import (
     compute_runtime_config_hash,
     compute_thresholds_hash,
 )
+from archon_search.eval.runner import _BASELINE_MODEL_VERSION_FIELDS
 
 EVAL_DIR = Path(__file__).resolve().parent
 BASELINES_DIR = EVAL_DIR / "baselines"
@@ -256,3 +257,59 @@ def test_thresholds_hash_changes_when_thresholds_toml_changes(tmp_path: Path) ->
     f.write_text(f.read_text() + "# trailing\n")
     h_after = compute_thresholds_hash(f)
     assert h_before != h_after
+
+
+# ---------------------------------------------------------------------------
+# B6: EvalBaseline model-version optional fields
+# ---------------------------------------------------------------------------
+
+# Import the authoritative field list from production code to avoid drift.
+_MODEL_VERSION_FIELDS = _BASELINE_MODEL_VERSION_FIELDS
+
+_MINIMAL_BASELINE = {
+    "eval_hash": "abc123",
+    "metrics": {"recall_at_1": 0.8},
+    "runtime_config_hash": "def456",
+    "command": "uv run archon-search eval",
+}
+
+
+def test_deterministic_baseline_model_fields_are_none() -> None:
+    if not BASELINE_JSON.exists():
+        pytest.skip("baseline.json not committed yet")
+    from archon_search.eval.runner import load_baseline
+
+    baseline = load_baseline(BASELINE_JSON)
+    for field_name in _MODEL_VERSION_FIELDS:
+        assert getattr(baseline, field_name) is None, (
+            f"Expected {field_name} to be None in deterministic baseline"
+        )
+
+
+def test_live_baseline_model_fields_populated(tmp_path: Path) -> None:
+    from archon_search.eval.runner import load_baseline
+
+    data = dict(_MINIMAL_BASELINE)
+    for field_name in _MODEL_VERSION_FIELDS:
+        data[field_name] = f"test-value-{field_name}"
+    path = tmp_path / "baseline.json"
+    path.write_text(json.dumps(data))
+
+    baseline = load_baseline(path)
+    for field_name in _MODEL_VERSION_FIELDS:
+        assert getattr(baseline, field_name) == f"test-value-{field_name}"
+
+
+@pytest.mark.parametrize("field_name", _MODEL_VERSION_FIELDS)
+def test_load_baseline_rejects_non_string_model_field(
+    tmp_path: Path, field_name: str
+) -> None:
+    from archon_search.eval.runner import load_baseline
+
+    data = dict(_MINIMAL_BASELINE)
+    data[field_name] = 42
+    path = tmp_path / "baseline.json"
+    path.write_text(json.dumps(data))
+
+    with pytest.raises(ValueError, match=field_name):
+        load_baseline(path)

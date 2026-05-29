@@ -287,9 +287,23 @@ class EvalBaseline:
     command: str
     thresholds_hash: str | None = None
     waiver_ids: dict[str, str] = field(default_factory=dict)
+    embedding_model_id: str | None = None
+    embedding_model_version: str | None = None
+    reranker_model_id: str | None = None
+    reranker_model_version: str | None = None
+    archon_search_version: str | None = None
+    captured_at: str | None = None
 
 
 _BASELINE_REQUIRED_FIELDS = ("eval_hash", "metrics", "runtime_config_hash", "command")
+_BASELINE_MODEL_VERSION_FIELDS = (
+    "embedding_model_id",
+    "embedding_model_version",
+    "reranker_model_id",
+    "reranker_model_version",
+    "archon_search_version",
+    "captured_at",
+)
 
 
 def load_baseline(path: Path) -> EvalBaseline:
@@ -351,6 +365,13 @@ def load_baseline(path: Path) -> EvalBaseline:
                 f"Baseline metric {k!r} must be a number or null, got {type(v).__name__}"
             )
 
+    model_version_kwargs: dict[str, str | None] = {}
+    for fld in _BASELINE_MODEL_VERSION_FIELDS:
+        val = raw.get(fld)
+        if val is not None and not isinstance(val, str):
+            raise ValueError(f"Baseline field {fld!r} must be a string or null")
+        model_version_kwargs[fld] = val
+
     return EvalBaseline(
         eval_hash=raw["eval_hash"],
         metrics=metrics,
@@ -358,6 +379,7 @@ def load_baseline(path: Path) -> EvalBaseline:
         command=raw["command"],
         thresholds_hash=thresholds_hash,
         waiver_ids=waiver_ids,
+        **model_version_kwargs,
     )
 
 

@@ -229,7 +229,7 @@ async def run_eval_suite(
 > **Releasable**: after Task 2.5 — `pytest -m live_eval` now writes `live_eval_report.json` + `live_eval_report.md` to `tests/eval/live_baselines/_artifacts/`. The JSON includes per-metric `MetricVerdict` objects with PASS/FAIL status; the markdown embeds the existing `render_report()` output alongside a verdict table. `EvalBaseline` schema accepts model-version fields from future live baselines without breaking existing deterministic baseline files.
 
 #### Task 2.1 — Extend `EvalBaseline` with 6 model-version optional fields
-- [ ] **File**: `archon_search/eval/runner.py`
+- [x] **File**: `archon_search/eval/runner.py`
 - **Depends on**: nothing (independent schema change)
 - **Description**:
   - Add 6 optional fields (all `= None`) to `EvalBaseline` dataclass after `waiver_ids`: `embedding_model_id`, `embedding_model_version`, `reranker_model_id`, `reranker_model_version`, `archon_search_version`, `captured_at` — all typed `str | None`
