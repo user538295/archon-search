@@ -190,7 +190,7 @@ async def run_eval_suite(
   - Checkpoint: `uv run pytest tests/eval/test_live_report_acceptance.py -k "stubs or guard or default_backend" --no-cov`
 
 #### Task 1.3 — `tests/eval/live/conftest.py` (isolated autouse shadow + fixtures)
-- [ ] **File**: `tests/eval/live/conftest.py`
+- [x] **File**: `tests/eval/live/conftest.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Define `_activate_deterministic_eval_backends` as a no-op autouse fixture with the **exact same name** as the parent conftest's autouse fixture — pytest fixture override by name prevents the parent's autouse from setting `ARCHON_SEARCH_EVAL_BACKENDS=1` for any test in this directory:
