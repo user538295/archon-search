@@ -907,6 +907,84 @@ class SearchStore:
             await self._do_write_meta_unlocked(db, collection, new_meta)
             return False
 
+    async def _do_subtract_meta_on_delete(
+        self,
+        db: "lancedb.db.AsyncConnection",
+        collection: str,
+        del_vectors: "list[list[float]]",
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> None:
+        # Caller must hold _lock_for(collection).
+        from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
+        from datetime import timezone  # noqa: PLC0415
+
+        if not del_vectors:
+            return
+
+        existing = await self._do_read_meta_unlocked(db, collection, namespace=namespace)
+        if existing is None:
+            logger.warning("Collection %r has no meta row; delete cannot update centroid", collection)
+            return
+
+        now = datetime.now(timezone.utc)
+        new_mutations = existing.mutations_since_recompute + len(del_vectors)
+
+        embedding_dim = len(existing.centroid_sum) if existing.centroid_sum is not None else 0
+        if not _centroid_sum_valid(
+            existing.centroid_sum, embedding_dim,
+            stored_model=existing.embedding_model or "",
+            writer_model=existing.embedding_model or "",
+        ):
+            logger.warning("Collection %r centroid stale, recompute queued", collection)
+            patched = CollectionMeta(
+                name=existing.name,
+                description=existing.description,
+                description_embedding=existing.description_embedding,
+                centroid=None,
+                centroid_sum=None,
+                doc_count=existing.doc_count,
+                chunk_count=existing.chunk_count,
+                embedding_model=existing.embedding_model,
+                last_indexed=now,
+                last_described=existing.last_described,
+                described_at_doc_count=existing.described_at_doc_count,
+                namespace=existing.namespace,
+                mutations_since_recompute=new_mutations,
+                needs_recompute=True,
+            )
+            await self._do_write_meta_unlocked(db, collection, patched)
+            return
+
+        del_sum = elementwise_sum(del_vectors)
+        new_sum = [a - b for a, b in zip(existing.centroid_sum, del_sum)]
+        new_chunk_count = max(0, existing.chunk_count - len(del_vectors))
+        new_doc_count = max(0, existing.doc_count - 1)
+
+        if new_chunk_count == 0:
+            new_centroid = None
+            new_sum = None
+            new_doc_count = 0
+        else:
+            new_centroid = [v / new_chunk_count for v in new_sum]
+
+        new_meta = CollectionMeta(
+            name=existing.name,
+            description=existing.description,
+            description_embedding=existing.description_embedding,
+            centroid=new_centroid,
+            centroid_sum=new_sum,
+            doc_count=new_doc_count,
+            chunk_count=new_chunk_count,
+            embedding_model=existing.embedding_model,
+            last_indexed=now,
+            last_described=existing.last_described,
+            described_at_doc_count=existing.described_at_doc_count,
+            namespace=existing.namespace,
+            mutations_since_recompute=new_mutations,
+            needs_recompute=existing.needs_recompute,
+        )
+        await self._do_write_meta_unlocked(db, collection, new_meta)
+
     # ------------------------------------------------------------------
     # Ingest
     # ------------------------------------------------------------------

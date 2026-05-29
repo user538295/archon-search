@@ -5373,3 +5373,216 @@ async def test_ingest_chunks_needs_recompute_false_below_threshold(tmp_path) -> 
         assert result.needs_recompute is False
     finally:
         await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# B5 Task 4.1 — _do_subtract_meta_on_delete helper
+# ---------------------------------------------------------------------------
+
+
+def _meta_with(tmp_path, **kwargs):
+    """Sync helper: create a store, write a CollectionMeta row, return (store, db, col)."""
+    import asyncio
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig()
+    store = SearchStore(tmp_path / "db", config=cfg)
+    asyncio.run(store.connect())
+    return store
+
+
+@pytest.mark.asyncio
+async def test_do_subtract_meta_decrements_chunk_count(tmp_path) -> None:
+    """Subtract 2 vectors from meta with chunk_count=5 → chunk_count==3."""
+    from archon_search.collection_meta import CollectionMeta
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "sub_col"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[10.0, 10.0], centroid=[2.0, 2.0],
+            chunk_count=5, doc_count=2, embedding_model="m",
+        )
+        await store.update_collection_meta(seed)
+        await store._do_subtract_meta_on_delete(db, col, [[1.0, 1.0], [2.0, 2.0]])
+        meta = await store.get_collection_meta(col)
+        assert meta is not None
+        assert meta.chunk_count == 3
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_subtract_meta_resets_on_last_doc(tmp_path) -> None:
+    """Subtract 2 vectors from meta with chunk_count=2 → centroid_sum=None, centroid=None, chunk_count=0."""
+    from archon_search.collection_meta import CollectionMeta
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "sub_col2"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[4.0, 4.0], centroid=[2.0, 2.0],
+            chunk_count=2, doc_count=1, embedding_model="m",
+        )
+        await store.update_collection_meta(seed)
+        await store._do_subtract_meta_on_delete(db, col, [[1.0, 1.0], [3.0, 3.0]])
+        meta = await store.get_collection_meta(col)
+        assert meta is not None
+        assert meta.centroid_sum is None
+        assert meta.centroid is None
+        assert meta.chunk_count == 0
+        assert meta.doc_count == 0
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_subtract_meta_noop_on_empty_vectors(tmp_path) -> None:
+    """Empty del_vectors → meta unchanged."""
+    from archon_search.collection_meta import CollectionMeta
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "sub_noop"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[5.0], centroid=[5.0],
+            chunk_count=1, doc_count=1, embedding_model="m",
+        )
+        await store.update_collection_meta(seed)
+        await store._do_subtract_meta_on_delete(db, col, [])
+        meta = await store.get_collection_meta(col)
+        assert meta.chunk_count == 1
+        assert meta.centroid_sum == [5.0]
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_subtract_meta_bumps_last_indexed(tmp_path) -> None:
+    """last_indexed is updated to a recent datetime after subtraction."""
+    from archon_search.collection_meta import CollectionMeta
+    from datetime import datetime, timezone
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "sub_ts"
+        old_ts = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        seed = CollectionMeta(
+            name=col, centroid_sum=[6.0], centroid=[6.0],
+            chunk_count=2, doc_count=1, embedding_model="m",
+            last_indexed=old_ts,
+        )
+        await store.update_collection_meta(seed)
+        await store._do_subtract_meta_on_delete(db, col, [[1.0]])
+        meta = await store.get_collection_meta(col)
+        assert meta.last_indexed is not None
+        assert meta.last_indexed != old_ts
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_subtract_meta_sets_needs_recompute_on_invalid_sum(tmp_path) -> None:
+    """Stored sum with NaN → centroid_sum=None, centroid=None, needs_recompute=True."""
+    from archon_search.collection_meta import CollectionMeta
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "sub_nan"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[float("nan")], centroid=[float("nan")],
+            chunk_count=2, doc_count=1, embedding_model="m",
+        )
+        await store.update_collection_meta(seed)
+        await store._do_subtract_meta_on_delete(db, col, [[1.0]])
+        meta = await store.get_collection_meta(col)
+        assert meta.centroid_sum is None
+        assert meta.centroid is None
+        assert meta.needs_recompute is True
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_subtract_meta_doc_count_floor_at_zero(tmp_path) -> None:
+    """doc_count=0 stays at 0 after subtraction (no negative value)."""
+    from archon_search.collection_meta import CollectionMeta
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "sub_dc_floor"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[3.0, 3.0], centroid=[1.5, 1.5],
+            chunk_count=2, doc_count=0, embedding_model="m",
+        )
+        await store.update_collection_meta(seed)
+        await store._do_subtract_meta_on_delete(db, col, [[1.0, 1.0], [2.0, 2.0]])
+        meta = await store.get_collection_meta(col)
+        assert meta.doc_count == 0
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_subtract_meta_noop_when_meta_none(tmp_path) -> None:
+    """No meta row for collection → logs warning, returns without error, no row created."""
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "sub_nometa"
+        await store.ensure_collection(col, 2)
+        await store._do_subtract_meta_on_delete(db, col, [[1.0, 2.0]])
+        meta = await store.get_collection_meta(col)
+        assert meta is None
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_subtract_meta_chunk_count_floor_at_zero(tmp_path) -> None:
+    """chunk_count=1 subtract 3 vectors → chunk_count stays at 0."""
+    from archon_search.collection_meta import CollectionMeta
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "sub_cc_floor"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[5.0], centroid=[5.0],
+            chunk_count=1, doc_count=1, embedding_model="m",
+        )
+        await store.update_collection_meta(seed)
+        await store._do_subtract_meta_on_delete(db, col, [[1.0], [2.0], [3.0]])
+        meta = await store.get_collection_meta(col)
+        assert meta.chunk_count == 0
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_subtract_meta_bumps_mutations(tmp_path) -> None:
+    """mutations_since_recompute is bumped by len(del_vectors)."""
+    from archon_search.collection_meta import CollectionMeta
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "sub_muts"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[10.0], centroid=[5.0],
+            chunk_count=2, doc_count=1, embedding_model="m",
+            mutations_since_recompute=3,
+        )
+        await store.update_collection_meta(seed)
+        await store._do_subtract_meta_on_delete(db, col, [[1.0], [2.0]])
+        meta = await store.get_collection_meta(col)
+        assert meta.mutations_since_recompute == 5
+    finally:
+        await store.disconnect()

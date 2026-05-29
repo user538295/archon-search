@@ -484,7 +484,7 @@ centroid_recompute_threshold: int = 10_000
 > **Releasable**: ⚠️ NOT independently releasable — see Phase 3 atomic-shipping constraint. Phase 4 is internally consistent after Task 4.2 but MUST ship together with Phases 3 and 5 as a single atomic change.
 
 #### Task 4.1 — `_do_subtract_meta_on_delete`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 3.1, Task 2.5
 - **Description**:
   - `async def _do_subtract_meta_on_delete(self, db, collection: str, del_vectors: list[list[float]], namespace: str = DEFAULT_NAMESPACE) -> None`: called while lock is held. Reads meta via `_do_read_meta_unlocked(db, collection, namespace=namespace)`. Derives `embedding_model` and `embedding_dim` from the read meta row — the helper does not accept them as parameters (the stored meta is the authoritative source). If `del_vectors` is empty, returns immediately (no-op — doc was already absent).
