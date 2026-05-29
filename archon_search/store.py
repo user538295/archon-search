@@ -909,6 +909,7 @@ class SearchStore:
         chunks: list[ChunkRecord],
         *,
         _locked_by_caller: bool = False,
+        embedding_model: str | None = None,
     ) -> int:
         self._validate_collection(collection)
         db = self._require_connected()
@@ -920,21 +921,29 @@ class SearchStore:
         if not chunks:
             return 0
 
-        if _locked_by_caller:
-            # REST /ingest pre-acquire path: caller holds the lock; skip acquire/release.
-            return await self._do_ingest(db, collection, chunks)
+        lock = None if _locked_by_caller else self._lock_for(collection)
+        if lock is not None:
+            try:
+                await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+            except asyncio.TimeoutError as e:
+                raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
+        try:
+            chunks_ingested = await self._do_ingest(db, collection, chunks)
 
-        # Acquire the per-collection lock; the timeout applies only to
-        # acquisition. Once acquired, the write runs to completion.
-        lock = self._lock_for(collection)
-        try:
-            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
-        except asyncio.TimeoutError as e:
-            raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
-        try:
-            return await self._do_ingest(db, collection, chunks)
+            if self._config.centroid_incremental_enabled:
+                batch_vectors = [list(c.vector) for c in chunks]
+                if batch_vectors:
+                    distinct_doc_count = len({c.doc_id for c in chunks})
+                    await self._do_update_meta_on_add(
+                        db, collection, batch_vectors, distinct_doc_count,
+                        embedding_model=embedding_model,
+                        embedding_dim=len(batch_vectors[0]),
+                    )
+
+            return chunks_ingested
         finally:
-            lock.release()
+            if lock is not None:
+                lock.release()
 
     async def _do_ingest(self, db, collection: str, chunks: list[ChunkRecord]) -> int:
         table = await db.open_table(collection)

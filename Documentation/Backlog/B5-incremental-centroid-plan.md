@@ -399,7 +399,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_store.py tests/test_config.py -v -k "do_update_meta_on_add or centroid_recompute_threshold"`
 
 #### Task 3.2 — Wire `_do_update_meta_on_add` into `ingest_chunks`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 3.1
 - **Description**:
   - **Flag gating contract**: when `centroid_incremental_enabled=False`, all incremental code paths are no-ops and the pre-B5 behavior is preserved (incl. retaining the old `update_collection_meta` call in `ingest_directory` and the `recompute_collection_meta` call in `sync.py`). The flag is the single source of truth for which code path runs; no other guards are needed.

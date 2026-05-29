@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import sys
 import uuid
@@ -5134,5 +5135,181 @@ async def test_do_update_meta_on_add_new_collection_no_recompute_at_threshold(tm
             embedding_model="m", embedding_dim=1,
         )
         assert signal is False, "Brand-new collection should never trigger recompute"
+    finally:
+        await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# B5 Task 3.2 — Wire _do_update_meta_on_add into ingest_chunks
+# ---------------------------------------------------------------------------
+
+
+def _make_incremental_store(tmp_path, threshold: int = 10_000):
+    """Return a connected SearchStore with incremental centroid enabled."""
+    import asyncio
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True, centroid_recompute_threshold=threshold)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    asyncio.run(store.connect())
+    return store
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_accumulates_centroid_sum_on_second_batch(tmp_path) -> None:
+    """B1 then B2 → centroid_sum == elementwise sum of all vectors."""
+    import asyncio
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "acc_col"
+        doc1 = _doc_id()
+        doc2 = _doc_id()
+        await store.ensure_collection(col, 2)
+        # Batch 1: [[1.0, 2.0]]
+        c1 = _chunk(doc1, 0)
+        import dataclasses; c1 = dataclasses.replace(c1, vector=[1.0, 2.0])
+        await store.ingest_chunks(col, [c1], embedding_model="m")
+        # Batch 2: [[3.0, 4.0]]
+        c2 = _chunk(doc2, 0)
+        import dataclasses; c2 = dataclasses.replace(c2, vector=[3.0, 4.0])
+        await store.ingest_chunks(col, [c2], embedding_model="m")
+        meta = await store.get_collection_meta(col)
+        assert meta is not None
+        assert meta.centroid_sum == [4.0, 6.0]
+        assert meta.chunk_count == 2
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_bootstrap_creates_meta_row(tmp_path) -> None:
+    """ingest into collection with no prior meta → meta row created with correct chunk_count."""
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "boot_col"
+        await store.ensure_collection(col, 2)
+        doc = _doc_id()
+        c = _chunk(doc, 0)
+        c = dataclasses.replace(c, vector=[1.0, 2.0])
+        await store.ingest_chunks(col, [c], embedding_model="m")
+        meta = await store.get_collection_meta(col)
+        assert meta is not None
+        assert meta.chunk_count == 1
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_doc_count_multi_doc_batch(tmp_path) -> None:
+    """Single ingest_chunks call with 3 distinct doc_ids → doc_count == 3."""
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "doc_count_col"
+        await store.ensure_collection(col, 2)
+        chunks = []
+        for i in range(3):
+            doc = _doc_id()
+            c = _chunk(doc, 0)
+            c = dataclasses.replace(c, vector=[float(i), float(i + 1)])
+            chunks.append(c)
+        await store.ingest_chunks(col, chunks, embedding_model="m")
+        meta = await store.get_collection_meta(col)
+        assert meta is not None
+        assert meta.doc_count == 3
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_no_full_scan_spy(tmp_path) -> None:
+    """get_all_vectors and count_documents are never called during ingest_chunks."""
+    from unittest.mock import AsyncMock, patch
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "spy_col"
+        await store.ensure_collection(col, 2)
+        doc = _doc_id()
+        c = _chunk(doc, 0)
+        c = dataclasses.replace(c, vector=[1.0, 2.0])
+        with patch.object(store, "get_all_vectors", new_callable=AsyncMock) as mock_gav, \
+             patch.object(store, "count_documents", new_callable=AsyncMock) as mock_cnt:
+            await store.ingest_chunks(col, [c], embedding_model="m")
+            await store.ingest_chunks(col, [c], embedding_model="m")
+        mock_gav.assert_not_called()
+        mock_cnt.assert_not_called()
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_lock_serializes_concurrent_adds(tmp_path) -> None:
+    """Two concurrent ingest_chunks for the same collection serialize correctly."""
+    import asyncio
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "serial_col"
+        await store.ensure_collection(col, 2)
+        docA = _doc_id()
+        docB = _doc_id()
+        cA = dataclasses.replace(_chunk(docA, 0), vector=[1.0, 2.0])
+        cB = dataclasses.replace(_chunk(docB, 0), vector=[3.0, 5.0])
+        await asyncio.gather(
+            store.ingest_chunks(col, [cA], embedding_model="m"),
+            store.ingest_chunks(col, [cB], embedding_model="m"),
+        )
+        meta = await store.get_collection_meta(col)
+        assert meta is not None
+        assert meta.centroid_sum == [4.0, 7.0], f"Expected [4.0, 7.0], got {meta.centroid_sum}"
+        assert meta.chunk_count == 2
+    finally:
+        await store.disconnect()
+
+
+def test_lock_for_keys_by_collection_not_namespace(tmp_path) -> None:
+    """_lock_for returns the same lock for the same collection regardless of any namespace arg."""
+    store = SearchStore(tmp_path / "db")
+    lock1 = store._lock_for("mycol")
+    lock2 = store._lock_for("mycol")
+    assert lock1 is lock2
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_locked_by_caller_accumulates_meta(tmp_path) -> None:
+    """_locked_by_caller=True: meta still updated; lock not released by ingest_chunks."""
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "lbc_col"
+        await store.ensure_collection(col, 2)
+        lock = store._lock_for(col)
+        await lock.acquire()
+        try:
+            doc = _doc_id()
+            c = dataclasses.replace(_chunk(doc, 0), vector=[1.0, 2.0])
+            result = await store.ingest_chunks(col, [c], _locked_by_caller=True, embedding_model="m")
+            # Lock must still be held (ingest_chunks must not release it)
+            assert lock.locked(), "Lock should still be held after _locked_by_caller call"
+            # centroid_sum should be updated
+            meta = await store.get_collection_meta(col)
+            assert meta is not None
+            assert meta.centroid_sum == [1.0, 2.0]
+        finally:
+            lock.release()
     finally:
         await store.disconnect()
