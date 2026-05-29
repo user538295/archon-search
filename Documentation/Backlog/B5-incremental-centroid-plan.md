@@ -275,7 +275,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "update_collection_meta"`
 
 #### Task 2.1 — `_do_read_meta_unlocked` and `_do_write_meta_unlocked`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - `async def _do_read_meta_unlocked(self, db, collection: str, namespace: str = DEFAULT_NAMESPACE) -> "CollectionMeta | None"`: reads the meta row for `collection` from an already-open `db` connection. Must NOT acquire `_lock_for(collection)`. Identical logic to the inner body of `get_collection_meta` (open `_META_TABLE`, filter by name + namespace, call `_row_to_meta`). Returns `None` if `_META_TABLE` absent or no matching row.

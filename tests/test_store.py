@@ -4463,6 +4463,176 @@ async def test_old_table_without_column_reads_none(tmp_path: Path) -> None:
         await store.disconnect()
 
 
+# ---------------------------------------------------------------------------
+# _do_read_meta_unlocked and _do_write_meta_unlocked tests (Task 2.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_do_read_meta_unlocked_returns_none_when_no_meta_table(
+    tmp_path: Path,
+) -> None:
+    """_do_read_meta_unlocked returns None when no meta table exists."""
+    store = SearchStore(tmp_path / "db_no_meta")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        result = await store._do_read_meta_unlocked(db, "some-col")
+        assert result is None
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_read_meta_unlocked_returns_existing_meta(
+    connected_store: SearchStore,
+) -> None:
+    """After update_collection_meta, _do_read_meta_unlocked returns the same meta."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(
+        name="read-unlocked-col",
+        doc_count=7,
+        chunk_count=21,
+        namespace="default",
+    )
+    await connected_store.update_collection_meta(meta)
+
+    db = connected_store._require_connected()
+    result = await connected_store._do_read_meta_unlocked(db, "read-unlocked-col")
+    assert result is not None
+    assert result.doc_count == 7
+    assert result.chunk_count == 21
+    assert result.namespace == "default"
+
+
+@pytest.mark.asyncio
+async def test_do_write_meta_unlocked_creates_row(
+    connected_store: SearchStore,
+) -> None:
+    """_do_write_meta_unlocked writes a row retrievable via get_collection_meta."""
+    from archon_search.collection_meta import CollectionMeta
+
+    # Ensure meta table exists first (by writing one row via the public API)
+    seed = CollectionMeta(name="write-seed-col")
+    await connected_store.update_collection_meta(seed)
+
+    meta = CollectionMeta(
+        name="write-unlocked-col",
+        doc_count=3,
+        chunk_count=9,
+    )
+    db = connected_store._require_connected()
+    await connected_store._do_write_meta_unlocked(db, "write-unlocked-col", meta)
+
+    retrieved = await connected_store.get_collection_meta("write-unlocked-col")
+    assert retrieved is not None
+    assert retrieved.doc_count == 3
+    assert retrieved.chunk_count == 9
+
+
+@pytest.mark.asyncio
+async def test_do_write_meta_unlocked_upserts_existing_row(
+    connected_store: SearchStore,
+) -> None:
+    """Writing twice with different chunk_count; second read reflects the second value."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta1 = CollectionMeta(name="upsert-unlocked-col", chunk_count=5)
+    await connected_store.update_collection_meta(meta1)
+
+    db = connected_store._require_connected()
+    meta2 = CollectionMeta(name="upsert-unlocked-col", chunk_count=99)
+    await connected_store._do_write_meta_unlocked(db, "upsert-unlocked-col", meta2)
+
+    retrieved = await connected_store.get_collection_meta("upsert-unlocked-col")
+    assert retrieved is not None
+    assert retrieved.chunk_count == 99
+
+
+@pytest.mark.asyncio
+async def test_do_write_meta_unlocked_creates_meta_table_if_absent(
+    tmp_path: Path,
+) -> None:
+    """_do_write_meta_unlocked on a db with no _META_TABLE creates it and stores the row."""
+    from archon_search.collection_meta import CollectionMeta
+
+    store = SearchStore(tmp_path / "db_write_no_meta")
+    await store.connect()
+    try:
+        db = store._require_connected()
+
+        # Verify no meta table exists yet
+        all_tables = (await db.list_tables()).tables
+        assert "_archon_collection_meta" not in all_tables
+
+        meta = CollectionMeta(name="auto-create-col", doc_count=1, chunk_count=2)
+        await store._do_write_meta_unlocked(db, "auto-create-col", meta)
+
+        # Table must now exist and the row must be retrievable
+        retrieved = await store.get_collection_meta("auto-create-col")
+        assert retrieved is not None
+        assert retrieved.doc_count == 1
+        assert retrieved.chunk_count == 2
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_write_meta_unlocked_includes_b5_columns(
+    connected_store: SearchStore,
+) -> None:
+    """Row written via _do_write_meta_unlocked includes all three B5 columns."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(
+        name="b5-unlocked-col",
+        centroid_sum=[1.0, 2.0],
+        mutations_since_recompute=5,
+        needs_recompute=True,
+    )
+    db = connected_store._require_connected()
+    await connected_store._do_write_meta_unlocked(db, "b5-unlocked-col", meta)
+
+    retrieved = await connected_store.get_collection_meta("b5-unlocked-col")
+    assert retrieved is not None
+    assert retrieved.centroid_sum is not None
+    assert abs(retrieved.centroid_sum[0] - 1.0) < 1e-9
+    assert abs(retrieved.centroid_sum[1] - 2.0) < 1e-9
+    assert retrieved.mutations_since_recompute == 5
+    assert retrieved.needs_recompute is True
+
+
+@pytest.mark.asyncio
+async def test_do_write_meta_unlocked_cross_namespace_isolation(
+    connected_store: SearchStore,
+) -> None:
+    """_do_write_meta_unlocked on collection in namespace A must not delete namespace B's row.
+
+    Uses _do_write_meta_unlocked directly for both namespaces to bypass the public
+    namespace-uniqueness guard, simulating the scenario where two namespaces share
+    a collection name (possible via direct store access or migration scenarios).
+    """
+    from archon_search.collection_meta import CollectionMeta
+
+    col = "cross-ns-col"
+    db = connected_store._require_connected()
+
+    meta_alpha = CollectionMeta(name=col, namespace="alpha", doc_count=1)
+    meta_beta = CollectionMeta(name=col, namespace="beta", doc_count=2)
+    await connected_store._do_write_meta_unlocked(db, col, meta_alpha)
+    await connected_store._do_write_meta_unlocked(db, col, meta_beta)
+
+    # Overwrite alpha — beta's row must survive untouched
+    updated_alpha = CollectionMeta(name=col, namespace="alpha", doc_count=99)
+    await connected_store._do_write_meta_unlocked(db, col, updated_alpha)
+
+    result_alpha = await connected_store.get_collection_meta(col, namespace="alpha")
+    result_beta = await connected_store.get_collection_meta(col, namespace="beta")
+    assert result_alpha is not None and result_alpha.doc_count == 99
+    assert result_beta is not None and result_beta.doc_count == 2, "beta row must not be deleted"
+
+
 @pytest.mark.asyncio
 async def test_a5b_end_to_end_flow_unchanged(connected_store: SearchStore, col_name: str) -> None:
     """Full happy-path regression: add → ingest → search → delete → search empty.

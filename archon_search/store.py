@@ -607,8 +607,12 @@ class SearchStore:
                             f"Collection {meta.name!r} belongs to namespace {existing_ns!r}; "
                             f"cannot reassign to {meta.namespace!r}"
                         )
-                    # meta.name validated upstream by _COLLECTION_RE; _where_eq is defense-in-depth
-                    await table.delete(_where_eq("name", meta.name))
+                    # _where_eq is defense-in-depth; include namespace to prevent cross-namespace collision.
+                    # Legacy rows may have NULL namespace (treated as DEFAULT_NAMESPACE), so match both.
+                    ns_predicate = _where_eq("namespace", meta.namespace)
+                    if meta.namespace == DEFAULT_NAMESPACE:
+                        ns_predicate = f"({ns_predicate} OR namespace IS NULL)"
+                    await table.delete(_where_eq("name", meta.name) + " AND " + ns_predicate)
 
             centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
             description_embedding_json = (
@@ -640,6 +644,80 @@ class SearchStore:
             )
         finally:
             lock.release()
+
+    # ------------------------------------------------------------------
+    # Private unlocked meta helpers (caller must hold _lock_for(collection))
+    # ------------------------------------------------------------------
+
+    async def _do_read_meta_unlocked(
+        self, db, collection: str, namespace: str = DEFAULT_NAMESPACE
+    ) -> "CollectionMeta | None":
+        # Caller must hold _lock_for(collection)
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return None
+        table = await db.open_table(_META_TABLE)
+        rows = await table.query().to_list()
+        row = next(
+            (
+                r for r in rows
+                if r["name"] == collection and (r.get("namespace") or DEFAULT_NAMESPACE) == namespace
+            ),
+            None,
+        )
+        return self._row_to_meta(row) if row is not None else None
+
+    async def _do_write_meta_unlocked(
+        self, db, collection: str, meta: "CollectionMeta"
+    ) -> None:
+        # Caller must hold _lock_for(collection)
+        if collection != meta.name:
+            raise ValueError(f"collection {collection!r} != meta.name {meta.name!r}")
+        _validate_namespace(meta.namespace)
+        self._validate_collection(meta.name)
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            table = await db.create_table(_META_TABLE, schema=self._meta_schema())
+        else:
+            table = await db.open_table(_META_TABLE)
+            rows = await table.query().to_list()
+            existing = next((r for r in rows if r["name"] == meta.name), None)
+            if existing is not None:
+                # Include namespace in delete predicate to avoid cross-namespace collision.
+                # Legacy rows may have NULL namespace (treated as DEFAULT_NAMESPACE), so match both.
+                ns_predicate = _where_eq("namespace", meta.namespace)
+                if meta.namespace == DEFAULT_NAMESPACE:
+                    ns_predicate = f"({ns_predicate} OR namespace IS NULL)"
+                await table.delete(_where_eq("name", meta.name) + " AND " + ns_predicate)
+
+        centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
+        description_embedding_json = (
+            json.dumps(meta.description_embedding) if meta.description_embedding is not None else ""
+        )
+        last_indexed_str = meta.last_indexed.isoformat() if meta.last_indexed else ""
+        last_described_str = meta.last_described.isoformat() if meta.last_described else ""
+        described_at = meta.described_at_doc_count if meta.described_at_doc_count is not None else -1
+
+        await table.add(
+            [
+                {
+                    "name": meta.name,
+                    "description": meta.description or "",
+                    "centroid_json": centroid_json,
+                    "description_embedding_json": description_embedding_json,
+                    "doc_count": meta.doc_count,
+                    "chunk_count": meta.chunk_count,
+                    "embedding_model": meta.embedding_model,
+                    "last_indexed": last_indexed_str,
+                    "last_described": last_described_str,
+                    "described_at_doc_count": described_at,
+                    "namespace": meta.namespace,
+                    "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
+                    "mutations_since_recompute": meta.mutations_since_recompute,
+                    "needs_recompute": meta.needs_recompute,
+                }
+            ]
+        )
 
     # ------------------------------------------------------------------
     # Ingest
