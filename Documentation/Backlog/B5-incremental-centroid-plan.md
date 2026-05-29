@@ -330,7 +330,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "centroid_sum_valid or batch_vectors_valid"`
 
 #### Task 2.4 — CI guard: no `_do_*_unlocked` call from non-`_do_*` methods
-- [ ] **File**: `tests/test_no_unlocked_direct_call.py`
+- [x] **File**: `tests/test_no_unlocked_direct_call.py`
 - **Depends on**: Task 2.3
 - **Description**:
   - Add a new test file (following the pattern of `tests/test_no_fstring_sql.py`) that AST-scans `archon_search/store.py` and asserts: no method whose name does **not** start with `_do_` makes a direct call to a method whose name ends with `_unlocked`. Implement using Python's `ast` module — parse `store.py`, walk `Call` nodes, filter for `Attribute` calls whose `attr` ends with `_unlocked`, and assert the enclosing function name starts with `_do_`.
