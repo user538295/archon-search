@@ -692,15 +692,34 @@ class SearchCollectionSync:
                 # Rebuild FTS once after all file operations
                 await self._pipeline.store.rebuild_fts_index(name)
 
-                # Recompute collection meta (centroid, doc/chunk counts)
-                try:
-                    await self._pipeline.recompute_collection_meta(name)
-                except Exception:  # noqa: BLE001
-                    logger.warning(
-                        "Failed to recompute collection meta for %r after sync; centroid may be stale",
-                        name,
-                        exc_info=True,
-                    )
+                # Centroid maintenance: incremental path fires only when checkpoint signal raised.
+                # Legacy (flag=False): unconditional full recompute on every sync.
+                if self._pipeline._centroid_incremental_enabled:
+                    try:
+                        store_cfg = getattr(self._pipeline.store, "_config", None)
+                        threshold = int(getattr(store_cfg, "centroid_recompute_threshold", 10_000))
+                        meta = await self._pipeline.store.get_collection_meta(name)
+                        if meta and (
+                            meta.needs_recompute
+                            or meta.mutations_since_recompute >= threshold
+                        ):
+                            logger.debug("Recompute collection meta for %r after sync", name)
+                            await self._pipeline.recompute_collection_meta(name)
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to recompute collection meta for %r after sync; centroid may be stale",
+                            name,
+                            exc_info=True,
+                        )
+                else:
+                    try:
+                        await self._pipeline.recompute_collection_meta(name)
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to recompute collection meta for %r after sync; centroid may be stale",
+                            name,
+                            exc_info=True,
+                        )
 
                 # Write DONE state
                 self._safe_state_update(name, CollectionProgress(

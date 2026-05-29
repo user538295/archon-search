@@ -669,7 +669,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "elementwise_sum"` and `uv run pytest tests/test_pipeline.py -v -k "recompute"`
 
 #### Task 6.2 — Remove `recompute_collection_meta` from watcher-sync hot path; add checkpoint wiring in sync
-- [ ] **File**: `archon_search/sync.py`
+- [x] **File**: `archon_search/sync.py`
 - **Depends on**: Task 6.1, Task 5.2, Task 5.3
 - **Description**:
   - **Task 5.3 dependency rationale**: Task 5.3 flips `centroid_incremental_enabled` default to True; Phase 6 sync changes assume the incremental path is the production default and would otherwise break the pre-B5 fallback chain (sync would lose centroid maintenance when the flag is False).

@@ -3430,6 +3430,7 @@ def _make_mock_pipeline_with_ingest_file(tmp_path, existing_collections=None, ma
     pipeline.ingest_file = AsyncMock(return_value=MagicMock(status="ok"))
     pipeline.store.rebuild_fts_index = AsyncMock()
     pipeline.store.delete_by_source_path = AsyncMock(return_value=1)
+    pipeline.store.get_collection_meta = AsyncMock(return_value=None)
     pipeline.recompute_collection_meta = AsyncMock()
     return pipeline
 
@@ -3728,7 +3729,8 @@ class TestTask46:
 
     @pytest.mark.asyncio
     async def test_sync_apply_changes_updates_collection_meta(self, tmp_path):
-        """After _apply_collection_changes, pipeline.recompute_collection_meta is called."""
+        """After _apply_collection_changes with needs_recompute=True, recompute_collection_meta is called."""
+        from archon_search.collection_meta import CollectionMeta
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -3739,6 +3741,14 @@ class TestTask46:
         pipeline = _make_mock_pipeline_with_ingest_file(
             tmp_path, existing_collections=["myproject"], manifest=manifest
         )
+        # B5: recompute fires when signal raised (needs_recompute=True)
+        from archon_search.collection_meta import CollectionMeta
+        from archon_search.config import SearchConfig
+        meta = CollectionMeta(name="myproject", needs_recompute=True)
+        pipeline.store.get_collection_meta = AsyncMock(return_value=meta)
+        cfg = SearchConfig()
+        cfg.centroid_incremental_enabled = True
+        pipeline.store._config = cfg
 
         state_store = _make_done_state(tmp_path, "myproject", {})
 
@@ -4889,3 +4899,121 @@ class TestSyncCollectionMethod:
         _, kwargs = mock_check.call_args
         assert kwargs.get("indexed_embedding_model") == ""
         assert kwargs.get("indexed_chunk_size") == 0
+
+
+# ===========================================================================
+# B5 Task 6.2 — sync hot-path removal and checkpoint wiring
+# ===========================================================================
+
+
+def _make_pipeline_for_sync_centroid(tmp_path, meta=None, incremental_enabled=True, threshold=10_000):
+    """Build a mock pipeline for Task 6.2 centroid tests.
+
+    Sets up store._config with centroid flags and get_collection_meta.
+    """
+    from archon_search.config import SearchConfig
+
+    pipeline = _make_mock_pipeline_with_ingest_file(tmp_path, existing_collections=["myproject"])
+
+    cfg = SearchConfig()
+    cfg.centroid_incremental_enabled = incremental_enabled
+    cfg.centroid_recompute_threshold = threshold
+    pipeline.store._config = cfg
+
+    from archon_search.store import ChunkIngestResult
+    pipeline.ingest_file = AsyncMock(
+        return_value=MagicMock(status="ok", needs_recompute=False)
+    )
+    pipeline.store.get_collection_meta = AsyncMock(return_value=meta)
+    return pipeline
+
+
+@pytest.mark.asyncio
+async def test_sync_does_not_call_recompute_below_threshold(tmp_path) -> None:
+    """Incremental sync below mutation threshold does not trigger recompute_collection_meta."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.sync import SearchCollectionSync
+
+    col_dir = tmp_path / "myproject"
+    col_dir.mkdir()
+    (col_dir / "a.md").write_text("content a")
+    (col_dir / "b.md").write_text("content b")
+    (col_dir / "c.md").write_text("content c")
+
+    meta = CollectionMeta(name="myproject", needs_recompute=False, mutations_since_recompute=3)
+    pipeline = _make_pipeline_for_sync_centroid(tmp_path, meta=meta, threshold=10_000)
+
+    # Mark as DONE so sync goes through incremental path
+    state_store = _make_done_state(
+        tmp_path, "myproject",
+        {str((col_dir / "a.md").resolve()): 1.0},
+    )
+    syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+    await syncer.sync([str(col_dir)])
+
+    pipeline.recompute_collection_meta.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sync_calls_recompute_when_signal_raised(tmp_path) -> None:
+    """Incremental sync calls recompute_collection_meta when needs_recompute is True."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.sync import SearchCollectionSync
+
+    col_dir = tmp_path / "myproject"
+    col_dir.mkdir()
+    (col_dir / "doc.md").write_text("content")
+
+    meta = CollectionMeta(name="myproject", needs_recompute=True, mutations_since_recompute=0)
+    pipeline = _make_pipeline_for_sync_centroid(tmp_path, meta=meta, threshold=10_000)
+
+    state_store = _make_done_state(tmp_path, "myproject", {})
+    syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+    await syncer.sync([str(col_dir)])
+
+    pipeline.recompute_collection_meta.assert_called_once_with("myproject")
+
+
+@pytest.mark.asyncio
+async def test_sync_incremental_path_no_full_scan(tmp_path) -> None:
+    """Incremental sync below threshold: store.get_all_vectors is never called."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.sync import SearchCollectionSync
+
+    col_dir = tmp_path / "myproject"
+    col_dir.mkdir()
+    (col_dir / "doc.md").write_text("hello")
+
+    meta = CollectionMeta(name="myproject", needs_recompute=False, mutations_since_recompute=0)
+    pipeline = _make_pipeline_for_sync_centroid(tmp_path, meta=meta, threshold=10_000)
+    pipeline.store.get_all_vectors = AsyncMock(return_value=[])
+    pipeline.store.count_documents = AsyncMock(return_value=0)
+
+    state_store = _make_done_state(tmp_path, "myproject", {})
+    syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+    await syncer.sync([str(col_dir)])
+
+    pipeline.store.get_all_vectors.assert_not_called()
+    pipeline.store.count_documents.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sync_recompute_on_delete_threshold_crossing(tmp_path) -> None:
+    """Post-loop check fires when mutations_since_recompute >= threshold even with needs_recompute=False."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.sync import SearchCollectionSync
+
+    col_dir = tmp_path / "myproject"
+    col_dir.mkdir()
+    (col_dir / "kept.md").write_text("stays")
+
+    meta = CollectionMeta(
+        name="myproject", needs_recompute=False, mutations_since_recompute=5
+    )
+    pipeline = _make_pipeline_for_sync_centroid(tmp_path, meta=meta, threshold=5)
+
+    state_store = _make_done_state(tmp_path, "myproject", {})
+    syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+    await syncer.sync([str(col_dir)])
+
+    pipeline.recompute_collection_meta.assert_called_once_with("myproject")
