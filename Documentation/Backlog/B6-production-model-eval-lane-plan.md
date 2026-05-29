@@ -174,7 +174,7 @@ async def run_eval_suite(
   - Checkpoint: `uv run pytest tests/eval/test_live_report_acceptance.py::test_live_eval_marker_excluded_from_default_run --no-cov`
 
 #### Task 1.2 — Parameterize `_build_pipeline_with_eval_backends()` + extend `run_eval_suite(backend=...)`
-- [ ] **File**: `archon_search/eval/runner.py`
+- [x] **File**: `archon_search/eval/runner.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Add `backend: Literal["deterministic", "live"] = "deterministic"`, `embedding_model_name: str = "BAAI/bge-small-en-v1.5"`, `reranker_model_name: str = "Xenova/ms-marco-MiniLM-L-6-v2"` to `_build_pipeline_with_eval_backends()`

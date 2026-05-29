@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 try:
     import tomllib  # Python 3.11+
@@ -460,19 +462,41 @@ def _validate_queries(corpus: EvalCorpus, runtime_cfg: EvalRuntimeConfig) -> Non
 
 async def _build_pipeline_with_eval_backends(
     db_path: Path,
+    *,
+    backend: Literal["deterministic", "live"] = "deterministic",
+    embedding_model_name: str = "BAAI/bge-small-en-v1.5",
+    reranker_model_name: str = "Xenova/ms-marco-MiniLM-L-6-v2",
 ):
     from archon_search.chunker import DocumentChunker
     from archon_search.embedder import Embedder
-    from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
     from archon_search.reranker import Reranker
     from archon_search.store import SearchStore
 
+    if backend == "live" and os.environ.get("ARCHON_SEARCH_EVAL_BACKENDS") == "1":
+        raise RuntimeError(
+            "live backend invoked while ARCHON_SEARCH_EVAL_BACKENDS=1 is set"
+            " — deterministic fixture is active"
+        )
+
     store = SearchStore(db_path)
     await store.connect()
-    embedder = Embedder(EvalEmbedderBackend())
-    reranker = Reranker(EvalRerankerBackend())
+
+    if backend == "live":
+        from archon_search.embedder import ModelEmbedder
+        from archon_search.reranker import ModelReranker
+
+        embedder = Embedder(ModelEmbedder(model_name=embedding_model_name))
+        reranker = Reranker(ModelReranker(model_name=reranker_model_name))
+    elif backend == "deterministic":
+        from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
+
+        embedder = Embedder(EvalEmbedderBackend())
+        reranker = Reranker(EvalRerankerBackend())
+    else:
+        raise ValueError(f"unknown backend: {backend!r}")
+
     chunker = DocumentChunker(chunk_size=256)
     parser = DocumentParser()
     pipeline = SearchPipeline(
@@ -561,6 +585,8 @@ async def run_eval_suite(
     runtime_config_path: Path,
     thresholds_path: Path | None = None,
     baseline_path: Path | None = None,
+    *,
+    backend: Literal["deterministic", "live"] = "deterministic",
 ) -> EvalReport:
     """Execute the trace-enabled eval suite over the corpus.
 
@@ -616,7 +642,7 @@ async def run_eval_suite(
 
     with tempfile.TemporaryDirectory(prefix="archon-search-eval-") as tmpdir:
         db_path = Path(tmpdir) / "lancedb"
-        pipeline = await _build_pipeline_with_eval_backends(db_path)
+        pipeline = await _build_pipeline_with_eval_backends(db_path, backend=backend)
         try:
             await _ingest_corpus(pipeline, corpus_root, corpus)
 
