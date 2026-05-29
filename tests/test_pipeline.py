@@ -2051,7 +2051,7 @@ async def test_recompute_collection_meta_namespace_param(tmp_path) -> None:
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
-    existing_meta = CollectionMeta(name="my-col", namespace="tenantA")
+    existing_meta = CollectionMeta(name="my-col", namespace="tenantA", needs_recompute=True)
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
@@ -3420,7 +3420,7 @@ async def test_recompute_populates_description_embedding() -> None:
     from archon_search.pipeline import SearchPipeline
 
     embed_vec = [0.7] * 4
-    existing_meta = CollectionMeta(name="my-col", description="some desc")
+    existing_meta = CollectionMeta(name="my-col", description="some desc", needs_recompute=True)
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
@@ -3458,7 +3458,7 @@ async def test_recompute_no_description_embedding_when_description_none() -> Non
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
-    existing_meta = CollectionMeta(name="my-col", description=None)
+    existing_meta = CollectionMeta(name="my-col", description=None, needs_recompute=True)
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
@@ -3726,3 +3726,247 @@ def test_ingest_result_has_needs_recompute_field() -> None:
 
     r2 = IngestResult(doc_id="abc", chunks_created=1, status="ok")
     assert r2.needs_recompute is False
+
+
+# ===========================================================================
+# B5 Task 6.1 — recompute_collection_meta extension
+# ===========================================================================
+
+
+def _make_pipeline_for_recompute(store, config=None):
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    if config is not None:
+        store._config = config
+    return pipeline
+
+
+@pytest.mark.asyncio
+async def test_recompute_writes_centroid_sum() -> None:
+    """After recompute_collection_meta, saved meta has centroid_sum == elementwise_sum(all_vectors)."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import elementwise_sum
+
+    vectors = [[1.0, 2.0, 3.0], [3.0, 4.0, 5.0]]
+    store = MagicMock()
+    # needs_recompute=True prevents the short-circuit from skipping the scan
+    store.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col", needs_recompute=True))
+    store.get_all_vectors = AsyncMock(return_value=vectors)
+    store.count_documents = AsyncMock(return_value=1)
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = _make_pipeline_for_recompute(store)
+    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+        await pipeline.recompute_collection_meta("col")
+
+    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved.centroid_sum == elementwise_sum(vectors)
+
+
+@pytest.mark.asyncio
+async def test_recompute_resets_mutations_counter() -> None:
+    """recompute_collection_meta resets mutations_since_recompute to 0 and needs_recompute to False."""
+    from archon_search.collection_meta import CollectionMeta
+
+    existing = CollectionMeta(name="col", mutations_since_recompute=999, needs_recompute=True)
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing)
+    store.get_all_vectors = AsyncMock(return_value=[[1.0, 2.0]])
+    store.count_documents = AsyncMock(return_value=1)
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = _make_pipeline_for_recompute(store)
+    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+        await pipeline.recompute_collection_meta("col")
+
+    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved.mutations_since_recompute == 0
+    assert saved.needs_recompute is False
+
+
+@pytest.mark.asyncio
+async def test_recompute_noop_on_empty_collection() -> None:
+    """recompute_collection_meta with empty vectors returns early; update_collection_meta not called."""
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.get_all_vectors = AsyncMock(return_value=[])
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = _make_pipeline_for_recompute(store)
+    await pipeline.recompute_collection_meta("empty-col")
+
+    store.update_collection_meta.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recompute_empty_collection_clears_needs_recompute_flag() -> None:
+    """force=True on empty collection writes a cleared meta row (not skip)."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+
+    existing = CollectionMeta(name="col", needs_recompute=True, mutations_since_recompute=42)
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing)
+    store.get_all_vectors = AsyncMock(return_value=[])
+    store.count_documents = AsyncMock(return_value=0)
+    store.update_collection_meta = AsyncMock()
+
+    cfg = SearchConfig()
+    cfg.centroid_incremental_enabled = True
+    pipeline = _make_pipeline_for_recompute(store, config=cfg)
+    await pipeline.recompute_collection_meta("col", force=True)
+
+    store.update_collection_meta.assert_awaited_once()
+    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved.needs_recompute is False
+    assert saved.mutations_since_recompute == 0
+    assert saved.centroid_sum is None
+    assert saved.centroid is None
+    assert saved.chunk_count == 0
+    assert saved.doc_count == 0
+
+
+@pytest.mark.asyncio
+async def test_recompute_single_get_all_vectors_call() -> None:
+    """recompute_collection_meta calls store.get_all_vectors exactly once."""
+    from archon_search.collection_meta import CollectionMeta
+
+    store = MagicMock()
+    # needs_recompute=True ensures short-circuit does not skip the scan
+    store.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col", needs_recompute=True))
+    store.get_all_vectors = AsyncMock(return_value=[[1.0, 2.0]])
+    store.count_documents = AsyncMock(return_value=1)
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = _make_pipeline_for_recompute(store)
+    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+        await pipeline.recompute_collection_meta("col")
+
+    store.get_all_vectors.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recompute_collection_meta_no_op_when_not_needed() -> None:
+    """Short-circuit: after fresh recompute (needs_recompute=False, mutations=0), second call skips scan."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+
+    existing = CollectionMeta(name="col", needs_recompute=False, mutations_since_recompute=0)
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing)
+    store.get_all_vectors = AsyncMock(return_value=[[1.0]])
+    store.update_collection_meta = AsyncMock()
+
+    cfg = SearchConfig()
+    cfg.centroid_incremental_enabled = True
+    pipeline = _make_pipeline_for_recompute(store, config=cfg)
+    await pipeline.recompute_collection_meta("col")
+
+    store.get_all_vectors.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recompute_collection_meta_force_bypasses_short_circuit() -> None:
+    """force=True bypasses the short-circuit and calls get_all_vectors even when no recompute needed."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+
+    existing = CollectionMeta(name="col", needs_recompute=False, mutations_since_recompute=0)
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing)
+    store.get_all_vectors = AsyncMock(return_value=[[1.0, 2.0]])
+    store.count_documents = AsyncMock(return_value=1)
+    store.update_collection_meta = AsyncMock()
+
+    cfg = SearchConfig()
+    cfg.centroid_incremental_enabled = True
+    pipeline = _make_pipeline_for_recompute(store, config=cfg)
+    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+        await pipeline.recompute_collection_meta("col", force=True)
+
+    store.get_all_vectors.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recompute_no_short_circuit_when_flag_disabled() -> None:
+    """When centroid_incremental_enabled=False, full scan always runs regardless of meta state."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+
+    existing = CollectionMeta(name="col", needs_recompute=False, mutations_since_recompute=0)
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing)
+    store.get_all_vectors = AsyncMock(return_value=[[1.0, 2.0]])
+    store.count_documents = AsyncMock(return_value=1)
+    store.update_collection_meta = AsyncMock()
+
+    cfg = SearchConfig()
+    cfg.centroid_incremental_enabled = False
+    pipeline = _make_pipeline_for_recompute(store, config=cfg)
+    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+        await pipeline.recompute_collection_meta("col")
+
+    store.get_all_vectors.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recompute_empty_collection_with_existing_meta_force_false_writes_cleared_row() -> None:
+    """force=False + existing_meta + empty vectors writes a cleared meta row via the existing_meta branch."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+
+    existing = CollectionMeta(name="col", needs_recompute=True, mutations_since_recompute=5)
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing)
+    store.get_all_vectors = AsyncMock(return_value=[])
+    store.count_documents = AsyncMock(return_value=0)
+    store.update_collection_meta = AsyncMock()
+
+    cfg = SearchConfig()
+    cfg.centroid_incremental_enabled = True
+    pipeline = _make_pipeline_for_recompute(store, config=cfg)
+    await pipeline.recompute_collection_meta("col", force=False)
+
+    store.update_collection_meta.assert_awaited_once()
+    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved.centroid_sum is None
+    assert saved.centroid is None
+    assert saved.needs_recompute is False
+    assert saved.mutations_since_recompute == 0
+
+
+@pytest.mark.asyncio
+async def test_recompute_new_collection_no_existing_meta_runs_full_scan() -> None:
+    """force=False + incremental enabled + existing_meta=None: full scan runs (first-ever recompute)."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+    from archon_search.store import elementwise_sum
+
+    vectors = [[1.0, 0.0], [0.0, 1.0]]
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.get_all_vectors = AsyncMock(return_value=vectors)
+    store.count_documents = AsyncMock(return_value=1)
+    store.update_collection_meta = AsyncMock()
+
+    cfg = SearchConfig()
+    cfg.centroid_incremental_enabled = True
+    pipeline = _make_pipeline_for_recompute(store, config=cfg)
+    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+        await pipeline.recompute_collection_meta("col", force=False)
+
+    store.get_all_vectors.assert_awaited_once()
+    store.update_collection_meta.assert_awaited_once()
+    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved.centroid_sum == elementwise_sum(vectors)

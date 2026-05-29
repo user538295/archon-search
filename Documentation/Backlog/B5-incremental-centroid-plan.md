@@ -639,7 +639,7 @@ centroid_recompute_threshold: int = 10_000
 > **Releasable**: after Task 6.2 — watcher-sync no longer triggers a full rescan; `recompute_collection_meta` correctly writes `centroid_sum` and resets counters; drift guard integration test passes.
 
 #### Task 6.1 — Extend `recompute_collection_meta` to populate `centroid_sum`
-- [ ] **Files**: `archon_search/store.py`, `archon_search/pipeline.py`
+- [x] **Files**: `archon_search/store.py`, `archon_search/pipeline.py`
 - **Depends on**: Task 1.2, Task 2.5, Task 5.2, Task 5.3
 - **Description**:
   - **Dependency note**: Task 5.2 must be complete before Task 6.1 removes `_compute_centroid`, because Task 5.2 removes the `_compute_centroid` call site at `pipeline.py:304` inside `ingest_directory`. Removing `_compute_centroid` before Task 5.2 would break `ingest_directory`.

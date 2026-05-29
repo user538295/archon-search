@@ -23,7 +23,7 @@ from archon_search.chunker import DocumentChunker
 from archon_search.embedder import Embedder, EmbedderBackend, ModelEmbedder
 from archon_search.parser import DocumentParser, ParseError
 from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
-from archon_search.store import SearchStore, StoreBusyError
+from archon_search.store import SearchStore, StoreBusyError, elementwise_sum
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
@@ -151,12 +151,6 @@ def _extract_front_matter(text: str) -> tuple[dict, str]:
     body = text[body_start:].lstrip("\r\n")
     return parsed, body
 
-
-def _compute_centroid(vectors: list[list[float]]) -> list[float]:
-    """Return element-wise mean of a list of equal-length vectors."""
-    n = len(vectors)
-    dim = len(vectors[0])
-    return [sum(v[i] for v in vectors) / n for i in range(dim)]
 
 
 class SearchPipeline:
@@ -376,7 +370,8 @@ class SearchPipeline:
 
         # Compute centroid and (conditionally) regenerate description
         if all_vectors:
-            centroid = _compute_centroid(all_vectors)
+            _all_sum = elementwise_sum(all_vectors)
+            centroid = [x / len(all_vectors) for x in _all_sum]
             ok_results = [r for r in results if r.status == "ok"]
             batch_doc_count = len(ok_results)
             batch_chunk_count = sum(r.chunks_created for r in ok_results)
@@ -789,26 +784,66 @@ class SearchPipeline:
             return []
         return await self.store.list_documents(collection, limit)
 
-    async def recompute_collection_meta(self, collection: str, namespace: str = DEFAULT_NAMESPACE) -> None:
-        """Recompute and persist CollectionMeta (centroid, doc/chunk counts) for a collection.
+    async def recompute_collection_meta(
+        self,
+        collection: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        force: bool = False,
+    ) -> None:
+        """Recompute and persist CollectionMeta (centroid, centroid_sum, doc/chunk counts).
 
-        Reads all vectors from the store, recomputes the centroid, and updates the
-        collection metadata.  Preserves any existing description and last_described fields.
-        No-op if the collection is empty.
+        Reads all vectors from the store, recomputes the centroid and centroid_sum,
+        resets mutations_since_recompute to 0 and needs_recompute to False, and
+        updates the collection metadata. Preserves existing description fields.
+
+        Short-circuit: when centroid_incremental_enabled=True and force=False, skips
+        the full scan if the meta row already has needs_recompute=False and
+        mutations_since_recompute=0.
+
+        force=True bypasses the short-circuit entirely (crash-recovery / reindex path).
         """
         existing_meta = await self.store.get_collection_meta(collection, namespace=namespace)
+
+        if not force and self._centroid_incremental_enabled:
+            if (
+                existing_meta is not None
+                and existing_meta.needs_recompute is False
+                and existing_meta.mutations_since_recompute == 0
+            ):
+                return
+
         vectors = await self.store.get_all_vectors(collection)
-        if not vectors:
-            return
-        centroid = _compute_centroid(vectors)
-        # chunk_count is exact: get_all_vectors returns one vector per chunk (no cap)
-        chunk_count = len(vectors)
-        # doc_count via a dedicated uncapped count method
-        doc_count = await self.store.count_documents(collection)
 
         description = existing_meta.description if existing_meta else None
         last_described = existing_meta.last_described if existing_meta else None
         described_at = existing_meta.described_at_doc_count if existing_meta else None
+
+        if not vectors:
+            if force or existing_meta is not None:
+                doc_count = await self.store.count_documents(collection)
+                meta = CollectionMeta(
+                    name=collection,
+                    centroid=None,
+                    centroid_sum=None,
+                    description=description,
+                    doc_count=doc_count,
+                    chunk_count=0,
+                    embedding_model=self._embedder.model_name,
+                    last_indexed=datetime.now(UTC),
+                    last_described=last_described,
+                    described_at_doc_count=described_at,
+                    namespace=namespace,
+                    description_embedding=None,
+                    mutations_since_recompute=0,
+                    needs_recompute=False,
+                )
+                await self.store.update_collection_meta(meta)
+            return
+
+        centroid_sum = elementwise_sum(vectors)
+        chunk_count = len(vectors)
+        centroid = [x / chunk_count for x in centroid_sum]
+        doc_count = await self.store.count_documents(collection)
 
         if description is not None:
             description_embedding = await self._embedder.embed_one(description)
@@ -818,6 +853,7 @@ class SearchPipeline:
         meta = CollectionMeta(
             name=collection,
             centroid=centroid,
+            centroid_sum=centroid_sum,
             description=description,
             doc_count=doc_count,
             chunk_count=chunk_count,
@@ -827,6 +863,8 @@ class SearchPipeline:
             described_at_doc_count=described_at,
             namespace=namespace,
             description_embedding=description_embedding,
+            mutations_since_recompute=0,
+            needs_recompute=False,
         )
         await self.store.update_collection_meta(meta)
 
