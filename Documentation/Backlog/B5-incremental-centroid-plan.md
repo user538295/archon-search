@@ -509,7 +509,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "do_subtract_meta"`
 
 #### Task 4.2 — Vector-aware `delete_document` with lock
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 4.1, Task 2.2
 - **Description**:
   - In `delete_document`, add `namespace: str = DEFAULT_NAMESPACE` to the method signature (if not already present). Acquire `_lock_for(collection)` with `asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)`, raising `StoreBusyError` on timeout — mirroring `ingest_chunks` exactly. The call to `_do_subtract_meta_on_delete` must pass `namespace=namespace`.

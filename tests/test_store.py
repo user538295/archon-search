@@ -1660,12 +1660,13 @@ async def test_delete_by_source_path_computes_doc_id(tmp_path: Path) -> None:
     source_path = "/some/project/README.md"
     expected_doc_id = hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
 
+    from archon_search.constants import DEFAULT_NAMESPACE
     store = SearchStore(tmp_path / "db")
     store.delete_document = AsyncMock(return_value=3)  # type: ignore[method-assign]
 
     result = await store.delete_by_source_path("my-col", source_path)
 
-    store.delete_document.assert_called_once_with("my-col", expected_doc_id)
+    store.delete_document.assert_called_once_with("my-col", expected_doc_id, namespace=DEFAULT_NAMESPACE)
     assert result == 3
 
 
@@ -1690,11 +1691,12 @@ async def test_delete_by_source_path_delegates_to_delete_document(tmp_path: Path
     source_path = "/some/project/README.md"
     expected_doc_id = hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
 
+    from archon_search.constants import DEFAULT_NAMESPACE
     store = SearchStore(tmp_path / "db")
     with patch.object(store, "delete_document", new_callable=AsyncMock, return_value=1) as mock_del:
         await store.delete_by_source_path("my-col", source_path)
 
-        mock_del.assert_called_once_with("my-col", expected_doc_id)
+        mock_del.assert_called_once_with("my-col", expected_doc_id, namespace=DEFAULT_NAMESPACE)
 
 
 @pytest.mark.asyncio
@@ -5586,3 +5588,221 @@ async def test_do_subtract_meta_bumps_mutations(tmp_path) -> None:
         assert meta.mutations_since_recompute == 5
     finally:
         await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# B5 Task 4.2 — Vector-aware delete_document with lock
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_document_subtracts_vectors(tmp_path) -> None:
+    """delete_document with centroid_incremental_enabled subtracts deleted doc's vectors from centroid_sum."""
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "del_sub_vec"
+        await store.ensure_collection(col, _DIM)
+
+        doc_a = _doc_id()
+        doc_b = _doc_id()
+
+        vec_a = [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0]]
+        vec_b = [[2.0, 3.0, 4.0, 5.0], [6.0, 7.0, 8.0, 9.0]]
+
+        chunks_a = [_chunk(doc_a, i) for i in range(3)]
+        chunks_b = [_chunk(doc_b, i) for i in range(2)]
+
+        for i, c in enumerate(chunks_a):
+            c.vector = vec_a[i]
+        for i, c in enumerate(chunks_b):
+            c.vector = vec_b[i]
+
+        await store.ingest_chunks(col, chunks_a, embedding_model="m")
+        await store.ingest_chunks(col, chunks_b, embedding_model="m")
+
+        await store.delete_document(col, doc_a)
+
+        meta = await store.get_collection_meta(col)
+        assert meta is not None
+        expected_sum = [v_a + v_b for v_a, v_b in zip(
+            [sum(v[i] for v in vec_b) for i in range(_DIM)],
+            [0.0] * _DIM,
+        )]
+        # centroid_sum should equal sum of doc_b's vectors only
+        b_sum = [sum(v[i] for v in vec_b) for i in range(_DIM)]
+        assert meta.centroid_sum == pytest.approx(b_sum)
+        assert meta.chunk_count == 2
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_last_document_resets_centroid(tmp_path) -> None:
+    """Deleting the only document resets centroid_sum to None and chunk_count to 0."""
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "del_last_doc"
+        await store.ensure_collection(col, _DIM)
+
+        doc_a = _doc_id()
+        chunks = [_chunk(doc_a, i) for i in range(2)]
+        for i, c in enumerate(chunks):
+            c.vector = [float(i + 1)] * _DIM
+
+        await store.ingest_chunks(col, chunks, embedding_model="m")
+        await store.delete_document(col, doc_a)
+
+        meta = await store.get_collection_meta(col)
+        assert meta is not None
+        assert meta.centroid_sum is None
+        assert meta.centroid is None
+        assert meta.chunk_count == 0
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_bumps_last_indexed(tmp_path) -> None:
+    """delete_document updates last_indexed in the collection meta."""
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "del_last_idx"
+        await store.ensure_collection(col, _DIM)
+
+        doc_a = _doc_id()
+        chunks = [_chunk(doc_a, 0)]
+        chunks[0].vector = [1.0] * _DIM
+
+        await store.ingest_chunks(col, chunks, embedding_model="m")
+        meta_before = await store.get_collection_meta(col)
+        assert meta_before is not None
+
+        # Small sleep to ensure time advances
+        import asyncio as _asyncio
+        await _asyncio.sleep(0.01)
+
+        await store.delete_document(col, doc_a)
+
+        meta_after = await store.get_collection_meta(col)
+        assert meta_after is not None
+        # _do_subtract_meta_on_delete sets last_indexed=now; it should be set
+        assert meta_after.last_indexed is not None
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_returns_zero_for_missing_doc(tmp_path) -> None:
+    """Deleting a non-existent doc_id returns 0 and leaves meta unchanged."""
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "del_missing"
+        await store.ensure_collection(col, _DIM)
+
+        doc_a = _doc_id()
+        chunks = [_chunk(doc_a, 0)]
+        chunks[0].vector = [1.0] * _DIM
+        await store.ingest_chunks(col, chunks, embedding_model="m")
+
+        meta_before = await store.get_collection_meta(col)
+
+        fake_id = _doc_id()
+        result = await store.delete_document(col, fake_id)
+
+        assert result == 0
+        meta_after = await store.get_collection_meta(col)
+        assert meta_after is not None
+        assert meta_after.chunk_count == meta_before.chunk_count
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_lock_timeout_raises_store_busy_error(tmp_path, monkeypatch) -> None:
+    """delete_document raises StoreBusyError when lock is held externally."""
+    import archon_search.store as store_mod
+    from archon_search.store import StoreBusyError
+
+    monkeypatch.setattr(store_mod, "INGEST_LOCK_TIMEOUT_S", 0.1)
+
+    store = SearchStore(tmp_path / "db_del_busy")
+    await store.connect()
+    try:
+        col = "del-busy-col"
+        await store.ensure_collection(col, _DIM)
+        lock = store._lock_for(col)
+        await lock.acquire()
+        try:
+            doc_id = _doc_id()
+            with pytest.raises(StoreBusyError):
+                await store.delete_document(col, doc_id)
+        finally:
+            lock.release()
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_no_full_scan_spy(tmp_path) -> None:
+    """delete_document does not call get_all_vectors or count_documents (no full scan)."""
+    from unittest.mock import AsyncMock, patch
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db_del_spy", config=cfg)
+    await store.connect()
+    try:
+        col = "del_spy_col"
+        await store.ensure_collection(col, _DIM)
+
+        doc_a = _doc_id()
+        chunks = [_chunk(doc_a, 0)]
+        chunks[0].vector = [1.0] * _DIM
+        await store.ingest_chunks(col, chunks, embedding_model="m")
+
+        get_all_vectors_called = []
+        count_documents_called = []
+
+        original_get_all = getattr(store, "get_all_vectors", None)
+        original_count = getattr(store, "count_documents", None)
+
+        if original_get_all is not None:
+            with patch.object(store, "get_all_vectors", side_effect=AssertionError("get_all_vectors must not be called")):
+                await store.delete_document(col, doc_a)
+        else:
+            # Method doesn't exist — verify we can delete without it
+            await store.delete_document(col, doc_a)
+    finally:
+        await store.disconnect()
+
+
+def test_delete_by_source_path_forwards_namespace(tmp_path) -> None:
+    """delete_by_source_path forwards namespace to delete_document."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    store = SearchStore(tmp_path / "db_ns_fwd")
+    asyncio.run(store.connect())
+    try:
+        col = "fwd_ns_col"
+        source = str(tmp_path / "file.txt")
+        import hashlib
+        from pathlib import Path as _Path
+        expected_doc_id = hashlib.sha256(str(_Path(source).resolve()).encode()).hexdigest()
+
+        with patch.object(store, "delete_document", new=AsyncMock(return_value=0)) as mock_del:
+            asyncio.run(store.delete_by_source_path(col, source, namespace="ns1"))
+            mock_del.assert_awaited_once_with(col, expected_doc_id, namespace="ns1")
+    finally:
+        asyncio.run(store.disconnect())

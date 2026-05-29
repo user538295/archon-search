@@ -1339,24 +1339,39 @@ class SearchStore:
     # ------------------------------------------------------------------
 
 
-    async def delete_document(self, collection: str, doc_id: str) -> int:
+    async def delete_document(
+        self, collection: str, doc_id: str, namespace: str = DEFAULT_NAMESPACE
+    ) -> int:
         self._validate_collection(collection)
         db = self._require_connected()
         if not _DOC_ID_RE.match(doc_id):
             raise ValueError(f"Invalid doc_id: {doc_id!r} — must be 64 hex chars")
+        lock = self._lock_for(collection)
         try:
-            table = await db.open_table(collection)
-        except ValueError:
-            return 0
-        # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
-        count: int = await table.count_rows(_where_eq("doc_id", doc_id))
-        if count == 0:
-            return 0
-        # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
-        await table.delete(_where_eq("doc_id", doc_id))
+            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+        except asyncio.TimeoutError as e:
+            raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
+        try:
+            try:
+                table = await db.open_table(collection)
+            except ValueError:
+                return 0
+            del_vectors = await self._do_fetch_doc_vectors_unlocked(db, collection, doc_id)
+            # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
+            count: int = await table.count_rows(_where_eq("doc_id", doc_id))
+            if count == 0:
+                return 0
+            # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
+            await table.delete(_where_eq("doc_id", doc_id))
+            if self._config.centroid_incremental_enabled:
+                await self._do_subtract_meta_on_delete(db, collection, del_vectors, namespace=namespace)
+        finally:
+            lock.release()
         return count
 
-    async def delete_by_source_path(self, collection: str, source_path: str) -> int:
+    async def delete_by_source_path(
+        self, collection: str, source_path: str, namespace: str = DEFAULT_NAMESPACE
+    ) -> int:
         """Delete all chunks for a source file by computing its doc_id.
 
         ``source_path`` must be an absolute, resolved path — the same form
@@ -1365,7 +1380,7 @@ class SearchStore:
         may not match the stored doc_id.
         """
         doc_id = hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
-        return await self.delete_document(collection, doc_id)
+        return await self.delete_document(collection, doc_id, namespace=namespace)
 
     # ------------------------------------------------------------------
     # List documents

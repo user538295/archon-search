@@ -23,7 +23,7 @@ from archon_search.chunker import DocumentChunker
 from archon_search.embedder import Embedder, EmbedderBackend, ModelEmbedder
 from archon_search.parser import DocumentParser, ParseError
 from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
-from archon_search.store import SearchStore
+from archon_search.store import SearchStore, StoreBusyError
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
@@ -275,7 +275,10 @@ class SearchPipeline:
         # Persist
         with record_stage("persist"):
             await self.store.ensure_collection(collection, self._embedder.embedding_dim)
-            await self.store.delete_document(collection, doc_id)
+            try:
+                await self.store.delete_document(collection, doc_id)
+            except StoreBusyError:
+                return IngestResult(doc_id=doc_id, chunks_created=0, status="error")
             ingest_result = await self.store.ingest_chunks(collection, records)
 
             if rebuild_fts:
@@ -731,7 +734,7 @@ class SearchPipeline:
         meta = await self.store.get_collection_meta(collection, namespace=namespace)
         if meta is None:
             raise ValueError(f"collection {collection!r} not found in namespace {namespace!r}")
-        return await self.store.delete_document(collection, doc_id)
+        return await self.store.delete_document(collection, doc_id, namespace=namespace)
 
     async def list_collections(self) -> list[CollectionInfo]:
         return await self.store.list_collections()

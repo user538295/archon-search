@@ -236,4 +236,56 @@ def test_get_collection_meta_includes_description_embedding() -> None:
     assert result["description_embedding"] == [0.1, 0.4]
 
 
+# ---------------------------------------------------------------------------
+# B5 Task 4.2 — MCP delete_document: StoreBusyError mapping and namespace forwarding
+# ---------------------------------------------------------------------------
+
+
+def _make_pipeline_mock_with_delete(delete_side_effect=None, delete_return=0):
+    """Return a pipeline mock for delete_document tests."""
+    pipeline = MagicMock()
+    pipeline.delete_document = AsyncMock(
+        side_effect=delete_side_effect,
+        return_value=delete_return if delete_side_effect is None else None,
+    )
+    return pipeline
+
+
+def _get_delete_tool_fn(pipeline):
+    """Build a stub-backed app with the given pipeline and return delete_document tool fn."""
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+    importlib.reload(mcp_mod)
+    app = mcp_mod.create_app(pipeline, "col1")
+    return app._tools["delete_document"]
+
+
+def test_mcp_delete_document_maps_store_busy_to_store_busy_code() -> None:
+    """delete_document MCP handler returns code='store_busy' when store is busy."""
+    import asyncio
+    from archon_search.store import StoreBusyError
+
+    pipeline = _make_pipeline_mock_with_delete(delete_side_effect=StoreBusyError(timeout_s=0.1))
+    tool_fn = _get_delete_tool_fn(pipeline)
+
+    result = asyncio.run(tool_fn(doc_id="a" * 64, collection="col1"))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == "store_busy"
+
+
+def test_mcp_delete_document_forwards_namespace() -> None:
+    """delete_document MCP handler forwards namespace parameter to pipeline.delete_document."""
+    import asyncio
+
+    pipeline = _make_pipeline_mock_with_delete(delete_return=1)
+    tool_fn = _get_delete_tool_fn(pipeline)
+
+    asyncio.run(tool_fn(doc_id="b" * 64, collection="col1", namespace="tenant1"))
+
+    pipeline.delete_document.assert_awaited_once()
+    _args, _kwargs = pipeline.delete_document.call_args
+    assert _kwargs.get("namespace") == "tenant1" or (len(_args) >= 3 and _args[2] == "tenant1")
+
+
 

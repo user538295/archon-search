@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, IngestResult, SearchResult
+from archon_search.store import ChunkIngestResult
 from archon_search.embedder import Embedder, EmbedderBackend
 from archon_search.reranker import Reranker, RerankerBackend
 
@@ -134,9 +135,9 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
         async def delete_document(self, *a: Any, **kw: Any) -> int:
             return 0
 
-        async def ingest_chunks(self, collection: str, records: list[ChunkRecord]) -> int:
+        async def ingest_chunks(self, collection: str, records: list[ChunkRecord]) -> ChunkIngestResult:
             captured_records.extend(records)
-            return len(records)
+            return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
 
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
@@ -178,9 +179,9 @@ async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_na
         async def delete_document(self, *a: Any, **kw: Any) -> int:
             return 0
 
-        async def ingest_chunks(self, collection: str, records: list[ChunkRecord]) -> int:
+        async def ingest_chunks(self, collection: str, records: list[ChunkRecord]) -> ChunkIngestResult:
             captured_records.extend(records)
-            return len(records)
+            return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
 
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
@@ -527,8 +528,8 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
         async def delete_document(self, *a: Any, **kw: Any) -> int:
             return 0
 
-        async def ingest_chunks(self, *a: Any, **kw: Any) -> int:
-            return 0
+        async def ingest_chunks(self, *a: Any, **kw: Any) -> ChunkIngestResult:
+            return ChunkIngestResult(chunks_ingested=0, needs_recompute=False)
 
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             nonlocal rebuild_called
@@ -891,8 +892,8 @@ async def test_ingest_file_records_parse_embed_persist(tmp_path):
         async def delete_document(self, *a: Any, **kw: Any) -> int:
             return 0
 
-        async def ingest_chunks(self, *a: Any, **kw: Any) -> int:
-            return 1
+        async def ingest_chunks(self, *a: Any, **kw: Any) -> ChunkIngestResult:
+            return ChunkIngestResult(chunks_ingested=1, needs_recompute=False)
 
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
@@ -946,8 +947,8 @@ async def test_pipeline_noop_when_unbound(tmp_path):
         async def delete_document(self, *a: Any, **kw: Any) -> int:
             return 0
 
-        async def ingest_chunks(self, *a: Any, **kw: Any) -> int:
-            return 1
+        async def ingest_chunks(self, *a: Any, **kw: Any) -> ChunkIngestResult:
+            return ChunkIngestResult(chunks_ingested=1, needs_recompute=False)
 
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
@@ -1961,7 +1962,7 @@ async def test_ingest_directory_namespace_param(tmp_path) -> None:
     store = MagicMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
-    store.ingest_chunks = AsyncMock(return_value=1)
+    store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
     store.rebuild_fts_index = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
@@ -2003,7 +2004,7 @@ async def test_ingest_directory_default_namespace(tmp_path) -> None:
     store = MagicMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
-    store.ingest_chunks = AsyncMock(return_value=1)
+    store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
     store.rebuild_fts_index = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
@@ -2388,7 +2389,7 @@ async def test_delete_document_correct_namespace_succeeds() -> None:
     deleted = await pipeline.delete_document(doc_id, "col-a", namespace="tenantA")
 
     assert deleted == 3
-    store.delete_document.assert_awaited_once_with("col-a", doc_id)
+    store.delete_document.assert_awaited_once_with("col-a", doc_id, namespace="tenantA")
 
 
 # ===========================================================================
@@ -3285,7 +3286,7 @@ def _make_stub_store_for_embedding_tests(existing_meta=None):  # type: ignore[no
     store = MagicMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
-    store.ingest_chunks = AsyncMock(return_value=1)
+    store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
     store.rebuild_fts_index = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.update_collection_meta = AsyncMock()
@@ -3501,3 +3502,43 @@ async def test_recompute_no_op_when_empty() -> None:
 
     embed_one_mock.assert_not_awaited()
     store.update_collection_meta.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# B5 Task 4.2 — pipeline.ingest_file handles StoreBusyError from delete_document
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_returns_error_on_delete_store_busy(tmp_path) -> None:
+    """ingest_file returns IngestResult(status='error') when delete_document raises StoreBusyError."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.store import StoreBusyError
+
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.delete_document = AsyncMock(side_effect=StoreBusyError(timeout_s=0.1))
+    store.ingest_chunks = AsyncMock()
+    store.rebuild_fts_index = AsyncMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    md_file = tmp_path / "busy.md"
+    md_file.write_text("Some content to ingest.")
+
+    result = await pipeline.ingest_file(md_file, "test-col")
+
+    assert isinstance(result, IngestResult)
+    assert result.status == "error"
+    store.ingest_chunks.assert_not_awaited()

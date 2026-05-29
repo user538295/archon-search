@@ -688,13 +688,19 @@ def create_app(
     async def delete_document(
         doc_id: str,
         collection: str | None = None,
+        namespace: str | None = None,
     ) -> dict[str, Any]:
         """Delete all chunks for a document from the store."""
+        from archon_search.constants import DEFAULT_NAMESPACE  # noqa: PLC0415
         try:
             count = await pipeline.delete_document(
-                doc_id, collection or default_collection
+                doc_id, collection or default_collection,
+                namespace=namespace or DEFAULT_NAMESPACE,
             )
             return {"deleted": count}
+        except StoreBusyError as exc:
+            logger.warning("delete_document store busy: %s", exc)
+            return McpErrorResponse(error=str(exc), code="store_busy")
         except Exception as exc:
             logger.exception("delete_document failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
