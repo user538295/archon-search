@@ -4887,3 +4887,252 @@ def test_elementwise_sum_empty_list() -> None:
 def test_elementwise_sum_raises_on_mixed_dimensions() -> None:
     with pytest.raises(ValueError, match="mixed-dimension vectors"):
         elementwise_sum([[1.0, 2.0], [3.0, 4.0, 5.0]])
+
+
+# ---------------------------------------------------------------------------
+# B5 Task 3.1 — _do_update_meta_on_add helper
+# ---------------------------------------------------------------------------
+
+def _make_store_with_config(tmp_path, **config_overrides):
+    """Create a connected SearchStore with a custom SearchConfig."""
+    import asyncio
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(**config_overrides)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    asyncio.run(store.connect())
+    return store
+
+
+@pytest.mark.asyncio
+async def test_do_update_meta_on_add_accumulates_from_zero(tmp_path) -> None:
+    """Brand-new collection (no meta row) — accumulates from zero seed."""
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "testcol"
+        vecs = [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]
+        signal = await store._do_update_meta_on_add(
+            db, col, vecs, distinct_doc_count=1,
+            embedding_model="m", embedding_dim=2,
+        )
+        meta = await store.get_collection_meta(col)
+        assert meta is not None
+        assert meta.chunk_count == 3
+        assert meta.centroid_sum == [9.0, 12.0]
+        assert signal is False
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_update_meta_on_add_accumulates_onto_existing(tmp_path) -> None:
+    """Existing meta with centroid_sum=[1.0] and chunk_count=1 → add [3.0]."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "testcol"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[1.0], centroid=[1.0],
+            chunk_count=1, doc_count=1, embedding_model="m",
+        )
+        await store.update_collection_meta(seed)
+        await store._do_update_meta_on_add(
+            db, col, [[3.0]], distinct_doc_count=1,
+            embedding_model="m", embedding_dim=1,
+        )
+        meta = await store.get_collection_meta(col)
+        assert meta.centroid_sum == [4.0]
+        assert meta.chunk_count == 2
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_update_meta_on_add_signals_recompute_on_invalid_sum(tmp_path) -> None:
+    """Stored meta has NaN centroid_sum → returns True and writes centroid=None, centroid_sum=None."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "testcol"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[float("nan")], centroid=[float("nan")],
+            chunk_count=1, doc_count=1, embedding_model="m",
+        )
+        await store.update_collection_meta(seed)
+        signal = await store._do_update_meta_on_add(
+            db, col, [[1.0]], distinct_doc_count=1,
+            embedding_model="m", embedding_dim=1,
+        )
+        assert signal is True
+        meta = await store.get_collection_meta(col)
+        assert meta.centroid_sum is None
+        assert meta.centroid is None
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_update_meta_on_add_invalid_sum_does_not_bump_mutations(tmp_path) -> None:
+    """NaN stored sum → mutations_since_recompute stays at 7, counts unchanged."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "testcol"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[float("nan")], centroid=[float("nan")],
+            chunk_count=5, doc_count=3, embedding_model="m",
+            mutations_since_recompute=7,
+        )
+        await store.update_collection_meta(seed)
+        await store._do_update_meta_on_add(
+            db, col, [[1.0], [2.0], [3.0]], distinct_doc_count=1,
+            embedding_model="m", embedding_dim=1,
+        )
+        meta = await store.get_collection_meta(col)
+        assert meta.mutations_since_recompute == 7
+        assert meta.chunk_count == 5
+        assert meta.doc_count == 3
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_update_meta_on_add_signals_recompute_at_threshold(tmp_path) -> None:
+    """mutations_since_recompute hits threshold → signal is True."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True, centroid_recompute_threshold=3)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "testcol"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[0.0], centroid=[0.0],
+            chunk_count=1, doc_count=1, embedding_model="m",
+            mutations_since_recompute=2,
+        )
+        await store.update_collection_meta(seed)
+        signal = await store._do_update_meta_on_add(
+            db, col, [[1.0]], distinct_doc_count=1,
+            embedding_model="m", embedding_dim=1,
+        )
+        assert signal is True
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_update_meta_on_add_nan_batch_vector_triggers_recompute(tmp_path) -> None:
+    """NaN in input batch → returns True."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "testcol"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[0.0], centroid=[0.0],
+            chunk_count=1, doc_count=1, embedding_model="m",
+        )
+        await store.update_collection_meta(seed)
+        signal = await store._do_update_meta_on_add(
+            db, col, [[float("nan")]], distinct_doc_count=1,
+            embedding_model="m", embedding_dim=1,
+        )
+        assert signal is True
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_update_meta_on_add_none_model_skips_maintenance(tmp_path) -> None:
+    """embedding_model=None → meta unchanged, returns False."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "testcol"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[1.0], centroid=[1.0],
+            chunk_count=1, doc_count=1, embedding_model="m",
+        )
+        await store.update_collection_meta(seed)
+        signal = await store._do_update_meta_on_add(
+            db, col, [[99.0]], distinct_doc_count=1,
+            embedding_model=None, embedding_dim=1,
+        )
+        assert signal is False
+        meta = await store.get_collection_meta(col)
+        assert meta.centroid_sum == [1.0]
+        assert meta.chunk_count == 1
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_update_meta_on_add_preserves_description_embedding(tmp_path) -> None:
+    """description_embedding must survive an incremental add (not be silently wiped)."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "testcol"
+        seed = CollectionMeta(
+            name=col, centroid_sum=[1.0], centroid=[1.0],
+            chunk_count=1, doc_count=1, embedding_model="m",
+            description_embedding=[0.1, 0.2, 0.3],
+        )
+        await store.update_collection_meta(seed)
+        await store._do_update_meta_on_add(
+            db, col, [[2.0]], distinct_doc_count=1,
+            embedding_model="m", embedding_dim=1,
+        )
+        meta = await store.get_collection_meta(col)
+        assert meta.description_embedding == [0.1, 0.2, 0.3], (
+            "description_embedding was wiped by _do_update_meta_on_add"
+        )
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_update_meta_on_add_new_collection_no_recompute_at_threshold(tmp_path) -> None:
+    """Brand-new collection (no prior meta) never signals recompute even above threshold."""
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True, centroid_recompute_threshold=1)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        db = store._require_connected()
+        col = "testcol"
+        signal = await store._do_update_meta_on_add(
+            db, col, [[1.0], [2.0], [3.0]], distinct_doc_count=1,
+            embedding_model="m", embedding_dim=1,
+        )
+        assert signal is False, "Brand-new collection should never trigger recompute"
+    finally:
+        await store.disconnect()

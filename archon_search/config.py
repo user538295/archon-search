@@ -56,6 +56,9 @@ class SearchConfig:
     max_parallel_collections: int = 3
     routing_strategy: str = "centroid"
     routing_description_weight: float = DEFAULT_ROUTING_DESCRIPTION_WEIGHT
+    # [database] — B5 incremental centroid
+    centroid_recompute_threshold: int = 10_000
+    centroid_incremental_enabled: bool = False
     # [collections]
     pinned_collections: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)
@@ -181,6 +184,15 @@ def load_config(path: Path | None = None) -> SearchConfig:
         if top_k_return <= 0:
             raise ConfigError(f"top_k_return must be > 0, got {top_k_return}")
         config.top_k_return = top_k_return
+    if "centroid_recompute_threshold" in database:
+        threshold = _coerce_int(database["centroid_recompute_threshold"], "centroid_recompute_threshold")
+        if threshold < 1:
+            raise ConfigError("centroid_recompute_threshold must be >= 1")
+        config.centroid_recompute_threshold = threshold
+    if "centroid_incremental_enabled" in database:
+        config.centroid_incremental_enabled = _coerce_bool(
+            database["centroid_incremental_enabled"], "centroid_incremental_enabled"
+        )
 
     search = doc.get("search", {})
     if "max_fanout" in search:

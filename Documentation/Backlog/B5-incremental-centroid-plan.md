@@ -370,7 +370,7 @@ centroid_recompute_threshold: int = 10_000
 > **Commit granularity reconciliation**: each Phase 3–5 task gets its own commit per the project's per-task commit convention. The atomic-shipping constraint is reconciled with the per-task rule by gating all new incremental code paths behind a feature flag `centroid_incremental_enabled` (added to `SearchConfig`, default `False`). The flag wraps the new code paths in `ingest_chunks._do_update_meta_on_add`, `delete_document._do_subtract_meta_on_delete`, and the `ingest_directory` description-only write (Task 5.2). While the flag is `False`, all of Phase 3–5's tasks land as no-op-equivalents (the existing batch-overwrite path runs unchanged). The flag flips to `True` in the final Phase 5 task (Task 5.3 below), making all the new code paths live in a single small atomic commit. This preserves per-task commits without exposing the intermediate-state corruption window.
 
 #### Task 3.1 — `_do_update_meta_on_add` helper and threshold config
-- [ ] **Files**: `archon_search/store.py`, `archon_search/config.py`
+- [x] **Files**: `archon_search/store.py`, `archon_search/config.py`
 - **Depends on**: Task 2.3
 - **Description**:
   - Add to `config.py` → `SearchConfig`: `centroid_recompute_threshold: int = 10_000`. Load from TOML section `[database]` key `centroid_recompute_threshold`. The loader already reads `[database]` keys; add this alongside them.

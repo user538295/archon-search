@@ -203,7 +203,7 @@ def _normalize_ingested_by(value: "str | None") -> str:
 class SearchStore:
     """Async LanceDB store for chunked document embeddings."""
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path, config: "SearchConfig | None" = None) -> None:
         self._db_path = Path(db_path).expanduser()
         self._db: Optional[lancedb.db.AsyncConnection] = None
         # Per-collection ingest/reindex lock map. Reads do not acquire any
@@ -212,6 +212,8 @@ class SearchStore:
         # call paths).
         self._collection_locks: dict[str, asyncio.Lock] = {}
         self._ping_cache: tuple[float, bool] | None = None
+        from archon_search.config import SearchConfig as _SearchConfig  # noqa: PLC0415
+        self._config: _SearchConfig = config if config is not None else _SearchConfig()
 
     def _lock_for(self, collection: str) -> asyncio.Lock:
         """Lazily create and return the lock for *collection*."""
@@ -783,6 +785,119 @@ class SearchStore:
         # Guard against rows where the vector column is unexpectedly absent/null
         # (LanceDB schema enforces non-null, but defensive filter prevents bad list(None) calls)
         return [list(r["vector"]) for r in rows if r.get("vector") is not None]
+
+    async def _do_update_meta_on_add(
+        self,
+        db: "lancedb.db.AsyncConnection",
+        collection: str,
+        batch_vectors: "list[list[float]]",
+        distinct_doc_count: int,
+        embedding_model: "str | None",
+        embedding_dim: int,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> bool:
+        # Caller must hold _lock_for(collection).
+        # Returns True when the caller should invoke recompute_collection_meta.
+        from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
+        if embedding_model is None:
+            return False
+
+        existing = await self._do_read_meta_unlocked(db, collection, namespace=namespace)
+
+        if existing is not None:
+            if not _batch_vectors_valid(batch_vectors):
+                logger.warning("Collection %r batch vectors contain NaN/inf; skipping centroid maintenance", collection)
+                patched = CollectionMeta(
+                    name=existing.name,
+                    description=existing.description,
+                    description_embedding=existing.description_embedding,
+                    centroid=existing.centroid,
+                    centroid_sum=existing.centroid_sum,
+                    doc_count=existing.doc_count,
+                    chunk_count=existing.chunk_count,
+                    embedding_model=existing.embedding_model,
+                    last_indexed=existing.last_indexed,
+                    last_described=existing.last_described,
+                    described_at_doc_count=existing.described_at_doc_count,
+                    namespace=existing.namespace,
+                    mutations_since_recompute=existing.mutations_since_recompute,
+                    needs_recompute=True,
+                )
+                await self._do_write_meta_unlocked(db, collection, patched)
+                return True
+
+            if not _centroid_sum_valid(
+                existing.centroid_sum, embedding_dim,
+                stored_model=existing.embedding_model,
+                writer_model=embedding_model,
+            ):
+                logger.warning("Collection %r centroid stale, recompute queued", collection)
+                patched = CollectionMeta(
+                    name=existing.name,
+                    description=existing.description,
+                    description_embedding=existing.description_embedding,
+                    centroid=None,
+                    centroid_sum=None,
+                    doc_count=existing.doc_count,
+                    chunk_count=existing.chunk_count,
+                    embedding_model=existing.embedding_model,
+                    last_indexed=existing.last_indexed,
+                    last_described=existing.last_described,
+                    described_at_doc_count=existing.described_at_doc_count,
+                    namespace=existing.namespace,
+                    mutations_since_recompute=existing.mutations_since_recompute,
+                    needs_recompute=True,
+                )
+                await self._do_write_meta_unlocked(db, collection, patched)
+                return True
+
+            new_sum = [a + b for a, b in zip(existing.centroid_sum, elementwise_sum(batch_vectors))]
+            new_chunk_count = existing.chunk_count + len(batch_vectors)
+            new_doc_count = existing.doc_count + distinct_doc_count
+            new_mutations = existing.mutations_since_recompute + len(batch_vectors)
+            new_centroid = [v / new_chunk_count for v in new_sum]
+            new_meta = CollectionMeta(
+                name=existing.name,
+                description=existing.description,
+                description_embedding=existing.description_embedding,
+                centroid=new_centroid,
+                centroid_sum=new_sum,
+                doc_count=new_doc_count,
+                chunk_count=new_chunk_count,
+                embedding_model=embedding_model,
+                last_indexed=existing.last_indexed,
+                last_described=existing.last_described,
+                described_at_doc_count=existing.described_at_doc_count,
+                namespace=existing.namespace,
+                mutations_since_recompute=new_mutations,
+                needs_recompute=existing.needs_recompute,
+            )
+            await self._do_write_meta_unlocked(db, collection, new_meta)
+            return new_meta.mutations_since_recompute >= self._config.centroid_recompute_threshold or new_meta.needs_recompute
+        else:
+            # Brand-new collection: batch IS the full collection; no recompute needed.
+            if not _batch_vectors_valid(batch_vectors):
+                logger.warning("Collection %r batch vectors contain NaN/inf; skipping centroid maintenance", collection)
+                new_meta = CollectionMeta(
+                    name=collection, embedding_model=embedding_model,
+                    namespace=namespace, needs_recompute=True,
+                )
+                await self._do_write_meta_unlocked(db, collection, new_meta)
+                return True
+            batch_sum = elementwise_sum(batch_vectors)
+            n = len(batch_vectors)
+            new_meta = CollectionMeta(
+                name=collection,
+                centroid=[v / n for v in batch_sum],
+                centroid_sum=batch_sum,
+                doc_count=distinct_doc_count,
+                chunk_count=n,
+                embedding_model=embedding_model,
+                namespace=namespace,
+                mutations_since_recompute=n,
+            )
+            await self._do_write_meta_unlocked(db, collection, new_meta)
+            return False
 
     # ------------------------------------------------------------------
     # Ingest

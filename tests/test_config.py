@@ -651,3 +651,37 @@ def test_routing_description_weight_out_of_range_raises(tmp_path: Path) -> None:
         )
         with pytest.raises(ConfigError, match="routing_description_weight must be"):
             load_config(path=toml_file)
+
+
+# ---------------------------------------------------------------------------
+# B5 Task 3.1 — centroid_recompute_threshold and centroid_incremental_enabled
+# ---------------------------------------------------------------------------
+
+
+def test_centroid_recompute_threshold_default() -> None:
+    assert SearchConfig().centroid_recompute_threshold == 10_000
+
+
+def test_centroid_incremental_enabled_default() -> None:
+    assert SearchConfig().centroid_incremental_enabled is False
+
+
+def test_centroid_recompute_threshold_loaded_from_toml(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\ncentroid_recompute_threshold = 500\n", encoding="utf-8")
+    cfg = load_config(path=toml_file)
+    assert cfg.centroid_recompute_threshold == 500
+
+
+def test_centroid_incremental_enabled_loaded_from_toml(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\ncentroid_incremental_enabled = true\n", encoding="utf-8")
+    cfg = load_config(path=toml_file)
+    assert cfg.centroid_incremental_enabled is True
+
+
+def test_centroid_recompute_threshold_validation(tmp_path: Path) -> None:
+    toml_file = tmp_path / "bad.toml"
+    toml_file.write_text("[database]\ncentroid_recompute_threshold = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="centroid_recompute_threshold must be >= 1"):
+        load_config(path=toml_file)
