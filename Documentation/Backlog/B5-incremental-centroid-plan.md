@@ -231,7 +231,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "centroid_sum or mutations_since or needs_recompute"`
 
 #### Task 1.3 — Schema migration: `add_columns` for pre-B5 meta rows
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Add `async def migrate_centroid_sum(self) -> None:` following the exact pattern of `migrate_namespace` (`store.py:395`):

@@ -512,6 +512,36 @@ class SearchStore:
                 return
             raise
 
+    async def migrate_centroid_sum(self) -> None:
+        """Idempotent: adds centroid_sum_json, mutations_since_recompute, needs_recompute columns to _archon_collection_meta if absent."""
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        table = await db.open_table(_META_TABLE)
+        schema_names = (await table.schema()).names
+        _B5_COLUMNS = [
+            ("centroid_sum_json", "cast('' as string)"),
+            ("mutations_since_recompute", "cast(0 as bigint)"),
+            ("needs_recompute", "cast(false as boolean)"),
+        ]
+        if all(col in schema_names for col, _ in _B5_COLUMNS):
+            return
+        added = []
+        for col, default in _B5_COLUMNS:
+            if col in schema_names:
+                continue
+            try:
+                await table.add_columns({col: default})
+                added.append(col)
+            except Exception as exc:
+                if "already exists" in str(exc).lower():
+                    logger.warning("Concurrent migration: %s already added — %s", col, exc)
+                else:
+                    raise
+        if added:
+            logger.info("centroid_sum migration: added %s to %s", added, _META_TABLE)
+
     async def migrate_acl(self) -> None:
         """Idempotent: adds acl column (list<utf8>, nullable) to each chunk table that lacks it.
 

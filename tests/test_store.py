@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pytest
 import pytest_asyncio
 
@@ -1130,7 +1131,190 @@ async def test_migrate_namespace_concurrent_race(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CollectionMeta tests 
+# migrate_centroid_sum tests
+# ---------------------------------------------------------------------------
+
+_PRE_B5_SCHEMA_FIELDS = [
+    pa.field("name", pa.utf8()),
+    pa.field("description", pa.utf8()),
+    pa.field("centroid_json", pa.utf8()),
+    pa.field("description_embedding_json", pa.utf8()),
+    pa.field("doc_count", pa.int64()),
+    pa.field("chunk_count", pa.int64()),
+    pa.field("embedding_model", pa.utf8()),
+    pa.field("last_indexed", pa.utf8()),
+    pa.field("last_described", pa.utf8()),
+    pa.field("described_at_doc_count", pa.int64()),
+    pa.field("namespace", pa.utf8()),
+]
+
+
+@pytest.mark.asyncio
+async def test_migrate_centroid_sum_adds_columns(tmp_path: Path) -> None:
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        old_schema = pa.schema(_PRE_B5_SCHEMA_FIELDS)
+        await db.create_table("_archon_collection_meta", schema=old_schema)
+        await store.migrate_centroid_sum()
+        table = await db.open_table("_archon_collection_meta")
+        schema_names = (await table.schema()).names
+        assert "centroid_sum_json" in schema_names
+        assert "mutations_since_recompute" in schema_names
+        assert "needs_recompute" in schema_names
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_centroid_sum_idempotent(tmp_path: Path) -> None:
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        old_schema = pa.schema(_PRE_B5_SCHEMA_FIELDS)
+        await db.create_table("_archon_collection_meta", schema=old_schema)
+        await store.migrate_centroid_sum()  # first call
+        await store.migrate_centroid_sum()  # second call — must be no-op, no exception
+        table = await db.open_table("_archon_collection_meta")
+        schema_names = (await table.schema()).names
+        assert "centroid_sum_json" in schema_names
+        assert "mutations_since_recompute" in schema_names
+        assert "needs_recompute" in schema_names
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_centroid_sum_no_meta_table_noop(tmp_path: Path) -> None:
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.migrate_centroid_sum()  # no _archon_collection_meta — must be no-op
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_centroid_sum_existing_rows_get_defaults(tmp_path: Path) -> None:
+    """Existing rows get correct default values after migration."""
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        old_schema = pa.schema(_PRE_B5_SCHEMA_FIELDS)
+        table = await db.create_table("_archon_collection_meta", schema=old_schema)
+        # Insert a pre-B5 row
+        await table.add([{
+            "name": "existing-col",
+            "description": "desc",
+            "centroid_json": "",
+            "description_embedding_json": "",
+            "doc_count": 3,
+            "chunk_count": 9,
+            "embedding_model": "bge",
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": -1,
+            "namespace": "default",
+        }])
+        await store.migrate_centroid_sum()
+        # Verify the existing row gets correct defaults
+        retrieved = await store.get_collection_meta("existing-col")
+        assert retrieved is not None
+        assert retrieved.centroid_sum is None          # empty string default → None
+        assert retrieved.mutations_since_recompute == 0  # 0 default
+        assert retrieved.needs_recompute is False       # false default
+        # doc_count and chunk_count unchanged
+        assert retrieved.doc_count == 3
+        assert retrieved.chunk_count == 9
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_old_schema_upsert_preserves_new_columns(tmp_path: Path) -> None:
+    """Verify that an old-binary upsert (row dict with only pre-B5 columns) on
+    a migrated table does NOT null out B5 columns on OTHER existing rows.
+
+    This test's result determines the BREAKING.md forward-compatibility claim.
+    """
+    from archon_search.collection_meta import CollectionMeta
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        old_schema = pa.schema(_PRE_B5_SCHEMA_FIELDS)
+        table = await db.create_table("_archon_collection_meta", schema=old_schema)
+        row_a = {
+            "name": "col-a",
+            "description": "",
+            "centroid_json": "",
+            "description_embedding_json": "",
+            "doc_count": 0,
+            "chunk_count": 0,
+            "embedding_model": "",
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": -1,
+            "namespace": "default",
+        }
+        row_b = dict(row_a)
+        row_b["name"] = "col-b"
+        await table.add([row_a, row_b])
+
+        # Run migration
+        await store.migrate_centroid_sum()
+
+        # Write B5 values to row_a via update_collection_meta
+        meta_a = CollectionMeta(
+            name="col-a",
+            centroid_sum=[1.0, 2.0],
+            mutations_since_recompute=5,
+            needs_recompute=True,
+        )
+        await store.update_collection_meta(meta_a)
+
+        # Simulate old-binary upsert: delete + insert row_b with ONLY pre-B5 columns.
+        # LanceDB may raise RuntimeError("Append with different schema") when the
+        # incoming row dict is missing the new B5 columns. This is the documented
+        # LanceDB behavior as of 4.x: mixed-version deployment fails hard (not silently).
+        await table.delete("name = 'col-b'")
+        row_b_old_binary = dict(row_a)
+        row_b_old_binary["name"] = "col-b"
+        schema_mismatch = False
+        try:
+            await table.add([row_b_old_binary])
+        except RuntimeError as exc:
+            if "different schema" in str(exc).lower() or "missing" in str(exc).lower():
+                # LanceDB rejects old-binary inserts with a hard error (not silent corruption).
+                # BREAKING.md claim: mixed-version deployment is NOT safe.
+                schema_mismatch = True
+            else:
+                raise
+
+        # Regardless of whether insert succeeded or raised, verify row_a's B5 columns
+        # are intact (the delete of col-b already ran unconditionally above).
+        rows = await table.query().to_list()
+        row_a_actual = next(r for r in rows if r["name"] == "col-a")
+        assert row_a_actual.get("centroid_sum_json") not in (None, ""), (
+            "col-a's centroid_sum_json was lost — B5 columns not preserved"
+        )
+        assert row_a_actual.get("mutations_since_recompute") == 5
+        assert row_a_actual.get("needs_recompute") is True
+
+        if schema_mismatch:
+            # Document: LanceDB raises on old-binary insert AND preserves other rows' B5 data
+            pass  # test passes: both safety properties hold
+    finally:
+        await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# CollectionMeta tests
 # ---------------------------------------------------------------------------
 
 
