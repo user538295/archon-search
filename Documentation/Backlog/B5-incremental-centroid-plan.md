@@ -208,7 +208,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_collection_meta.py -v`
 
 #### Task 1.2 — Add `centroid_sum_json`, `mutations_since_recompute`, `needs_recompute` to `_meta_schema` and round-trip through `update_collection_meta` / `_row_to_meta`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - In `_meta_schema()`, add (all `nullable=True` — consistent with the `or 0` / `or False` defensive fallbacks in `_row_to_meta`):

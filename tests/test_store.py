@@ -1267,6 +1267,123 @@ async def test_collection_meta_centroid_none_round_trips(
 
 
 @pytest.mark.asyncio
+async def test_centroid_sum_json_round_trips(connected_store: SearchStore) -> None:
+    from archon_search.collection_meta import CollectionMeta
+    meta = CollectionMeta(name="b5-centroid-sum-rt", centroid_sum=[1.0, 2.0])
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("b5-centroid-sum-rt")
+    assert retrieved is not None
+    assert retrieved.centroid_sum is not None
+    assert isinstance(retrieved.centroid_sum, list)
+    assert len(retrieved.centroid_sum) == 2
+    assert abs(retrieved.centroid_sum[0] - 1.0) < 1e-9
+    assert abs(retrieved.centroid_sum[1] - 2.0) < 1e-9
+
+@pytest.mark.asyncio
+async def test_centroid_sum_json_none_round_trips(connected_store: SearchStore) -> None:
+    from archon_search.collection_meta import CollectionMeta
+    meta = CollectionMeta(name="b5-centroid-sum-none", centroid_sum=None)
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("b5-centroid-sum-none")
+    assert retrieved is not None
+    assert retrieved.centroid_sum is None
+
+@pytest.mark.asyncio
+async def test_malformed_centroid_sum_json_parses_to_none(connected_store: SearchStore) -> None:
+    """Manually insert a row with malformed centroid_sum_json; get_collection_meta returns centroid_sum=None."""
+    from archon_search.store import _META_TABLE
+    db = connected_store._require_connected()
+    # Ensure meta table exists
+    from archon_search.collection_meta import CollectionMeta
+    seed = CollectionMeta(name="b5-malformed-sum")
+    await connected_store.update_collection_meta(seed)
+    # Directly patch the row with malformed JSON
+    table = await db.open_table(_META_TABLE)
+    await table.delete("name = 'b5-malformed-sum'")
+    schema = await table.schema()
+    # Build a row with all fields but malformed centroid_sum_json
+    row: dict = {f: "" for f in schema.names}
+    row["name"] = "b5-malformed-sum"
+    row["doc_count"] = 0
+    row["chunk_count"] = 0
+    row["described_at_doc_count"] = -1
+    row["centroid_sum_json"] = "not-json"
+    assert "mutations_since_recompute" in schema.names, "B5 column missing from schema"
+    assert "needs_recompute" in schema.names, "B5 column missing from schema"
+    row["mutations_since_recompute"] = 0
+    row["needs_recompute"] = False
+    await table.add([row])
+    retrieved = await connected_store.get_collection_meta("b5-malformed-sum")
+    assert retrieved is not None
+    assert retrieved.centroid_sum is None
+
+@pytest.mark.asyncio
+async def test_mutations_since_recompute_round_trips(connected_store: SearchStore) -> None:
+    from archon_search.collection_meta import CollectionMeta
+    meta = CollectionMeta(name="b5-mutations-rt", mutations_since_recompute=42)
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("b5-mutations-rt")
+    assert retrieved is not None
+    assert retrieved.mutations_since_recompute == 42
+
+@pytest.mark.asyncio
+async def test_needs_recompute_round_trips(connected_store: SearchStore) -> None:
+    from archon_search.collection_meta import CollectionMeta
+    meta = CollectionMeta(name="b5-needs-recompute-rt", needs_recompute=True)
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("b5-needs-recompute-rt")
+    assert retrieved is not None
+    assert retrieved.needs_recompute is True
+
+@pytest.mark.asyncio
+async def test_mutations_since_recompute_zero_round_trips(connected_store: SearchStore) -> None:
+    from archon_search.collection_meta import CollectionMeta
+    meta = CollectionMeta(name="b5-mutations-zero", mutations_since_recompute=0)
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("b5-mutations-zero")
+    assert retrieved is not None
+    assert retrieved.mutations_since_recompute == 0
+
+@pytest.mark.asyncio
+async def test_needs_recompute_false_round_trips(connected_store: SearchStore) -> None:
+    from archon_search.collection_meta import CollectionMeta
+    meta = CollectionMeta(name="b5-needs-recompute-false", needs_recompute=False)
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("b5-needs-recompute-false")
+    assert retrieved is not None
+    assert retrieved.needs_recompute is False
+
+@pytest.mark.asyncio
+async def test_update_collection_meta_writes_b5_columns(connected_store: SearchStore) -> None:
+    """Row dict (not just schema) must contain all three B5 columns — no NULL on write."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import _META_TABLE
+    meta = CollectionMeta(
+        name="b5-writes-columns",
+        centroid_sum=[3.0, 4.0],
+        mutations_since_recompute=7,
+        needs_recompute=True,
+    )
+    await connected_store.update_collection_meta(meta)
+    # Verify via get_collection_meta (round-trip)
+    retrieved = await connected_store.get_collection_meta("b5-writes-columns")
+    assert retrieved is not None
+    assert retrieved.centroid_sum is not None
+    assert abs(retrieved.centroid_sum[0] - 3.0) < 1e-9
+    assert retrieved.mutations_since_recompute == 7
+    assert retrieved.needs_recompute is True
+    # Also verify raw row to confirm columns are not NULL
+    db = connected_store._require_connected()
+    table = await db.open_table(_META_TABLE)
+    rows = await table.query().to_list()
+    raw = next((r for r in rows if r["name"] == "b5-writes-columns"), None)
+    assert raw is not None
+    assert raw.get("centroid_sum_json") not in (None, "")
+    assert raw.get("mutations_since_recompute") == 7
+    assert raw.get("needs_recompute") is True
+
+
+@pytest.mark.asyncio
 async def test_get_all_collections_meta_empty_before_any_update(tmp_path: Path) -> None:
     """get_all_collections_meta returns [] when no meta rows exist."""
     store = SearchStore(tmp_path / "db_meta_empty")

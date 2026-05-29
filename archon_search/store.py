@@ -275,6 +275,9 @@ class SearchStore:
                 pa.field("last_described", pa.utf8()),
                 pa.field("described_at_doc_count", pa.int64()),
                 pa.field("namespace", pa.utf8()),
+                pa.field("centroid_sum_json", pa.utf8(), nullable=True),
+                pa.field("mutations_since_recompute", pa.int64(), nullable=True),
+                pa.field("needs_recompute", pa.bool_(), nullable=True),
             ]
         )
 
@@ -390,10 +393,35 @@ class SearchStore:
         last_described = datetime.fromisoformat(row["last_described"]) if row["last_described"] else None
         raw_described_at: int = row["described_at_doc_count"]
         described_at = None if raw_described_at < 0 else raw_described_at
+        raw_cs = row.get("centroid_sum_json", "")
+        centroid_sum: list[float] | None = None
+        if raw_cs:
+            try:
+                parsed = json.loads(raw_cs)
+                if not isinstance(parsed, list) or any(
+                    type(x) not in (int, float) or not math.isfinite(x) for x in parsed
+                ):
+                    logger.warning(
+                        "Malformed centroid_sum_json for collection %r — centroid_sum set to None",
+                        row.get("name"),
+                    )
+                else:
+                    centroid_sum = [float(x) for x in parsed]
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Malformed centroid_sum_json for collection %r — centroid_sum set to None",
+                    row.get("name"),
+                )
+                centroid_sum = None
+        mutations_since_recompute = int(row.get("mutations_since_recompute") or 0)
+        needs_recompute = bool(row.get("needs_recompute") or False)
         return CollectionMeta(
             name=row["name"],
             description=row["description"] if row["description"] else None,
             centroid=centroid,
+            centroid_sum=centroid_sum,
+            mutations_since_recompute=mutations_since_recompute,
+            needs_recompute=needs_recompute,
             doc_count=row["doc_count"],
             chunk_count=row["chunk_count"],
             embedding_model=row["embedding_model"],
@@ -568,6 +596,9 @@ class SearchStore:
                     "last_described": last_described_str,
                     "described_at_doc_count": described_at,
                     "namespace": meta.namespace,
+                    "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
+                    "mutations_since_recompute": meta.mutations_since_recompute,
+                    "needs_recompute": meta.needs_recompute,
                 }
             ]
         )
