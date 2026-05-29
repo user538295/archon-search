@@ -40,6 +40,14 @@ class ReindexResult:
     ts_normalized: int = 0
 
 
+@dataclass
+class ChunkIngestResult:
+    """Outcome of ``SearchStore.ingest_chunks``."""
+
+    chunks_ingested: int
+    needs_recompute: bool
+
+
 class StoreBusyError(Exception):
     """Raised when ``SearchStore.ingest_chunks`` cannot acquire the per-collection
     lock within ``INGEST_LOCK_TIMEOUT_S`` seconds (typically because
@@ -910,7 +918,7 @@ class SearchStore:
         *,
         _locked_by_caller: bool = False,
         embedding_model: str | None = None,
-    ) -> int:
+    ) -> ChunkIngestResult:
         self._validate_collection(collection)
         db = self._require_connected()
         for chunk in chunks:
@@ -919,7 +927,7 @@ class SearchStore:
             validate_metadata(chunk.metadata)
 
         if not chunks:
-            return 0
+            return ChunkIngestResult(chunks_ingested=0, needs_recompute=False)
 
         lock = None if _locked_by_caller else self._lock_for(collection)
         if lock is not None:
@@ -929,18 +937,19 @@ class SearchStore:
                 raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
         try:
             chunks_ingested = await self._do_ingest(db, collection, chunks)
+            needs_recompute = False
 
             if self._config.centroid_incremental_enabled:
                 batch_vectors = [list(c.vector) for c in chunks]
                 if batch_vectors:
                     distinct_doc_count = len({c.doc_id for c in chunks})
-                    await self._do_update_meta_on_add(
+                    needs_recompute = await self._do_update_meta_on_add(
                         db, collection, batch_vectors, distinct_doc_count,
                         embedding_model=embedding_model,
                         embedding_dim=len(batch_vectors[0]),
                     )
 
-            return chunks_ingested
+            return ChunkIngestResult(chunks_ingested=chunks_ingested, needs_recompute=needs_recompute)
         finally:
             if lock is not None:
                 lock.release()

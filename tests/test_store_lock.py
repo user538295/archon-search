@@ -145,7 +145,7 @@ async def test_ingest_succeeds_after_holder_releases(
     n = await asyncio.wait_for(
         connected_store.ingest_chunks(col_name, [_chunk()]), timeout=2.0
     )
-    assert n == 1
+    assert n.chunks_ingested == 1
 
 
 @pytest.mark.integration
@@ -245,7 +245,7 @@ async def test_ingest_chunks_skips_lock_when_locked_by_caller(
     await lock.acquire()
     try:
         n = await connected_store.ingest_chunks(col_name, [_chunk()], _locked_by_caller=True)
-        assert n == 1
+        assert n.chunks_ingested == 1
     finally:
         lock.release()
 

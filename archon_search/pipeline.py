@@ -276,12 +276,12 @@ class SearchPipeline:
         with record_stage("persist"):
             await self.store.ensure_collection(collection, self._embedder.embedding_dim)
             await self.store.delete_document(collection, doc_id)
-            await self.store.ingest_chunks(collection, records)
+            ingest_result = await self.store.ingest_chunks(collection, records)
 
             if rebuild_fts:
                 await self.store.rebuild_fts_index(collection)
 
-        return IngestResult(doc_id=doc_id, chunks_created=len(records), status="ok")
+        return IngestResult(doc_id=doc_id, chunks_created=ingest_result.chunks_ingested, status="ok")
 
     async def ingest_directory(
         self,

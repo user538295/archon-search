@@ -191,8 +191,8 @@ async def test_ingest_chunks_serializes_acl_field(tmp_path):
             indexed_at="2024-01-01T00:00:00+00:00",
             acl=["ns1"],
         )
-        count = await store.ingest_chunks("acl_test", [chunk])
-        assert count == 1
+        result = await store.ingest_chunks("acl_test", [chunk])
+        assert result.chunks_ingested == 1
 
         db = store._require_connected()
         table = await db.open_table("acl_test")
@@ -222,8 +222,8 @@ async def test_ingest_chunks_serializes_deny_all_acl(tmp_path):
             indexed_at="2024-01-01T00:00:00+00:00",
             acl=[],  # deny-all
         )
-        count = await store.ingest_chunks("deny_all_test", [chunk])
-        assert count == 1
+        result = await store.ingest_chunks("deny_all_test", [chunk])
+        assert result.chunks_ingested == 1
 
         db = store._require_connected()
         table = await db.open_table("deny_all_test")

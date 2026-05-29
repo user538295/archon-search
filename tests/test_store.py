@@ -528,8 +528,8 @@ async def test_store_ingest_empty_list_returns_zero(
 ) -> None:
     """ingest_chunks with empty list returns 0 without touching the table."""
     await connected_store.ensure_collection(col_name, _DIM)
-    count = await connected_store.ingest_chunks(col_name, [])
-    assert count == 0
+    result = await connected_store.ingest_chunks(col_name, [])
+    assert result.chunks_ingested == 0
 
 
 @pytest.mark.asyncio
@@ -5311,5 +5311,65 @@ async def test_ingest_chunks_locked_by_caller_accumulates_meta(tmp_path) -> None
             assert meta.centroid_sum == [1.0, 2.0]
         finally:
             lock.release()
+    finally:
+        await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# B5 Task 3.3 — ChunkIngestResult return type
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_returns_chunk_ingest_result(tmp_path) -> None:
+    """ingest_chunks returns ChunkIngestResult with .chunks_ingested and .needs_recompute."""
+    from archon_search.store import ChunkIngestResult
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        col = "rtype_col"
+        await store.ensure_collection(col, _DIM)
+        doc = _doc_id()
+        result = await store.ingest_chunks(col, [_chunk(doc, 0)])
+        assert isinstance(result, ChunkIngestResult)
+        assert hasattr(result, "chunks_ingested")
+        assert hasattr(result, "needs_recompute")
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_chunks_ingested_correct(tmp_path) -> None:
+    """chunks_ingested matches the number of chunks written."""
+    from archon_search.store import ChunkIngestResult
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        col = "cnt_col"
+        await store.ensure_collection(col, _DIM)
+        doc = _doc_id()
+        result = await store.ingest_chunks(col, [_chunk(doc, 0), _chunk(doc, 1)])
+        assert isinstance(result, ChunkIngestResult)
+        assert result.chunks_ingested == 2
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_needs_recompute_false_below_threshold(tmp_path) -> None:
+    """Fresh collection, 3 chunks, default threshold 10 000 → needs_recompute == False."""
+    from archon_search.store import ChunkIngestResult
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig(centroid_incremental_enabled=True)
+    store = SearchStore(tmp_path / "db", config=cfg)
+    await store.connect()
+    try:
+        col = "nr_col"
+        await store.ensure_collection(col, _DIM)
+        doc = _doc_id()
+        chunks = [_chunk(doc, i) for i in range(3)]
+        result = await store.ingest_chunks(col, chunks, embedding_model="m")
+        assert isinstance(result, ChunkIngestResult)
+        assert result.needs_recompute is False
     finally:
         await store.disconnect()

@@ -464,7 +464,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "ingest_chunks or lock_for"`
 
 #### Task 3.3 — Surface `needs_recompute` signal to callers via `ChunkIngestResult`
-- [ ] **Files**: `archon_search/store.py`, `archon_search/pipeline.py`
+- [x] **Files**: `archon_search/store.py`, `archon_search/pipeline.py`
 - **Depends on**: Task 3.2
 - **Description**:
   - Change `ingest_chunks` return type from `int` (chunk count) to a new `@dataclass class ChunkIngestResult: chunks_ingested: int; needs_recompute: bool`. The name `ChunkIngestResult` avoids colliding with `_types.IngestResult(doc_id, chunks_created, status)` which already exists in the codebase.
