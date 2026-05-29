@@ -8,6 +8,23 @@
 
 ## Changelog
 
+### [next release] — B5 incremental centroid maintenance (additive internal columns)
+
+**Surface**: `_archon_collection_meta` LanceDB table (internal schema). No public REST or MCP contract change.
+
+**Additive internal columns**:
+- `centroid_sum_json` (`utf8`) — JSON-encoded element-wise sum of all chunk vectors; combined with `chunk_count` satisfies `centroid = centroid_sum / chunk_count`. Empty string when unset.
+- `mutations_since_recompute` (`int64`) — incremented on every ingest/delete; reset to `0` after a full recompute. `-1` sentinel = pre-B5 row.
+- `needs_recompute` (`bool`) — set `True` when incremental maintenance cannot proceed (model mismatch, NaN/Inf in vectors, missing seed sum). Cleared on successful `recompute_collection_meta`.
+
+These columns are **not exposed** via any REST endpoint, MCP tool, or CLI command. They are internal routing metadata. Adding them is **non-breaking** for any public API consumer.
+
+**Mixed-version deployment caveat**: an older binary's `update_collection_meta` uses its own schema (without the three new columns). If that binary performs a delete-then-insert upsert on a table that already carries the new columns, LanceDB's upsert semantics may null out the new columns on the affected row, which the B5 runtime treats identically to `needs_recompute = True` and recovers via a full recompute on next access. Do not run mixed-version deployments without first verifying your LanceDB version's actual upsert behavior. The safe upgrade path is to restart all instances to the same binary version before relying on incremental centroid accuracy.
+
+**Migration**: none required for operators. The three columns are populated lazily on first ingest or reindex after upgrade. Existing collections are treated as `needs_recompute = True` until their first post-upgrade recompute.
+
+**Announced in**: this release.
+
 ### [next release] — B4 hybrid collection routing
 
 **Surface**: MCP `get_collection_meta`, `get_collections_meta`, and `list_collections` tools.

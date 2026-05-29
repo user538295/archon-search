@@ -706,7 +706,7 @@ centroid_recompute_threshold: int = 10_000
 > **Releasable**: after Task 7.1 — all acceptance criteria pass; all affected docs updated; eval harness green.
 
 #### Task 7.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover and update all documentation affected by B5:

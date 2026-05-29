@@ -177,6 +177,38 @@ The key is auto-generated on first start at `~/.archon-search/.search.env` with 
 
 There is no live-reload — every rotation requires a service restart. Clients holding the old key will receive `401` immediately after restart.
 
+### Stale centroid — symptoms, causes, and recovery
+
+**Symptom**: The log line `logger.warning("Collection %r centroid stale, recompute queued", ...)` appears in `~/.archon-search/logs/archon-search.log`. The `needs_recompute` flag is `True` on one or more collections in `_archon_collection_meta`. Routing scores for the affected collection may be unreliable until the recompute completes.
+
+**Causes**:
+- **Model switch**: the embedding model was changed and the stored `centroid_sum_json` was computed under a different model, making it incompatible with current vectors.
+- **NaN / Inf in vectors**: a vector batch contained non-finite values (e.g. from a corrupt document or embedder bug). The incremental update is aborted and `needs_recompute` is set to prevent corrupting the sum.
+- **Crash between writes**: the server crashed after writing new chunks to the chunk table but before updating `_archon_collection_meta`. On next start the incremental sum is out of sync with the actual chunk set.
+- **Delete-only workload**: a series of deletions crossed the `mutations_since_recompute` threshold without any subsequent ingest to re-anchor the sum. The centroid remains valid mathematically but may be stale relative to the current corpus distribution.
+
+**Recovery**:
+
+```bash
+# Trigger a full centroid recompute for the affected collection:
+archon-search collection reindex <collection-name>
+
+# Or via the MCP reindex tool (requires a live server and valid API key):
+# mcp call reindex collection=<collection-name>
+```
+
+Calling `recompute_collection_meta` with `force=True` from the pipeline (internal API) also clears the flag. The reindex job runs asynchronously; monitor progress with `GET /status` or `GET /indexing-state`.
+
+**Monitoring**:
+
+```bash
+grep 'centroid stale, recompute queued' ~/.archon-search/logs/archon-search.log
+```
+
+On Linux, use `journalctl --user -u archon-search | grep 'centroid stale'`.
+
+**Note on delete-only workloads**: collections that undergo many deletions without subsequent ingest will accumulate `mutations_since_recompute` until the configured threshold is exceeded. When the threshold fires, the pipeline sets `needs_recompute = True` and queues a recompute automatically. If no ingest follows, the recompute must be triggered manually via `archon-search collection reindex <name>`.
+
 ## See also
 
 - `Architecture/100_system_architecture_overview.md` — component layout and request flow.

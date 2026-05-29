@@ -110,6 +110,16 @@ All values live in `~/.archon-search/archon-search.toml` (see `archon-search.tom
 
 Before changing any of these in a release, re-run `uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py` to confirm `routing_accuracy` does not drop below the floor. Knob changes are eval-gated, not just benchmark-gated.
 
+### Centroid maintenance cost (B5)
+
+As of B5, centroid maintenance cost is no longer O(chunks) on every ingest:
+
+- **Ingest**: O(batch) — `(centroid_sum, chunk_count)` is updated incrementally from the newly ingested vectors only. The existing centroid sum is read once from `_archon_collection_meta`, the batch contribution is added, and the result is written back.
+- **Delete**: O(chunks-in-document) — deleting a document subtracts only that document's chunk vectors from the running sum. No full collection scan is needed.
+- **Full recompute** (`recompute_collection_meta`): O(chunks) — retained for explicit calls: `archon-search collection reindex <name>`, crash recovery (when `needs_recompute = True`), and periodic drift-reset checkpoints. This path is not triggered by normal ingest or delete.
+
+The `centroid_incremental_enabled` feature flag (default `True`) gates the incremental path. Set it to `False` in `archon-search.toml` to revert to full-recompute on every ingest (not recommended for large corpora). See `archon_search/store.py` and `CON-4` in `530_technical_debt_refactoring_roadmap.md` for the full rationale.
+
 ## See also
 
 - `Architecture/100_system_architecture_overview.md` — the pipeline these knobs affect.

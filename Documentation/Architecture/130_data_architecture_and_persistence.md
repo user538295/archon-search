@@ -126,6 +126,11 @@ The per-field partition map (**system** / **filterable** / **ranking** / **audit
 | `last_described` | `utf8` | ISO 8601 or `""` |
 | `described_at_doc_count` | `int64` | `-1` sentinel = unset |
 | `namespace` | `utf8` | added by `migrate_namespace`; defaults to `default` |
+| `centroid_sum_json` | `utf8` | JSON-encoded `list[float]` — element-wise sum of all chunk vectors. Combined with `chunk_count`, satisfies `centroid = centroid_sum / chunk_count`. Added by B5 incremental-centroid maintenance; `""` when unset or not yet migrated. |
+| `mutations_since_recompute` | `int64` | Counter incremented on every ingest batch and every delete operation; reset to `0` after a full `recompute_collection_meta`. Used to detect high-churn collections that need a periodic drift-reset recompute. `-1` sentinel = pre-B5 row (treated as 0 at read time). |
+| `needs_recompute` | `bool` | Set `True` when incremental maintenance cannot proceed (model mismatch detected, NaN/Inf in a vector batch, or centroid sum absent from a pre-B5 store). The pipeline calls `recompute_collection_meta` automatically when this flag is `True` before the next search or routing query against the collection. Cleared to `False` on successful full recompute. |
+
+The three B5 columns are additive and populated lazily: rows written by an older binary that lacks B5 will have `None` for all three fields, which the store treats identically to the `needs_recompute = True` state and triggers a full recompute on next access. See also `BREAKING.md` for mixed-version deployment caveats.
 
 ### Timestamp format
 

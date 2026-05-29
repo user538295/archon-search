@@ -65,7 +65,7 @@ Goal: stand up the measurement surface before adding ranking features, and ship 
 - [x] **B2. Deeper health and readiness (item 22)** — distinguish `live` vs. `ready`; cover storage connectivity, model warm-status, index build state, watcher state, queue depth. Operators need this before scaling load.
 - [x] **B3. Server-side multi-collection search primitive (item 8)** — embed the query once; one merge + rerank pass across collections. Co-designed with `/explain` (A4) so the routing path is debuggable.
 - [x] **B4. Stronger collection routing (item 9)** — description-embedding + centroid hybrid blend shipped; centroid remains the default (`routing_strategy = "centroid"`), hybrid is opt-in via `routing_strategy = "hybrid"` + `routing_description_weight`. One new artifact: `CollectionMeta.description_embedding` stored per-collection and used by the router in hybrid mode. Multi-centroid routing (per-cluster centroids for diffuse corpora) deferred to a future item; roadmap item 9's multi-centroid scope is narrowed to this single-artifact implementation. Gated by the eval harness (`routing_mrr_hybrid ≥ routing_mrr_centroid` baseline).
-- [ ] **B5. Hardening: incremental centroid update (`CON-4`, item 17)** — maintain `(sum, count)` on collection metadata; full recompute only on reindex. Eliminates an O(chunks) cost from every ingest.
+- [x] **B5. Hardening: incremental centroid update (`CON-4`, item 17)** — incremental `(centroid_sum, chunk_count)` maintenance at store layer — three concrete defects fixed (batch-only overwrite, delete-ignores-centroid, O(chunks) sync-path rescan). Ingest is O(batch); delete is O(chunks-in-document); O(chunks) full scan retained only for explicit `recompute_collection_meta` (reindex, crash recovery, drift reset). Controlled by `centroid_incremental_enabled` flag (default `True`).
 - [ ] **B6. Hardening: production-model eval lane (`EVL-1`, item 4 follow-up)** — `live`-marker job on tag pushes that runs the eval harness against the real embedder/reranker (not the deterministic stubs). Gated by `tests/eval/thresholds.toml`.
 - [ ] **B7. Hardening: structured logs + log rotation (item 25)** — JSON log option, telemetry JSONL rotation policy beyond retention-day pruning.
 
@@ -215,7 +215,7 @@ If only one ordering is used for planning, use this — each phase is a coherent
 9. ✅ B2. Deeper health and readiness (item 22).
 10. ✅ B3. Server-side multi-collection search primitive (item 8).
 11. ✅ B4. Stronger collection routing (item 9) — description-embedding hybrid blend; centroid default preserved; multi-centroid deferred.
-12. ⬜ B5. Incremental centroid update (item 17, `CON-4`).
+12. ✅ B5. Incremental centroid update (item 17, `CON-4`) — three defects fixed; see Phase B entry above.
 13. ⬜ B6. Production-model eval lane (`EVL-1`).
 14. ⬜ B7. Structured logs + log rotation (item 25).
 
