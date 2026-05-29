@@ -1,0 +1,15 @@
+# Live eval thresholds — populated post-calibration.
+#
+# This file is intentionally empty. load_live_thresholds() returns None when
+# required sections ([quality_floors]) are absent, enabling report-only mode
+# until a maintainer commits calibrated values after the first live eval run.
+#
+# After calibration, add sections like:
+#   [quality_floors]
+#   recall_at_1 = 0.XX
+#   recall_at_3 = 0.XX
+#   ...
+#
+#   [latency_ceilings]
+#   latency_p50_ms = XXX.0
+#   latency_p95_ms = XXX.0

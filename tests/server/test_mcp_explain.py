@@ -325,7 +325,7 @@ async def test_mcp_explain_telemetry_no_query(tmp_path: Path) -> None:
     await writer.drain_and_stop()
 
     reader = TelemetryReader(logs_dir, retention_days=30)
-    today = date.today()
+    today = datetime.now(UTC).date()
     entries, skipped = reader.read_entries(today, today)
     explain_entries = [e for e in entries if e.endpoint == "explain"]
     assert len(explain_entries) >= 1

@@ -1317,7 +1317,6 @@ async def test_post_explain_telemetry_emits_no_query(tmp_path: Path) -> None:
     from archon_search.store import SearchStore
     from archon_search.telemetry.writer import TelemetryWriter
     from archon_search.telemetry.reader import TelemetryReader
-    from datetime import date
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
@@ -1375,7 +1374,7 @@ async def test_post_explain_telemetry_emits_no_query(tmp_path: Path) -> None:
     await writer.drain_and_stop()
 
     reader = TelemetryReader(logs_dir, retention_days=30)
-    today = date.today()
+    today = datetime.now(UTC).date()
     entries, skipped = reader.read_entries(today, today)
     assert skipped == 0
 
