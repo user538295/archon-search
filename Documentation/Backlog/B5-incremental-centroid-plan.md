@@ -309,7 +309,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "do_fetch_doc_vectors"`
 
 #### Task 2.3 — NaN/inf guard and `_centroid_sum_valid` helper
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - `def _centroid_sum_valid(centroid_sum: list[float] | None, embedding_dim: int, stored_model: str, writer_model: str) -> bool`: returns `True` iff all of the following hold: `centroid_sum is not None`, `len(centroid_sum) == embedding_dim`, `stored_model == writer_model`, and no element of `centroid_sum` is NaN or inf. Pure function; no I/O.
