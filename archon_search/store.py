@@ -646,11 +646,11 @@ class SearchStore:
             lock.release()
 
     # ------------------------------------------------------------------
-    # Private unlocked meta helpers (caller must hold _lock_for(collection))
+    # Private unlocked helpers (caller must hold _lock_for(collection))
     # ------------------------------------------------------------------
 
     async def _do_read_meta_unlocked(
-        self, db, collection: str, namespace: str = DEFAULT_NAMESPACE
+        self, db: "lancedb.db.AsyncConnection", collection: str, namespace: str = DEFAULT_NAMESPACE
     ) -> "CollectionMeta | None":
         # Caller must hold _lock_for(collection)
         all_names: list[str] = (await db.list_tables()).tables
@@ -668,7 +668,7 @@ class SearchStore:
         return self._row_to_meta(row) if row is not None else None
 
     async def _do_write_meta_unlocked(
-        self, db, collection: str, meta: "CollectionMeta"
+        self, db: "lancedb.db.AsyncConnection", collection: str, meta: "CollectionMeta"
     ) -> None:
         # Caller must hold _lock_for(collection)
         if collection != meta.name:
@@ -718,6 +718,23 @@ class SearchStore:
                 }
             ]
         )
+
+    async def _do_fetch_doc_vectors_unlocked(
+        self, db: "lancedb.db.AsyncConnection", collection: str, doc_id: str
+    ) -> list[list[float]]:
+        # Caller must hold _lock_for(collection)
+        if not _DOC_ID_RE.match(doc_id):
+            raise ValueError(f"Invalid doc_id: {doc_id!r} — must be 64 hex chars")
+        self._validate_collection(collection)
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return []
+        # doc_id validated above by _DOC_ID_RE; _where_eq is defense-in-depth
+        rows = await table.query().where(_where_eq("doc_id", doc_id)).select(["vector", "doc_id"]).to_list()
+        # Guard against rows where the vector column is unexpectedly absent/null
+        # (LanceDB schema enforces non-null, but defensive filter prevents bad list(None) calls)
+        return [list(r["vector"]) for r in rows if r.get("vector") is not None]
 
     # ------------------------------------------------------------------
     # Ingest

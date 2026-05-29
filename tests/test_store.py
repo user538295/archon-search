@@ -4656,3 +4656,146 @@ async def test_a5b_end_to_end_flow_unchanged(connected_store: SearchStore, col_n
     # After delete, the doc is no longer in the store
     docs = await connected_store.list_documents(col_name)
     assert all(d.doc_id != doc_id for d in docs), "doc must be absent after delete"
+
+
+# ---------------------------------------------------------------------------
+# _do_fetch_doc_vectors_unlocked tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_do_fetch_doc_vectors_unlocked_empty_when_no_table(
+    tmp_path: Path,
+) -> None:
+    """Returns [] when the collection table does not exist."""
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        result = await store._do_fetch_doc_vectors_unlocked(db, "nonexistent-col", _doc_id())
+        assert result == []
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_fetch_doc_vectors_unlocked_returns_correct_vectors(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Ingesting two docs and fetching by doc_id returns only that doc's vectors."""
+    doc_a = _doc_id()
+    doc_b = _doc_id()
+    vec_a0 = [1.0, 2.0, 3.0, 4.0]
+    vec_a1 = [5.0, 6.0, 7.0, 8.0]
+    vec_b0 = [9.0, 10.0, 11.0, 12.0]
+
+    chunks = [
+        ChunkRecord(
+            doc_id=doc_a,
+            chunk_id=f"{doc_a}-000000",
+            text="a chunk 0",
+            vector=vec_a0,
+            source_path=f"/tmp/{doc_a[:8]}.md",
+            indexed_at=datetime.now(timezone.utc).isoformat(),
+        ),
+        ChunkRecord(
+            doc_id=doc_a,
+            chunk_id=f"{doc_a}-000001",
+            text="a chunk 1",
+            vector=vec_a1,
+            source_path=f"/tmp/{doc_a[:8]}.md",
+            indexed_at=datetime.now(timezone.utc).isoformat(),
+        ),
+        ChunkRecord(
+            doc_id=doc_b,
+            chunk_id=f"{doc_b}-000000",
+            text="b chunk 0",
+            vector=vec_b0,
+            source_path=f"/tmp/{doc_b[:8]}.md",
+            indexed_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    ]
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    db = connected_store._require_connected()
+    result = await connected_store._do_fetch_doc_vectors_unlocked(db, col_name, doc_a)
+
+    assert len(result) == 2
+    assert {tuple(v) for v in result} == {tuple(vec_a0), tuple(vec_a1)}
+    assert all(isinstance(v, list) for v in result), "vectors must be plain Python lists"
+
+
+@pytest.mark.asyncio
+async def test_do_fetch_doc_vectors_unlocked_empty_when_doc_not_found(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Returns [] when the collection exists but doc_id has no rows."""
+    other_doc = _doc_id()
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, [_chunk(other_doc, 0)])
+
+    db = connected_store._require_connected()
+    missing_doc = _doc_id()
+    result = await connected_store._do_fetch_doc_vectors_unlocked(db, col_name, missing_doc)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_do_fetch_doc_vectors_unlocked_no_cross_collection_bleed(
+    tmp_path: Path,
+) -> None:
+    """Fetching doc vectors from collection A does not return vectors from collection B."""
+    store = SearchStore(tmp_path / "db_cross")
+    await store.connect()
+    try:
+        col_a = "col-alpha"
+        col_b = "col-beta"
+        doc_a = _doc_id()
+        doc_b = _doc_id()
+
+        await store.ensure_collection(col_a, _DIM)
+        await store.ensure_collection(col_b, _DIM)
+        await store.ingest_chunks(col_a, [_chunk(doc_a, 0, text="from A")])
+        await store.ingest_chunks(col_b, [_chunk(doc_b, 0, text="from B")])
+
+        db = store._require_connected()
+        # doc_a should exist only in col_a; querying col_b for doc_a must return empty
+        result_col_a = await store._do_fetch_doc_vectors_unlocked(db, col_a, doc_a)
+        result_col_b_for_doc_a = await store._do_fetch_doc_vectors_unlocked(db, col_b, doc_a)
+
+        assert len(result_col_a) == 1, "col_a should have one chunk for doc_a"
+        assert result_col_b_for_doc_a == [], "col_b must not return doc_a's vectors"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_fetch_doc_vectors_unlocked_invalid_doc_id_raises(
+    tmp_path: Path,
+) -> None:
+    """Malformed doc_id raises ValueError."""
+    store = SearchStore(tmp_path / "db2")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        with pytest.raises(ValueError, match="Invalid doc_id"):
+            await store._do_fetch_doc_vectors_unlocked(db, "some-col", "not-a-valid-hex-id")
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_do_fetch_doc_vectors_unlocked_invalid_collection_raises(
+    tmp_path: Path,
+) -> None:
+    """Invalid collection name (fails _validate_collection) raises ValueError."""
+    store = SearchStore(tmp_path / "db3")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        # Names starting with '_' fail _COLLECTION_RE (must start with [a-zA-Z0-9])
+        with pytest.raises(ValueError):
+            await store._do_fetch_doc_vectors_unlocked(db, "_reserved-col", _doc_id())
+    finally:
+        await store.disconnect()

@@ -295,7 +295,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "do_read_meta_unlocked or do_write_meta_unlocked"`
 
 #### Task 2.2 — `_do_fetch_doc_vectors_unlocked`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - `async def _do_fetch_doc_vectors_unlocked(self, db, collection: str, doc_id: str) -> list[list[float]]`: fetches all stored vectors for `doc_id` from the chunk table of `collection`. Selects `["vector", "doc_id"]` only (no full row materialisation). Returns an empty list if the table does not exist or the doc has no rows. Uses `_where_eq("doc_id", doc_id)` for the filter. Does NOT acquire any lock.
