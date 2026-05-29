@@ -129,13 +129,16 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
     captured_records: list[ChunkRecord] = []
 
     class CapturingStore:
+        from archon_search.config import SearchConfig
+        _config = SearchConfig()
+
         async def ensure_collection(self, *a: Any, **kw: Any) -> None:
             pass
 
         async def delete_document(self, *a: Any, **kw: Any) -> int:
             return 0
 
-        async def ingest_chunks(self, collection: str, records: list[ChunkRecord]) -> ChunkIngestResult:
+        async def ingest_chunks(self, collection: str, records: list[ChunkRecord], **kw: Any) -> ChunkIngestResult:
             captured_records.extend(records)
             return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
 
@@ -173,13 +176,16 @@ async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_na
     captured_records: list[ChunkRecord] = []
 
     class CapturingStore:
+        from archon_search.config import SearchConfig
+        _config = SearchConfig()
+
         async def ensure_collection(self, *a: Any, **kw: Any) -> None:
             pass
 
         async def delete_document(self, *a: Any, **kw: Any) -> int:
             return 0
 
-        async def ingest_chunks(self, collection: str, records: list[ChunkRecord]) -> ChunkIngestResult:
+        async def ingest_chunks(self, collection: str, records: list[ChunkRecord], **kw: Any) -> ChunkIngestResult:
             captured_records.extend(records)
             return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
 
@@ -1959,6 +1965,8 @@ async def test_ingest_directory_namespace_param(tmp_path) -> None:
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
+    from archon_search.config import SearchConfig
+
     store = MagicMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
@@ -1966,6 +1974,7 @@ async def test_ingest_directory_namespace_param(tmp_path) -> None:
     store.rebuild_fts_index = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
+    store._config = SearchConfig(centroid_incremental_enabled=False)
 
     pipeline = SearchPipeline(
         store=store,
@@ -2001,6 +2010,8 @@ async def test_ingest_directory_default_namespace(tmp_path) -> None:
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
+    from archon_search.config import SearchConfig
+
     store = MagicMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
@@ -2008,6 +2019,7 @@ async def test_ingest_directory_default_namespace(tmp_path) -> None:
     store.rebuild_fts_index = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
+    store._config = SearchConfig(centroid_incremental_enabled=False)
 
     pipeline = SearchPipeline(
         store=store,
@@ -3282,6 +3294,7 @@ async def test_search_many_acl_filtered_propagates() -> None:
 def _make_stub_store_for_embedding_tests(existing_meta=None):  # type: ignore[no-untyped-def]
     """Return a store mock suitable for description-embedding tests."""
     from unittest.mock import AsyncMock, MagicMock
+    from archon_search.config import SearchConfig
 
     store = MagicMock()
     store.ensure_collection = AsyncMock()
@@ -3290,6 +3303,7 @@ def _make_stub_store_for_embedding_tests(existing_meta=None):  # type: ignore[no
     store.rebuild_fts_index = AsyncMock()
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.update_collection_meta = AsyncMock()
+    store._config = SearchConfig(centroid_incremental_enabled=False)
     return store
 
 
@@ -3542,3 +3556,173 @@ async def test_ingest_file_returns_error_on_delete_store_busy(tmp_path) -> None:
     assert isinstance(result, IngestResult)
     assert result.status == "error"
     store.ingest_chunks.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# B5 Task 5.2 — ingest_directory with update_description and needs_recompute
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_store_for_b5() -> MagicMock:
+    """Build a MagicMock store suitable for B5 task 5.2 tests."""
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.delete_document = AsyncMock(return_value=0)
+    store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=2, needs_recompute=False))
+    store.rebuild_fts_index = AsyncMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+    store.update_description = AsyncMock()
+    store.count_documents = AsyncMock(return_value=1)
+    store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
+    # Store needs a _config with centroid_incremental_enabled; set in each test as needed
+    from archon_search.config import SearchConfig
+    store._config = SearchConfig(centroid_incremental_enabled=False)
+    return store
+
+
+def _make_pipeline_with_store(store: MagicMock):
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    return SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_calls_update_description_not_update_collection_meta(tmp_path) -> None:
+    """With centroid_incremental_enabled=True, ingest_directory calls update_description,
+    NOT update_collection_meta."""
+    from archon_search.config import SearchConfig
+
+    store = _make_mock_store_for_b5()
+    store._config = SearchConfig(centroid_incremental_enabled=True)
+
+    pipeline = _make_pipeline_with_store(store)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Hello\n\nContent for testing.\n" * 5)
+
+    await pipeline.ingest_directory(tmp_path, "test-col")
+
+    store.update_description.assert_awaited_once()
+    store.update_collection_meta.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_triggers_recompute_on_needs_recompute_signal(tmp_path) -> None:
+    """When store.ingest_chunks returns needs_recompute=True and flag is on,
+    recompute_collection_meta is called."""
+    from archon_search.config import SearchConfig
+
+    store = _make_mock_store_for_b5()
+    store._config = SearchConfig(centroid_incremental_enabled=True, centroid_recompute_threshold=1)
+    store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=2, needs_recompute=True))
+
+    pipeline = _make_pipeline_with_store(store)
+
+    with patch.object(pipeline, "recompute_collection_meta", new=AsyncMock()) as mock_recompute:
+        md_file = tmp_path / "doc.md"
+        md_file.write_text("# Hello\n\nContent for testing.\n" * 5)
+
+        await pipeline.ingest_directory(tmp_path, "test-col")
+
+    mock_recompute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_no_recompute_below_threshold(tmp_path) -> None:
+    """When needs_recompute=False, recompute_collection_meta is NOT called."""
+    from archon_search.config import SearchConfig
+
+    store = _make_mock_store_for_b5()
+    store._config = SearchConfig(centroid_incremental_enabled=True, centroid_recompute_threshold=10000)
+    store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=2, needs_recompute=False))
+
+    pipeline = _make_pipeline_with_store(store)
+
+    with patch.object(pipeline, "recompute_collection_meta", new=AsyncMock()) as mock_recompute:
+        md_file = tmp_path / "doc.md"
+        md_file.write_text("# Hello\n\nContent for testing.\n" * 5)
+
+        await pipeline.ingest_directory(tmp_path, "test-col")
+
+    mock_recompute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_triggers_recompute_on_needs_recompute_signal(tmp_path) -> None:
+    """ingest_file calls recompute_collection_meta directly when needs_recompute=True and flag=True."""
+    from archon_search.config import SearchConfig
+
+    store = _make_mock_store_for_b5()
+    store._config = SearchConfig(centroid_incremental_enabled=True)
+    store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=2, needs_recompute=True))
+
+    pipeline = _make_pipeline_with_store(store)
+
+    with patch.object(pipeline, "recompute_collection_meta", new=AsyncMock()) as mock_recompute:
+        md_file = tmp_path / "doc.md"
+        md_file.write_text("# Hello\n\nContent for testing.\n" * 5)
+
+        result = await pipeline.ingest_file(md_file, "test-col")
+
+    assert result.status == "ok"
+    assert result.needs_recompute is True
+    mock_recompute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_forwards_namespace_to_store(tmp_path) -> None:
+    """ingest_file forwards namespace= to store.delete_document and store.ingest_chunks."""
+    store = _make_mock_store_for_b5()
+
+    pipeline = _make_pipeline_with_store(store)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Hello\n\nContent for testing.\n" * 5)
+
+    await pipeline.ingest_file(md_file, "test-col", namespace="ns1")
+
+    # delete_document should receive namespace="ns1"
+    call_kwargs = store.delete_document.call_args
+    assert call_kwargs.kwargs.get("namespace") == "ns1" or (
+        len(call_kwargs.args) >= 3 and call_kwargs.args[2] == "ns1"
+    )
+
+    # ingest_chunks should receive namespace="ns1"
+    ic_kwargs = store.ingest_chunks.call_args
+    assert ic_kwargs.kwargs.get("namespace") == "ns1"
+
+
+def test_ingest_result_needs_recompute_not_in_rest_response() -> None:
+    """IngestResult.needs_recompute is an internal field and must not appear in any REST schema."""
+    from archon_search.server import schemas
+
+    schema_classes = [
+        getattr(schemas, name)
+        for name in dir(schemas)
+        if not name.startswith("_")
+    ]
+    for cls in schema_classes:
+        if hasattr(cls, "model_fields"):
+            assert "needs_recompute" not in cls.model_fields, (
+                f"{cls.__name__} must not expose needs_recompute in REST schema"
+            )
+
+
+def test_ingest_result_has_needs_recompute_field() -> None:
+    """IngestResult dataclass has needs_recompute field (internal pipeline signal)."""
+    r = IngestResult(doc_id="abc", chunks_created=1, status="ok", needs_recompute=True)
+    assert r.needs_recompute is True
+
+    r2 = IngestResult(doc_id="abc", chunks_created=1, status="ok")
+    assert r2.needs_recompute is False

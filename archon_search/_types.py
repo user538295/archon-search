@@ -133,3 +133,4 @@ class IngestResult:
     chunks_created: int
     status: str
     error: str | None = None
+    needs_recompute: bool = False

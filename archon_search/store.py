@@ -1045,6 +1045,7 @@ class SearchStore:
         *,
         _locked_by_caller: bool = False,
         embedding_model: str | None = None,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> ChunkIngestResult:
         self._validate_collection(collection)
         db = self._require_connected()

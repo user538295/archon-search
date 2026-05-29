@@ -577,7 +577,7 @@ centroid_recompute_threshold: int = 10_000
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "update_description"`
 
 #### Task 5.2 — Refactor `ingest_directory` to use `update_description` and check `needs_recompute`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 5.1, Task 3.3
 - **Description**:
   - Pass `embedding_model=self._embedder.model_name` to every `store.ingest_chunks` call (via `ingest_file`). Update `ingest_file` to accept and forward an `embedding_model: str` keyword argument to `store.ingest_chunks`.

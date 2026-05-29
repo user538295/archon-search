@@ -198,6 +198,14 @@ class SearchPipeline:
     def embedder_is_warm(self) -> bool:
         return self._embedder.is_warm
 
+    @property
+    def _centroid_incremental_enabled(self) -> bool:
+        """Return True if the store config has centroid_incremental_enabled set."""
+        cfg = getattr(self.store, "_config", None)
+        if cfg is None:
+            return False
+        return bool(getattr(cfg, "centroid_incremental_enabled", False))
+
     # ------------------------------------------------------------------
     # Ingest
     # ------------------------------------------------------------------
@@ -210,6 +218,7 @@ class SearchPipeline:
         _vector_collector: list[list[float]] | None = None,
         _chunk_collector: list[str] | None = None,
         *,
+        namespace: str = DEFAULT_NAMESPACE,
         ingested_by: IngestedBy = "cli",
     ) -> IngestResult:
         doc_id = hashlib.sha256(str(path.resolve()).encode()).hexdigest()
@@ -276,15 +285,27 @@ class SearchPipeline:
         with record_stage("persist"):
             await self.store.ensure_collection(collection, self._embedder.embedding_dim)
             try:
-                await self.store.delete_document(collection, doc_id)
+                await self.store.delete_document(collection, doc_id, namespace=namespace)
             except StoreBusyError:
                 return IngestResult(doc_id=doc_id, chunks_created=0, status="error")
-            ingest_result = await self.store.ingest_chunks(collection, records)
+            ingest_result = await self.store.ingest_chunks(
+                collection, records,
+                embedding_model=self._embedder.model_name,
+                namespace=namespace,
+            )
+
+            if rebuild_fts and self._centroid_incremental_enabled and ingest_result.needs_recompute:
+                await self.recompute_collection_meta(collection, namespace=namespace)
 
             if rebuild_fts:
                 await self.store.rebuild_fts_index(collection)
 
-        return IngestResult(doc_id=doc_id, chunks_created=ingest_result.chunks_ingested, status="ok")
+        return IngestResult(
+            doc_id=doc_id,
+            chunks_created=ingest_result.chunks_ingested,
+            status="ok",
+            needs_recompute=ingest_result.needs_recompute,
+        )
 
     async def ingest_directory(
         self,
@@ -338,6 +359,7 @@ class SearchPipeline:
                 rebuild_fts=False,
                 _vector_collector=all_vectors,
                 _chunk_collector=all_chunks,
+                namespace=namespace,
                 ingested_by=ingested_by,
             )
             results.append(result)
@@ -372,29 +394,44 @@ class SearchPipeline:
                     described_at = batch_doc_count
                     last_described = datetime.now(UTC)
 
-            if description is not None:
-                description_embedding = await self._embedder.embed_one(description)
-            else:
-                logger.debug(
-                    "description_embedding: description is None for collection %r — skipping",
+            if self._centroid_incremental_enabled:
+                await self.store.update_description(
                     collection,
+                    description,
+                    last_described,
+                    described_at_doc_count=described_at,
+                    last_indexed=datetime.now(UTC),
+                    namespace=namespace,
                 )
-                description_embedding = None
+            else:
+                # Pre-B5 path: retained until flag default flips in Task 5.3
+                if description is not None:
+                    description_embedding = await self._embedder.embed_one(description)
+                else:
+                    logger.debug(
+                        "description_embedding: description is None for collection %r — skipping",
+                        collection,
+                    )
+                    description_embedding = None
 
-            meta = CollectionMeta(
-                name=collection,
-                centroid=centroid,
-                description=description,
-                doc_count=batch_doc_count,
-                chunk_count=batch_chunk_count,
-                embedding_model=self._embedder.model_name,
-                last_indexed=datetime.now(UTC),
-                last_described=last_described,
-                described_at_doc_count=described_at,
-                namespace=namespace,
-                description_embedding=description_embedding,
-            )
-            await self.store.update_collection_meta(meta)
+                meta = CollectionMeta(
+                    name=collection,
+                    centroid=centroid,
+                    description=description,
+                    doc_count=batch_doc_count,
+                    chunk_count=batch_chunk_count,
+                    embedding_model=self._embedder.model_name,
+                    last_indexed=datetime.now(UTC),
+                    last_described=last_described,
+                    described_at_doc_count=described_at,
+                    namespace=namespace,
+                    description_embedding=description_embedding,
+                )
+                await self.store.update_collection_meta(meta)
+
+        # Aggregate needs_recompute signal: if any file triggered it, fire recompute
+        if self._centroid_incremental_enabled and any(r.needs_recompute for r in results):
+            await self.recompute_collection_meta(collection, namespace=namespace)
 
         return results
 
