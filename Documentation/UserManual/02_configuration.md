@@ -73,10 +73,20 @@ The annotated reference is `archon-search.toml.example`. The sections below matc
 
 ### `[logging]`
 
-| Key | Type | Default |
-| --- | --- | --- |
-| `level` | string | `INFO` |
-| `log_file` | string | `~/.archon-search/logs/archon-search.log` |
+| Key | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `level` | string | `INFO` | Valid values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive). Invalid values raise `ConfigError`. |
+| `log_file` | string | `~/.archon-search/logs/archon-search.log` | Path to the rotating log file. Tilde is expanded. Set to `""` to disable file logging entirely (recommended for containers and multi-worker deployments — see note below). |
+| `format` | string | `text` | Log line format. Valid values: `text` (human-readable) or `json` (structured JSON). Use `json` when shipping logs to ELK, Loki, or Datadog. Invalid values raise `ConfigError`. |
+| `backup_count` | int (>=0) | `7` | Number of rotated log files to keep alongside the active file. `0` means rotated files are never deleted and accumulate indefinitely. Invalid values (negative or non-integer) raise `ConfigError`. |
+
+File logging uses a `TimedRotatingFileHandler` that rotates at UTC midnight. When `format = "json"`, each log record is a JSON object; records emitted during an active HTTP request include a `correlation_id` field populated from the request's `X-Request-ID` context.
+
+**Upgrade migration note**: if you upgrade from a version that did not default `log_file`, the new non-empty default activates file logging automatically on next start. Set `log_file = ""` to restore the previous behaviour of logging to stderr only.
+
+**File-only output**: when `log_file` is non-empty, `configure_logging()` sets `logger.propagate = False` to prevent duplicate output. Log output goes **only** to the file — not to stderr. Operators who need both file and stderr output simultaneously must implement a separate log-forwarding solution. macOS users running under launchd should note that `StandardErrorPath` output will be empty while `log_file` is configured, because stderr is suppressed by the propagation flag.
+
+**Multi-worker constraint**: `TimedRotatingFileHandler` is not multi-process safe. If you run `archon-search` behind a multi-worker process manager (e.g. `gunicorn -w N`), set `log_file = ""` in your config to avoid interleaved writes and lost rotation events.
 
 ### `[telemetry]`
 

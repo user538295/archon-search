@@ -70,6 +70,14 @@ The companion runtime guarantees are enforced in `archon_search/config.py` (the 
 - `[telemetry].export_enabled = true` logs a warning at config load and is coerced back to `false` (`config.py`); there is no remote sink in v1.
 - `doc_id`s are path-derived; when telemetry is on, log files may reveal filesystem paths. This is documented as accepted operator risk; a hashed-doc-id mode is on the roadmap. #Unverified
 
+### Logger names: always `__name__`
+
+All modules in `archon_search/` must use `logging.getLogger(__name__)` — except `archon_search/logging_setup.py`, which intentionally uses the literal `"archon_search"` to target the root hierarchy logger. The guard in `tests/test_logger_names.py` allows any string starting with `archon_search` followed by `.` or end of string, and flags all other hardcoded names.
+
+`configure_logging()` (`archon_search/logging_setup.py`) is idempotent — calling it multiple times does not add duplicate handlers. The function is invoked once, as the first action in `run_server()`.
+
+**`[logging]` TOML / Python field name mismatch**: the TOML key `format` maps to the `SearchConfig` dataclass field `log_format`. This is the only `[logging]` key where the TOML name differs from the Python attribute name.
+
 ### Auth: every data-plane endpoint is bearer-gated
 
 The middleware exempts only `/health`, `/docs`, `/openapi.json`, `/redoc` (`server/middleware_auth.py::_EXEMPT_PATHS`); the latter three expose schema, not data. The API key is resolved by `key_manager.py` in priority order: `ARCHON_SEARCH_API_KEY` env var, then a key file at `ARCHON_SEARCH_KEY_FILE` (or default `~/.archon-search/.search.env`), then auto-generated with file mode `600` on POSIX.

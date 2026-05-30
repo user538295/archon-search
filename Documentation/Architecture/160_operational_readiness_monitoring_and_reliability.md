@@ -72,14 +72,22 @@ The header name can be changed from the default `"X-Request-ID"` via `[observabi
 
 ### Log file
 
-On macOS the server writes a single rolling log to `~/.archon-search/logs/archon-search.log`. Two independent code paths touch this path and they are **not kept in sync**:
+`configure_logging()` (`archon_search/logging_setup.py`) is called as the first action in `run_server()`. When `[logging].log_file` is non-empty (the default is `~/.archon-search/logs/archon-search.log`), it opens a `TimedRotatingFileHandler` that rotates at UTC midnight and retains `[logging].backup_count` (default 7) rotated files. File logging is therefore **active by default** — no explicit opt-in is required.
+
+Set `log_file = ""` to disable file logging and write to stderr only (recommended for containers and multi-worker deployments).
+
+When `log_file` is non-empty, `configure_logging()` sets `logger.propagate = False` to prevent duplicate output — log output goes **only** to the file, not to stderr. Operators expecting logs in both destinations simultaneously must use a separate log-forwarding solution. macOS launchd users should be aware that `StandardErrorPath` output will be empty while `log_file` is configured.
+
+**Log format**: when `[logging].format = "json"` (default is `text`), each record is a single-line JSON object suitable for ELK, Loki, or Datadog. JSON records emitted during an active HTTP request include a `correlation_id` field matching the request's `X-Request-ID`.
+
+Two independent code paths reference the log path and they are **not kept in sync**:
 
 - `platform/macos.py::LaunchdSearchService.register` hard-codes `Path.home() / ".archon-search" / "logs" / "archon-search.log"` when formatting `_PLIST_TEMPLATE`'s `{log_path}` placeholder into `StandardOutPath` / `StandardErrorPath`. It does **not** read `cfg.log_file`.
 - `cli/install_cmd.py::install` ensures `Path(cfg.log_file).expanduser().parent` exists before service start, but never feeds `cfg.log_file` into the plist.
 
-Consequence: if an operator customizes `cfg.log_file`, the macOS plist will still point at the hard-coded default path. The `cfg.log_file`-driven directory creation only affects code paths that actually open `cfg.log_file` (e.g. an in-process logger).
+Consequence: if an operator customizes `cfg.log_file`, the macOS plist will still point at the hard-coded default path. The `cfg.log_file`-driven directory creation only affects code paths that actually open `cfg.log_file` (the in-process `TimedRotatingFileHandler`).
 
-The Linux unit (`platform/linux.py::_UNIT_TEMPLATE`) delegates stdout/stderr to `journalctl --user -u archon-search`. There is no rotation policy in v1 — see `Architecture/140_error_handling_strategy.md` for the accepted-risk register.
+The Linux unit (`platform/linux.py::_UNIT_TEMPLATE`) delegates stdout/stderr to `journalctl --user -u archon-search`. There is no rotation policy in the systemd unit itself — rotation is handled in-process by `TimedRotatingFileHandler`.
 
 ### Telemetry JSONL
 

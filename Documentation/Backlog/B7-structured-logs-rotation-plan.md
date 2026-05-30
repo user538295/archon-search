@@ -467,7 +467,7 @@ Since this is a hard dependency, import `JsonFormatter` at module level (not con
 - **Checkpoint**: N/A
 
 #### Task 4.2 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, architecture docs, user guides, configuration references) and update every file whose content is affected by the changes delivered in this plan. Files to update at minimum:
