@@ -296,7 +296,7 @@ async def run_eval_suite(
   - Checkpoint: `uv run pytest tests/eval/test_live_report_acceptance.py -k "comparison or report_only or never_raises or none_actual or ceiling_delta or boundary or partial_thresholds or with_baseline" --no-cov`
 
 #### Task 2.4 — `write_live_report_json()` + `write_live_report_markdown()`
-- [ ] **File**: `archon_search/eval/live_report.py`
+- [x] **File**: `archon_search/eval/live_report.py`
 - **Depends on**: Task 2.3
 - **Description**:
   - `write_live_report_json(r: LiveEvalReport, path: Path) -> None`:

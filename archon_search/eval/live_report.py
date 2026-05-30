@@ -6,6 +6,8 @@ write_live_report_markdown().
 """
 from __future__ import annotations
 
+import dataclasses
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -248,6 +250,97 @@ def _ceiling_verdict(
         baseline_value=baseline_value,
         delta_from_baseline=delta_from_baseline,
     )
+
+
+# ---------------------------------------------------------------------------
+# Serialization helpers
+# ---------------------------------------------------------------------------
+
+def write_live_report_json(r: LiveEvalReport, path: Path) -> None:
+    """Serialize *r* to a JSON file at *path* (creating parent dirs as needed)."""
+    from archon_search._durable_io import atomic_write_bytes
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    verdicts_list = []
+    for v in r.verdicts:
+        verdicts_list.append({
+            "name": v.name,
+            "actual": v.actual,
+            "threshold": v.threshold,
+            "kind": v.kind,
+            "status": v.status,
+            "delta_from_threshold": v.delta_from_threshold,
+            "baseline_value": v.baseline_value,
+            "delta_from_baseline": v.delta_from_baseline,
+        })
+
+    eval_report = r.eval_report
+    eval_report_dict = {
+        "metrics": dataclasses.asdict(eval_report.metrics),
+        "query_count": eval_report.query_count,
+        "document_count": eval_report.document_count,
+        "generated_at": eval_report.generated_at.isoformat(),
+    }
+
+    payload = {
+        "verdicts": verdicts_list,
+        "overall_status": r.overall_status,
+        "generated_at": r.generated_at.isoformat(),
+        "eval_report": eval_report_dict,
+    }
+
+    atomic_write_bytes(path, json.dumps(payload, indent=2).encode(), mode=0o644)
+
+
+def write_live_report_markdown(r: LiveEvalReport, path: Path) -> None:
+    """Serialize *r* to a Markdown file at *path* (creating parent dirs as needed)."""
+    from archon_search._durable_io import atomic_write_bytes
+    from archon_search.eval.runner import render_report
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _fmt_cell(v: object) -> str:
+        if v is None:
+            return "—"
+        return str(v)
+
+    lines: list[str] = []
+    lines.append(f"# Live Eval Report — {r.overall_status.upper()}")
+    lines.append("")
+    lines.append(f"Generated: {r.generated_at.isoformat()}")
+    lines.append("")
+
+    # Verdict table
+    header = "| Metric | Actual | Threshold | Δ Threshold | Status | Baseline | Δ Baseline |"
+    separator = "| --- | --- | --- | --- | --- | --- | --- |"
+    lines.append(header)
+    lines.append(separator)
+    for v in r.verdicts:
+        row = (
+            f"| {v.name} "
+            f"| {_fmt_cell(v.actual)} "
+            f"| {_fmt_cell(v.threshold)} "
+            f"| {_fmt_cell(v.delta_from_threshold)} "
+            f"| {v.status} "
+            f"| {_fmt_cell(v.baseline_value)} "
+            f"| {_fmt_cell(v.delta_from_baseline)} |"
+        )
+        lines.append(row)
+
+    lines.append("")
+
+    # Fenced block with rendered eval report, disclaimer stripped
+    rendered = render_report(r.eval_report)
+    filtered_lines = [
+        ln for ln in rendered.splitlines()
+        if "deterministic eval backends" not in ln
+    ]
+    lines.append("```")
+    lines.extend(filtered_lines)
+    lines.append("```")
+
+    atomic_write_bytes(path, "\n".join(lines).encode(), mode=0o644)
 
 
 def load_live_thresholds(path: Path) -> EvalThresholds | None:

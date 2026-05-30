@@ -446,3 +446,146 @@ def test_build_live_report_with_baseline() -> None:
     assert r1.baseline_value == pytest.approx(0.65)
     assert r1.delta_from_baseline is not None
     assert r1.delta_from_baseline == pytest.approx(0.70 - 0.65)  # actual(0.70) - baseline(0.65)
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4 — write_live_report_json + write_live_report_markdown
+# ---------------------------------------------------------------------------
+
+
+def _make_live_report() -> "LiveEvalReport":
+    """Build a synthetic LiveEvalReport for serialisation tests."""
+    from archon_search.eval.live_report import LiveEvalReport, MetricVerdict
+
+    from datetime import datetime, UTC
+
+    eval_report = _make_report(thresholds=_make_thresholds())
+    verdicts = [
+        MetricVerdict(
+            name="recall_at_1",
+            actual=0.75,
+            threshold=0.60,
+            kind="floor",
+            status="pass",
+            delta_from_threshold=0.15,
+            baseline_value=0.65,
+            delta_from_baseline=0.10,
+        ),
+        # Verdict with None actual and None threshold — must serialize as JSON null
+        MetricVerdict(
+            name="routing_accuracy",
+            actual=None,
+            threshold=None,
+            kind="floor",
+            status="skipped",
+            delta_from_threshold=None,
+            baseline_value=None,
+            delta_from_baseline=None,
+        ),
+    ]
+    return LiveEvalReport(
+        verdicts=verdicts,
+        overall_status="pass",
+        generated_at=datetime(2026, 5, 30, 12, 0, 0, tzinfo=UTC),
+        eval_report=eval_report,
+    )
+
+
+@pytest.mark.eval
+def test_report_generation_format(tmp_path: Path) -> None:
+    """write_live_report_json and write_live_report_markdown produce well-formed output."""
+    import json
+    import re
+
+    from archon_search.eval.live_report import write_live_report_json, write_live_report_markdown
+
+    r = _make_live_report()
+    json_path = tmp_path / "report.json"
+    md_path = tmp_path / "report.md"
+
+    write_live_report_json(r, json_path)
+    write_live_report_markdown(r, md_path)
+
+    # --- JSON assertions ---
+    data = json.loads(json_path.read_text())
+    assert set(data.keys()) == {"verdicts", "overall_status", "generated_at", "eval_report"}
+
+    # generated_at is an ISO-8601 string
+    assert isinstance(data["generated_at"], str)
+    assert re.match(r"\d{4}-\d{2}-\d{2}T", data["generated_at"])
+
+    # verdicts: None values serialize as JSON null (not string "None")
+    routing_verdict = next(v for v in data["verdicts"] if v["name"] == "routing_accuracy")
+    assert routing_verdict["actual"] is None  # JSON null → Python None
+    assert routing_verdict["threshold"] is None
+    assert routing_verdict["delta_from_threshold"] is None
+    assert "None" not in json_path.read_text()
+
+    # eval_report projected dict has exactly 4 keys
+    er = data["eval_report"]
+    assert set(er.keys()) == {"metrics", "query_count", "document_count", "generated_at"}
+    assert isinstance(er["metrics"], dict)
+    assert isinstance(er["query_count"], int)
+    assert isinstance(er["document_count"], int)
+    assert isinstance(er["generated_at"], str)
+    assert re.match(r"\d{4}-\d{2}-\d{2}T", er["generated_at"])
+
+    # --- Markdown assertions ---
+    md = md_path.read_text()
+    assert "# Live Eval Report" in md
+
+    # Verdict table header present
+    assert "| Metric |" in md or "Metric |" in md
+
+    # Fenced block with the rendered report
+    assert "```" in md
+    assert "=== Archon Search Eval Report ===" in md
+
+    # At least one data row (not just header)
+    lines = md.splitlines()
+    table_data_rows = [
+        ln for ln in lines
+        if ln.startswith("|") and "Metric" not in ln and "---" not in ln
+    ]
+    assert len(table_data_rows) >= 1
+
+    # No Python literal "None" in any cell; None values render as em-dash
+    routing_row = next((r for r in table_data_rows if "routing_accuracy" in r), None)
+    assert routing_row is not None, "routing_accuracy row not found in table"
+    assert "—" in routing_row, "None values should render as '—' in markdown table"
+    for row in table_data_rows:
+        assert "None" not in row, f"Python None literal found in table row: {row!r}"
+
+    # Status column has at least one valid status value
+    statuses_in_rows = [
+        cell.strip()
+        for row in table_data_rows
+        for cell in row.split("|")
+        if cell.strip() in ("pass", "fail", "skipped")
+    ]
+    assert len(statuses_in_rows) >= 1
+
+    # Disclaimer line stripped from fenced block
+    assert "deterministic eval backends" not in md
+
+
+@pytest.mark.eval
+def test_write_json_creates_parent_dirs(tmp_path: Path) -> None:
+    """write_live_report_json creates nested parent directories automatically."""
+    from archon_search.eval.live_report import write_live_report_json
+
+    r = _make_live_report()
+    deep_path = tmp_path / "nested" / "dir" / "report.json"
+    write_live_report_json(r, deep_path)
+    assert deep_path.exists()
+
+
+@pytest.mark.eval
+def test_write_markdown_creates_parent_dirs(tmp_path: Path) -> None:
+    """write_live_report_markdown creates nested parent directories automatically."""
+    from archon_search.eval.live_report import write_live_report_markdown
+
+    r = _make_live_report()
+    deep_path = tmp_path / "nested" / "dir" / "report.md"
+    write_live_report_markdown(r, deep_path)
+    assert deep_path.exists()
