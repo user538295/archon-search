@@ -11,7 +11,7 @@ import tomlkit
 
 from archon_search.constants import DEFAULT_ROUTING_DESCRIPTION_WEIGHT
 
-_logger = logging.getLogger("archon.search")
+_logger = logging.getLogger(__name__)
 
 _VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 

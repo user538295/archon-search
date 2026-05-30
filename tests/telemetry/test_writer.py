@@ -99,7 +99,7 @@ async def test_writer_drops_oldest_on_full_queue(
 ) -> None:
     fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
     writer = TelemetryWriter(tmp_path, queue_size=2, clock=lambda: fixed)
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
     # Don't start the drain task yet — fill the queue first.
     writer.enqueue(_make_entry("q1"))
     writer.enqueue(_make_entry("q2"))
@@ -148,7 +148,7 @@ async def test_writer_dropped_count_warning_rate_limited(
     writer.enqueue(_make_entry("q1"))
     writer.enqueue(_make_entry("q2"))
 
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
     for i in range(100):
         writer.enqueue(_make_entry(f"drop-{i}"))
 
@@ -183,7 +183,7 @@ async def test_writer_swallows_oserror_and_continues(
 
     monkeypatch.setattr(os, "write", flaky_write)
 
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
     await writer.start()
     writer.enqueue(_make_entry("fail-once"))
     writer.enqueue(_make_entry("ok"))
@@ -237,7 +237,7 @@ async def test_writer_enqueue_after_stop_is_silent_drop(
     await writer.start()
     await writer.drain_and_stop()
 
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
     for i in range(5):
         writer.enqueue(_make_entry(f"after-stop-{i}"))
 
@@ -268,7 +268,7 @@ async def test_writer_drain_respects_bounded_timeout(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
     fixed = datetime(2026, 5, 14, 12, 0, 0, tzinfo=UTC)
     writer = TelemetryWriter(tmp_path, drain_timeout_s=0.5, clock=lambda: fixed)
 
@@ -465,7 +465,7 @@ async def test_writer_handles_route_entry_exceeding_limit_as_error(
         latency_ms=3.0,
     )
 
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
 
     # Patch _truncate_to_fit to always raise for this specific oversized call.
     real_truncate = writer._truncate_to_fit
@@ -510,7 +510,7 @@ async def test_writer_valueerror_from_truncation_caught_in_drain_loop(
         lambda entry, limit_bytes=8192: (_ for _ in ()).throw(ValueError("synthetic error")),
     )
 
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
 
     await writer.start()
     writer.enqueue(_make_entry("raises"))
@@ -520,7 +520,7 @@ async def test_writer_valueerror_from_truncation_caught_in_drain_loop(
     assert writer._task is None  # task was cleaned up normally
 
     # 2. A WARNING was logged.
-    warn_records = [r for r in caplog.records if r.levelno == logging.WARNING and "archon.search" in r.name]
+    warn_records = [r for r in caplog.records if r.levelno == logging.WARNING and "archon_search" in r.name]
     assert len(warn_records) >= 1
 
     # 3. Writer can process a subsequent entry (start again to prove not broken).
@@ -547,7 +547,7 @@ async def test_writer_write_error_warning_is_rate_limited(
         lambda entry, limit_bytes=8192: (_ for _ in ()).throw(ValueError("always fails")),
     )
 
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
 
     await writer.start()
     for i in range(10):
@@ -814,7 +814,7 @@ async def test_oserror_during_rotation_swallowed(
             raise OSError("rotation-fsync-failed")
         return real_fsync(fd)
 
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
     with mock.patch.object(os, "fsync", side_effect=flaky_fsync):
         await writer.start()
         writer.enqueue(_make_entry("before"))  # opens fd on date_a
@@ -849,7 +849,7 @@ async def test_rotation_failure_clears_fd_state_and_recovers(
             raise OSError("rotation-fsync-failed")
         return real_fsync(fd)
 
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
     with mock.patch.object(os, "fsync", side_effect=flaky_fsync):
         # First append on date_a opens the fd.
         writer._append(date_a, b'{"d":"a"}\n')

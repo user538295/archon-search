@@ -20,7 +20,7 @@ _ALL_ERROR_KINDS = (
     "other",
 )
 
-logger = logging.getLogger("archon.search")
+logger = logging.getLogger(__name__)
 
 
 class TelemetryReader:

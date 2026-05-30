@@ -82,11 +82,11 @@ def test_telemetry_config_export_enabled_false_silent(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     path = _write(tmp_path, "[telemetry]\nexport_enabled = false\n")
-    with caplog.at_level("WARNING", logger="archon.search"):
+    with caplog.at_level("WARNING", logger="archon_search"):
         cfg = load_config(path)
     assert cfg.telemetry.export_enabled is False
     assert not [
-        r for r in caplog.records if r.name == "archon.search" and r.levelname == "WARNING"
+        r for r in caplog.records if r.name == "archon_search.config" and r.levelname == "WARNING"
     ]
 
 
@@ -94,10 +94,10 @@ def test_export_enabled_true_logs_warning(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     path = _write(tmp_path, "[telemetry]\nexport_enabled = true\n")
-    with caplog.at_level("WARNING", logger="archon.search"):
+    with caplog.at_level("WARNING", logger="archon_search"):
         load_config(path)
     records = [
-        r for r in caplog.records if r.name == "archon.search" and r.levelname == "WARNING"
+        r for r in caplog.records if r.name == "archon_search.config" and r.levelname == "WARNING"
     ]
     assert any("reserved for " in r.getMessage() for r in records), [
         r.getMessage() for r in records

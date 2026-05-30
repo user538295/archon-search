@@ -28,7 +28,7 @@ from archon_search.store import SearchStore, StoreBusyError, elementwise_sum
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
 
-logger = logging.getLogger("archon")
+logger = logging.getLogger(__name__)
 
 
 @dataclass

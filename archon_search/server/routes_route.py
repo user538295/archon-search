@@ -18,7 +18,7 @@ from archon_search.router import MultiCollectionRouter
 from archon_search.sync import path_to_collection_name
 from archon_search.telemetry.entry import ErrorKind, TelemetryEntry
 
-logger = logging.getLogger("archon.search")
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

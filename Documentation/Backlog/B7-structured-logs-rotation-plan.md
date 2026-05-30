@@ -409,7 +409,7 @@ Since this is a hard dependency, import `JsonFormatter` at module level (not con
 > **Releasable**: after Task 3.1 — the `archon_search.*` logger hierarchy is coherent; level propagation and structured JSON `logger` field work correctly; the CI guard prevents regression.
 
 #### Task 3.1 — Normalise all `getLogger()` calls + add CI guard (single commit)
-- [ ] **Files**: 33 source files in `archon_search/` (see table in Architecture section); `tests/test_logger_names.py` (new)
+- [x] **Files**: 33 source files in `archon_search/` (see table in Architecture section); `tests/test_logger_names.py` (new)
 - **Depends on**: Task 2.2 (so `logging_setup.py` exists and its intentional `"archon_search"` root call is in place before the guard is written)
 - **Description**:
   - In each of the 33 files listed in the Architecture table, change `logging.getLogger("<hardcoded>")` to `logging.getLogger(__name__)`. The module-level variable name (`logger`, `_logger`, `log`, `_log`) is unchanged.

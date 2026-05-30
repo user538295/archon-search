@@ -1823,7 +1823,7 @@ async def test_mcp_explain_emits_stage_timings_log_record(
         mcp_app = mcp_module.create_app(pipeline, "default", writer=None, config=config)
 
     import logging
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         result = await mcp_app.tools["explain"](query="common alpha beta", collection="docs", top_k=3)
 
     assert "error" not in result, f"MCP explain returned error: {result}"

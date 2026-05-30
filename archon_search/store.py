@@ -67,7 +67,7 @@ if TYPE_CHECKING:
     import pyarrow as pa
     from archon_search.filters import SearchFilters
 
-logger = logging.getLogger("archon")
+logger = logging.getLogger(__name__)
 
 _CHUNK_ID_RE = re.compile(r"^[a-f0-9]{64}-\d{6}$")
 _DOC_ID_RE = re.compile(r"^[a-f0-9]{64}$")

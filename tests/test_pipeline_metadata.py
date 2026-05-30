@@ -92,7 +92,7 @@ async def test_pipeline_falls_back_when_stat_fails(
         return real_stat(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "stat", boom)
-    caplog.set_level(logging.DEBUG, logger="archon")
+    caplog.set_level(logging.DEBUG, logger="archon_search")
 
     result = await pipeline.ingest_file(md_file, col_name)
     assert result.status == "ok"

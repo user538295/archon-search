@@ -10,7 +10,7 @@ from archon_search.constants import _NAMESPACE_RE
 
 _ACL_SIDECAR_MAX_BYTES = 65536
 
-logger = logging.getLogger("archon_search")
+logger = logging.getLogger(__name__)
 
 
 def is_acl_namespace_valid(name: str) -> bool:

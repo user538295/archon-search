@@ -184,7 +184,7 @@ def test_read_entries_skips_malformed_lines(
         encoding="utf-8",
     )
 
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
     reader = TelemetryReader(tmp_path, retention_days=30)
     entries, skipped = reader.read_entries(date(2026, 5, 14), date(2026, 5, 14))
 
@@ -202,7 +202,7 @@ def test_read_entries_skips_missing_file(
     # Patch files_in_range to return a non-existent file path
     missing = tmp_path / "2026-05-14.jsonl"
 
-    caplog.set_level(logging.DEBUG, logger="archon.search")
+    caplog.set_level(logging.DEBUG, logger="archon_search")
 
     with patch.object(reader, "files_in_range", return_value=[missing]):
         entries, skipped = reader.read_entries(date(2026, 5, 14), date(2026, 5, 14))
@@ -224,7 +224,7 @@ def test_read_entries_skips_oserror_file(
     bad_file = tmp_path / "2026-05-14.jsonl"
     bad_file.write_text("{}\n")  # create it, but we'll patch open
 
-    caplog.set_level(logging.WARNING, logger="archon.search")
+    caplog.set_level(logging.WARNING, logger="archon_search")
     reader = TelemetryReader(tmp_path, retention_days=30)
 
     real_open = Path.open

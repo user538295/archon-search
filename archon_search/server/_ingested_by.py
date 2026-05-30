@@ -14,7 +14,7 @@ from typing import cast
 from archon_search._types import IngestedBy
 from archon_search.constants import INGESTED_BY_VALUES, LEGACY_INGESTED_BY
 
-logger = logging.getLogger("archon")
+logger = logging.getLogger(__name__)
 
 _TRUNCATE_LEN = 32
 

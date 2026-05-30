@@ -20,7 +20,7 @@ try:
 except ImportError:  # pragma: no cover
     import tomli as tomllib  # type: ignore[no-redef]
 
-logger = logging.getLogger("archon")
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

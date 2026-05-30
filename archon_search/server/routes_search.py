@@ -27,7 +27,7 @@ _SEARCH_TIMEOUT_SECONDS = 30.0
 
 _FANOUT_VALIDATION_LIMIT = 8  # Pydantic-layer cap; must match SearchConfig.max_fanout default. See B3 known limitations.
 
-logger = logging.getLogger("archon.search")
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

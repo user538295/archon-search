@@ -60,7 +60,7 @@ def test_cli_ingest_emits_stage_timings_log_record(
     monkeypatch.setattr("archon_search.cli.ingest.load_config", lambda p: SearchConfig())
 
     runner = CliRunner()
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         result = runner.invoke(ingest, ["--path", str(tmp_path), "--collection", "test-col"])
 
     assert result.exit_code == 0, f"CLI exited with {result.exit_code}: {result.output}"
@@ -101,7 +101,7 @@ def test_cli_collection_add_emits_stage_timings_log_record(
     monkeypatch.setattr("archon_search.cli.collection.get_default_config_path", lambda: tmp_path / "archon-search.toml")
 
     runner = CliRunner()
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         result = runner.invoke(add, [str(tmp_path)])
 
     assert result.exit_code == 0, f"CLI exited with {result.exit_code}: {result.output}"
@@ -133,7 +133,7 @@ def test_cli_collection_add_disabled_no_stage_timings_log(
     monkeypatch.setattr("archon_search.cli.collection.get_default_config_path", lambda: tmp_path / "archon-search.toml")
 
     runner = CliRunner()
-    with caplog.at_level(logging.DEBUG, logger="archon.search"):
+    with caplog.at_level(logging.DEBUG, logger="archon_search"):
         result = runner.invoke(add, [str(tmp_path)])
 
     assert result.exit_code == 0, f"CLI exited with {result.exit_code}: {result.output}"
@@ -182,7 +182,7 @@ def test_cli_collection_reindex_emits_stage_timings_log_record(
     collection_name = path_to_collection_name(str(tmp_path))
 
     runner = CliRunner()
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         result = runner.invoke(reindex, [collection_name])
 
     assert result.exit_code == 0, f"CLI exited with {result.exit_code}: {result.output}"
@@ -213,7 +213,7 @@ def test_cli_ingest_disabled_no_stage_timings_log(
     monkeypatch.setattr("archon_search.cli.ingest.load_config", lambda p: cfg)
 
     runner = CliRunner()
-    with caplog.at_level(logging.DEBUG, logger="archon.search"):
+    with caplog.at_level(logging.DEBUG, logger="archon_search"):
         result = runner.invoke(ingest, ["--path", str(tmp_path), "--collection", "test-col"])
 
     assert result.exit_code == 0, f"CLI exited with {result.exit_code}: {result.output}"
@@ -246,7 +246,7 @@ def test_cli_collection_reindex_disabled_no_stage_timings_log(
     collection_name = path_to_collection_name(str(tmp_path))
 
     runner = CliRunner()
-    with caplog.at_level(logging.DEBUG, logger="archon.search"):
+    with caplog.at_level(logging.DEBUG, logger="archon_search"):
         result = runner.invoke(reindex, [collection_name])
 
     assert result.exit_code == 0, f"CLI exited with {result.exit_code}: {result.output}"

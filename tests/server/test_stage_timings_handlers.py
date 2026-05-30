@@ -133,7 +133,7 @@ def _get_timing_records(caplog: pytest.LogCaptureFixture) -> list:
 def test_search_emits_stage_timings_record(caplog: pytest.LogCaptureFixture) -> None:
     """POST /search success path emits one stage_timings log record with 'total' key."""
     app = _make_search_app(timings_enabled=True)
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         with TestClient(app) as client:
             resp = client.post("/search", json={"collection": "col", "query": "hello"})
 
@@ -152,7 +152,7 @@ def test_route_emits_stage_timings_record(caplog: pytest.LogCaptureFixture) -> N
     fake_router = _FakeColRouter(pre_context="ctx", routable=[], decomposer=False)
     app = _make_route_app(timings_enabled=True)
 
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
             with TestClient(app) as client:
                 resp = client.post("/route", json={"query": "hello"})
@@ -170,7 +170,7 @@ def test_route_emits_stage_timings_record(caplog: pytest.LogCaptureFixture) -> N
 def test_stage_timings_disabled_no_log_record(caplog: pytest.LogCaptureFixture) -> None:
     """stage_timings_enabled=False → no stage_timings log record emitted."""
     app = _make_search_app(timings_enabled=False)
-    with caplog.at_level(logging.DEBUG, logger="archon.search"):
+    with caplog.at_level(logging.DEBUG, logger="archon_search"):
         with TestClient(app) as client:
             resp = client.post("/search", json={"collection": "col", "query": "hello"})
 
@@ -183,7 +183,7 @@ def test_stage_timings_record_has_correlation_id(caplog: pytest.LogCaptureFixtur
     """correlation_id on stage_timings log record matches the X-Request-ID response header."""
     request_id = "my-request-id-abc123"
     app = _make_search_app(timings_enabled=True)
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         with TestClient(app) as client:
             resp = client.post(
                 "/search",
@@ -210,7 +210,7 @@ async def test_concurrent_requests_have_distinct_ids(caplog: pytest.LogCaptureFi
     app = _make_search_app(timings_enabled=True)
 
     transport = httpx.ASGITransport(app=app)
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
             resp_a, resp_b = await asyncio.gather(
                 ac.post("/search", json={"collection": "col", "query": "hello"}, headers={"X-Request-ID": id_a}),
@@ -245,7 +245,7 @@ def test_search_emits_partial_stage_timings_on_timeout(caplog: pytest.LogCapture
     pipeline_mock.search = AsyncMock(side_effect=_search_with_embed_then_timeout)
 
     app = _make_search_app(timings_enabled=True, pipeline_mock=pipeline_mock)
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         with TestClient(app, raise_server_exceptions=False) as client:
             resp = client.post("/search", json={"collection": "col", "query": "hello"})
 
@@ -270,7 +270,7 @@ def test_route_emits_partial_stage_timings_on_timeout(caplog: pytest.LogCaptureF
     )
     app = _make_route_app(timings_enabled=True)
 
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
             with TestClient(app, raise_server_exceptions=False) as client:
                 resp = client.post("/route", json={"query": "hello"})
@@ -290,7 +290,7 @@ def test_route_stage_timings_disabled_no_log_record(caplog: pytest.LogCaptureFix
     fake_router = _FakeColRouter(pre_context="ctx", routable=[], decomposer=False)
     app = _make_route_app(timings_enabled=False)
 
-    with caplog.at_level(logging.DEBUG, logger="archon.search"):
+    with caplog.at_level(logging.DEBUG, logger="archon_search"):
         with patch("archon_search.server.routes_route._build_router", return_value=fake_router):
             with TestClient(app) as client:
                 resp = client.post("/route", json={"query": "hello"})

@@ -213,7 +213,7 @@ class TestStartupLog:
         config = SearchConfig()
         config.db_path = str(tmp_path / "search")
         job_store = JobStore(path=tmp_path / "jobs.json")
-        with caplog.at_level(logging.INFO, logger="archon-search"):
+        with caplog.at_level(logging.INFO, logger="archon_search.server.app"):
             create_app(config, job_store)
         # Must log INFO about auth with a source
         auth_logs = [r for r in caplog.records if "auth" in r.getMessage().lower() and r.levelname == "INFO"]

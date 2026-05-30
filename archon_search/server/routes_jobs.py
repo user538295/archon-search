@@ -17,7 +17,7 @@ from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.schemas import ErrorDetail, JobResponse
 
-logger = logging.getLogger("archon-search")
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

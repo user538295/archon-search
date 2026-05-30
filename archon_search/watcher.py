@@ -14,7 +14,7 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
-_log = logging.getLogger("archon")
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

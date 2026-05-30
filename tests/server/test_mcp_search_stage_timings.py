@@ -104,7 +104,7 @@ async def test_mcp_search_emits_stage_timings_record(caplog: pytest.LogCaptureFi
     pipeline = _make_search_pipeline()
     app = _make_app(pipeline)
 
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         result = await app.tools["search"](query="hello", collection=None)
 
     assert isinstance(result, dict), f"Expected dict result, got {type(result)}"
@@ -124,7 +124,7 @@ async def test_mcp_search_stage_timings_disabled_no_log(caplog: pytest.LogCaptur
     pipeline = _make_search_pipeline()
     app = _make_app(pipeline, timings_enabled=False)
 
-    with caplog.at_level(logging.DEBUG, logger="archon.search"):
+    with caplog.at_level(logging.DEBUG, logger="archon_search"):
         await app.tools["search"](query="hello", collection=None)
 
     records = _get_stage_timing_records(caplog)
@@ -144,7 +144,7 @@ async def test_mcp_header_correlation_id_matches_log_record(caplog: pytest.LogCa
     test_id = "mcp-test-request-id-abc123"
     token = _correlation_id.set(test_id)
     try:
-        with caplog.at_level(logging.INFO, logger="archon.search"):
+        with caplog.at_level(logging.INFO, logger="archon_search"):
             await app.tools["search"](query="hello", collection=None)
     finally:
         _correlation_id.reset(token)
@@ -164,7 +164,7 @@ async def test_mcp_search_with_context_emits_stage_timings_with_context_key(
     pipeline = _make_search_with_context_pipeline()
     app = _make_app(pipeline)
 
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         result = await app.tools["search_with_context"](query="hello", collection=None)
 
     records = _get_stage_timing_records(caplog)
@@ -189,7 +189,7 @@ async def test_mcp_search_with_context_correlation_id_matches_log_record(caplog:
     test_id = "swc-test-request-id-xyz789"
     token = _correlation_id.set(test_id)
     try:
-        with caplog.at_level(logging.INFO, logger="archon.search"):
+        with caplog.at_level(logging.INFO, logger="archon_search"):
             await app.tools["search_with_context"](query="hello", collection=None)
     finally:
         _correlation_id.reset(token)
@@ -209,7 +209,7 @@ async def test_mcp_search_with_context_stage_timings_disabled_no_log(
     pipeline = _make_search_with_context_pipeline()
     app = _make_app(pipeline, timings_enabled=False)
 
-    with caplog.at_level(logging.DEBUG, logger="archon.search"):
+    with caplog.at_level(logging.DEBUG, logger="archon_search"):
         await app.tools["search_with_context"](query="hello", collection=None)
 
     records = _get_stage_timing_records(caplog)

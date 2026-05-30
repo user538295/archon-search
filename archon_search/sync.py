@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from archon_search.pipeline import SearchPipeline
     from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore
 
-logger = logging.getLogger("archon")
+logger = logging.getLogger(__name__)
 
 _LEGACY_COLLECTION = "archon-history"
 _DEFAULT_SESSIONS_NAME = "sessions"

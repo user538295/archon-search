@@ -13,7 +13,7 @@ from archon_search._durable_io import atomic_write_json
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import JOBS_FILE, IngestJob, JobStatus
 
-logger = logging.getLogger("archon")
+logger = logging.getLogger(__name__)
 
 _CRASH_STATUSES = {JobStatus.RUNNING, JobStatus.CANCELLING}
 _EVICTION_DAYS = 7

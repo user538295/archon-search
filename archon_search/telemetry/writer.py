@@ -28,7 +28,7 @@ from pathlib import Path
 
 from archon_search.telemetry.entry import TelemetryEntry
 
-_logger = logging.getLogger("archon.search")
+_logger = logging.getLogger(__name__)
 
 # Maximum serialized byte size for a single JSONL entry.
 MAX_ENTRY_BYTES = 8192

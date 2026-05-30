@@ -16,7 +16,7 @@ from typing import Literal
 
 from archon_search.eval.runner import EvalReport, EvalThresholds, load_thresholds
 
-logger = logging.getLogger("archon")
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

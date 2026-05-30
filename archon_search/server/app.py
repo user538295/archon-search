@@ -45,7 +45,7 @@ from archon_search.server.routes_telemetry import router as telemetry_router
 from archon_search.telemetry.pruner import Pruner
 from archon_search.telemetry.writer import TelemetryWriter
 
-logger = logging.getLogger("archon-search")
+logger = logging.getLogger(__name__)
 
 def _configure_openapi(app: FastAPI) -> None:
     """Override app.openapi with a closure that adds BearerAuth security scheme

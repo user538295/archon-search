@@ -15,7 +15,7 @@ from archon_search.observability import record_stage
 if TYPE_CHECKING:
     from archon_search.embedder import Embedder
 
-logger = logging.getLogger("archon")
+logger = logging.getLogger(__name__)
 
 _FETCH_TIMEOUT = 10.0
 

@@ -45,7 +45,7 @@ from archon_search.telemetry.writer import TelemetryWriter
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
 
-logger = logging.getLogger("archon.search")
+logger = logging.getLogger(__name__)
 
 
 class McpErrorResponse(TypedDict):

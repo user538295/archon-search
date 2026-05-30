@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from collections.abc import Generator
 
-logger = logging.getLogger("archon.search")
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # ContextVars

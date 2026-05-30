@@ -10,7 +10,7 @@ from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 
 from archon_search.constants import DEFAULT_FAST_MODEL
 
-logger = logging.getLogger("archon")
+logger = logging.getLogger(__name__)
 
 # Serializes concurrent SDK connect() calls during the os.environ mutation window.
 # Lazy-initialized per event loop (avoids "bound to a different event loop" errors).

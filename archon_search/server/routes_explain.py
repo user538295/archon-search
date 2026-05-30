@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
     from archon_search.pipeline import ExplainPipelineResult
 
-logger = logging.getLogger("archon.search")
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

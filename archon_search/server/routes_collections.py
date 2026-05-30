@@ -24,7 +24,7 @@ from archon_search.server.schemas import CollectionDetail, CollectionSummary, De
 from archon_search.store import StoreBusyError
 from archon_search.sync import path_to_collection_name
 
-logger = logging.getLogger("archon-search")
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/collections")
 

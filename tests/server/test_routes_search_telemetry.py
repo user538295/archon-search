@@ -155,7 +155,7 @@ def test_pipeline_failure_logs_structured_event_type(caplog: pytest.LogCaptureFi
 
     app = _make_test_app(writer=writer_mock, pipeline_mock=pipeline_mock)
 
-    with caplog.at_level(logging.ERROR, logger="archon.search"):
+    with caplog.at_level(logging.ERROR, logger="archon_search"):
         with TestClient(app, raise_server_exceptions=False) as client:
             response = client.post(
                 "/search",
@@ -167,7 +167,7 @@ def test_pipeline_failure_logs_structured_event_type(caplog: pytest.LogCaptureFi
     error_records = [
         r
         for r in caplog.records
-        if r.name == "archon.search"
+        if r.name.startswith("archon_search")
         and r.levelno == logging.ERROR
         and hasattr(r, "event_type")
     ]
@@ -202,7 +202,7 @@ def test_telemetry_enqueue_failure_does_not_break_route(
 
     app = _make_test_app(writer=writer_mock, pipeline_mock=pipeline_mock)
 
-    with caplog.at_level(logging.WARNING, logger="archon.search"):
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
         with TestClient(app, raise_server_exceptions=False) as client:
             response = client.post("/search", json={"collection": "col", "query": "test"})
 
@@ -210,7 +210,7 @@ def test_telemetry_enqueue_failure_does_not_break_route(
     assert any(
         "telemetry enqueue failed" in r.message
         and r.levelno == logging.WARNING
-        and r.name == "archon.search"
+        and r.name.startswith("archon_search")
         for r in caplog.records
     )
 
@@ -391,7 +391,7 @@ def test_search_pipeline_timeout_returns_504_and_enqueues_telemetry(
 
     app = _make_test_app(writer=writer_mock, pipeline_mock=pipeline_mock)
 
-    with caplog.at_level(logging.ERROR, logger="archon.search"):
+    with caplog.at_level(logging.ERROR, logger="archon_search"):
         with TestClient(app, raise_server_exceptions=False) as client:
             response = client.post("/search", json={"collection": "col", "query": "test"})
 
@@ -406,7 +406,7 @@ def test_search_pipeline_timeout_returns_504_and_enqueues_telemetry(
     error_records = [
         r
         for r in caplog.records
-        if r.name == "archon.search"
+        if r.name.startswith("archon_search")
         and r.levelno == logging.ERROR
         and hasattr(r, "event_type")
     ]

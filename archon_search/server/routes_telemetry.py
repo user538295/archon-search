@@ -14,7 +14,7 @@ from archon_search.server.schemas_telemetry import DisabledResponse, EntriesResp
 from archon_search.telemetry.entry import EndpointKind, ErrorKind, Status
 from archon_search.telemetry.reader import TelemetryReader
 
-logger = logging.getLogger("archon.search")
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

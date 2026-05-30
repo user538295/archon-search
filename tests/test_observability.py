@@ -39,7 +39,7 @@ def test_stage_recorder_repeated_stage_logs_debug(caplog: pytest.LogCaptureFixtu
     import logging
 
     recorder = StageRecorder()
-    with caplog.at_level(logging.DEBUG, logger="archon.search"):
+    with caplog.at_level(logging.DEBUG, logger="archon_search"):
         recorder.record("embed", 10.0)
         recorder.record("embed", 20.0)
 

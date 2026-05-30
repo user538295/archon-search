@@ -110,7 +110,7 @@ async def test_mcp_ingest_file_emits_stage_timings(caplog: pytest.LogCaptureFixt
 
     app = _make_app(pipeline)
 
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         result = await app.tools["ingest_file"](path="/tmp/x.md", collection=None)
 
     assert isinstance(result, dict), f"Expected dict result, got {type(result)}"
@@ -134,7 +134,7 @@ async def test_mcp_ingest_file_stage_timings_values_non_negative(caplog: pytest.
 
     app = _make_app(pipeline)
 
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         await app.tools["ingest_file"](path="/tmp/x.md", collection=None)
 
     records = _get_stage_timing_records(caplog)
@@ -153,7 +153,7 @@ async def test_mcp_ingest_file_stage_timings_disabled_no_log(caplog: pytest.LogC
     cfg.observability.stage_timings_enabled = False
     app = _make_app(pipeline, config=cfg)
 
-    with caplog.at_level(logging.DEBUG, logger="archon.search"):
+    with caplog.at_level(logging.DEBUG, logger="archon_search"):
         await app.tools["ingest_file"](path="/tmp/x.md", collection=None)
 
     records = _get_stage_timing_records(caplog)
@@ -189,7 +189,7 @@ async def test_mcp_ingest_directory_emits_aggregated_stage_sums(caplog: pytest.L
 
     app = _make_app(pipeline)
 
-    with caplog.at_level(logging.INFO, logger="archon.search"):
+    with caplog.at_level(logging.INFO, logger="archon_search"):
         result = await app.tools["ingest_directory"](path="/tmp/dir", collection=None)
 
     assert isinstance(result, list), f"Expected list result, got {type(result)}"
@@ -224,7 +224,7 @@ async def test_mcp_ingest_directory_stage_timings_disabled_no_log(caplog: pytest
     cfg.observability.stage_timings_enabled = False
     app = _make_app(pipeline, config=cfg)
 
-    with caplog.at_level(logging.DEBUG, logger="archon.search"):
+    with caplog.at_level(logging.DEBUG, logger="archon_search"):
         await app.tools["ingest_directory"](path="/tmp/dir", collection=None)
 
     records = _get_stage_timing_records(caplog)

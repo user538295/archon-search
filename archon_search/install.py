@@ -20,7 +20,7 @@ from archon_search.platform.types import GpuType
 if TYPE_CHECKING:
     pass
 
-logger = logging.getLogger("archon")
+logger = logging.getLogger(__name__)
 
 _SEARCH_PACKAGES = ["lancedb", "fastembed", "docling", "markitdown", "trafilatura", "chonkie", "fastmcp"]
 _WAIT_FOR_SERVICE_TIMEOUT = 60

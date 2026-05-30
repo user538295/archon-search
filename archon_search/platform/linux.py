@@ -11,7 +11,7 @@ from pathlib import Path
 
 from archon_search.platform.service import SearchServiceLifecycle, ServiceStatus
 
-log = logging.getLogger("archon_search")
+log = logging.getLogger(__name__)
 
 _SERVICE_NAME = "archon-search"
 

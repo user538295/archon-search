@@ -258,10 +258,10 @@ class TestIndexingStateStore:
         store = IndexingStateStore(tmp_path)
         store._state_file.write_text("not valid json")
         import logging
-        with caplog.at_level(logging.WARNING, logger="archon"):
+        with caplog.at_level(logging.WARNING, logger="archon_search"):
             result = store.read()
         assert result is None
-        assert any(r.name == "archon" and r.levelno == logging.WARNING for r in caplog.records)
+        assert any(r.name == "archon_search.progress" and r.levelno == logging.WARNING for r in caplog.records)
 
     def test_read_empty_file(self, tmp_path: Path) -> None:
         store = IndexingStateStore(tmp_path)
@@ -896,10 +896,10 @@ class TestIndexingStateStoreEdgeCases:
         store = IndexingStateStore(tmp_path)
         # read() uses Path.read_text — patch it to raise PermissionError (subclass of OSError)
         with patch.object(Path, "read_text", side_effect=PermissionError("denied")):
-            with caplog.at_level(logging.WARNING, logger="archon"):
+            with caplog.at_level(logging.WARNING, logger="archon_search"):
                 result = store.read()
         assert result is None
-        assert any(r.levelno == logging.WARNING and r.name == "archon" for r in caplog.records)
+        assert any(r.levelno == logging.WARNING and r.name == "archon_search.progress" for r in caplog.records)
 
     # state path is a directory → returns None, no crash
     def test_read_state_path_is_directory_returns_none(self, tmp_path: Path) -> None:

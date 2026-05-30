@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-logger = logging.getLogger("archon.search")
+logger = logging.getLogger(__name__)
 
 
 class Pruner:

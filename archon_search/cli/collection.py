@@ -13,7 +13,7 @@ from archon_search.config import get_default_config_path, load_config
 from archon_search.observability import bind_stage_recorder, new_correlation_id
 from archon_search.pipeline import create_pipeline
 
-logger = logging.getLogger("archon.search")
+logger = logging.getLogger(__name__)
 
 
 @click.group()

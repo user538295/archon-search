@@ -11,7 +11,7 @@ from starlette.responses import Response
 
 from archon_search.constants import DEFAULT_NAMESPACE, _validate_namespace
 
-logger = logging.getLogger("archon-search")
+logger = logging.getLogger(__name__)
 
 _EXEMPT_PATHS: frozenset[str] = frozenset({"/health", "/docs", "/openapi.json", "/redoc", "/ready"})
 

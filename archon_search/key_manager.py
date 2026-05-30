@@ -11,7 +11,7 @@ from pathlib import Path
 
 from archon_search._durable_io import atomic_write_bytes
 
-logger = logging.getLogger("archon-search")
+logger = logging.getLogger(__name__)
 
 _key_file_env = os.environ.get("ARCHON_SEARCH_KEY_FILE") or ""
 KEY_FILE: Path = (

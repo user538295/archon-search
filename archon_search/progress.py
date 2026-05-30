@@ -12,7 +12,7 @@ from pathlib import Path
 
 from archon_search._durable_io import atomic_write_json
 
-logger = logging.getLogger("archon")
+logger = logging.getLogger(__name__)
 
 
 def _safe_int(val: object, default: int = 0) -> int:
