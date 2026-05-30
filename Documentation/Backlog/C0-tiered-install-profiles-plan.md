@@ -439,7 +439,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ---
 
 #### Task 3.2 — Jina license gate
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1 (JINA_RERANKER_MODEL constant)
 - **Description**:
   - `_requires_jina_license(profile: InstallProfile) -> bool`:

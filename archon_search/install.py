@@ -22,7 +22,7 @@ from archon_search.config import SearchConfig, load_config
 from archon_search.pipeline import create_pipeline
 from archon_search.platform.runtime import get_runtime, get_search_service
 from archon_search.platform.types import GpuType
-from archon_search.profiles import InstallProfile, get_profile
+from archon_search.profiles import JINA_RERANKER_MODEL, InstallProfile, get_profile
 
 if TYPE_CHECKING:
     pass
@@ -439,6 +439,44 @@ def _render_summary(
         "  server process on first query — expect ~5–15s latency on first search.",
     ]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Jina license gate (Task C0-3.2)
+# ---------------------------------------------------------------------------
+
+def _requires_jina_license(profile: InstallProfile) -> bool:
+    """Return True if *profile* uses the Jina reranker model (CC-BY-NC-4.0)."""
+    return profile.reranker == JINA_RERANKER_MODEL
+
+
+def _prompt_jina_license(non_interactive: bool, accept_jina_license: bool = False) -> None:
+    """Print the Jina CC-BY-NC-4.0 warning and gate on user / flag acceptance.
+
+    Raises SystemExit(1) if the license is not accepted.
+    """
+    print(
+        "WARNING: jinaai/jina-reranker-v2-base-multilingual is licensed CC-BY-NC-4.0\n"
+        "(non-commercial use only). Commercial use of multilingual profiles 2 and 3\n"
+        "requires an alternative reranker. You will be required to confirm license\n"
+        "acceptance before this model is downloaded."
+    )
+
+    if accept_jina_license:
+        return
+
+    if non_interactive:
+        print(
+            "Non-interactive mode: Jina license automatically declined. "
+            "Use an English profile for commercial installs."
+        )
+        raise SystemExit(1)
+
+    response = input("Type 'accept' to confirm license acceptance and continue, or anything else to abort: ")
+    if response.strip().lower() == "accept":
+        return
+    print("License not accepted. Aborting.")
+    raise SystemExit(1)
 
 
 class SearchInstaller:
