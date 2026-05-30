@@ -442,7 +442,7 @@ Since this is a hard dependency, import `JsonFormatter` at module level (not con
 > **Releasable**: after Task 4.2 — the feature is fully verified, documented, and ready to ship.
 
 #### Task 4.1 — Update `archon-search.toml.example`
-- [ ] **File**: `archon-search.toml.example`
+- [x] **File**: `archon-search.toml.example`
 - **Depends on**: Task 1.1
 - **Description**:
   - In the `[logging]` section, add two commented-out keys with descriptions below the existing `log_file` line:

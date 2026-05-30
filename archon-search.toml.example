@@ -75,7 +75,17 @@ watch = false
 
 [logging]
 level = "INFO"
+# Set to "" to disable file logging (stderr only — useful in containers).
+# Upgrade note: the non-empty default activates file logging automatically;
+# set log_file = "" explicitly to opt out.
 log_file = "~/.archon-search/logs/archon-search.log"
+# Log format: "text" (default) or "json" (structured JSON for log aggregators).
+# format = "text"
+
+# Number of rotated log files to retain (daily rotation at UTC midnight).
+# 0 = never delete rotated files (they accumulate indefinitely).
+# 1 = keep only 1 rotated file in addition to the current log file.
+# backup_count = 7
 
 [observability]
 # Correlation-ID propagation and per-stage latency recording.
