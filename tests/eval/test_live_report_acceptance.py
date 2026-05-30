@@ -7,6 +7,16 @@ import pytest
 import tomllib
 from pathlib import Path
 
+from archon_search.eval.types import EvalMetrics
+from archon_search.eval.runner import (
+    EvalReport,
+    EvalThresholds,
+    EvalBaseline,
+    EvalQualityFloors,
+    EvalLatencyCeilings,
+    EvalRuntimeConfig,
+)
+
 PYPROJECT_PATH = Path(__file__).resolve().parents[2] / "pyproject.toml"
 CORPUS_ROOT = Path(__file__).resolve().parent
 RUNTIME_CFG_PATH = CORPUS_ROOT / "runtime.toml"
@@ -117,3 +127,322 @@ def test_load_live_thresholds_malformed_toml(tmp_path: Path) -> None:
     p.write_text("[[[\n")
     result = load_live_thresholds(p)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3 — MetricVerdict + LiveEvalReport + build_live_report helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_metrics(**overrides) -> EvalMetrics:
+    defaults = dict(
+        recall_at_1=0.70,
+        recall_at_3=0.80,
+        recall_at_5=0.85,
+        mrr=0.75,
+        ndcg_at_5=0.78,
+        ndcg_at_10=0.80,
+        reranker_lift=0.05,
+        routing_accuracy=None,
+        latency_p50_ms=25.0,
+        latency_p95_ms=80.0,
+        routing_mrr_centroid=None,
+        routing_mrr_hybrid=None,
+        routing_precision_at_1_centroid=None,
+        routing_precision_at_1_hybrid=None,
+    )
+    defaults.update(overrides)
+    return EvalMetrics(**defaults)
+
+
+def _make_floors(**overrides) -> EvalQualityFloors:
+    defaults: dict = dict(
+        recall_at_1=0.60,
+        recall_at_3=0.70,
+        recall_at_5=0.75,
+        mrr=0.65,
+        ndcg_at_5=0.68,
+        ndcg_at_10=0.70,
+        routing_accuracy=None,
+    )
+    defaults.update(overrides)
+    return EvalQualityFloors(**defaults)
+
+
+def _make_thresholds(**overrides) -> EvalThresholds:
+    floors = overrides.pop("quality_floors", _make_floors())
+    latency = overrides.pop("latency_ceilings", EvalLatencyCeilings())
+    return EvalThresholds(quality_floors=floors, latency_ceilings=latency, **overrides)
+
+
+def _make_runtime_cfg() -> EvalRuntimeConfig:
+    return EvalRuntimeConfig(
+        candidate_depth=12,
+        return_depth=10,
+        metric_depth=10,
+        routing_contract_enabled=False,
+    )
+
+
+def _make_report(
+    metrics=None,
+    thresholds=None,
+    baseline=None,
+) -> EvalReport:
+    return EvalReport(
+        metrics=metrics if metrics is not None else _make_metrics(),
+        traces=[],
+        corpus_root=Path("/tmp/eval"),
+        runtime_config=_make_runtime_cfg(),
+        thresholds=thresholds,
+        baseline=baseline,
+        notes=[],
+        routing_disabled_queries=0,
+        routing_bypassed_queries=0,
+        query_count=0,
+        document_count=0,
+    )
+
+
+@pytest.mark.eval
+def test_threshold_comparison_passes() -> None:
+    """All metrics well above floors and below latency ceilings → overall_status == pass."""
+    from archon_search.eval.live_report import build_live_report
+
+    thresholds = _make_thresholds(
+        latency_ceilings=EvalLatencyCeilings(latency_p50_ms=200.0, latency_p95_ms=500.0),
+    )
+    report = _make_report(
+        metrics=_make_metrics(latency_p50_ms=25.0, latency_p95_ms=80.0),
+        thresholds=thresholds,
+    )
+    live = build_live_report(report)
+    assert live.overall_status == "pass"
+    assert len(live.verdicts) == 13
+    for v in live.verdicts:
+        assert v.status in ("pass", "skipped"), f"{v.name} expected pass or skipped, got {v.status}"
+
+
+@pytest.mark.eval
+def test_threshold_comparison_fails() -> None:
+    """recall_at_1 below floor → overall_status==fail, only recall_at_1 verdict fails."""
+    from archon_search.eval.live_report import build_live_report
+
+    thresholds = _make_thresholds(
+        quality_floors=_make_floors(recall_at_1=0.5, routing_accuracy=None),
+        latency_ceilings=EvalLatencyCeilings(latency_p50_ms=200.0, latency_p95_ms=500.0),
+    )
+    report = _make_report(
+        metrics=_make_metrics(recall_at_1=0.3),
+        thresholds=thresholds,
+    )
+    live = build_live_report(report)
+    assert live.overall_status == "fail"
+
+    by_name = {v.name: v for v in live.verdicts}
+    recall_v = by_name["recall_at_1"]
+    assert recall_v.status == "fail"
+    assert recall_v.delta_from_threshold is not None
+    assert recall_v.delta_from_threshold < 0
+
+    for name, v in by_name.items():
+        if name != "recall_at_1":
+            assert v.status != "fail", f"{name} should not fail"
+
+
+@pytest.mark.eval
+def test_report_only_when_no_thresholds() -> None:
+    """thresholds=None → overall_status==report_only; all verdicts skipped."""
+    from archon_search.eval.live_report import build_live_report
+
+    report = _make_report(thresholds=None)
+    live = build_live_report(report)
+    assert live.overall_status == "report_only"
+    for v in live.verdicts:
+        assert v.status == "skipped", f"{v.name} expected skipped, got {v.status}"
+
+
+@pytest.mark.eval
+def test_report_only_with_baseline_computes_deltas() -> None:
+    """thresholds=None + baseline present → skipped verdicts still compute delta_from_baseline."""
+    from archon_search.eval.live_report import build_live_report
+
+    baseline = EvalBaseline(
+        eval_hash="abc123",
+        metrics={"recall_at_1": 0.65, "mrr": 0.70},
+        runtime_config_hash="def456",
+        command="uv run pytest",
+    )
+    report = _make_report(thresholds=None, baseline=baseline)
+    live = build_live_report(report)
+    assert live.overall_status == "report_only"
+    by_name = {v.name: v for v in live.verdicts}
+    # Metrics present in baseline get delta computed
+    r1 = by_name["recall_at_1"]
+    assert r1.status == "skipped"
+    assert r1.baseline_value == pytest.approx(0.65)
+    assert r1.delta_from_baseline == pytest.approx(0.70 - 0.65)
+    # Metrics absent from baseline have None delta
+    ndcg = by_name["ndcg_at_5"]
+    assert ndcg.baseline_value is None
+    assert ndcg.delta_from_baseline is None
+
+
+@pytest.mark.eval
+def test_build_live_report_never_raises() -> None:
+    """Even with all metrics below all floors, build_live_report returns without raising."""
+    from archon_search.eval.live_report import LiveEvalReport, build_live_report
+
+    thresholds = _make_thresholds(
+        quality_floors=_make_floors(
+            recall_at_1=0.99, recall_at_3=0.99, recall_at_5=0.99,
+            mrr=0.99, ndcg_at_5=0.99, ndcg_at_10=0.99,
+        ),
+        latency_ceilings=EvalLatencyCeilings(latency_p50_ms=1.0, latency_p95_ms=1.0),
+    )
+    report = _make_report(
+        metrics=_make_metrics(latency_p50_ms=9999.0, latency_p95_ms=9999.0),
+        thresholds=thresholds,
+    )
+    result = build_live_report(report)
+    assert isinstance(result, LiveEvalReport)
+
+
+@pytest.mark.eval
+def test_build_live_report_with_none_actual_metrics() -> None:
+    """routing_accuracy=None in metrics → routing_accuracy verdict is skipped."""
+    from archon_search.eval.live_report import build_live_report
+
+    thresholds = _make_thresholds(
+        quality_floors=_make_floors(routing_accuracy=0.80),
+    )
+    report = _make_report(
+        metrics=_make_metrics(routing_accuracy=None),
+        thresholds=thresholds,
+    )
+    live = build_live_report(report)
+    by_name = {v.name: v for v in live.verdicts}
+    assert "routing_accuracy" in by_name
+    assert by_name["routing_accuracy"].status == "skipped"
+
+
+@pytest.mark.eval
+def test_optional_routing_metric_with_values_passes() -> None:
+    """routing_accuracy with actual > floor → pass verdict (not skipped)."""
+    from archon_search.eval.live_report import build_live_report
+
+    thresholds = _make_thresholds(
+        quality_floors=_make_floors(routing_accuracy=0.80),
+    )
+    report = _make_report(
+        metrics=_make_metrics(routing_accuracy=0.90),
+        thresholds=thresholds,
+    )
+    live = build_live_report(report)
+    by_name = {v.name: v for v in live.verdicts}
+    assert by_name["routing_accuracy"].status == "pass"
+    assert by_name["routing_accuracy"].delta_from_threshold == pytest.approx(0.90 - 0.80)
+
+
+@pytest.mark.eval
+def test_ceiling_metric_delta_sign_convention() -> None:
+    """delta_from_threshold for ceiling = ceiling - actual (positive=pass, negative=fail)."""
+    from archon_search.eval.live_report import build_live_report
+
+    # Case 1: actual > ceiling → fail, delta negative
+    thresholds = _make_thresholds(
+        latency_ceilings=EvalLatencyCeilings(latency_p50_ms=None, latency_p95_ms=500.0),
+    )
+    report = _make_report(
+        metrics=_make_metrics(latency_p95_ms=600.0),
+        thresholds=thresholds,
+    )
+    live = build_live_report(report)
+    by_name = {v.name: v for v in live.verdicts}
+    v95 = by_name["latency_p95_ms"]
+    assert v95.status == "fail"
+    assert v95.delta_from_threshold == pytest.approx(500.0 - 600.0)  # -100
+
+    # Case 2: actual < ceiling → pass, delta positive
+    report2 = _make_report(
+        metrics=_make_metrics(latency_p95_ms=400.0),
+        thresholds=thresholds,
+    )
+    live2 = build_live_report(report2)
+    by_name2 = {v.name: v for v in live2.verdicts}
+    v95_2 = by_name2["latency_p95_ms"]
+    assert v95_2.status == "pass"
+    assert v95_2.delta_from_threshold == pytest.approx(500.0 - 400.0)  # +100
+
+
+@pytest.mark.eval
+def test_threshold_comparison_boundary_exact_equality() -> None:
+    """Exact equality (actual == floor) → status==fail with delta==0.0 (strict floor)."""
+    from archon_search.eval.live_report import build_live_report
+
+    thresholds = _make_thresholds(
+        quality_floors=_make_floors(recall_at_1=0.5),
+    )
+    report = _make_report(
+        metrics=_make_metrics(recall_at_1=0.5),
+        thresholds=thresholds,
+    )
+    live = build_live_report(report)
+    by_name = {v.name: v for v in live.verdicts}
+    assert by_name["recall_at_1"].status == "fail"
+    assert by_name["recall_at_1"].delta_from_threshold == pytest.approx(0.0)
+
+
+@pytest.mark.eval
+def test_ceiling_exact_equality_is_fail() -> None:
+    """Exact equality (actual == ceiling) → status==fail with delta==0.0 (strict ceiling)."""
+    from archon_search.eval.live_report import build_live_report
+
+    thresholds = _make_thresholds(
+        latency_ceilings=EvalLatencyCeilings(latency_p50_ms=None, latency_p95_ms=500.0),
+    )
+    report = _make_report(
+        metrics=_make_metrics(latency_p95_ms=500.0),
+        thresholds=thresholds,
+    )
+    live = build_live_report(report)
+    by_name = {v.name: v for v in live.verdicts}
+    assert by_name["latency_p95_ms"].status == "fail"
+    assert by_name["latency_p95_ms"].delta_from_threshold == pytest.approx(0.0)
+
+
+@pytest.mark.eval
+def test_build_live_report_with_partial_thresholds() -> None:
+    """latency_p50_ms=None ceiling → latency_p50_ms verdict is skipped."""
+    from archon_search.eval.live_report import build_live_report
+
+    thresholds = _make_thresholds(
+        latency_ceilings=EvalLatencyCeilings(latency_p50_ms=None, latency_p95_ms=500.0),
+    )
+    report = _make_report(thresholds=thresholds)
+    live = build_live_report(report)
+    by_name = {v.name: v for v in live.verdicts}
+    assert by_name["latency_p50_ms"].status == "skipped"
+    assert by_name["latency_p95_ms"].status == "pass"
+
+
+@pytest.mark.eval
+def test_build_live_report_with_baseline() -> None:
+    """With baseline present, verdicts have baseline_value and delta_from_baseline."""
+    from archon_search.eval.live_report import build_live_report
+
+    baseline = EvalBaseline(
+        eval_hash="abc123",
+        metrics={"recall_at_1": 0.65, "mrr": 0.70},
+        runtime_config_hash="def456",
+        command="uv run pytest",
+    )
+    thresholds = _make_thresholds()
+    report = _make_report(thresholds=thresholds, baseline=baseline)
+    live = build_live_report(report)
+    by_name = {v.name: v for v in live.verdicts}
+
+    r1 = by_name["recall_at_1"]
+    assert r1.baseline_value == pytest.approx(0.65)
+    assert r1.delta_from_baseline is not None
+    assert r1.delta_from_baseline == pytest.approx(0.70 - 0.65)  # actual(0.70) - baseline(0.65)

@@ -262,7 +262,7 @@ async def run_eval_suite(
   - Checkpoint: `uv run pytest tests/eval/test_live_report_acceptance.py -k "load_live_thresholds" --no-cov`
 
 #### Task 2.3 — `MetricVerdict` + `LiveEvalReport` + `build_live_report()`
-- [ ] **File**: `archon_search/eval/live_report.py`
+- [x] **File**: `archon_search/eval/live_report.py`
 - **Depends on**: Task 2.2 (file created)
 - **Description**:
   - Add `MetricVerdict` and `LiveEvalReport` dataclasses (see Architecture section)

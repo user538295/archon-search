@@ -6,12 +6,12 @@ documents:    55
 
 Quality metrics:
   recall_at_1        = 0.8600
-  recall_at_3        = 0.9400
-  recall_at_5        = 0.9800
+  recall_at_3        = 0.9600
+  recall_at_5        = 1.0000
   mrr                = 1.0000
-  ndcg_at_5          = 0.9757
-  ndcg_at_10         = 0.9794
-  reranker_lift      = 0.0230
+  ndcg_at_5          = 0.9870
+  ndcg_at_10         = 0.9870
+  reranker_lift      = 0.0273
   routing_accuracy   = 0.9032
   routing_mrr_centroid     = 0.6667
   routing_p@1_centroid     = 0.6667
