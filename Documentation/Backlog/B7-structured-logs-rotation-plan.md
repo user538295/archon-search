@@ -315,7 +315,7 @@ Since this is a hard dependency, import `JsonFormatter` at module level (not con
 > **Releasable**: after Task 2.3 — a running server writes to the configured log file with the configured level and format; `correlation_id` appears in JSON records when a request is active.
 
 #### Task 2.1 — `CorrelationIdFilter`
-- [ ] **File**: `archon_search/logging_setup.py` (new file)
+- [x] **File**: `archon_search/logging_setup.py` (new file)
 - **Depends on**: nothing (standalone; uses only stdlib `logging` and `archon_search.observability`)
 - **Description**:
   - Create new module `archon_search/logging_setup.py`
