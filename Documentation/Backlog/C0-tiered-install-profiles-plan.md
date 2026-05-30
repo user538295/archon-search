@@ -281,7 +281,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 > **Releasable**: after this phase, all safety gates (lock, disk space, reinstall guard, force-delete rollback, pre-warm) are independently testable functions; still no user-visible UX change.
 
 #### Task 2.1 — Advisory install lock
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: nothing (independent utility)
 - **Description**:
   - `_install_lock_path() -> Path` returns `Path.home() / ".archon-search" / ".install.lock"`.
