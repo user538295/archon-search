@@ -246,7 +246,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ---
 
 #### Task 1.4 — Runtime support for optional reranker
-- [ ] **Files**: `archon_search/pipeline.py`, `archon_search/server/app.py`, `archon_search/config.py`
+- [x] **Files**: `archon_search/pipeline.py`, `archon_search/server/app.py`, `archon_search/config.py`
 - **Depends on**: Task 1.2 (SearchConfig)
 - **Description**:
   - **Problem**: `reranker_model = ""` is written when `profile.reranker is None` (Multilingual Minimal). The current `SearchPipeline.__init__` declares `reranker: Reranker` as non-optional, and both `search()` and `explain()` call `self._reranker.rerank()` / `self._reranker._rerank_with_trace()` unconditionally. An empty string causes `AttributeError` on the first query.

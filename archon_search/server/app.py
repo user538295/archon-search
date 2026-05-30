@@ -153,7 +153,11 @@ def create_app(
     app.state.pipeline = SearchPipeline(
         store=app.state.search_store,
         embedder=app.state.embedder,
-        reranker=Reranker(ModelReranker(config.reranker_model, providers=config.providers or None)),
+        reranker=(
+            Reranker(ModelReranker(config.reranker_model, providers=config.providers or None))
+            if config.reranker_model
+            else None
+        ),
         chunker=DocumentChunker(config.chunk_size),
         parser=DocumentParser(),
         top_k_retrieve=config.top_k_retrieve,

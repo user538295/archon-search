@@ -160,7 +160,7 @@ class SearchPipeline:
         self,
         store: SearchStore,
         embedder: Embedder,
-        reranker: Reranker,
+        reranker: Reranker | None,
         chunker: DocumentChunker,
         parser: DocumentParser,
         top_k_retrieve: int,
@@ -186,7 +186,7 @@ class SearchPipeline:
 
     @property
     def reranker_is_warm(self) -> bool:
-        return self._reranker.is_warm
+        return self._reranker.is_warm if self._reranker is not None else False
 
     @property
     def embedder_is_warm(self) -> bool:
@@ -464,7 +464,11 @@ class SearchPipeline:
                     filter_flags,
                     acl_denied,
                 )
-        results = await self._reranker.rerank(query, candidates, top_k=self._top_k_return)
+        if self._reranker is not None:
+            results = await self._reranker.rerank(query, candidates, top_k=self._top_k_return)
+        else:
+            candidates = candidates[:self._top_k_return]
+            results = [self._candidate_to_search_result(c) for c in candidates]
         return SearchPipelineResult(results=results, acl_filtered=acl_filtered)
 
     async def explain(
@@ -499,7 +503,7 @@ class SearchPipeline:
             return rs if rs is not None else c.score_breakdown.rrf_score
 
         if collections is not None:
-            if rerank is False and len(collections) > 1:
+            if rerank is False and len(collections) > 1 and self._reranker is not None:
                 raise ExplainMultiCollectionNoRerankError()
 
             vector = query_vector if query_vector is not None else await self._embedder.embed_one(query)
@@ -537,7 +541,7 @@ class SearchPipeline:
                 query, vector, collections_in_scope, namespace, candidate_depth
             )
 
-            if rerank:
+            if rerank and self._reranker is not None:
                 candidates = await self._reranker.rerank_candidates(
                     query, merged, top_k=len(merged)
                 )
@@ -565,7 +569,7 @@ class SearchPipeline:
 
         candidates, acl_filtered = apply_acl_filter(candidates, lambda c: c.acl, namespace)
 
-        if rerank:
+        if rerank and self._reranker is not None:
             try:
                 candidates = await self._reranker.rerank_candidates(
                     query, candidates, top_k=len(candidates)
@@ -631,9 +635,14 @@ class SearchPipeline:
         )
 
         # Step 7: single global rerank pass.
-        t0 = monotonic()
-        ranked = await self._reranker.rerank_candidates(query, merged, top_k=self._top_k_return)
-        rerank_time_ms = (monotonic() - t0) * 1000.0
+        if self._reranker is not None:
+            t0 = monotonic()
+            ranked = await self._reranker.rerank_candidates(query, merged, top_k=self._top_k_return)
+            rerank_time_ms = (monotonic() - t0) * 1000.0
+        else:
+            merged.sort(key=lambda c: -c.score_breakdown.rrf_score)
+            ranked = merged[:self._top_k_return]
+            rerank_time_ms = 0.0
 
         # Step 8: convert to public results.
         results = [self._candidate_to_search_result(c) for c in ranked]
@@ -698,7 +707,8 @@ class SearchPipeline:
 
     def _candidate_to_search_result(self, c: ScoredSearchCandidate) -> SearchResult:
         score = c.score_breakdown.reranker_score
-        assert score is not None
+        if score is None:
+            score = c.score_breakdown.rrf_score
         return SearchResult(
             doc_id=c.doc_id,
             chunk_id=c.chunk_id,
@@ -888,12 +898,15 @@ def create_pipeline(
         cfg.embedding_model,
         providers=cfg.providers,
     )
-    _reranker_backend: RerankerBackend = reranker_backend or ModelReranker(
-        cfg.reranker_model,
-        providers=cfg.providers,
-    )
+    if cfg.reranker_model:
+        _reranker_backend: RerankerBackend = reranker_backend or ModelReranker(
+            cfg.reranker_model,
+            providers=cfg.providers,
+        )
+        reranker: Reranker | None = Reranker(_reranker_backend)
+    else:
+        reranker = None
     embedder = Embedder(_embedder_backend)
-    reranker = Reranker(_reranker_backend)
     chunker = DocumentChunker(cfg.chunk_size)
     parser = DocumentParser()
 

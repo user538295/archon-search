@@ -92,6 +92,11 @@ async def collect_search_trace(
     store = pipeline.store
     reranker = pipeline._reranker
 
+    if reranker is None:
+        raise RuntimeError(
+            "Eval harness requires a reranker; cannot run with Multilingual Minimal profile."
+        )
+
     # Drift guard: verify no component was swapped since snapshot
     _check_component_drift(pipeline, embedder, store, reranker)
 
