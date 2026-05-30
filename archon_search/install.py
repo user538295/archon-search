@@ -284,6 +284,79 @@ def _check_reinstall_guard(
     )
 
 
+def _execute_force_reinstall(
+    config_path: Path,
+    db_path: Path,
+    profile: InstallProfile,
+    profile_name: str,
+    multilingual: bool,
+    non_interactive: bool,
+    dry_run: bool = False,
+) -> None:
+    """Execute the force-delete-db rollback sequence."""
+    # Step 1: Backup config
+    bak_path = config_path.with_suffix(".toml.bak")
+    has_backup = False
+    if config_path.exists():
+        shutil.copy2(config_path, bak_path)
+        has_backup = True
+
+    # Step 2: Confirmation gate
+    if not non_interactive:
+        response = input("WARNING: This will permanently delete all indexed data. Type 'yes' to confirm: ")
+        if response != "yes":
+            if has_backup:
+                shutil.copy2(bak_path, config_path)
+            print("Aborted.")
+            raise SystemExit(1)
+
+    # Step 3: Stop service
+    if dry_run:
+        print("[dry-run] Would stop service.")
+    else:
+        try:
+            get_search_service().stop()
+        except RuntimeError:
+            pass  # treat service-not-running as no-op
+        except Exception:
+            if has_backup:
+                shutil.copy2(bak_path, config_path)
+            raise
+
+    # Step 4: Delete DB directory
+    if dry_run:
+        print(f"[dry-run] Would delete database at {db_path}.")
+    else:
+        if db_path.exists():
+            try:
+                shutil.rmtree(db_path)
+            except Exception:
+                print(
+                    f"Install failed during database deletion. Your previous config has been preserved at "
+                    f"{bak_path} for reference. "
+                    "Run archon-search install to create a fresh install from scratch.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+
+    # Step 5: Write new profile config
+    if dry_run:
+        print(f"[dry-run] Would write profile config for {profile_name}.")
+    else:
+        tmp = config_path.with_suffix(".toml.tmp")
+        tmp.unlink(missing_ok=True)
+        try:
+            _write_profile_config(config_path, profile, profile_name, multilingual)
+        except Exception:
+            print(
+                f"Install failed after database deletion. Your previous config has been preserved at "
+                f"{bak_path} for reference. "
+                "Run archon-search install to create a fresh install from scratch.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+
 class SearchInstaller:
     """Installs and manages the search service end-to-end."""
 

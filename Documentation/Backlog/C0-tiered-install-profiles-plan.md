@@ -387,7 +387,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ---
 
 #### Task 2.5 — Force-delete-db rollback sequence
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.3 (_write_profile_config), Task 2.4 (NeedsForceDeleteError)
 - **Description**:
   - `_execute_force_reinstall(config_path: Path, db_path: Path, profile: InstallProfile, profile_name: str, multilingual: bool, non_interactive: bool, dry_run: bool = False) -> None`:
