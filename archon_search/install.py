@@ -15,6 +15,7 @@ import shutil
 from shutil import rmtree
 from typing import TYPE_CHECKING
 
+import click
 import tomlkit
 
 from archon_search._durable_io import atomic_write_bytes
@@ -22,7 +23,7 @@ from archon_search.config import SearchConfig, load_config
 from archon_search.pipeline import create_pipeline
 from archon_search.platform.runtime import get_runtime, get_search_service
 from archon_search.platform.types import GpuType
-from archon_search.profiles import JINA_RERANKER_MODEL, InstallProfile, get_profile
+from archon_search.profiles import JINA_RERANKER_MODEL, InstallProfile, VALID_PROFILE_NAMES, get_profile
 
 if TYPE_CHECKING:
     pass
@@ -477,6 +478,63 @@ def _prompt_jina_license(non_interactive: bool, accept_jina_license: bool = Fals
         return
     print("License not accepted. Aborting.")
     raise SystemExit(1)
+
+
+_CHOICE_MAP = {"1": "minimal", "2": "balanced", "3": "max", "": "minimal"}
+
+
+def _select_profile(
+    profile_flag: str | None,
+    multilingual_flag: bool,
+    non_interactive: bool,
+) -> tuple[str, bool]:
+    """Select and validate an install profile.
+
+    Returns a (profile_name, multilingual) tuple.
+    """
+    # Explicit profile flag: validate and return immediately.
+    if profile_flag is not None:
+        if profile_flag not in VALID_PROFILE_NAMES:
+            raise click.BadParameter(
+                f"{profile_flag!r} is not a valid profile. "
+                f"Valid options: {sorted(VALID_PROFILE_NAMES)}",
+                param_hint="--profile",
+            )
+        return (profile_flag, multilingual_flag)
+
+    # Non-interactive: use defaults.
+    if non_interactive:
+        if not multilingual_flag:
+            logger.info("No profile specified — defaulting to 'minimal'.")
+            logger.info("No --multilingual flag — defaulting to English models.")
+        else:
+            logger.info("No profile specified — defaulting to 'minimal'.")
+        return ("minimal", multilingual_flag)
+
+    # Interactive: show table and prompt.
+    terminal_width = shutil.get_terminal_size(fallback=(80, 24)).columns
+    table = _render_profile_table(multilingual=multilingual_flag, width=terminal_width)
+    if table:
+        print(table)
+
+    for attempt in range(3):
+        try:
+            raw = input("Choice [1-3, default 1]: ").strip()
+        except EOFError:
+            print("No input received (EOF). Aborting.")
+            raise SystemExit(1)
+
+        if raw in _CHOICE_MAP:
+            return (_CHOICE_MAP[raw], multilingual_flag)
+
+        remaining = 2 - attempt
+        if remaining > 0:
+            print(f"Invalid choice {raw!r}. Please enter 1, 2, or 3.")
+        else:
+            print("Too many invalid attempts. Aborting.")
+            raise SystemExit(1)
+
+    raise SystemExit(1)  # unreachable, satisfies type checker
 
 
 class SearchInstaller:

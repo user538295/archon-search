@@ -467,7 +467,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ---
 
 #### Task 3.3 — Profile selection logic
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1, Task 3.1 (_render_profile_table)
 - **Description**:
   - `_select_profile(profile_flag: str | None, multilingual_flag: bool, non_interactive: bool) -> tuple[str, bool]`:
