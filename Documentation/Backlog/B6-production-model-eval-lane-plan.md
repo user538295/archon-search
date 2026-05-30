@@ -243,7 +243,7 @@ async def run_eval_suite(
   - Checkpoint: `uv run pytest tests/eval/test_baseline_contract.py --no-cov`
 
 #### Task 2.2 — `load_live_thresholds(path: Path) -> EvalThresholds | None`
-- [ ] **File**: `archon_search/eval/live_report.py` (new — create the file with this function first)
+- [x] **File**: `archon_search/eval/live_report.py` (new — create the file with this function first)
 - **Depends on**: Task 1.1 (live_thresholds.toml stub must exist)
 - **Description**:
   - Create `archon_search/eval/live_report.py`
