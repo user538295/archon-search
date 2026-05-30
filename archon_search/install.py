@@ -357,6 +357,90 @@ def _execute_force_reinstall(
             raise SystemExit(1)
 
 
+_PROFILE_ORDER = ("minimal", "balanced", "max")
+_PROFILE_CAPS = {"minimal": "Minimal", "balanced": "Balanced", "max": "Max"}
+
+
+def _render_profile_table(multilingual: bool, width: int = 80) -> str:
+    """Return a formatted profile comparison table string. Does NOT print."""
+    profiles = [get_profile(name, multilingual) for name in _PROFILE_ORDER]
+    lines: list[str] = []
+
+    if width >= 80:
+        # Header
+        lines.append("  Profile      Download    Quality       Speed (CPU / Apple Silicon)")
+        lines.append("  ─────────    ────────    ───────       ───────────────────────────")
+        # Data rows
+        for n, (name, p) in enumerate(zip(_PROFILE_ORDER, profiles), start=1):
+            if p.download_mb >= 1000:
+                size_str = f"~{p.download_mb / 1000:.1f} GB"
+            else:
+                size_str = f"~{p.download_mb} MB"
+            cap = _PROFILE_CAPS[name]
+            lines.append(
+                f"  {n}) {cap:<9}  {size_str:<10}  {p.quality_stars:<12}  "
+                f"~{p.cpu_ms} ms/query  / ~{p.metal_ms} ms"
+            )
+        lines.append("")
+        # Models section
+        lines.append("  Models (all sizes from fastembed registry, verified):")
+        for n, (name, p) in enumerate(zip(_PROFILE_ORDER, profiles), start=1):
+            if p.reranker is None:
+                lines.append(f"  {n}) {p.embedder}  (no reranker)")
+            else:
+                lines.append(f"  {n}) {p.embedder} + {p.reranker}")
+        lines.append("")
+        # Best-for section
+        lines.append("  Best for:")
+        lines.append("  1) Personal use, <10k docs, fast responses, low RAM")
+        lines.append("  2) Team use, 10k–200k docs, good recall, ~1 GB RAM")
+        lines.append("  3) Large corpora, 200k+ docs, highest precision, ~2.5 GB RAM")
+    else:
+        # Narrow: one line per profile
+        for n, (name, p) in enumerate(zip(_PROFILE_ORDER, profiles), start=1):
+            if p.download_mb >= 1000:
+                size_str = f"~{p.download_mb / 1000:.1f} GB"
+            else:
+                size_str = f"~{p.download_mb} MB"
+            cap = _PROFILE_CAPS[name]
+            if p.reranker is not None:
+                lines.append(f"  {n}) {cap}: {p.embedder} + {p.reranker} ({size_str})")
+            else:
+                lines.append(f"  {n}) {cap}: {p.embedder} (no reranker) ({size_str})")
+
+    lines.append("")
+    if not multilingual:
+        lines.append("  Add --multilingual to use multilingual models instead.")
+    else:
+        lines.append("  (Showing multilingual models)")
+
+    return "\n".join(lines)
+
+
+def _render_summary(
+    profile_name: str,
+    profile: InstallProfile,
+    multilingual: bool,
+    providers: list[str],
+) -> str:
+    """Return an install summary block string. Does NOT print."""
+    cap = _PROFILE_CAPS.get(profile_name, profile_name.capitalize())
+    lang = "Multilingual" if multilingual else "English"
+    reranker_str = profile.reranker if profile.reranker is not None else "(none)"
+    providers_str = ", ".join(providers) if providers else "(CPU default)"
+    lines = [
+        f"  Installing: {cap} · {lang}",
+        f"  Embedder:   {profile.embedder}",
+        f"  Reranker:   {reranker_str}",
+        f"  Chunk size: {profile.chunk_size} tokens",
+        f"  Providers:  {providers_str}",
+        "",
+        "  Note: Model files are downloaded now. ONNX session initialization happens in the",
+        "  server process on first query — expect ~5–15s latency on first search.",
+    ]
+    return "\n".join(lines)
+
+
 class SearchInstaller:
     """Installs and manages the search service end-to-end."""
 

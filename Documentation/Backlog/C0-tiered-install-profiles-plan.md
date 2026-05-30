@@ -417,7 +417,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 > **Releasable**: after this phase, the full install UX is live; `archon-search install` presents profiles and installs the chosen one. Each task in this phase is releasable individually after Task 3.4 integrates them.
 
 #### Task 3.1 — Profile table and summary screen
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1 (profiles)
 - **Description**:
   - `_render_profile_table(multilingual: bool, width: int = 80) -> str`:
