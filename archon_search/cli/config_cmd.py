@@ -42,6 +42,8 @@ def _default_toml() -> str:
     logging_table = tomlkit.table()
     logging_table.add("level", cfg.level)
     logging_table.add("log_file", cfg.log_file)
+    logging_table.add("format", cfg.log_format)
+    logging_table.add("backup_count", cfg.backup_count)
     doc.add("logging", logging_table)
 
     return tomlkit.dumps(doc)

@@ -699,3 +699,129 @@ def test_centroid_recompute_threshold_validation(tmp_path: Path) -> None:
     toml_file.write_text("[database]\ncentroid_recompute_threshold = 0\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="centroid_recompute_threshold must be >= 1"):
         load_config(path=toml_file)
+
+
+# ---------------------------------------------------------------------------
+# B7 Task 1.1 — [logging] section: log_format and backup_count
+# ---------------------------------------------------------------------------
+
+
+def test_logging_level_default() -> None:
+    assert SearchConfig().level == "INFO"
+
+
+def test_logging_log_file_default() -> None:
+    assert SearchConfig().log_file == "~/.archon-search/logs/archon-search.log"
+
+
+def test_logging_level_valid_values(tmp_path: Path) -> None:
+    for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        toml_file = tmp_path / f"cfg_{level}.toml"
+        toml_file.write_text(f'[logging]\nlevel = "{level}"\n', encoding="utf-8")
+        config = load_config(path=toml_file)
+        assert config.level == level
+
+
+def test_logging_level_case_insensitive(tmp_path: Path) -> None:
+    for raw, expected in [("info", "INFO"), ("Info", "INFO"), ("WARNING", "WARNING")]:
+        toml_file = tmp_path / f"cfg_{raw}.toml"
+        toml_file.write_text(f'[logging]\nlevel = "{raw}"\n', encoding="utf-8")
+        config = load_config(path=toml_file)
+        assert config.level == expected
+
+
+def test_logging_level_invalid_raises(tmp_path: Path) -> None:
+    for bad in ("VERBOSE", "ALL", ""):
+        toml_file = tmp_path / f"bad_{bad}.toml"
+        toml_file.write_text(f'[logging]\nlevel = "{bad}"\n', encoding="utf-8")
+        with pytest.raises(ConfigError):
+            load_config(path=toml_file)
+
+
+def test_logging_level_warn_normalized_to_warning(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[logging]\nlevel = "WARN"\n', encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.level == "WARNING"
+
+
+def test_logging_format_text_default() -> None:
+    assert SearchConfig().log_format == "text"
+
+
+def test_logging_format_json_parsed(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[logging]\nformat = "json"\n', encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.log_format == "json"
+
+
+def test_logging_format_invalid_raises(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[logging]\nformat = "xml"\n', encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_logging_backup_count_default() -> None:
+    assert SearchConfig().backup_count == 7
+
+
+def test_logging_backup_count_zero_allowed(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[logging]\nbackup_count = 0\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.backup_count == 0
+
+
+def test_logging_backup_count_negative_raises(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[logging]\nbackup_count = -1\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_logging_backup_count_parsed(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[logging]\nbackup_count = 14\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.backup_count == 14
+
+
+def test_logging_log_file_empty_string_allowed(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[logging]\nlog_file = ""\n', encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.log_file == ""
+
+
+def test_logging_toml_key_format_maps_to_log_format_field(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[logging]\nformat = "text"\n', encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.log_format == "text"
+
+
+def test_default_toml_logging_section_includes_all_keys() -> None:
+    from archon_search.cli.config_cmd import _default_toml
+
+    import tomlkit as _tomlkit
+
+    doc = _tomlkit.parse(_default_toml())
+    log_section = doc.get("logging", {})
+    for key in ("level", "log_file", "format", "backup_count"):
+        assert key in log_section, f"Missing key in [logging]: {key!r}"
+
+
+def test_logging_format_case_sensitive_uppercase_raises(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[logging]\nformat = "JSON"\n', encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_logging_backup_count_string_raises(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[logging]\nbackup_count = "seven"\n', encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)

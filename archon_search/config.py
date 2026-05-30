@@ -13,6 +13,8 @@ from archon_search.constants import DEFAULT_ROUTING_DESCRIPTION_WEIGHT
 
 _logger = logging.getLogger("archon.search")
 
+_VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+
 
 class ConfigError(Exception):
     """Raised on invalid configuration values."""
@@ -66,6 +68,8 @@ class SearchConfig:
     # [logging]
     level: str = "INFO"
     log_file: str = "~/.archon-search/logs/archon-search.log"
+    log_format: str = "text"
+    backup_count: int = 7
     # [telemetry]
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     # [observability]
@@ -252,9 +256,26 @@ def load_config(path: Path | None = None) -> SearchConfig:
 
     log_cfg = doc.get("logging", {})
     if "level" in log_cfg:
-        config.level = str(log_cfg["level"])
+        raw_level = str(log_cfg["level"]).upper()
+        if raw_level == "WARN":
+            raw_level = "WARNING"
+        if raw_level not in _VALID_LOG_LEVELS:
+            raise ConfigError(
+                f"[logging].level must be one of {sorted(_VALID_LOG_LEVELS)}, got {str(log_cfg['level'])!r}"
+            )
+        config.level = raw_level
     if "log_file" in log_cfg:
         config.log_file = str(log_cfg["log_file"])
+    if "format" in log_cfg:
+        fmt = str(log_cfg["format"])
+        if fmt not in {"text", "json"}:
+            raise ConfigError(f"[logging].format must be 'text' or 'json', got {fmt!r}")
+        config.log_format = fmt
+    if "backup_count" in log_cfg:
+        bc = _coerce_int(log_cfg["backup_count"], "[logging].backup_count")
+        if bc < 0:
+            raise ConfigError(f"[logging].backup_count must be >= 0, got {bc}")
+        config.backup_count = bc
 
     telemetry_cfg = doc.get("telemetry", {})
     telemetry = TelemetryConfig()
