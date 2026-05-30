@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -198,6 +199,61 @@ def _check_disk_space(profile: InstallProfile, base_path: Path | None = None) ->
             f"Insufficient disk space. This profile requires ~{profile.download_mb * 2} MB free;"
             f" only {usage.free // 1_000_000} MB available."
         )
+
+
+# ---------------------------------------------------------------------------
+# Model pre-warm downloader (Task C0-2.3)
+# ---------------------------------------------------------------------------
+
+def _prewarm_timeout(profile: InstallProfile) -> int:
+    estimated_bytes = profile.download_mb * 1_000_000
+    return min(1800, max(300, estimated_bytes // 100_000))
+
+
+def _prewarm_models(profile: InstallProfile, timeout: int | None = None) -> None:
+    """Download embedder (and optionally reranker) model files to the fastembed cache.
+
+    Uses a threading.Timer for cross-platform timeout (signal.alarm is POSIX-only).
+    fastembed/HF progress is printed to stderr — not suppressed.
+    """
+    import fastembed  # noqa: PLC0415 — lazy; not installed at import time
+    TextEmbedding = fastembed.TextEmbedding  # noqa: N806
+    TextCrossEncoder = fastembed.TextCrossEncoder  # noqa: N806
+
+    if timeout is None:
+        timeout = _prewarm_timeout(profile)
+
+    cancelled = threading.Event()
+    timer = threading.Timer(timeout, cancelled.set)
+    timer.start()
+
+    try:
+        try:
+            TextEmbedding(profile.embedder, lazy_load=True)
+        except Exception as exc:
+            raise InstallError(f"Failed to pre-warm embedder model {profile.embedder!r}: {exc}") from exc
+
+        if cancelled.is_set():
+            timer.cancel()
+            logger.warning(
+                "Model pre-warm timed out after %ss. Service will start without cached model files,"
+                " same as default behavior.",
+                timeout,
+            )
+            return
+
+        if profile.reranker is not None:
+            try:
+                TextCrossEncoder(profile.reranker, lazy_load=True)
+            except Exception as exc:
+                raise InstallError(
+                    f"Failed to pre-warm reranker model {profile.reranker!r}: {exc}"
+                ) from exc
+
+        timer.cancel()
+    except InstallError:
+        timer.cancel()
+        raise
 
 
 class SearchInstaller:

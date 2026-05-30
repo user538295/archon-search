@@ -335,7 +335,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ---
 
 #### Task 2.3 — Model pre-warm downloader
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1 (InstallProfile), Task 1.4 (optional reranker runtime support)
 - **Description**:
   - `_prewarm_timeout(profile: InstallProfile) -> int`:
