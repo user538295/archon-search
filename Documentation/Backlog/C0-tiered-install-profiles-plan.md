@@ -315,7 +315,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ---
 
 #### Task 2.2 — Disk space check
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1 (InstallProfile)
 - **Description**:
   - `class InstallError(Exception)`: generic install-abort error (add near top of `install.py` if not already present).

@@ -10,6 +10,7 @@ import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
+import shutil
 from shutil import rmtree
 from typing import TYPE_CHECKING
 
@@ -171,6 +172,32 @@ def _profile_toml(profile_name: str, multilingual: bool) -> str:
     db["multilingual"] = multilingual
 
     return tomlkit.dumps(doc)
+
+
+# ---------------------------------------------------------------------------
+# Disk space guard (Task C0-2.2)
+# ---------------------------------------------------------------------------
+
+class InstallError(Exception):
+    """Raised to abort an install due to a pre-flight check failure."""
+
+
+def _check_disk_space(profile: InstallProfile, base_path: Path | None = None) -> None:
+    """Raise InstallError if the filesystem has insufficient free space for *profile*."""
+    if base_path is None:
+        base_path = Path.home() / ".archon-search"
+
+    check_path = base_path
+    while not check_path.exists():
+        check_path = check_path.parent
+
+    usage = shutil.disk_usage(check_path)
+    required_bytes = profile.download_mb * 1024 * 1024 * 2
+    if usage.free < required_bytes:
+        raise InstallError(
+            f"Insufficient disk space. This profile requires ~{profile.download_mb * 2} MB free;"
+            f" only {usage.free // 1_000_000} MB available."
+        )
 
 
 class SearchInstaller:
