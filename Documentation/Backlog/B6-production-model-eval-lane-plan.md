@@ -339,7 +339,7 @@ async def run_eval_suite(
 > **Releasable**: after Task 3.1 — all 10 required acceptance tests from the brief are implemented. The 5 pure-logic tests (2, 4, 5, 6, 7 from brief) are already passing in the PR eval suite from Phases 1–2. The 5 live-backend tests (1, 3, 8, 9, 10) pass when run with model weights, proving isolation, model-version recording, calibration procedure, and latency stability.
 
 #### Task 3.1 — `tests/eval/live/test_live_acceptance.py` (live-backend tests 1, 3, 8, 9, 10)
-- [ ] **File**: `tests/eval/live/test_live_acceptance.py`
+- [x] **File**: `tests/eval/live/test_live_acceptance.py`
 - **Depends on**: Task 1.2, Task 1.3, Task 2.1, Task 2.3
 - **Description**:
   - All 5 tests marked `@pytest.mark.live_eval`; use `live_corpus_root`, `live_runtime_cfg_path`, `live_artifacts_dir` fixtures from the local conftest
