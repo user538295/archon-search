@@ -825,3 +825,48 @@ def test_logging_backup_count_string_raises(tmp_path: Path) -> None:
     toml_file.write_text('[logging]\nbackup_count = "seven"\n', encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(path=toml_file)
+
+
+# ---------------------------------------------------------------------------
+# C0 Task 1.2 — profile and multilingual fields
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_profile_and_multilingual_defaults(tmp_path: Path) -> None:
+    config = load_config(path=tmp_path / "nonexistent.toml")
+    assert config.profile == ""
+    assert config.multilingual is False
+
+
+def test_load_config_reads_profile_balanced(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[database]\nprofile = "balanced"\n', encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.profile == "balanced"
+
+
+def test_load_config_reads_multilingual_true(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\nmultilingual = true\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.multilingual is True
+
+
+def test_load_config_multilingual_wrong_type_raises(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[database]\nmultilingual = "yes"\n', encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_save_config_round_trip_preserves_profile_and_multilingual(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text(
+        '[database]\nprofile = "balanced"\nmultilingual = true\n',
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    save_config(config, toml_file)
+    reloaded = load_config(path=toml_file)
+    assert reloaded.profile == "balanced"
+    assert reloaded.multilingual is True

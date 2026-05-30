@@ -189,7 +189,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ---
 
 #### Task 1.2 — `SearchConfig` profile fields + `load_config()` extension
-- [ ] **File**: `archon_search/config.py`
+- [x] **File**: `archon_search/config.py`
 - **Depends on**: nothing (independent of Task 1.1)
 - **Description**:
   - Add `profile: str = ""` and `multilingual: bool = False` to `SearchConfig` dataclass, after the existing `[database]` fields.

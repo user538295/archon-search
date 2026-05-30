@@ -61,6 +61,9 @@ class SearchConfig:
     # [database] — B5 incremental centroid
     centroid_recompute_threshold: int = 10_000
     centroid_incremental_enabled: bool = True
+    # [database] — C0 tiered install profiles
+    profile: str = ""
+    multilingual: bool = False
     # [collections]
     pinned_collections: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)
@@ -197,6 +200,10 @@ def load_config(path: Path | None = None) -> SearchConfig:
         config.centroid_incremental_enabled = _coerce_bool(
             database["centroid_incremental_enabled"], "centroid_incremental_enabled"
         )
+    if "profile" in database:
+        config.profile = str(database["profile"])
+    if "multilingual" in database:
+        config.multilingual = _coerce_bool(database["multilingual"], "multilingual")
 
     search = doc.get("search", {})
     if "max_fanout" in search:
