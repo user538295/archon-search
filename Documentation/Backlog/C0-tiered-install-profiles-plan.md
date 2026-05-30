@@ -213,7 +213,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ---
 
 #### Task 1.3 — Durable profile config writer + `configure_providers()` durable-write fix
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1 (InstallProfile type), Task 1.2 (config fields exist)
 - **Description**:
   - Add `_write_profile_config(config_path: Path, profile: InstallProfile, profile_name: str, multilingual: bool) -> None`:
