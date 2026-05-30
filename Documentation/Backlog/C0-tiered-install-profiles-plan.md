@@ -499,7 +499,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ---
 
 #### Task 3.4 — `SearchInstaller.run()` full profile-aware rewrite
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.4, Task 2.1–2.5, Task 3.1–3.3
 - **Description**:
   - Update `SearchInstaller.__init__`: keep `self.cfg = load_config(path)` in `__init__` as it is today (for backwards compatibility with `run_uninstall()`, `_is_service_running()`, `_wait_for_service()`, and `create_data_dir()`, all of which read `self.cfg`). Do NOT remove this assignment. Note: `_bootstrap_collections()` also reads `self.cfg` — it is dead code (never called in production) but has tests in `tests/test_install.py`. Keeping `self.cfg` in `__init__` means those tests continue to pass without modification.

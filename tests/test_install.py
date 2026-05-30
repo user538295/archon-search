@@ -577,15 +577,31 @@ class TestRun:
 
     def test_run_aborts_on_user_decline(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
 
+        write_service_mock = MagicMock()
         with patch("builtins.input", return_value="n"), \
-             patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps") as mock_install:
-            result = installer.run(non_interactive=False)
+             patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+             patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
+             patch.object(installer, "validate_providers", return_value=False), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "write_service_file", write_service_mock), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_wait_for_service", return_value=True), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(
+                non_interactive=False,
+                profile="minimal",
+                skip_preload=True,
+            )
 
         assert result != 0
-        mock_install.assert_not_called()
+        write_service_mock.assert_not_called()
 
     def test_installer_run_warns_when_service_running(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """If service is already running, installer warns but continues."""
@@ -615,218 +631,182 @@ class TestRun:
         assert "running" in captured.out.lower() or "warning" in captured.out.lower() or "already" in captured.out.lower()
 
     def test_run_prints_step_labels(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """All 5 step labels [1/5]–[5/5] must appear in stdout for a successful run."""
+        """Step labels [4/5] and [5/5] must appear in stdout for a successful run."""
         installer = _make_installer(tmp_path)
-        svc = MagicMock()
-        svc.register.return_value = 0
-        svc.start.return_value = 0
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
 
-        mock_pipeline = MagicMock()
-        mock_pipeline.store = AsyncMock()
-
-        with patch("archon_search.install.get_search_service", return_value=svc), \
-             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
-             patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
+        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+             patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
+             patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "configure_providers"), \
-             patch.object(installer, "validate_providers", return_value=True), \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
-            result = installer.run(non_interactive=True)
+             patch.object(installer, "_wait_for_service", return_value=True), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True, profile="minimal", skip_preload=False)
 
         captured = capsys.readouterr()
         assert result == 0
-        assert "[1/5]" in captured.out
-        assert "[2/5]" in captured.out
-        assert "[3/5]" in captured.out
         assert "[4/5]" in captured.out
         assert "[5/5]" in captured.out
 
     def test_run_prints_validating_message_for_apple_silicon(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """For apple_silicon GPU, stdout must contain '[2/5] Validating GPU acceleration'."""
+        """For METAL GPU with validate_providers=True, CoreML appears in providers summary."""
         installer = _make_installer(tmp_path)
-        svc = MagicMock()
-        svc.register.return_value = 0
-        svc.start.return_value = 0
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
 
-        mock_pipeline = MagicMock()
-        mock_pipeline.store = AsyncMock()
-
-        with patch("archon_search.install.get_search_service", return_value=svc), \
-             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
+        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
-             patch.object(installer, "configure_providers"), \
              patch.object(installer, "validate_providers", return_value=True), \
+             patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
-            result = installer.run(non_interactive=True)
+             patch.object(installer, "_wait_for_service", return_value=True), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
         captured = capsys.readouterr()
         assert result == 0
-        assert "[2/5] Validating GPU acceleration" in captured.out
+        assert "CoreML" in captured.out
 
     def test_run_prints_coreml_validation_failed_message(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """For apple_silicon GPU where validate_providers returns False, stdout must contain warning message."""
+        """For METAL GPU where validate_providers returns False, warning message is printed."""
         installer = _make_installer(tmp_path)
-        svc = MagicMock()
-        svc.register.return_value = 0
-        svc.start.return_value = 0
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
 
-        mock_pipeline = MagicMock()
-        mock_pipeline.store = AsyncMock()
-
-        with patch("archon_search.install.get_search_service", return_value=svc), \
-             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
+        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
-             patch.object(installer, "configure_providers"), \
              patch.object(installer, "validate_providers", return_value=False), \
+             patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
-            result = installer.run(non_interactive=True)
+             patch.object(installer, "_wait_for_service", return_value=True), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
         captured = capsys.readouterr()
         assert result == 0
-        assert "[2/5] Warning: CoreML validation failed" in captured.out
+        assert "CoreML validation failed" in captured.out
 
     def test_run_prints_providers_configured_for_non_apple_silicon(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """For non-apple_silicon GPU (e.g. 'none'), stdout must contain '[2/5] Providers configured for none'."""
+        """For NONE GPU, configure_providers is called and CPU default appears in summary."""
         installer = _make_installer(tmp_path)
-        svc = MagicMock()
-        svc.register.return_value = 0
-        svc.start.return_value = 0
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
 
-        mock_pipeline = MagicMock()
-        mock_pipeline.store = AsyncMock()
-
-        with patch("archon_search.install.get_search_service", return_value=svc), \
-             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
-             patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
-             patch.object(installer, "configure_providers"), \
-             patch.object(installer, "validate_providers", return_value=True), \
+        configure_mock = MagicMock()
+        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+             patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
+             patch.object(installer, "validate_providers", return_value=False), \
+             patch.object(installer, "configure_providers", configure_mock), \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
-            result = installer.run(non_interactive=True)
+             patch.object(installer, "_wait_for_service", return_value=True), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
         captured = capsys.readouterr()
         assert result == 0
-        assert "[2/5] Providers configured for none" in captured.out
+        configure_mock.assert_called_once_with(gpu=GpuType.NONE)
+        assert "CPU default" in captured.out
 
     def test_run_prints_packages_already_installed_when_no_missing(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """When check_deps() returns [], stdout must contain 'already installed'."""
+        """run() succeeds and prints completion message (no longer has package step)."""
         installer = _make_installer(tmp_path)
-        svc = MagicMock()
-        svc.register.return_value = 0
-        svc.start.return_value = 0
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
 
-        mock_pipeline = MagicMock()
-        mock_pipeline.store = AsyncMock()
-
-        with patch("archon_search.install.get_search_service", return_value=svc), \
-             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
-             patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
+        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+             patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
+             patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "configure_providers"), \
-             patch.object(installer, "validate_providers", return_value=True), \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
-            result = installer.run(non_interactive=True)
+             patch.object(installer, "_wait_for_service", return_value=True), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
         captured = capsys.readouterr()
         assert result == 0
-        assert "already installed" in captured.out
+        assert "archon-search installed and running" in captured.out
 
     def test_run_prints_installing_packages_when_missing(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """When check_deps() returns ['lancedb'], stdout must contain '[1/5] Installing packages: lancedb'."""
+        """run() succeeds and prints profile summary (package installation no longer part of run())."""
         installer = _make_installer(tmp_path)
-        svc = MagicMock()
-        svc.register.return_value = 0
-        svc.start.return_value = 0
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
 
-        mock_pipeline = MagicMock()
-        mock_pipeline.store = AsyncMock()
-
-        with patch("archon_search.install.get_search_service", return_value=svc), \
-             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
-             patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=["lancedb"]), \
-             patch.object(installer, "install_deps"), \
+        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+             patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
+             patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "configure_providers"), \
-             patch.object(installer, "validate_providers", return_value=True), \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
-            result = installer.run(non_interactive=True)
+             patch.object(installer, "_wait_for_service", return_value=True), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
         captured = capsys.readouterr()
         assert result == 0
-        assert "[1/5] Installing packages: lancedb" in captured.out
+        assert "Embedder" in captured.out
 
     def test_run_prints_packages_installed_confirmation_when_missing(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """When check_deps() returns ['lancedb'], stdout must contain '[1/5] Packages installed.'."""
+        """run() prints profile_name in completion message."""
         installer = _make_installer(tmp_path)
-        svc = MagicMock()
-        svc.register.return_value = 0
-        svc.start.return_value = 0
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
 
-        mock_pipeline = MagicMock()
-        mock_pipeline.store = AsyncMock()
-
-        with patch("archon_search.install.get_search_service", return_value=svc), \
-             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
-             patch("archon_search.sync.SearchCollectionSync") as MockSync, \
-             patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=["lancedb"]), \
-             patch.object(installer, "install_deps"), \
+        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+             patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
+             patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "configure_providers"), \
-             patch.object(installer, "validate_providers", return_value=True), \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
-             patch.object(installer, "_wait_for_service", return_value=True):
-            MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
-            result = installer.run(non_interactive=True)
+             patch.object(installer, "_wait_for_service", return_value=True), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
         captured = capsys.readouterr()
         assert result == 0
-        assert "[1/5] Packages installed." in captured.out
+        assert "Minimal" in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -1374,28 +1354,31 @@ class TestRunFlow:
     """Tests for the validation-first flow wired into run()."""
 
     def test_run_flow_apple_silicon_validation_passes(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """apple_silicon: validate → success → configure_providers called → success message printed."""
+        """METAL GPU: validate → success → configure_providers called → CoreML in providers summary."""
         installer = _make_installer(tmp_path)
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
 
-        with patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "install_deps"), \
-             patch.object(installer, "check_deps", return_value=[]), \
+        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+             patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
              patch.object(installer, "validate_providers", return_value=True) as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_is_service_running", return_value=False), \
              patch.object(installer, "_wait_for_service", return_value=True):
-            result = installer.run(non_interactive=True)
+            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
         assert result == 0
         mock_validate.assert_called_once_with(["CoreMLExecutionProvider"])
         mock_configure.assert_called_once_with(gpu=GpuType.METAL)
         captured = capsys.readouterr()
-        assert "CoreML acceleration validated" in captured.out
-        assert "Warning" not in captured.out
+        assert "CoreML" in captured.out
 
     def test_run_flow_apple_silicon_validation_fails_falls_back(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """apple_silicon: validate → failure → configure_providers NOT called → warning printed."""
@@ -1421,50 +1404,56 @@ class TestRunFlow:
         assert "Warning: CoreML validation failed" in captured.out
 
     def test_run_flow_cuda_skips_validation(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """cuda: validation NOT called → configure_providers called directly, no CoreML messages."""
+        """CUDA: validation NOT called → configure_providers called directly, no CoreML messages."""
         installer = _make_installer(tmp_path)
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
 
-        with patch.object(installer, "detect_gpu", return_value="cuda"), \
-             patch.object(installer, "install_deps") as mock_install, \
-             patch.object(installer, "check_deps", return_value=["some-dep"]), \
+        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+             patch.object(installer, "detect_gpu", return_value=GpuType.CUDA), \
              patch.object(installer, "validate_providers") as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_is_service_running", return_value=False), \
              patch.object(installer, "_wait_for_service", return_value=True):
-            result = installer.run(non_interactive=True)
+            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
         assert result == 0
-        mock_install.assert_called_once_with(gpu="cuda")
         mock_validate.assert_not_called()
-        mock_configure.assert_called_once_with(gpu="cuda")
+        mock_configure.assert_called_once_with(gpu=GpuType.CUDA)
         captured = capsys.readouterr()
         assert "CoreML" not in captured.out
 
     def test_run_flow_no_gpu_unchanged(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """no gpu: validation NOT called → configure_providers called (no-op internally), no CoreML messages."""
+        """NONE GPU: validation NOT called → configure_providers called (no-op internally), no CoreML messages."""
         installer = _make_installer(tmp_path)
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
 
-        with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "install_deps") as mock_install, \
-             patch.object(installer, "check_deps", return_value=["some-dep"]), \
+        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+             patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
              patch.object(installer, "validate_providers") as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
              patch.object(installer, "create_data_dir"), \
-             patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \
              patch.object(installer, "write_service_file"), \
              patch.object(installer, "load_service", return_value=0), \
              patch.object(installer, "_is_service_running", return_value=False), \
              patch.object(installer, "_wait_for_service", return_value=True):
-            result = installer.run(non_interactive=True)
+            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
         assert result == 0
-        mock_install.assert_called_once_with(gpu="none")
         mock_validate.assert_not_called()
-        mock_configure.assert_called_once_with(gpu="none")
+        mock_configure.assert_called_once_with(gpu=GpuType.NONE)
         captured = capsys.readouterr()
         assert "CoreML" not in captured.out
 

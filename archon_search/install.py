@@ -19,7 +19,7 @@ import click
 import tomlkit
 
 from archon_search._durable_io import atomic_write_bytes
-from archon_search.config import SearchConfig, load_config
+from archon_search.config import SearchConfig, get_default_config_path, load_config
 from archon_search.pipeline import create_pipeline
 from archon_search.platform.runtime import get_runtime, get_search_service
 from archon_search.platform.types import GpuType
@@ -537,6 +537,35 @@ def _select_profile(
     raise SystemExit(1)  # unreachable, satisfies type checker
 
 
+# ---------------------------------------------------------------------------
+# Legacy service cleanup (Task 3.4)
+# ---------------------------------------------------------------------------
+
+def _legacy_service_path() -> Path:
+    """Return the path to a legacy externally-managed search service file."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "LaunchAgents" / "com.archon.search.plist"
+    return Path.home() / ".config" / "systemd" / "user" / "archon-search.service"
+
+
+def _remove_legacy_service(legacy_path: Path) -> None:
+    """Unload and remove a legacy externally-managed service definition."""
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["launchctl", "unload", str(legacy_path)], check=False, capture_output=True)
+        elif sys.platform.startswith("linux"):
+            service_name = legacy_path.stem
+            subprocess.run(["systemctl", "--user", "stop", service_name], check=False, capture_output=True)
+            subprocess.run(["systemctl", "--user", "disable", service_name], check=False, capture_output=True)
+    except Exception:
+        pass  # best-effort
+    try:
+        legacy_path.unlink(missing_ok=True)
+        click.echo(f"Removed legacy service file: {legacy_path}")
+    except Exception as exc:
+        click.echo(f"Warning: could not remove legacy service file: {exc}", err=True)
+
+
 class SearchInstaller:
     """Installs and manages the search service end-to-end."""
 
@@ -766,67 +795,164 @@ class SearchInstaller:
     # Full install flow
     # ------------------------------------------------------------------
 
-    def run(self, non_interactive: bool = False) -> int:
+    def run(
+        self,
+        non_interactive: bool = False,
+        profile: str | None = None,
+        multilingual: bool = False,
+        skip_preload: bool = False,
+        force: bool = False,
+        delete_db: bool = False,
+        accept_jina_license: bool = False,
+    ) -> int:
         """Execute the full install flow. Returns 0 on success."""
-        gpu = self.detect_gpu()
+        # Validate --force requires --delete-db
+        if force and not delete_db:
+            print("--force requires --delete-db. To force a reinstall, use both flags together.")
+            return 1
 
-        print(f"Search installer — GPU detected: {gpu}")
-        print("Note: first run will download ~150MB of model data.")
+        with _acquire_install_lock():
+            # Step 0: legacy cleanup + log directory
+            legacy = _legacy_service_path()
+            if legacy.exists():
+                _remove_legacy_service(legacy)
+            log_dir = Path.home() / ".archon-search" / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
 
-        if not non_interactive:
-            answer = input("Proceed with installation? [y/N] ").strip().lower()
-            if answer != "y":
-                print("Installation aborted.")
+            # Step 1: profile selection
+            try:
+                profile_name, is_multilingual = _select_profile(profile, multilingual, non_interactive)
+            except SystemExit as e:
+                return int(e.code) if e.code is not None else 1
+            except click.BadParameter as e:
+                print(str(e))
                 return 1
 
-        # Warn if service already running
-        if self._is_service_running():
-            print("Warning: Search service is already running. Proceeding anyway.")
+            # Step 2: get profile data
+            prof = get_profile(profile_name, is_multilingual)
 
-        # Dependencies
-        missing = self.check_deps()
-        if missing:
-            print(f"[1/5] Installing packages: {', '.join(missing)} ...")
-            self.install_deps(gpu=gpu)
-            print("[1/5] Packages installed.")
-        else:
-            print("[1/5] All packages already installed.")
+            # Step 3: Jina license gate
+            if _requires_jina_license(prof):
+                try:
+                    _prompt_jina_license(non_interactive, accept_jina_license=accept_jina_license)
+                except SystemExit as e:
+                    return int(e.code) if e.code is not None else 1
 
-        # Configure execution providers based on GPU type
-        if not self.dry_run and gpu == GpuType.METAL:
-            print("[2/5] Validating GPU acceleration (first run downloads ~150 MB model data) ...")
-            if self.validate_providers(["CoreMLExecutionProvider"]):
-                self.configure_providers(gpu=gpu)
-                print("[2/5] CoreML acceleration validated — GPU/Neural Engine active.")
+            # Step 4: config path
+            config_path = Path(self.config_file) if self.config_file else get_default_config_path()
+
+            # Step 5: reinstall check
+            db_path = Path(self.cfg.db_path).expanduser()
+            if config_path.exists():
+                existing_cfg = load_config(config_path)
+                db_path = Path(existing_cfg.db_path).expanduser()
+                try:
+                    _check_reinstall_guard(existing_cfg, prof, profile_name, is_multilingual)
+                except NeedsForceDeleteError as exc:
+                    if not (force and delete_db):
+                        print(str(exc))
+                        return 1
+
+            # Step 6/7/8: config write branches
+            branch: str
+            if force and delete_db:
+                # Branch A: force-delete reinstall
+                branch = "force"
+                try:
+                    _execute_force_reinstall(
+                        config_path, db_path, prof, profile_name, is_multilingual,
+                        non_interactive, dry_run=self.dry_run
+                    )
+                except SystemExit as e:
+                    return int(e.code) if e.code is not None else 1
+            elif not config_path.exists():
+                # Branch B: fresh install
+                branch = "fresh"
+                tmp = config_path.with_suffix(config_path.suffix + ".tmp")
+                tmp.unlink(missing_ok=True)
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_bytes(config_path, _profile_toml(profile_name, is_multilingual).encode())
+                shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
             else:
-                print("[2/5] Warning: CoreML validation failed — falling back to CPU. macOS 12+ required.")
-        else:
-            print(f"[2/5] Configuring providers for {gpu} ...")
-            self.configure_providers(gpu=gpu)
-            print(f"[2/5] Providers configured for {gpu}.")
+                # Branch C: idempotent reinstall (same profile)
+                branch = "idempotent"
+                shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
+                _write_profile_config(config_path, prof, profile_name, is_multilingual)
 
-        # Create data directory
-        print("[3/5] Creating data directory ...")
-        self.create_data_dir()
+            # Step 8b: reload config with freshly-written values
+            self.cfg = cfg = load_config(config_path)
 
-        # Register and start service (bootstrap happens in the background via the server's startup sync)
-        print("[4/5] Starting search service ...")
-        self.write_service_file()
-        rc = self.load_service()
-        if rc != 0:
-            print(f"Service start returned exit code {rc}.", file=sys.stderr)
-            return rc
+            # Step 9: GPU detection and provider configuration
+            gpu = self.detect_gpu()
+            providers: list[str] = []
+            if not self.dry_run and gpu == GpuType.METAL:
+                if self.validate_providers(["CoreMLExecutionProvider"]):
+                    self.configure_providers(gpu=gpu)
+                    providers = ["CoreML (Apple Silicon)"]
+                else:
+                    print("Warning: CoreML validation failed — falling back to CPU.")
+            elif gpu == GpuType.CUDA:
+                self.configure_providers(gpu=gpu)
+                providers = ["CUDA"]
+            else:
+                self.configure_providers(gpu=gpu)
 
-        # Wait for service readiness — indexing runs in background via server's asyncio.create_task
-        print("[5/5] Waiting for service readiness ...")
-        if not self.dry_run:
-            ready = self._wait_for_service()
-            if not ready:
-                print(f"Warning: Search service did not become ready within {_WAIT_FOR_SERVICE_TIMEOUT} seconds.")
+            # Step 10: create data directory
+            self.create_data_dir()
+
+            # Step 11: disk space check
+            try:
+                _check_disk_space(prof)
+            except InstallError as exc:
+                print(str(exc))
                 return 1
 
-        print("Search service installed and running.")
-        return 0
+            # Step 12: summary display
+            print(_render_summary(profile_name, prof, is_multilingual, providers))
+
+            # Step 13: confirmation
+            if not non_interactive:
+                answer = input("Proceed? [Y/n]: ").strip().lower()
+                if answer not in ("y", ""):
+                    print("Installation aborted.")
+                    return 1
+
+            # Step 14: pre-warm
+            if not skip_preload:
+                print("[4/5] Downloading models...")
+                try:
+                    _prewarm_models(prof)
+                except InstallError as exc:
+                    print(f"Model download failed: {exc}", file=sys.stderr)
+                    if branch == "fresh":
+                        config_path.unlink(missing_ok=True)
+                        config_path.with_suffix(".toml.bak").unlink(missing_ok=True)
+                    elif branch == "idempotent":
+                        bak = config_path.with_suffix(".toml.bak")
+                        if bak.exists():
+                            shutil.copy2(bak, config_path)
+                    # branch == "force": leave backup, new config stays
+                    return 1
+
+            # Step 15: register and start service
+            print("[5/5] Starting search service...")
+            self.write_service_file()
+            rc = self.load_service()
+            if rc != 0:
+                print(f"Service start returned exit code {rc}.", file=sys.stderr)
+                return rc
+
+            # Step 16: wait for readiness
+            if not self.dry_run:
+                ready = self._wait_for_service()
+                if not ready:
+                    print(f"Warning: Search service did not become ready within {_WAIT_FOR_SERVICE_TIMEOUT} seconds.")
+                    return 1
+
+            # Step 17: completion message
+            lang = "Multilingual" if is_multilingual else "English"
+            print(f"archon-search installed and running. Profile: {profile_name.capitalize()} · {lang}.")
+            return 0
 
     # ------------------------------------------------------------------
     # Uninstall flow
