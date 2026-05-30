@@ -32,7 +32,7 @@ After C1 ships: `archon-search install` either prompts the user to choose a prof
 - Disk space check before model download
 - Model pre-warm via `TextEmbedding(model, lazy_load=True)` + `TextCrossEncoder(model, lazy_load=True)`
 - Reinstall guard: detect conflicting `embedding_model` or `chunk_size`; require `--force --delete-db` to override
-- `--force --delete-db` 7-step rollback flow with config backup and restore-on-failure
+- `--force --delete-db` 5-step rollback function (with steps 6–7 handled by the `run()` caller) with config backup and restore-on-failure
 - Jina CC-BY-NC-4.0 license gate for multilingual profiles 2 and 3
 - Profile table display with narrow-terminal fallback; summary confirmation screen
 - Interactive profile selection + non-interactive path (`--profile`, `--multilingual`, `--skip-preload` flags)
@@ -73,6 +73,7 @@ After C1 ships: `archon-search install` either prompts the user to choose a prof
 - ONNX session initialization still occurs server-side on first query (~5–15s for large models). This is explained to the user in the summary screen.
 - Crash-injection tests for `--force --delete-db` rollback are not included in this plan — the rollback relies on the already-tested `_durable_io` primitives.
 - Timeout formula uses a 100 KB/s floor; actual download speed varies. Timeout fires with a warning and the service starts without a cached model — same as today.
+- **Pre-warm timeout is non-preemptive**: the cancellation flag is checked between the embedder and reranker download phases, but not during an individual download call. If the embedder download hangs (network issue, DNS failure), the timeout fires but the function continues blocking until the download completes or fails. This is a limitation of the `threading.Timer` + flag design and is accepted for v1.
 - Jina license prompt is required but the check is process-level only (no cryptographic assurance); downstream commercial misuse is not archon-search's enforcement problem.
 - `_default_toml()` in `config_cmd.py` remains for the `config` subcommand; only the `install` path switches to `_profile_toml()`.
 - `--force --delete-db` always deletes the database when both flags are provided, even if the new profile is identical to the existing one. This is by design — the flags express an explicit destructive intent. The confirmation prompt (in interactive mode) provides the final safety gate.
@@ -121,7 +122,7 @@ Persisted in `[database]` section. Read by `load_config()`. Written only by `_wr
 - `_check_disk_space(profile: InstallProfile) -> None` — raises `InstallError` if insufficient
 - `_prewarm_models(profile: InstallProfile, timeout: int) -> None` — lazy_load download with timeout
 - `_check_reinstall_guard(existing_cfg: SearchConfig, new_profile: InstallProfile) -> None` — raises `NeedsForceDeleteError` on conflict
-- `_execute_force_reinstall(config_path, db_path, profile, profile_name, multilingual, non_interactive, dry_run=False)` — 7-step rollback
+- `_execute_force_reinstall(config_path, db_path, profile, profile_name, multilingual, non_interactive, dry_run=False)` — 5-step rollback function (steps 6–7 delegated to `run()` caller)
 - `_render_profile_table(multilingual: bool, width: int) -> str` — profile table or narrow fallback
 - `_render_summary(profile_name, profile, multilingual, providers) -> str`
 - `_maybe_prompt_jina_license(profile, multilingual, non_interactive) -> None` — raises `SystemExit(1)` on decline
@@ -141,10 +142,14 @@ New flags on the `install` Click command:
 
 `install_cmd.py`'s `install` command body becomes:
 ```python
-SearchInstaller(config_path=config_path, dry_run=dry_run).run(
+# NOTE: SearchInstaller.__init__ takes config_file: str | None, not config_path: Path.
+# Pass config_file=str(config_path) if config_path else None,
+# OR rename config_file -> config_path (type Path | str | None) throughout install.py.
+SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=dry_run).run(
     profile=profile, multilingual=multilingual,
     non_interactive=non_interactive, skip_preload=skip_preload,
     force=force, delete_db=delete_db,
+    accept_jina_license=accept_jina_license,
 )
 ```
 
@@ -156,7 +161,7 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
 > **Releasable**: after this phase, the profile registry and config fields are in place and independently testable; no user-visible behavior change yet.
 
 #### Task 1.1 — Profile registry
-- [ ] **File**: `archon_search/profiles.py` (new file)
+- [x] **File**: `archon_search/profiles.py` (new file)
 - **Depends on**: nothing
 - **Description**:
   - `@dataclass InstallProfile(name, embedder, reranker, chunk_size, download_mb, quality_stars, cpu_ms, metal_ms, memory_gb)` — all fields required; `reranker: str | None` (None = Minimal multilingual, no reranker)
@@ -216,14 +221,17 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
     - Ensure `[database]` section exists.
     - Write these keys into `[database]`: `embedding_model`, `reranker_model` (skipped / set to `""` if `profile.reranker is None`), `chunk_size`, `profile`, `multilingual`.
     - Persist with `_durable_io.atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())`.
+    - **IMPORTANT**: this function MUST use tomlkit round-trip editing (parse-modify-serialize), NOT a raw TOML string write. The `[database]` section is updated in-place; all other sections (`[server]`, `[logging]`, `[telemetry]`, `[collections]`) must be preserved unchanged.
   - Add `_profile_toml(profile_name: str, multilingual: bool) -> str`:
     - Returns a minimal valid TOML string that includes the `[database]` section with the profile's model keys and `[server]` defaults. Used for fresh installs (replaces bare `_default_toml()` call in the install path).
     - Delegates model selection to `get_profile(profile_name, multilingual)`.
+    - **`_profile_toml()` MUST generate all config sections that `_default_toml()` generates** (not just `[database]` and `[server]`). To prevent drift from `_default_toml()` in `config_cmd.py`, `_profile_toml()` should either (a) call `_default_toml()` and use tomlkit to overlay the profile-specific `[database]` values, or (b) share a common config-generation helper. The implementation choice must be documented in a comment.
   - Fix `configure_providers()`: replace `config_path.write_text(tomlkit.dumps(doc))  # noqa: durable-write` with `_durable_io.atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())` and remove the `# noqa` comment.
   - **Releasable**: after this task, profile config can be written durably and `configure_providers()` no longer bypasses the fsync contract.
 - **Tests (TDD)** — `tests/test_install_config_writer.py` (new file):
   - Unit: `test_write_profile_config_fresh_file` — creates file; `load_config()` returns correct embedding_model, chunk_size, profile, multilingual
   - Unit: `test_write_profile_config_updates_existing` — existing TOML with other sections preserved; only `[database]` updated
+  - Unit: `test_write_profile_config_preserves_server_and_logging_sections` — create a TOML file with `[server]`, `[logging]`, `[telemetry]`, and `[collections]` sections alongside `[database]`; call `_write_profile_config()`; parse result; assert all non-`[database]` sections are unchanged (no key removed or mutated)
   - Unit: `test_write_profile_config_no_reranker_writes_empty_string` — multilingual minimal sets `reranker_model = ""`
   - Unit: `test_write_profile_config_is_atomic` — file has correct content even if process is interrupted after write (use `atomic_write_bytes` contract)
   - Unit: `test_write_profile_config_cleans_stale_tmp_before_write` — create a stale `<config_path>.tmp` file; verify write succeeds (stale tmp removed before calling `atomic_write_bytes`)
@@ -243,11 +251,15 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
 - **Description**:
   - **Problem**: `reranker_model = ""` is written when `profile.reranker is None` (Multilingual Minimal). The current `SearchPipeline.__init__` declares `reranker: Reranker` as non-optional, and both `search()` and `explain()` call `self._reranker.rerank()` / `self._reranker._rerank_with_trace()` unconditionally. An empty string causes `AttributeError` on the first query.
   - In `config.py`: clarify that `SearchConfig.reranker_model: str` accepts `""` as a sentinel meaning "no reranker". The existing default `"Xenova/ms-marco-MiniLM-L-6-v2"` is unchanged for all non-empty cases.
-  - In `pipeline.py` — make `reranker` optional in `SearchPipeline`:
+  - In `pipeline.py` — make `reranker` optional in `SearchPipeline`. The following `self._reranker.*` access sites ALL require guarding (enumerate and guard every one):
     - Change `SearchPipeline.__init__` signature: `reranker: Reranker` → `reranker: Reranker | None = None`.
-    - In `SearchPipeline.search()`: add `if self._reranker is not None:` guard around the `self._reranker.rerank()` call. When `reranker` is `None`, return candidates sorted by vector+FTS RRF score without a second-stage ranking pass.
-    - In `SearchPipeline.explain()`: add `if self._reranker is not None:` guard around the `self._reranker._rerank_with_trace()` call. When `reranker` is `None`, set `reranker_trace = None` in the explain output (omit the reranker section entirely rather than crashing).
+    - In `SearchPipeline.search()`: add `if self._reranker is not None:` guard around the `self._reranker.rerank()` call. When `reranker` is `None`, apply `top_k_return` trimming manually (`candidates = candidates[:self._top_k_return]`) and return the RRF-sorted candidates as-is. The score for each result uses the existing `reranker_score if reranker_score is not None else rrf_score` fallback logic in `_candidate_to_search_result()`. API response fields `reranker_score` and `reranker_trace` must be `null` / omitted when reranker is `None`.
+    - In `SearchPipeline.search_many()` (multi-collection path): add the same `if self._reranker is not None:` guard around any `self._reranker.*` calls. When `reranker` is `None`, return candidates without a reranking pass. Set `rerank_time_ms = 0.0` in `FanoutTimings` (no time is spent in reranking when the reranker is absent).
+    - In `_candidate_to_search_result()`: remove the `assert score is not None` at line 701. Replace with: use `reranker_score` if not None, else fall back to `rrf_score`. This method is called from `search_many()` and must not assert when reranker is absent.
+    - In `SearchPipeline.explain()`: add `if self._reranker is not None:` guard around the `self._reranker._rerank_with_trace()` call. When `reranker` is `None`, set `reranker_trace = None` in the explain output (omit the reranker section entirely rather than crashing). This applies to both single-collection and multi-collection `explain()` paths. For multi-collection `explain()` with `rerank=True` and `reranker=None`: treat as equivalent to `rerank=False` — skip the reranker call, sort by RRF score across collections, and set `reranker_trace=None`. Do NOT raise `ExplainMultiCollectionNoRerankError`; that exception is reserved for when the user explicitly passes `rerank=False`, not for when the pipeline has no reranker.
+    - In `SearchPipeline.reranker_is_warm` property (called by the readiness endpoint): guard against `self._reranker is None` — return `False` when reranker is `None` instead of raising `AttributeError`.
     - In `create_pipeline()`: if `cfg.reranker_model == ""`, skip `ModelReranker` and `Reranker` construction entirely; pass `reranker=None` to `SearchPipeline`.
+    - **Eval harness impact (accepted limitation)**: `eval/_tracing.py` directly accesses `pipeline._reranker` (line 93) and calls `reranker.rerank_candidates()` (line 107). This will raise `AttributeError` if the eval suite is run against a no-reranker profile (Multilingual Minimal). Add a guard to `eval/_tracing.py`: before line 93, check `if pipeline._reranker is None: raise RuntimeError('Eval harness requires a reranker; cannot run with Multilingual Minimal profile.')`. This converts a confusing `AttributeError` into a clear error message. The eval harness is designed for reranker-equipped pipelines and must not be run with `reranker=None` in v1.
   - In `app.py` — address BOTH construction sites:
     - `create_pipeline()` in `pipeline.py` handles the `cfg.reranker_model == ""` case (above).
     - The inline construction in `app.py:create_app()` (where `Reranker(ModelReranker(config.reranker_model, ...))` is currently constructed unconditionally): if `config.reranker_model == ""`, do NOT construct `ModelReranker` or `Reranker`; pass `reranker=None` directly.
@@ -255,8 +267,12 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
 - **Tests (TDD)** — `tests/test_pipeline_optional_reranker.py` (new file):
   - Unit: `test_pipeline_skips_reranker_when_model_is_empty` — `SearchConfig` with `reranker_model=""` → `create_pipeline()` returns pipeline with `reranker=None`; no `ModelReranker` instantiated
   - Unit: `test_app_skips_reranker_when_config_model_empty` — mock `config.reranker_model = ""`; assert `ModelReranker` is NOT constructed during app startup
-  - Unit: `test_search_without_reranker_returns_results` — Construct a `SearchPipeline` directly with `reranker=None`; mock the store's `hybrid_search` to return candidate results; call `pipeline.search(query='test')` directly; assert results list is returned without `AttributeError` (verifies the `if self._reranker is not None:` guard in `search()`)
-  - Unit: `test_explain_without_reranker_returns_results` — Construct a `SearchPipeline` directly with `reranker=None`; call `pipeline.explain(query='test', doc_id='d1', rerank=True)` (use `rerank=True`, the default, to exercise the guard path); assert a valid explain response is returned with `reranker_trace=None` and no `AttributeError` (verifies the `if self._reranker is not None:` guard in `explain()`)
+  - Unit: `test_search_without_reranker_returns_results` — Construct a `SearchPipeline` directly with `reranker=None`; mock the store's `hybrid_search` to return candidate results; call `pipeline.search(query='test')` directly; assert results list is returned without `AttributeError` (verifies the `if self._reranker is not None:` guard in `search()`); also assert `reranker_score` and `reranker_trace` fields are `None`/omitted in results; assert `len(results) <= top_k_return`
+  - Unit: `test_candidate_to_search_result_uses_rrf_score_when_reranker_none` — construct a `ScoredSearchCandidate` with `reranker_score=None` and `rrf_score=0.75`; call `_candidate_to_search_result()`; assert `result.score == 0.75` (the assert at line 701 has been replaced with a fallback)
+  - Unit: `test_search_many_without_reranker_returns_results` — Construct a `SearchPipeline` directly with `reranker=None`; mock the store's multi-collection search path to return candidate results; call `pipeline.search_many(query='test', collections=['col1','col2'])` directly; assert results list is returned without `AttributeError`
+  - Unit: `test_explain_without_reranker_returns_results` — Construct a `SearchPipeline` directly with `reranker=None`; call `pipeline.explain(query='test', collection='col1', rerank=True)` (correct signature: no `doc_id` parameter; use `rerank=True` to exercise the guard path); assert a valid explain response is returned with `reranker_trace=None` and no `AttributeError` (verifies the `if self._reranker is not None:` guard in `explain()`)
+  - Unit: `test_explain_multi_collection_without_reranker` — Construct a `SearchPipeline` directly with `reranker=None`; call `pipeline.explain(query='test', collections=['col1','col2'], rerank=True)`; assert no `AttributeError`, `reranker_trace=None`
+  - Unit: `test_pipeline_reranker_is_warm_returns_false_when_none` — Construct a `SearchPipeline` with `reranker=None`; assert `pipeline.reranker_is_warm is False` (no `AttributeError`; readiness endpoint safe)
   - Checkpoint: `pytest tests/test_pipeline_optional_reranker.py -v`
 
 ---
@@ -274,9 +290,12 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
     - On entry: use `os.open(str(lock_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)` to create the lock file atomically (`O_EXCL` guarantees create-or-fail; no TOCTOU window). Write `"<pid>:<timestamp>"` (e.g., `f"{os.getpid()}:{int(time.time())}"`) to the lock file. The timestamp mitigates PID reuse on busy systems.
     - If `os.open` raises `FileExistsError`: the lock file already exists. Read its contents and parse the PID from `<pid>:<timestamp>` format. If PID parsing fails (`ValueError` or malformed content), treat as stale — unlink the file and retry `O_EXCL` creation.
     - Stale lock detection (after `FileExistsError`): check if the recorded PID is still alive using a platform-safe check:
-      - **POSIX** (`sys.platform != "win32"`): use `os.kill(pid, 0)` — raises `OSError`/`ProcessLookupError` if dead.
+      - **POSIX** (`sys.platform != "win32"`): use `os.kill(pid, 0)`:
+        - If it raises `ProcessLookupError` (ESRCH): the process is dead — treat as stale.
+        - If it raises `PermissionError` (EPERM): the process **exists** but is owned by a different user — treat as **live** and raise `InstallLockError`. Do NOT treat EPERM as stale.
+        - If it returns `None`: the process is alive — raise `InstallLockError`.
       - **Windows** (`sys.platform == "win32"`): use `psutil.pid_exists(pid)` — **do NOT use `os.kill` on Windows**, as it calls `TerminateProcess` even for signal 0 and will kill the target process.
-    - If PID is dead: unlink the stale lock file and retry `O_EXCL` creation. If PID is alive: raise `InstallLockError("Install already in progress.")`.
+    - If PID is dead: unlink the stale lock file and retry `O_EXCL` creation **at most once**. If the second `O_EXCL` attempt fails (another concurrent process took the lock between the unlink and the retry), raise `InstallLockError` immediately — do not retry again. If PID is alive (or EPERM on POSIX): raise `InstallLockError("Install already in progress.")`.
     - On exit (finally): remove lock file.
   - **`psutil` dependency**: add `psutil >= 5.0; sys_platform == "win32"` as a platform-conditional dependency in `pyproject.toml`. Alternatively, use `try/except ImportError` with a fallback: if `psutil` is unavailable on Windows, treat any lock file as stale (conservative: always proceed rather than risk failing to detect a live process). **Never use `os.kill(pid, sig)` on Windows for liveness checks** — it calls `TerminateProcess` even for signal 0.
   - **Releasable**: after this task, concurrent install protection is in place.
@@ -285,7 +304,8 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
   - Unit: `test_lock_removes_file_on_exit` — lock file absent after context exits normally
   - Unit: `test_lock_removes_file_on_exception` — lock file absent after context raises
   - Unit: `test_lock_raises_if_live_pid_holds_lock` — write a live PID (current PID) to lock file; entering context raises `InstallLockError`
-  - Unit: `test_lock_removes_stale_dead_pid_and_proceeds` — write a dead PID to lock file; entering context succeeds and overwrites the file
+  - Unit: `test_lock_removes_stale_dead_pid_and_proceeds` — write a dead PID to lock file; entering context succeeds and overwrites the file; also covers the scenario where two concurrent processes race: mock `os.open` to succeed on the first stale-check unlink, then raise `FileExistsError` on the single retry attempt; assert `InstallLockError` is raised (not an infinite loop)
+  - Unit: `test_lock_treats_permission_error_from_kill_as_live_process` — write a valid-format PID to lock file; mock `os.kill(pid, 0)` to raise `PermissionError`; entering context raises `InstallLockError` (process is alive but owned by another user)
   - Unit: `test_lock_uses_o_excl_for_atomic_creation` — mock `os.open`; verify `O_EXCL | O_CREAT` flags used; confirm no separate read-then-write sequence (no TOCTOU)
   - Unit: `test_lock_uses_platform_safe_pid_check` — mock `sys.platform` as `"win32"`; verify `os.kill` is NOT called; verify `psutil.pid_exists` IS called
   - Unit: `test_lock_handles_corrupted_pid_file` — write `"not-a-pid"` to lock file; entering context treats it as stale and succeeds (no `ValueError` raised, no `InstallLockError`)
@@ -309,6 +329,7 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
   - Unit: `test_disk_space_sufficient_does_not_raise` — mock `shutil.disk_usage` with ample free space
   - Unit: `test_disk_space_insufficient_raises_install_error` — mock with tight free space; assert `InstallError` raised with expected message
   - Unit: `test_disk_space_walks_up_to_existing_ancestor` — base path and its parent do not exist; walks up until finding an existing ancestor and uses it for `shutil.disk_usage`
+  - Unit: `test_disk_space_usage_raises_is_propagated` — mock `shutil.disk_usage` to raise `PermissionError`; assert the exception propagates (not swallowed). The implementation may optionally wrap it in `InstallError` with a user-friendly message; either way the error must not be silently swallowed.
   - Checkpoint: `pytest tests/test_install_disk_space.py -v`
 
 ---
@@ -323,6 +344,7 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
   - `_prewarm_models(profile: InstallProfile, timeout: int | None = None) -> None`:
     - If `timeout is None`, compute via `_prewarm_timeout(profile)`.
     - **Timeout implementation**: use `threading.Timer` with a cancellation flag — **do NOT use `signal.alarm`**. `signal.alarm` is absent on Windows (`AttributeError`), is process-global (can interrupt unrelated file I/O mid-operation, leaving corrupted cache files), and is unsafe in library code. Implementation: create a `threading.Event` flag; start `threading.Timer(timeout, lambda: flag.set())`; check the flag between download phases (after embedder download, before reranker download). If the flag is set: log a warning (`"Model pre-warm timed out after {timeout}s. Service will start without cached model files, same as default behavior."`) and return without raising. On success: cancel the timer.
+    - **Note (non-preemptive timeout)**: the cancellation flag is checked between the embedder and reranker phases, but NOT during an individual download call. If the embedder download hangs, the timeout fires but the function continues blocking until the download completes or fails. This is an accepted v1 limitation (see Known Limitations).
     - `TextEmbedding(profile.embedder, lazy_load=True)` — this call triggers the download to the fastembed cache without creating an ONNX session.
     - Check cancellation flag. If set, warn and return early.
     - If `profile.reranker` is not None: `TextCrossEncoder(profile.reranker, lazy_load=True)`.
@@ -336,6 +358,7 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
   - Unit: `test_prewarm_calls_cross_encoder_when_reranker_set` — mock `fastembed.TextCrossEncoder`; assert called with reranker model
   - Unit: `test_prewarm_skips_cross_encoder_when_reranker_none` — multilingual minimal profile; assert `TextCrossEncoder` not called
   - Unit: `test_prewarm_raises_install_error_on_download_failure` — mock `TextEmbedding` to raise; assert `InstallError` raised with model name in message
+  - Unit: `test_prewarm_raises_install_error_on_cross_encoder_failure` — mock `TextEmbedding` to succeed; mock `TextCrossEncoder` to raise; assert `InstallError` is raised with the reranker model name in the message
   - Unit: `test_prewarm_timeout_fires_and_warns` — set a very short timeout (e.g., 0.01s); mock `TextEmbedding` to sleep past the timeout; verify timeout fires, a warning is logged, and the function returns without raising; also assert `TextCrossEncoder` is NOT called when the cancellation flag fires between the embedder and reranker phases
   - Unit: `test_prewarm_cancels_timer_on_success` — mock `threading.Timer`; verify `cancel()` is called after successful download
   - Checkpoint: `pytest tests/test_install_prewarm.py -v`
@@ -421,12 +444,14 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
 - **Description**:
   - `_requires_jina_license(profile: InstallProfile) -> bool`:
     - Returns `profile.reranker == JINA_RERANKER_MODEL`.
-  - `_prompt_jina_license(non_interactive: bool) -> None`:
+  - `_prompt_jina_license(non_interactive: bool, accept_jina_license: bool = False) -> None`:
     - Prints: the CC-BY-NC-4.0 warning block from the brief (model name, license, commercial use prohibition).
-    - If `non_interactive`: print `"Non-interactive mode: Jina license automatically declined. Use an English profile for commercial installs."` and raise `SystemExit(1)`.
+    - If `accept_jina_license` is `True`: skip the prompt entirely and proceed without raising `SystemExit(1)`, even when `non_interactive=True`. This enables CI/CD automation for multilingual deployments.
+    - Else if `non_interactive`: print `"Non-interactive mode: Jina license automatically declined. Use an English profile for commercial installs."` and raise `SystemExit(1)`.
     - Otherwise: prompt `"Type 'accept' to confirm license acceptance and continue, or anything else to abort: "`.
     - If input is not `"accept"` (case-insensitive strip): print `"License not accepted. Aborting."` and raise `SystemExit(1)`.
-  - **Releasable**: after this task, Jina multilingual profiles cannot be installed without explicit license acknowledgment.
+  - `run()` must accept and forward `accept_jina_license: bool = False` to `_prompt_jina_license()`. The `--accept-jina-license` CLI flag (defined in Task 3.5) passes this value in.
+  - **Releasable**: after this task, Jina multilingual profiles cannot be installed without explicit license acknowledgment (but can be automated via `--accept-jina-license`).
 - **Tests (TDD)** — `tests/test_install_jina_gate.py` (new file):
   - Unit: `test_requires_jina_license_true_for_multilingual_balanced` — balanced multilingual → True
   - Unit: `test_requires_jina_license_false_for_english` — any English profile → False
@@ -436,6 +461,7 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
   - Unit: `test_prompt_jina_accept_uppercase_does_not_raise` — mock input returning `"ACCEPT"` → no exception (case-insensitive)
   - Unit: `test_prompt_jina_accept_with_whitespace_does_not_raise` — mock input returning `" accept "` → no exception (strip + case-insensitive)
   - Unit: `test_prompt_jina_decline_raises_systemexit` — mock input returning `"no"` → `SystemExit(1)`
+  - Unit: `test_prompt_jina_accept_jina_license_flag_skips_prompt` — `accept_jina_license=True, non_interactive=True`; assert no `SystemExit`, no `input()` call (prompt is bypassed entirely)
   - Checkpoint: `pytest tests/test_install_jina_gate.py -v`
 
 ---
@@ -453,6 +479,7 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
       - Detect terminal width via `shutil.get_terminal_size(fallback=(80, 24)).columns`.
       - Print `_render_profile_table(multilingual=multilingual_flag, width=terminal_width)`.
       - Prompt `"Choice [1-3, default 1]: "`. Map `"1"` → `"minimal"`, `"2"` → `"balanced"`, `"3"` → `"max"`. Empty input → `"minimal"`. Invalid input → re-prompt (up to 3 attempts then `SystemExit(1)`).
+      - In the prompt loop, catch `EOFError` from `input()` (raised when stdin is a closed pipe): print `"No input received (EOF). Aborting."` and raise `SystemExit(1)`.
       - Return `(selected_name, multilingual_flag)`.
   - **Releasable**: after this task, profile selection logic is independently callable from `SearchInstaller.run()`.
 - **Tests (TDD)** — `tests/test_install_select_profile.py` (new file):
@@ -465,6 +492,7 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
   - Unit: `test_interactive_empty_defaults_to_minimal` — mock input `""` → `("minimal", False)`
   - Unit: `test_interactive_invalid_then_valid_retries` — mock inputs `["x", "2"]` → `("balanced", False)`
   - Unit: `test_interactive_three_invalid_inputs_exits` — three invalid inputs → `SystemExit(1)`
+  - Unit: `test_interactive_eof_on_input_exits` — mock `input()` to raise `EOFError`; assert `SystemExit(1)` raised with the "No input received (EOF). Aborting." message
   - Unit: `test_interactive_choice_returns_multilingual_flag_as_given` — mock input `"2"`, `multilingual_flag=True` → `("balanced", True)`
   - Checkpoint: `pytest tests/test_install_select_profile.py -v`
 
@@ -481,9 +509,10 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
       - **Step 0** (before lock acquisition in practice, but inside the method): Run `_remove_legacy_service()` if a legacy service file exists (macOS launchd plist from pre-C1 installs). Create log directory `~/.archon-search/logs/` if absent.
       1. Call `_select_profile(profile, multilingual, non_interactive)` → `(profile_name, is_multilingual)`.
       2. `prof = get_profile(profile_name, is_multilingual)`.
-      3. If `_requires_jina_license(prof)`: call `_prompt_jina_license(non_interactive)`.
+      3. If `_requires_jina_license(prof)`: call `_prompt_jina_license(non_interactive, accept_jina_license=accept_jina_license)`.
       4. Config path: `Path(self.config_file) if self.config_file else get_default_config_path()`.
       5. Reinstall check: if `config_path.exists()`: `existing_cfg = load_config(config_path)`. Call `_check_reinstall_guard(existing_cfg, prof, profile_name, is_multilingual)`. Catch `NeedsForceDeleteError`: print error message and return 1 if `not (force and delete_db)`.
+      5b. Compute `db_path`: `db_path = Path(self.cfg.db_path)` from the existing config (or from `get_default_config_path()` if config does not exist). This must be computed before the branch at step 6 — `_execute_force_reinstall` requires a concrete `db_path` argument.
       6. **`if force and delete_db`** (branch A): call `_execute_force_reinstall(config_path, db_path, prof, profile_name, is_multilingual, non_interactive, dry_run=self.dry_run)`. After this call returns, proceed directly to step 8b — do NOT execute steps 7 or 8. **Design decision**: `--force --delete-db` is unconditionally destructive when both flags are set. If the reinstall guard passes silently (no conflict), the force-delete flow still runs. This is intentional — the user explicitly requested database deletion. The confirmation prompt at step 13 (if not `non_interactive`) provides the final safety gate.
       7. **`elif config_path` does not exist** (branch B — fresh install): check for and remove any stale `<config_path>.tmp` file, then create parent dirs and write `_profile_toml(profile_name, is_multilingual)` to `config_path` durably via `_durable_io.atomic_write_bytes`. Create a backup of the config file (`config_path.with_suffix(".toml.bak")`) immediately after writing.
       8. **`elif`** (branch C — reinstall, same profile — idempotent): Create a backup of the config file first: copy `config_path` to `config_path.with_suffix(".toml.bak")` if `config_path` exists. Then call `_write_profile_config(config_path, prof, profile_name, is_multilingual)`. (Backup is created BEFORE the write, so restoring it reverts the profile update.)
@@ -527,7 +556,7 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
   - Remove `_default_toml()` call from the install path — it is superseded by `_profile_toml()`. The `_default_toml()` function itself remains in `config_cmd.py` for the `config` subcommand; it is only removed from the `install` path.
   - Log directory creation (`~/.archon-search/logs/`) moves from `install_cmd.py` to `SearchInstaller.run()` step 0. Remove from `install_cmd.py`.
   - Keep `_wait_for_health()` and `_get_db_path()` removed from `install_cmd.py` — these are now in `SearchInstaller`.
-  - Replace the `install` Click command body with new flags and a single `SearchInstaller(config_path=config_path, dry_run=dry_run).run(...)` call:
+  - Replace the `install` Click command body with new flags and a single `SearchInstaller(...).run(...)` call:
     ```python
     @click.command()
     @click.option("--profile", type=click.Choice(["minimal","balanced","max"]), default=None)
@@ -537,11 +566,16 @@ SearchInstaller(config_path=config_path, dry_run=dry_run).run(
     @click.option("--delete-db", is_flag=True, default=False)
     @click.option("--dry-run", is_flag=True, default=False)
     @click.option("--non-interactive", is_flag=True, default=False)
+    @click.option("--accept-jina-license", is_flag=True, default=False)
     @click.option("--config", "config_path", default=None, type=click.Path(path_type=Path))
     def install(...) -> None:
-        sys.exit(SearchInstaller(config_path=config_path, dry_run=dry_run).run(
+        # NOTE: SearchInstaller.__init__ takes config_file: str | None (not config_path: Path).
+        # Either pass config_file=str(config_path) if config_path else None here,
+        # OR rename config_file -> config_path throughout install.py.
+        sys.exit(SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=dry_run).run(
             non_interactive=non_interactive, profile=profile, multilingual=multilingual,
             skip_preload=skip_preload, force=force, delete_db=delete_db,
+            accept_jina_license=accept_jina_license,
         ))
     ```
   - **Releasable**: after this task, `archon-search install --profile balanced` works end-to-end.
