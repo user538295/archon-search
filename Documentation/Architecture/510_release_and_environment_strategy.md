@@ -109,14 +109,15 @@ flowchart TD
 
 ## CI Workflows
 
-Two workflows live under `.github/workflows/`. Each has a single, narrow purpose.
+Three workflows live under `.github/workflows/`. Each has a single, narrow purpose.
 
 | Workflow file                  | Trigger                              | Purpose                                                                                                                                                                                                |
 | ------------------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `archon-search-pr.yml`         | `pull_request`                       | PR gate. Installs with `uv sync --dev`, runs the default test suite with coverage append, then the eval slice with thresholds, then enforces `coverage report --fail-under=85`. Both pytest steps use `--cov-append` against a single `.coverage` file; there is no `coverage combine` step. |
 | `archon-search-release.yml`    | `push: tags: "*"`, `workflow_dispatch` | Manual release. Job 1 re-runs the eval-gated suite + coverage floor; Job 2 builds the wheel, verifies the wheel version matches the pushed tag, and publishes to PyPI via OIDC.                        |
+| `archon-search-eval-live.yml`  | `push: tags: "*"`, `workflow_dispatch` | Live model eval. Runs `pytest -m live_eval tests/eval/live/` with real fastembed + cross-encoder weights. Runs **concurrently** with `archon-search-release.yml` on tag push — it does not block the release. The test step uses `continue-on-error: true` and always uploads the `live-eval-report` artifact. In v1 the `live_thresholds.toml` is a comment-only stub, so this workflow is **report-only** (no gates fire) until the baseline is calibrated and thresholds are added. |
 
-Both workflows pin Python 3.12 and use `astral-sh/setup-uv@v3` to install `uv`. The release workflow additionally installs `hatch` out-of-band via `uv tool install hatch` for the build step — `hatch` is not a declared project dependency (only `hatchling` and `hatch-vcs` appear in `[build-system].requires`). No other third-party tooling is brought in beyond what `pyproject.toml` declares.
+All three workflows pin Python 3.12 and use `astral-sh/setup-uv@v3` to install `uv`. The release workflow additionally installs `hatch` out-of-band via `uv tool install hatch` for the build step — `hatch` is not a declared project dependency (only `hatchling` and `hatch-vcs` appear in `[build-system].requires`). No other third-party tooling is brought in beyond what `pyproject.toml` declares.
 
 ## Environment
 

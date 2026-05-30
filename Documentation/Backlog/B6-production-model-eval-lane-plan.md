@@ -1,7 +1,7 @@
 # B6 — Production-Model Eval Lane
 **Purpose**: Add a live-eval lane that measures ranking quality and latency with real fastembed + cross-encoder backends so regressions in production models are caught before release.
 **Audience**: archon-search contributors implementing B6; reviewers of the resulting PRs.
-**Status**: To Do
+**Status**: Done
 
 ---
 
@@ -400,7 +400,7 @@ async def run_eval_suite(
 - **Checkpoint**: `python -c "import yaml; yaml.safe_load(open('.github/workflows/archon-search-eval-live.yml'))"` (syntax check)
 
 #### Task 4.2 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project affected by B6 and update each file. Files that must be updated:
@@ -411,16 +411,16 @@ async def run_eval_suite(
   - Verify all acceptance criteria below are met before marking complete.
 - **Releasable**: B6 is fully delivered and documented.
 - **Acceptance criteria** (must all pass):
-  - [ ] `uv run pytest -o addopts= --strict-markers -m 'not live and not eval and not benchmark and not integration and not live_eval'` exits 0 with coverage ≥ 85% (default suite unchanged)
-  - [ ] `uv run pytest -o addopts= --strict-markers --cov=archon_search --cov-append -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/` exits 0 (deterministic eval unchanged, pure-logic acceptance tests pass)
-  - [ ] `uv run pytest tests/eval/test_live_report_acceptance.py -v --no-cov` exits 0 (all 5 pure-logic acceptance tests pass without model weights)
-  - [ ] `uv run pytest tests/eval/test_baseline_contract.py -v --no-cov` exits 0 (existing deterministic baseline loads with new optional fields as `None`)
-  - [ ] `uv run pytest tests/eval/live/ --collect-only --no-cov` collects tests without warnings or errors
-  - [ ] `uv run pytest --co -q --no-cov -m live_eval` lists both live test files without `PytestUnknownMarkWarning`
-  - [ ] On a machine with cached model weights: `uv run pytest -m live_eval tests/eval/live/ -v --no-cov` exits 0 with `live_eval_report.json` and `live_eval_report.md` written to `tests/eval/live_baselines/_artifacts/`
-  - [ ] `live_eval_report.json` parses as valid JSON with top-level keys `{verdicts, overall_status, generated_at, eval_report}` and `overall_status == "report_only"` (no thresholds committed yet)
-  - [ ] `.github/workflows/archon-search-eval-live.yml` is valid YAML; triggers on `push: { tags }` and `workflow_dispatch`; uploads artifact with `if: always()`
-  - [ ] All 10 acceptance tests from the brief are implemented (5 in `test_live_report_acceptance.py`, 5 in `test_live_acceptance.py`)
-  - [ ] `tests/eval/README.md` documents the live eval lane; `Documentation/Architecture/200_testing_strategy.md` pyramid and table include `live_eval`
+  - [x] `uv run pytest -o addopts= --strict-markers -m 'not live and not eval and not benchmark and not integration and not live_eval'` exits 0 with coverage ≥ 85% (default suite unchanged)
+  - [x] `uv run pytest -o addopts= --strict-markers --cov=archon_search --cov-append -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/` exits 0 (deterministic eval unchanged, pure-logic acceptance tests pass)
+  - [x] `uv run pytest tests/eval/test_live_report_acceptance.py -v --no-cov` exits 0 (all 5 pure-logic acceptance tests pass without model weights)
+  - [x] `uv run pytest tests/eval/test_baseline_contract.py -v --no-cov` exits 0 (existing deterministic baseline loads with new optional fields as `None`)
+  - [x] `uv run pytest tests/eval/live/ --collect-only --no-cov` collects tests without warnings or errors
+  - [x] `uv run pytest --co -q --no-cov -m live_eval` lists both live test files without `PytestUnknownMarkWarning`
+  - [x] On a machine with cached model weights: `uv run pytest -m live_eval tests/eval/live/ -v --no-cov` exits 0 with `live_eval_report.json` and `live_eval_report.md` written to `tests/eval/live_baselines/_artifacts/`
+  - [x] `live_eval_report.json` parses as valid JSON with top-level keys `{verdicts, overall_status, generated_at, eval_report}` and `overall_status == "report_only"` (no thresholds committed yet)
+  - [x] `.github/workflows/archon-search-eval-live.yml` is valid YAML; triggers on `push: { tags }` and `workflow_dispatch`; uploads artifact with `if: always()`
+  - [x] All 10 acceptance tests from the brief are implemented (5 in `test_live_report_acceptance.py`, 5 in `test_live_acceptance.py`)
+  - [x] `tests/eval/README.md` documents the live eval lane; `Documentation/Architecture/200_testing_strategy.md` pyramid and table include `live_eval`
 - **Tests (TDD)**: N/A — verification and documentation task.
 - **Checkpoint**: manually confirm every criterion above is checked.

@@ -169,6 +169,63 @@ Default unmarked eval units (contract / fixture / metric tests, fast):
 uv run pytest --no-cov tests/eval/ -q
 ```
 
+## Live eval lane
+
+The `live_eval` pytest marker runs the eval corpus through real fastembed and cross-encoder model weights. It is separate from the deterministic `eval` marker — use it for CI quality checks on tag push and for calibrating the live baseline.
+
+### Directory structure
+
+```
+tests/eval/
+  live/
+    __init__.py
+    conftest.py            # overrides autouse to isolate ARCHON_SEARCH_EVAL_BACKENDS
+    test_live_eval_suite.py
+    test_live_acceptance.py
+  live_thresholds.toml     # live quality floors + latency ceilings (stub until calibrated)
+  live_baselines/
+    .gitkeep
+    baseline.json          # calibrated baseline (absent until first calibration run)
+    _artifacts/            # CI upload target (.gitignore keeps it clean locally)
+```
+
+### Conftest isolation
+
+`tests/eval/live/conftest.py` no-ops the parent `conftest.py` autouse fixture that sets `ARCHON_SEARCH_EVAL_BACKENDS=1`. Live tests must never run under deterministic backends, so the no-op shadow prevents the env var from leaking in.
+
+### Calibration procedure
+
+1. Run the live eval suite on a clean install with model weights:
+
+   ```
+   uv run pytest -m live_eval tests/eval/live/ -v --no-cov
+   ```
+
+2. Inspect the printed report. If the metrics look reasonable, copy the measured values into `live_baselines/baseline.json`. The file schema mirrors `baselines/baseline.json` with six additional model-version fields (`embedding_model_id`, `embedding_model_version`, `reranker_model_id`, `reranker_model_version`, `archon_search_version`, `captured_at`).
+
+3. Update `live_thresholds.toml` with initial quality floors. Recommended starting points:
+   - Quality floors: measured baseline value − 0.02 pp (e.g. `recall_at_1 = 0.86` if measured is `0.88`).
+   - Latency ceiling: `latency_p95_ms` = 1.5× the measured baseline (e.g. `3000` if baseline is `2000`).
+
+4. Commit `live_baselines/baseline.json` and the updated `live_thresholds.toml` together.
+
+### Outlier checklist
+
+Before lowering a live threshold, check:
+
+- Was the run on cold or warm model cache? Cold first-run latency is up to 10× warmer.
+- Are the CI host specs comparable to the baseline host? (Runner CPU count, RAM)
+- Did the fastembed or cross-encoder model version change? Update `embedding_model_version` / `reranker_model_version` in the baseline.
+- Did the eval fixture corpus change? Regenerate the baseline.
+
+### `live_thresholds.toml` lifecycle
+
+`live_thresholds.toml` starts as a comment-only stub (no `[quality_floors]` section). In this state `load_live_thresholds()` returns `None` and the CI run is **report-only** — no gates fire. Once calibrated, add a `[quality_floors]` section to activate gating. The latency ceiling is always optional; leave it unset until you have a stable CI baseline.
+
+### CI latency variance caveat
+
+Live latency numbers are measured on ephemeral GitHub Actions runners under shared CPU, model download cache, and OS scheduling noise. Latency thresholds derived from CI baselines may not reflect local or production performance. Set latency ceilings generously (1.5×) and treat them as regression guards rather than SLAs.
+
 ## Routing fixture schema (B4)
 
 `routing/collections.jsonl` — one JSON object per line:

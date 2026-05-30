@@ -20,7 +20,7 @@ Tests in `archon-search` are split across four pytest markers plus a default (un
 
 ```mermaid
 flowchart TB
-  subgraph default[Default run — &#40;not live and not eval and not benchmark and not integration&#41;]
+  subgraph default[Default run — &#40;not live and not eval and not benchmark and not integration and not live_eval&#41;]
     U[Unit tests<br/>tests/test_*.py<br/>stubs from tests/_search_stubs.py]
   end
   subgraph gated[Marker-gated]
@@ -28,6 +28,7 @@ flowchart TB
     E[eval<br/>tests/eval/<br/>deterministic backends]
     B[benchmark<br/>requires running server<br/>auto-skips if unreachable]
     L[live<br/>real network / external services]
+    LE[live_eval<br/>tests/eval/live/<br/>real model weights]
   end
   default --> CI[CI: coverage gate ≥ 85%]
   gated -.-> CI
@@ -64,6 +65,15 @@ Performance benchmarks. The flagship file is `tests/benchmark_routing_latency.py
 
 Tests that hit real network or external services. Excluded from the default run for the same reasons as `integration`, but specifically called out so reviewers know a test depends on something outside the sandbox.
 
+### `live_eval` — `uv run pytest -m live_eval tests/eval/live/ -v --no-cov`
+
+Runs the eval corpus through **real fastembed + cross-encoder model weights** — the same models used in production. Excluded from the default run because it requires model downloads (~200 MB) and GPU/CPU inference time.
+
+- Tests live under `tests/eval/live/`. The directory has its own `conftest.py` that no-ops the parent autouse fixture, ensuring `ARCHON_SEARCH_EVAL_BACKENDS` is never set to `"1"` (which would inject deterministic stubs).
+- Thresholds live in `tests/eval/live_thresholds.toml`. Until calibrated, the file is a comment-only stub and `load_live_thresholds()` returns `None`, making all runs **report-only** (no gates fire).
+- The live baseline (`tests/eval/live_baselines/baseline.json`) is absent until the first calibration run. See `tests/eval/README.md` for the calibration procedure and threshold formula (quality floors: −0.02 pp; latency ceiling: 1.5× baseline).
+- CI triggers: `archon-search-eval-live.yml` runs on every tag push (concurrently with the release workflow) and on manual `workflow_dispatch`. The test step uses `continue-on-error: true` and uploads the report artifact regardless of outcome — pre-calibration report-only mode must never block a release.
+
 ## Coverage
 
 `pyproject.toml [tool.pytest.ini_options] addopts` includes `--cov=archon_search --cov-report=term-missing --cov-fail-under=85`.
@@ -81,6 +91,7 @@ Tests that hit real network or external services. Excluded from the default run 
 | A retrieval / routing / reranking quality change   | Eval        | `eval`                  | Update `baseline.json` + `baseline.md` if measured metrics shift. See `tests/eval/README.md`. |
 | Latency regression on `POST /route`                | Benchmark   | `benchmark`             | Server must be running; auto-skips otherwise.                                        |
 | Behaviour that requires real network               | Live        | `live`                  | Justify the dependency in the PR description. #Unverified (marker registered; no in-tree `@pytest.mark.live` usage sampled) |
+| Quality regression with real model weights         | Live eval   | `live_eval`             | Runs on tag push via `archon-search-eval-live.yml`. Requires model weight download. See `tests/eval/README.md` (live eval lane section). |
 
 ## See also
 
