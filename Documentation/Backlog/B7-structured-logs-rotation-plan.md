@@ -338,7 +338,7 @@ Since this is a hard dependency, import `JsonFormatter` at module level (not con
   - Checkpoint: `uv run pytest tests/test_logging_setup.py::test_filter_sets_correlation_id_when_present tests/test_logging_setup.py::test_filter_omits_correlation_id_when_absent tests/test_logging_setup.py::test_filter_always_returns_true tests/test_logging_setup.py::test_filter_does_not_set_none -v`
 
 #### Task 2.2 — `configure_logging()`
-- [ ] **File**: `archon_search/logging_setup.py`
+- [x] **File**: `archon_search/logging_setup.py`
 - **Depends on**: Task 1.1 (needs `config.log_format`, `config.backup_count`), Task 2.1 (`CorrelationIdFilter`)
 - **Description**:
   - Add `python-json-logger>=2.0,<3` to `pyproject.toml` `[project.dependencies]` (hard dependency — always available)
