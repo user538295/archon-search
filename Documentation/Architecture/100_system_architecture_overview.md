@@ -154,6 +154,22 @@ LanceDB at `cfg.db_path` (default `~/.archon-search/search`) is the only durable
 
 One Python process. `uvicorn` serves the FastAPI app produced by `create_app`; `run_server` calls `uvicorn.run(app, host=..., port=...)` with no MCP sub-app mounted. The FastMCP HTTP app defined by `create_mcp_http_app` is currently not started by the shipped entry point — this is a known gap, not the intended end state. #Unverified whether this is intentional for v1 or an oversight to be fixed. Background tasks owned by the FastAPI lifespan when `config.telemetry.enabled` is true: `TelemetryWriter`, `Pruner` (both gated behind the telemetry-enabled config flag, which defaults to false). The watchdog `Observer` runs in its own thread per `CollectionWatcher` and posts coroutines back to the main event loop. Long-running ingest/reindex work is dispatched via FastAPI `BackgroundTasks` (see `routes_jobs.py`, `routes_collections.py`) with job state recorded in the synchronous `JobStore` (see [120_services_and_integration_architecture.md](120_services_and_integration_architecture.md) for sequence diagrams).
 
+## Install Profile Registry (C0)
+
+`archon_search/profiles.py` defines three tiered install profiles (`minimal`, `balanced`, `max`) for English and multilingual model stacks. The profile controls which `embedding_model`, `reranker_model`, and `chunk_size` are written into `archon-search.toml` at install time.
+
+The install flow (`archon_search/install.py`):
+
+1. Prompts for or validates the profile and multilingual flag.
+2. Applies a Jina CC-BY-NC-4.0 license gate for multilingual `balanced`/`max` (those profiles use `jinaai/jina-reranker-v2-base-multilingual`).
+3. Detects reinstall with a mismatched profile; raises `NeedsForceDeleteError` when embedder or chunk_size differs; the caller requires `--force --delete-db` to proceed.
+4. Writes profile config (`[database].profile`, `embedding_model`, `reranker_model`, `multilingual`, `chunk_size`) to `archon-search.toml`.
+5. Checks available disk space against the profile's `download_mb` estimate.
+6. Pre-warms model weights (before service registration).
+7. Registers and starts the OS service.
+
+The multilingual minimal profile sets `reranker_model = ""` (no reranker), which causes `create_pipeline()` in `pipeline.py` to pass `reranker=None` to `SearchPipeline`. `SearchPipeline` guards every reranker call with `if self.reranker is None`.
+
 ## Failure and Recovery Posture
 
 Crash recovery and error handling are covered in [140_error_handling_strategy.md](140_error_handling_strategy.md). Key invariants set here:

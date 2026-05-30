@@ -286,7 +286,7 @@ Entry point: `archon-search` (`archon_search/cli/main.py`, Click group). Most su
 | `start` | — | Validate config, then start the OS service (`cli/start.py`). | `--config` |
 | `stop` | — | Stop the OS service; identity is fixed (`cli/stop.py`). | — |
 | `status` | — | Show running/stopped, PID, uptime (`cli/status.py`). | — |
-| `install` | — | Create default config if absent, register and start service, poll `/health` until ready (`cli/install_cmd.py`). Aborts with exit code 1 if `/health` does not respond within `_HEALTH_TIMEOUT = 60` seconds. | `--dry-run`, `--non-interactive`, `--config` |
+| `install` | — | Profile-aware installer: prompts for a tiered profile (or uses `--profile`), checks disk space, acquires install lock, optionally accepts Jina CC-BY-NC-4.0 license for multilingual models, writes profile config, pre-warms model weights, registers and starts the OS service, polls `/health` until ready. Aborts exit code 1 on failure; rolls back partial installs. See `archon_search/install.py` and `archon_search/profiles.py` for details. | `--profile {minimal,balanced,max}`, `--multilingual`, `--skip-preload`, `--force`, `--delete-db`, `--accept-jina-license`, `--dry-run`, `--non-interactive`, `--config` |
 | `uninstall` | — | Stop and unregister service; optionally delete the database directory (`cli/install_cmd.py`). | `--delete-db`, `--config` |
 | `ingest` | — | Ingest a directory into a collection synchronously (`cli/ingest.py`). Defaults to `~/.archon-search/history/sessions`. | `--path`, `--collection`, `--config` |
 | `sync` | — | Run `SearchCollectionSync` over all pinned + configured collections (`cli/sync.py`). | `--config` |

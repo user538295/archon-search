@@ -591,7 +591,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ### Phase 4 — Verification & Documentation
 
 #### Task 4.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, API docs, Architecture docs, user guides, `CHANGELOG`, `BREAKING.md`) and update every file whose content is affected by the changes delivered in this plan. The agent must not update docs that are unrelated.

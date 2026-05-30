@@ -20,7 +20,7 @@ Last reviewed: 2026-05-20 / Next review: 2026-08-20
 | [`Architecture/000_introduction_and_guiding_principles.md`](./000_introduction_and_guiding_principles.md) | Project introduction, scope, and top-level guiding principles. |
 | [`Architecture/010_engineering_principles_and_constraints.md`](./010_engineering_principles_and_constraints.md) | Engineering values, hard constraints, non-goals. |
 | [`Architecture/100_system_architecture_overview.md`](./100_system_architecture_overview.md) | High-level architecture and pipeline overview. |
-| [`Architecture/110_component_catalog_and_layer_breakdown.md`](./110_component_catalog_and_layer_breakdown.md) | Per-module catalog: parser, chunker, embedder, store, reranker, pipeline, router. |
+| [`Architecture/110_component_catalog_and_layer_breakdown.md`](./110_component_catalog_and_layer_breakdown.md) | Per-module catalog: parser, chunker, embedder, store, reranker, pipeline, router, profiles (C0). |
 | [`Architecture/120_services_and_integration_architecture.md`](./120_services_and_integration_architecture.md) | FastAPI server, MCP endpoint, OS service integration, external interfaces. |
 | [`Architecture/130_data_architecture_and_persistence.md`](./130_data_architecture_and_persistence.md) | LanceDB layout, FTS index, indexing state, on-disk paths under `~/.archon-search/`. |
 | [`Architecture/140_error_handling_strategy.md`](./140_error_handling_strategy.md) | Status code conventions, retry semantics, failure modes. |

@@ -66,6 +66,20 @@ providers = ["CUDAExecutionProvider"]
 
 The CLI's GPU autodetection (`archon_search/platform/runtime.py:detect_gpu_type`) currently only reports the available accelerator type — it does not auto-populate `providers`. You must set this manually.
 
+## Install profiles (C0)
+
+The installer ships three tiered profiles. Choose based on your hardware and quality requirements:
+
+| Profile | English stack | Multilingual stack | Download | Quality | Memory |
+| --- | --- | --- | --- | --- | --- |
+| `minimal` | `bge-small-en-v1.5` + MiniLM-L6 reranker | `paraphrase-multilingual-MiniLM-L12-v2` (no reranker) | ~150–220 MB | ★★☆☆☆ / ★☆☆☆☆ | ~0.5 GB |
+| `balanced` | `bge-base-en-v1.5` + MiniLM-L12 reranker | `paraphrase-multilingual-mpnet-base-v2` + Jina reranker | ~330 MB / ~2.1 GB | ★★★☆☆ | ~1.0–1.5 GB |
+| `max` | `bge-large-en-v1.5` + BGE reranker | `multilingual-e5-large` + Jina reranker | ~2.3–3.4 GB | ★★★★☆ | ~2.5–3.0 GB |
+
+**Multilingual `balanced` and `max` profiles use the Jina reranker (`jinaai/jina-reranker-v2-base-multilingual`)**, which is licensed CC-BY-NC-4.0 (non-commercial). The installer requires explicit license acceptance before downloading it.
+
+The chosen profile is recorded in `[database].profile` and `[database].multilingual` in `~/.archon-search/archon-search.toml`. Reinstalling with a different profile requires `--force --delete-db` (the installer will tell you if this is needed).
+
 ## Install as a background service (optional)
 
 To register and start `archon-search` as a user service:
@@ -74,21 +88,40 @@ To register and start `archon-search` as a user service:
 archon-search install
 ```
 
-Flags (verified against `archon_search/cli/install_cmd.py`):
+The interactive installer will prompt you to choose a profile. To skip the prompt:
+
+```bash
+# Non-interactive English minimal install (fastest, no license required)
+archon-search install --profile minimal --non-interactive --skip-preload
+
+# Multilingual balanced install with Jina license accepted
+archon-search install --profile balanced --multilingual --accept-jina-license --non-interactive
+```
+
+All flags (verified against `archon_search/cli/install_cmd.py`):
 
 | Flag | Effect |
 | --- | --- |
+| `--profile {minimal,balanced,max}` | Select the install profile (skips interactive prompt). |
+| `--multilingual` | Use multilingual model stack for the chosen profile. |
+| `--skip-preload` | Skip model weight pre-warming after install (weights download on first use). |
+| `--force` | Overwrite an existing install. Required when changing profiles. |
+| `--delete-db` | Also delete the database when reinstalling (`--force` required). Use with caution — this removes all indexed data. |
+| `--accept-jina-license` | Accept the Jina CC-BY-NC-4.0 license non-interactively (required for multilingual `balanced`/`max`). |
 | `--dry-run` | Print actions without executing. |
-| `--non-interactive` | Skip the `Proceed with installation? [y/N]` prompt. |
+| `--non-interactive` | Skip all confirmation prompts. |
 | `--config PATH` | Use a non-default config file when computing data/log paths. |
 
 The installer:
 
-1. Creates `~/.archon-search/archon-search.toml` from defaults if missing.
-2. Ensures `db_path` and `log_file` parent directories exist.
-3. Detects and removes any legacy service file (`~/Library/LaunchAgents/com.archon.search.plist` on macOS, `~/.config/systemd/user/archon-search.service` on Linux).
-4. Registers and starts the service via the platform adapter (`archon_search/platform/macos.py`, `linux.py`).
-5. Polls `GET http://<host>:<port>/health` for up to 60 seconds; exits non-zero if the service does not become ready.
+1. Detects and removes any legacy service file (`~/Library/LaunchAgents/com.archon.search.plist` on macOS, `~/.config/systemd/user/archon-search.service` on Linux).
+2. Prompts for (or validates) the install profile and multilingual flag.
+3. Prompts for Jina license acceptance if the profile requires it (or checks `--accept-jina-license`).
+4. Creates `~/.archon-search/archon-search.toml` from the profile defaults if missing.
+5. Checks available disk space for the selected profile.
+6. Pre-warms model weights (unless `--skip-preload`).
+7. Registers and starts the service via the platform adapter (`archon_search/platform/macos.py`, `linux.py`).
+8. Polls `GET http://<host>:<port>/health` for up to 60 seconds; exits non-zero if the service does not become ready.
 
 To remove:
 

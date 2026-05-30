@@ -105,7 +105,6 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/cli/collection.py` | `collection` subgroup; list/add/remove/info/reindex. | see source |
 | `archon_search/cli/config_cmd.py` | `config` subgroup; show/edit `~/.archon-search/archon-search.toml`. | see source |
 | `archon_search/cli/_helpers.py` | Shared CLI infrastructure (auth header, base URL resolution, error printing). | internal |
-| `archon_search/install.py` | High-level installer: dep check, GPU detect, provider config, service file, bootstrap. | `SearchInstaller` |
 
 ## Platform
 
@@ -157,6 +156,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/key_manager.py` | Resolve the API key from env (`ARCHON_SEARCH_API_KEY`), file (`ARCHON_SEARCH_KEY_FILE` or `~/.archon-search/.search.env`), or generate one (durable write with mode `0600` set at creation via `_durable_io.atomic_write_bytes`). | `load_or_generate_key` |
 | `archon_search/watcher.py` | Watchdog-driven `CollectionWatcher` + `WatcherManager` with a debounced handler. | `CollectionWatcher`, `WatcherManager` |
 | `archon_search/sync.py` | `SearchCollectionSync`: full reconcile between on-disk corpora and the index; manifest-based collection naming. | `SearchCollectionSync`, `SyncResult`, `path_to_collection_name` |
-| `archon_search/install.py` | High-level installer driving `platform/*` and bootstrap. | `SearchInstaller` |
+| `archon_search/install.py` | High-level installer: disk-space check, lock acquisition, Jina license gate, profile-aware config write, model pre-warm, service register, health poll, rollback on failure. `NeedsForceDeleteError` signals a mismatched-profile reinstall that requires `--force --delete-db`. Called by `cli/install_cmd.py`. | `SearchInstaller`, `NeedsForceDeleteError` |
+| `archon_search/profiles.py` | Defines the three tiered install profiles (`minimal`, `balanced`, `max`) for both English and multilingual stacks. `ENGLISH_PROFILES` and `MULTILINGUAL_PROFILES` are `dict[str, InstallProfile]`; `get_profile(name, multilingual)` is the single lookup entry point. The Jina reranker constant (`JINA_RERANKER_MODEL`) lives here so the license-gate check in `install.py` has a single reference. | `InstallProfile`, `ENGLISH_PROFILES`, `MULTILINGUAL_PROFILES`, `VALID_PROFILE_NAMES`, `JINA_RERANKER_MODEL`, `get_profile` |
 | `archon_search/_diagnostics.py` | Internal diagnostics helpers. | internal |
 | `archon_search/_durable_io.py` | Durable fsync-backed atomic file writes (fsync file → `os.replace` → fsync parent dir). All durable JSON/bytes state writes route through here; see [130_data_architecture_and_persistence.md](130_data_architecture_and_persistence.md#durability-contract). | `atomic_write_json`, `atomic_write_bytes` |

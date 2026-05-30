@@ -24,6 +24,8 @@ It runs as its own process, persists indexes and configuration under `~/.archon-
 pip install archon-search
 ```
 
+Running `archon-search install` registers the server as a background service and presents a tiered profile selector (`minimal`, `balanced`, `max`) that controls which embedding and reranker models are downloaded. See [Documentation/UserManual/01_installation.md](Documentation/UserManual/01_installation.md) for the full profile comparison table, flag reference, and disk-space requirements.
+
 Or, for a checkout-based development install:
 
 ```bash

@@ -33,6 +33,14 @@ auto_reindex_on_chunk_size_change = true
 # providers = ["CUDAExecutionProvider"]        # NVIDIA GPU
 # providers = ["CoreMLExecutionProvider"]      # Apple Silicon
 
+# Install profile ("minimal" | "balanced" | "max"; empty = legacy install).
+# Set by `archon-search install --profile <name>`; used by config.py to record which
+# profile was chosen at install time. Leave empty to preserve pre-C0 manual config.
+profile = ""
+# Use multilingual models (requires Jina CC-BY-NC-4.0 license acceptance for balanced/max).
+# Set to true by `archon-search install --multilingual`.
+multilingual = false
+
 # B5: incremental centroid maintenance (default: true).
 # Set to false to revert to the pre-B5 batch-overwrite behavior as a rollback escape hatch.
 centroid_incremental_enabled = true

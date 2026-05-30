@@ -78,6 +78,12 @@ Server configuration lives in `~/.archon-search/archon-search.toml`. To override
 
 A fully annotated reference is checked in at `../archon-search.toml.example`. Notable sections: `[server]`, `[database]`, `[routing]`, `[collections]`, `[logging]`, `[telemetry]`. Telemetry is **opt-in and off by default**; see `../README.md` "Telemetry (opt-in)" for the full surface.
 
+**Install profiles (C0):** `archon-search install` now selects a tiered model profile at install time (`minimal`, `balanced`, or `max`). The chosen profile sets `[database].profile`, `embedding_model`, `reranker_model`, and `multilingual` in the config. For a non-interactive developer install:
+
+```bash
+uv run archon-search install --profile minimal --non-interactive --skip-preload
+```
+
 ## 5. Verify the Server Is Up
 
 ```bash
