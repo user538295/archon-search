@@ -316,7 +316,7 @@ async def run_eval_suite(
   - Checkpoint: `uv run pytest tests/eval/test_live_report_acceptance.py -k "report_generation or parent_dirs" --no-cov`
 
 #### Task 2.5 — Extend `test_live_eval_suite.py` to generate report artifacts
-- [ ] **File**: `tests/eval/live/test_live_eval_suite.py`
+- [x] **File**: `tests/eval/live/test_live_eval_suite.py`
 - **Depends on**: Task 1.4 (existing test), Task 2.3, Task 2.4, Task 2.2
 - **Description**:
   - Extend `test_live_eval_suite_runs_and_generates_report` (do not rename; adds to existing assertions):
