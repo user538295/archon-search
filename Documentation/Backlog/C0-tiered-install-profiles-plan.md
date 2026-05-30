@@ -548,7 +548,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ---
 
 #### Task 3.5 — `install_cmd.py` consolidation
-- [ ] **File**: `archon_search/cli/install_cmd.py`
+- [x] **File**: `archon_search/cli/install_cmd.py`
 - **Depends on**: Task 3.4 (SearchInstaller.run() complete API)
 - **Description**:
   - Keep the existing `uninstall` Click command unchanged.

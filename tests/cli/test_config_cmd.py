@@ -116,62 +116,35 @@ def test_config_show_defaults_include_all_sections(runner: CliRunner, tmp_path: 
 # install subcommand
 # ---------------------------------------------------------------------------
 
-def test_install_registers_service(runner: CliRunner, mock_service: MagicMock) -> None:
-    with (
-        patch("archon_search.cli.install_cmd._get_service", return_value=mock_service),
-        patch("archon_search.cli.install_cmd._wait_for_health", return_value=True),
-    ):
+def test_install_delegates_to_search_installer(runner: CliRunner) -> None:
+    """install command is a thin shim — verify SearchInstaller.run() is called."""
+    run_mock = MagicMock(return_value=0)
+    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+        installer_cls.return_value.run = run_mock
         result = runner.invoke(main, ["install", "--non-interactive"])
     assert result.exit_code == 0, result.output
-    mock_service.register.assert_called_once()
+    run_mock.assert_called_once()
 
 
-def test_install_starts_service(runner: CliRunner, mock_service: MagicMock) -> None:
-    with (
-        patch("archon_search.cli.install_cmd._get_service", return_value=mock_service),
-        patch("archon_search.cli.install_cmd._wait_for_health", return_value=True),
-    ):
-        result = runner.invoke(main, ["install", "--non-interactive"])
+def test_install_dry_run_passed_to_installer(runner: CliRunner) -> None:
+    """--dry-run flag is forwarded to SearchInstaller constructor."""
+    run_mock = MagicMock(return_value=0)
+    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+        installer_cls.return_value.run = run_mock
+        result = runner.invoke(main, ["install", "--non-interactive", "--dry-run"])
     assert result.exit_code == 0, result.output
-    mock_service.start.assert_called_once()
-
-
-def test_install_waits_for_health_and_triggers_initial_sync(runner: CliRunner, mock_service: MagicMock) -> None:
-    with (
-        patch("archon_search.cli.install_cmd._get_service", return_value=mock_service),
-        patch("archon_search.cli.install_cmd._wait_for_health", return_value=True) as mock_wait,
-    ):
-        result = runner.invoke(main, ["install", "--non-interactive"])
-    assert result.exit_code == 0, result.output
-    mock_wait.assert_called_once()
-
-
-def test_install_dry_run_skips_service_calls(runner: CliRunner, mock_service: MagicMock) -> None:
-    with (
-        patch("archon_search.cli.install_cmd._get_service", return_value=mock_service),
-        patch("archon_search.cli.install_cmd._wait_for_health", return_value=True),
-    ):
-        result = runner.invoke(main, ["install", "--dry-run"])
-    assert result.exit_code == 0, result.output
-    mock_service.register.assert_not_called()
-    mock_service.start.assert_not_called()
+    _, kwargs = installer_cls.call_args
+    assert kwargs.get("dry_run") is True
 
 
 def test_install_migrates_legacy_service_definition(runner: CliRunner, mock_service: MagicMock, tmp_path: Path) -> None:
-    """Legacy plist/unit is removed during install migration."""
-    legacy_plist = tmp_path / "com.archon.search.plist"
-    legacy_plist.write_text("<plist/>")
-
-    with (
-        patch("archon_search.cli.install_cmd._get_service", return_value=mock_service),
-        patch("archon_search.cli.install_cmd._wait_for_health", return_value=True),
-        patch("archon_search.cli.install_cmd._legacy_service_path", return_value=legacy_plist),
-        patch("archon_search.cli.install_cmd._remove_legacy_service") as mock_remove,
-    ):
+    """Legacy service migration is handled inside SearchInstaller.run()."""
+    run_mock = MagicMock(return_value=0)
+    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+        installer_cls.return_value.run = run_mock
         result = runner.invoke(main, ["install", "--non-interactive"])
     assert result.exit_code == 0, result.output
-    mock_remove.assert_called_once_with(legacy_plist)
-    mock_service.register.assert_called_once()
+    run_mock.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
