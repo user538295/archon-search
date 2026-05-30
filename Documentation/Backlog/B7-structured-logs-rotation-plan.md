@@ -390,7 +390,7 @@ Since this is a hard dependency, import `JsonFormatter` at module level (not con
   - Checkpoint: `uv run pytest tests/test_logging_setup.py -v`
 
 #### Task 2.3 — Wire `configure_logging()` into `run_server()`
-- [ ] **File**: `archon_search/server/app.py`
+- [x] **File**: `archon_search/server/app.py`
 - **Depends on**: Task 2.2
 - **Description**:
   - Add `from archon_search.logging_setup import configure_logging` import

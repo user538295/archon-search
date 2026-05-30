@@ -337,6 +337,28 @@ def test_options_preflight_has_request_id(tmp_path: Path, job_store: JobStore) -
     assert _REQUEST_ID_RE.match(resp.headers.get("x-request-id", ""))
 
 
+def test_run_server_calls_configure_logging(monkeypatch):
+    """configure_logging must be called before anything else in run_server."""
+    import archon_search.server.app as app_module
+
+    calls = []
+
+    def spy_configure_logging(cfg):
+        calls.append(cfg)
+
+    def noop_uvicorn_run(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(app_module, "configure_logging", spy_configure_logging)
+    monkeypatch.setattr(app_module.uvicorn, "run", noop_uvicorn_run)
+
+    cfg = SearchConfig()
+    app_module.run_server(cfg)
+
+    assert len(calls) == 1
+    assert calls[0] is cfg
+
+
 def test_inbound_id_echoed(tmp_path: Path, job_store: JobStore) -> None:
     from unittest.mock import AsyncMock, patch
     from starlette.testclient import TestClient

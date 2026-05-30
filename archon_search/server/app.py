@@ -17,6 +17,7 @@ from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import load_or_generate_key
+from archon_search.logging_setup import configure_logging
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingStateStore
@@ -174,6 +175,7 @@ def create_app(
 
 def run_server(config: SearchConfig) -> None:
     """Create JobStore, build the app, and start the uvicorn server."""
+    configure_logging(config)
     job_store = JobStore()
     app = create_app(config, job_store)
     uvicorn.run(app, host=config.host, port=config.port)
