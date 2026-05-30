@@ -378,7 +378,7 @@ async def run_eval_suite(
 > **Releasable**: after Task 4.2 — a tag push triggers `archon-search-eval-live.yml` concurrently with `archon-search-release.yml`; the live eval report appears as a downloadable workflow artifact within ~25 minutes; `tests/eval/README.md` and the architecture docs reflect the two-lane eval strategy.
 
 #### Task 4.1 — `.github/workflows/archon-search-eval-live.yml`
-- [ ] **File**: `.github/workflows/archon-search-eval-live.yml` (new)
+- [x] **File**: `.github/workflows/archon-search-eval-live.yml` (new)
 - **Depends on**: Task 1.4, Task 2.5
 - **Description**:
   - Triggers: `push: { tags: ["*"] }` and `workflow_dispatch: {}` (no inputs — the `calibrate` input is removed; it did nothing in v1 and implied behavior that doesn't exist)
