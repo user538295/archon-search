@@ -366,7 +366,7 @@ SearchInstaller(config_file=str(config_path) if config_path else None, dry_run=d
 ---
 
 #### Task 2.4 — Reinstall guard
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1 (InstallProfile), Task 1.2 (SearchConfig.profile, .multilingual)
 - **Description**:
   - `class NeedsForceDeleteError(InstallError)`: raised when model or chunk_size conflict requires `--force --delete-db`.

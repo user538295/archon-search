@@ -256,6 +256,34 @@ def _prewarm_models(profile: InstallProfile, timeout: int | None = None) -> None
         raise
 
 
+# ---------------------------------------------------------------------------
+# Reinstall guard (Task C0-2.4)
+# ---------------------------------------------------------------------------
+
+class NeedsForceDeleteError(InstallError):
+    """Raised when a model or chunk_size conflict requires --force --delete-db to resolve."""
+
+
+def _check_reinstall_guard(
+    existing_cfg: SearchConfig,
+    new_profile: InstallProfile,
+    new_profile_name: str,
+    new_multilingual: bool,
+) -> None:
+    """Raise NeedsForceDeleteError when switching model or chunk_size would invalidate the index.
+
+    A reranker-only change is safe and does NOT trigger the guard.
+    The new_profile_name and new_multilingual parameters are accepted for future extensibility.
+    """
+    if existing_cfg.embedding_model == new_profile.embedder and existing_cfg.chunk_size == new_profile.chunk_size:
+        return
+    raise NeedsForceDeleteError(
+        f"Existing index uses {existing_cfg.embedding_model} (chunk_size={existing_cfg.chunk_size}). "
+        f"Switching to {new_profile.embedder} (chunk_size={new_profile.chunk_size}) requires re-indexing all documents. "
+        "Run with --force --delete-db to proceed."
+    )
+
+
 class SearchInstaller:
     """Installs and manages the search service end-to-end."""
 
