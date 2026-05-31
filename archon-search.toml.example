@@ -41,6 +41,12 @@ profile = ""
 # Set to true by `archon-search install --multilingual`.
 multilingual = false
 
+# Maximum number of embedder model instances to cache in memory (LRU cache, minimum 1).
+# embedder_cache_size = 3
+
+# If true, pre-warm all distinct embedding models at server startup (eager loading).
+# eager_load_embedders = false
+
 # B5: incremental centroid maintenance (default: true).
 # Set to false to revert to the pre-B5 batch-overwrite behavior as a rollback escape hatch.
 centroid_incremental_enabled = true

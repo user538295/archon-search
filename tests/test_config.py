@@ -870,3 +870,46 @@ def test_save_config_round_trip_preserves_profile_and_multilingual(tmp_path: Pat
     reloaded = load_config(path=toml_file)
     assert reloaded.profile == "balanced"
     assert reloaded.multilingual is True
+
+
+# ---------------------------------------------------------------------------
+# C1 Task 1.5 — embedder_cache_size and eager_load_embedders config keys
+# ---------------------------------------------------------------------------
+
+
+def test_embedder_cache_size_defaults_to_3() -> None:
+    config = SearchConfig()
+    assert config.embedder_cache_size == 3
+
+
+def test_eager_load_embedders_defaults_to_false() -> None:
+    config = SearchConfig()
+    assert config.eager_load_embedders is False
+
+
+def test_embedder_cache_size_from_toml(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\nembedder_cache_size = 5\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.embedder_cache_size == 5
+
+
+def test_eager_load_embedders_from_toml(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\neager_load_embedders = true\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.eager_load_embedders is True
+
+
+def test_embedder_cache_size_zero_raises(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\nembedder_cache_size = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="embedder_cache_size must be"):
+        load_config(path=toml_file)
+
+
+def test_embedder_cache_size_negative_raises(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\nembedder_cache_size = -1\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="embedder_cache_size must be"):
+        load_config(path=toml_file)

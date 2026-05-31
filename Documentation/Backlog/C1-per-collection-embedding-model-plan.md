@@ -270,7 +270,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_jobs.py -v -k "round_trips_reindex_job_type"`
 
 #### Task 1.5 — Config keys: `embedder_cache_size`, `eager_load_embedders`
-- [ ] **File**: `archon_search/config.py`
+- [x] **File**: `archon_search/config.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `embedder_cache_size: int = 3` and `eager_load_embedders: bool = False` to `SearchConfig`.

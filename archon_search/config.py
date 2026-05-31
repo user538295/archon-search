@@ -64,6 +64,9 @@ class SearchConfig:
     # [database] — C0 tiered install profiles
     profile: str = ""
     multilingual: bool = False
+    # [database] — C1 per-collection embedding model
+    embedder_cache_size: int = 3
+    eager_load_embedders: bool = False
     # [collections]
     pinned_collections: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)
@@ -204,6 +207,13 @@ def load_config(path: Path | None = None) -> SearchConfig:
         config.profile = str(database["profile"])
     if "multilingual" in database:
         config.multilingual = _coerce_bool(database["multilingual"], "multilingual")
+    if "embedder_cache_size" in database:
+        embedder_cache_size = _coerce_int(database["embedder_cache_size"], "embedder_cache_size")
+        if embedder_cache_size < 1:
+            raise ConfigError("embedder_cache_size must be >= 1")
+        config.embedder_cache_size = embedder_cache_size
+    if "eager_load_embedders" in database:
+        config.eager_load_embedders = _coerce_bool(database["eager_load_embedders"], "eager_load_embedders")
 
     search = doc.get("search", {})
     if "max_fanout" in search:
