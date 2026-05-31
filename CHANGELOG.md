@@ -1,6 +1,15 @@
 # Changelog
 
 
+## [26.5.652] - 2026-05-31
+
+**Flat release notes — bold title from first feat, no section headings**
+
+- Rename briefs and plans and move the completed items to completed/ folder
+- Flat release notes — bold title from first feat, no section headings
+- Backfill all release notes on each release cut
+
+
 ## [26.5.647] - 2026-05-31
 
 ### Bug Fixes
