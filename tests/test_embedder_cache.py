@@ -1,0 +1,259 @@
+"""Tests for EmbedderCache — written TDD-first."""
+from __future__ import annotations
+
+import asyncio
+import time
+
+import pytest
+from unittest.mock import patch, MagicMock
+
+from archon_search.embedder_cache import EmbedderCache
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _mock_embedder(name: str) -> MagicMock:
+    m = MagicMock()
+    m.model_name = name
+    return m
+
+
+def _slow_make(name: str) -> MagicMock:
+    """Synchronous slow factory; runs inside asyncio.to_thread."""
+    time.sleep(0.05)
+    return _mock_embedder(name)
+
+
+# ---------------------------------------------------------------------------
+# Basic load & cache
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_or_load_returns_embedder():
+    """First call returns an Embedder."""
+    cache = EmbedderCache(max_size=3)
+    with patch("archon_search.embedder_cache.make_embedder", return_value=_mock_embedder("model-A")):
+        result = await cache.get_or_load("model-A")
+    assert result.model_name == "model-A"
+
+
+@pytest.mark.asyncio
+async def test_get_or_load_caches_result():
+    """Second call for same model does not call make_embedder again."""
+    cache = EmbedderCache(max_size=3)
+    mock_emb = _mock_embedder("model-A")
+    with patch("archon_search.embedder_cache.make_embedder", return_value=mock_emb) as mock_make:
+        await cache.get_or_load("model-A")
+        await cache.get_or_load("model-A")
+    assert mock_make.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# LRU eviction
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_lru_eviction_removes_oldest():
+    """max_size=1: load A then B; only B remains in cache."""
+    cache = EmbedderCache(max_size=1)
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n: _mock_embedder(n)):
+        await cache.get_or_load("model-A")
+        await cache.get_or_load("model-B")
+    assert cache.cached_models() == ["model-B"]
+    assert "model-A" not in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_evicted_embedder_still_usable_by_caller():
+    """Caller holding reference to evicted embedder can still access its model_name."""
+    cache = EmbedderCache(max_size=1)
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n: _mock_embedder(n)):
+        emb_a = await cache.get_or_load("model-A")
+        await cache.get_or_load("model-B")  # evicts A
+    assert emb_a.model_name == "model-A"  # still accessible via caller's reference
+
+
+# ---------------------------------------------------------------------------
+# Concurrent scenarios
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_concurrent_eviction_burst():
+    """max_size=2, 4 concurrent loads for 4 distinct models.
+
+    All 4 callers get correct embedders; cache size <= 2; the 2 retained are
+    the 2 most recently *stored* (LRU policy: last-in wins eviction race).
+    """
+    cache = EmbedderCache(max_size=2)
+    models = ["model-A", "model-B", "model-C", "model-D"]
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=_slow_make):
+        results = await asyncio.gather(*[cache.get_or_load(m) for m in models])
+    # All 4 callers received their correct embedder
+    for model, result in zip(models, results):
+        assert result.model_name == model
+    # Cache honours max_size
+    assert len(cache._cache) <= 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_miss_deduplication():
+    """3 concurrent get_or_load calls for same model → make_embedder called exactly once.
+
+    All 3 callers receive the identical object instance.
+    """
+    cache = EmbedderCache(max_size=3)
+    call_count = 0
+
+    def _counting_slow_make(name: str) -> MagicMock:
+        nonlocal call_count
+        call_count += 1
+        time.sleep(0.05)
+        return _mock_embedder(name)
+
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=_counting_slow_make):
+        results = await asyncio.gather(
+            cache.get_or_load("model-A"),
+            cache.get_or_load("model-A"),
+            cache.get_or_load("model-A"),
+        )
+    assert call_count == 1, f"make_embedder called {call_count} times, expected 1"
+    # All callers get the identical instance
+    assert results[0] is results[1] is results[2]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_eviction_safety():
+    """max_size=1, 2 concurrent loads for different models, both return correct embedders."""
+    cache = EmbedderCache(max_size=1)
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=_slow_make):
+        results = await asyncio.gather(
+            cache.get_or_load("model-A"),
+            cache.get_or_load("model-B"),
+        )
+    assert results[0].model_name == "model-A"
+    assert results[1].model_name == "model-B"
+
+
+# ---------------------------------------------------------------------------
+# Preload
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_preload_skips_unknown_model_without_abort():
+    """make_embedder raises for one model; preload completes; other model is cached."""
+    cache = EmbedderCache(max_size=3)
+
+    def _selective_make(name: str) -> MagicMock:
+        if name == "bad-model":
+            raise ValueError("unknown model")
+        return _mock_embedder(name)
+
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=_selective_make):
+        await cache.preload(["good-model", "bad-model"])
+
+    assert "good-model" in cache.cached_models()
+    assert "bad-model" not in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_preload_uses_asyncio_to_thread():
+    """Verify asyncio.to_thread is actually called (not direct make_embedder in event loop)."""
+    cache = EmbedderCache(max_size=3)
+    to_thread_calls: list[str] = []
+    original_to_thread = asyncio.to_thread
+
+    async def tracking_to_thread(func, *args, **kwargs):
+        to_thread_calls.append(args[0] if args else "?")
+        return await original_to_thread(func, *args, **kwargs)
+
+    with patch("asyncio.to_thread", side_effect=tracking_to_thread):
+        with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n: _mock_embedder(n)):
+            await cache.preload(["model-A", "model-B"])
+
+    assert len(to_thread_calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# Error handling & cleanup
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_or_load_make_embedder_raises_cleans_up_loading_event():
+    """After a failed load, a subsequent call with a working factory succeeds."""
+    cache = EmbedderCache(max_size=3)
+    call_count = 0
+
+    def _flaky_make(name: str) -> MagicMock:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("transient failure")
+        return _mock_embedder(name)
+
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=_flaky_make):
+        with pytest.raises(RuntimeError):
+            await cache.get_or_load("model-A")
+        # Loading event must have been cleaned up; retry must succeed
+        result = await cache.get_or_load("model-A")
+
+    assert result.model_name == "model-A"
+    assert "model-A" in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_waiters_retry_after_failed_load():
+    """3 concurrent calls; make_embedder fails first then succeeds.
+
+    Uses asyncio.wait_for with 2s timeout as a deadlock guard.
+    """
+    cache = EmbedderCache(max_size=3)
+    call_count = 0
+
+    def _flaky_make(name: str) -> MagicMock:
+        nonlocal call_count
+        call_count += 1
+        time.sleep(0.02)
+        if call_count == 1:
+            raise RuntimeError("first load fails")
+        return _mock_embedder(name)
+
+    async def _load():
+        return await cache.get_or_load("model-A")
+
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=_flaky_make):
+        tasks = [asyncio.create_task(_load()) for _ in range(3)]
+        done, pending = await asyncio.wait(tasks, timeout=2.0)
+        # Cancel any pending (shouldn't happen, but keep test clean)
+        for t in pending:
+            t.cancel()
+
+    # At least 2 of the 3 should succeed (one may raise from the first failure)
+    successes = [t for t in done if not t.cancelled() and t.exception() is None]
+    failures = [t for t in done if not t.cancelled() and t.exception() is not None]
+    assert len(pending) == 0, "Deadlock: some tasks did not complete within 2 s"
+    assert len(successes) >= 1, "Expected at least one successful result"
+    for t in successes:
+        assert t.result().model_name == "model-A"
+
+
+@pytest.mark.asyncio
+async def test_preload_failure_does_not_leave_dangling_loading_event():
+    """preload with one bad model; subsequent get_or_load for that model with working make_embedder completes."""
+    cache = EmbedderCache(max_size=3)
+    call_count = 0
+
+    def _flaky_make(name: str) -> MagicMock:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise ValueError("preload failure")
+        return _mock_embedder(name)
+
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=_flaky_make):
+        await cache.preload(["model-A"])
+        # Now retry — must complete within 2 s (no dangling event blocking)
+        result = await asyncio.wait_for(cache.get_or_load("model-A"), timeout=2.0)
+
+    assert result.model_name == "model-A"

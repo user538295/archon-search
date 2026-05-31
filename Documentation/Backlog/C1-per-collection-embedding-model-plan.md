@@ -293,7 +293,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
 > **Releasable**: after Task 2.2 — `EmbedderCache` is in `app.state`, accessible to route handlers. First search requests will use the cache; all existing tests still pass.
 
 #### Task 2.1 — `EmbedderCache` class
-- [ ] **File**: `archon_search/embedder_cache.py` (new file)
+- [x] **File**: `archon_search/embedder_cache.py` (new file)
 - **Depends on**: Task 1.5
 - **Description**:
   - `class EmbedderCache`:
