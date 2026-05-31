@@ -200,7 +200,7 @@ async def test_model_mismatch_collection_excluded_and_not_searched(tmp_path):
                 description=bad_meta.description,
                 doc_count=bad_meta.doc_count,
                 chunk_count=bad_meta.chunk_count,
-                embedding_model="some-other-model",
+                active_embedding_model="some-other-model",
                 namespace=DEFAULT_NAMESPACE,
             )
         )

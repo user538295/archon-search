@@ -415,7 +415,7 @@ class SearchPipeline:
                     description=description,
                     doc_count=batch_doc_count,
                     chunk_count=batch_chunk_count,
-                    embedding_model=self._embedder.model_name,
+                    active_embedding_model=self._embedder.model_name,
                     last_indexed=datetime.now(UTC),
                     last_described=last_described,
                     described_at_doc_count=described_at,
@@ -523,7 +523,7 @@ class SearchPipeline:
             excluded: list[ExcludedCollection] = []
             collections_in_scope: list[str] = []
             for name in collections:
-                if meta_by_name[name].embedding_model != self._embedder.model_name:
+                if meta_by_name[name].active_embedding_model != self._embedder.model_name:
                     excluded.append(ExcludedCollection(name=name, reason="embedding_model_mismatch"))
                 else:
                     collections_in_scope.append(name)
@@ -614,7 +614,7 @@ class SearchPipeline:
         excluded_collections: list[ExcludedCollection] = []
         collections_in_scope: list[str] = []
         for name in collections:
-            if meta_by_name[name].embedding_model != self._embedder.model_name:
+            if meta_by_name[name].active_embedding_model != self._embedder.model_name:
                 excluded_collections.append(
                     ExcludedCollection(name=name, reason="embedding_model_mismatch")
                 )
@@ -838,7 +838,7 @@ class SearchPipeline:
                     description=description,
                     doc_count=doc_count,
                     chunk_count=0,
-                    embedding_model=self._embedder.model_name,
+                    active_embedding_model=self._embedder.model_name,
                     last_indexed=datetime.now(UTC),
                     last_described=last_described,
                     described_at_doc_count=described_at,
@@ -867,7 +867,7 @@ class SearchPipeline:
             description=description,
             doc_count=doc_count,
             chunk_count=chunk_count,
-            embedding_model=self._embedder.model_name,
+            active_embedding_model=self._embedder.model_name,
             last_indexed=datetime.now(UTC),
             last_described=last_described,
             described_at_doc_count=described_at,

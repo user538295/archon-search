@@ -1316,8 +1316,8 @@ def test_run_router_for_query_accepts_strategy_param() -> None:
     mock_pipeline._embedder = mock_embedder
 
     metas = [
-        CollectionMeta(name="code", centroid=[0.1] * 128, embedding_model="eval-sha256-v1"),
-        CollectionMeta(name="docs", centroid=[0.5] * 128, embedding_model="eval-sha256-v1"),
+        CollectionMeta(name="code", centroid=[0.1] * 128, active_embedding_model="eval-sha256-v1"),
+        CollectionMeta(name="docs", centroid=[0.5] * 128, active_embedding_model="eval-sha256-v1"),
     ]
 
     with patch("archon_search.router.MultiCollectionRouter.select", new_callable=AsyncMock) as mock_select:
@@ -1342,9 +1342,9 @@ def test_run_router_for_query_returns_full_ranked_order() -> None:
     mock_pipeline._embedder = mock_embedder
 
     metas = [
-        CollectionMeta(name="alpha", centroid=[0.9] * 128, embedding_model="eval-sha256-v1"),
-        CollectionMeta(name="beta", centroid=[0.5] * 128, embedding_model="eval-sha256-v1"),
-        CollectionMeta(name="gamma", centroid=[0.1] * 128, embedding_model="eval-sha256-v1"),
+        CollectionMeta(name="alpha", centroid=[0.9] * 128, active_embedding_model="eval-sha256-v1"),
+        CollectionMeta(name="beta", centroid=[0.5] * 128, active_embedding_model="eval-sha256-v1"),
+        CollectionMeta(name="gamma", centroid=[0.1] * 128, active_embedding_model="eval-sha256-v1"),
     ]
     # Router returns all 3 in score order (highest to lowest)
     expected_order = [metas[0], metas[1], metas[2]]
@@ -1536,14 +1536,14 @@ async def test_hybrid_router_receives_metas_with_populated_description_embedding
         CollectionMeta(
             name="alpha",
             centroid=[0.2] * 128,
-            embedding_model="eval-sha256-v1",
+            active_embedding_model="eval-sha256-v1",
             description="HTTP networking collection",
             description_embedding=fake_embedding,
         ),
         CollectionMeta(
             name="beta",
             centroid=[0.8] * 128,
-            embedding_model="eval-sha256-v1",
+            active_embedding_model="eval-sha256-v1",
             description="Storage and database collection",
             description_embedding=[0.9] * 128,
         ),

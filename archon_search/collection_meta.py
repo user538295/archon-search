@@ -20,7 +20,10 @@ class CollectionMeta:
     needs_recompute: bool = False
     doc_count: int = 0
     chunk_count: int = 0
-    embedding_model: str = ""
+    active_embedding_model: str = ""
+    pending_embedding_model: str | None = None
+    needs_reindex: bool = False
+    reindex_job_id: str | None = None
     last_indexed: datetime | None = None
     last_described: datetime | None = None
     described_at_doc_count: int | None = None

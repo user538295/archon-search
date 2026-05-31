@@ -142,7 +142,7 @@ async def test_migrate_acl_idempotent(tmp_path):
             centroid=None,
             doc_count=0,
             chunk_count=0,
-            embedding_model="test",
+            active_embedding_model="test",
             last_indexed=None,
             last_described=None,
             described_at_doc_count=None,

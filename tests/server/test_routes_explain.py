@@ -399,7 +399,7 @@ async def test_post_explain_concurrent_collectionless_requests(tmp_path: Path) -
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
 
     pipeline = MagicMock()
-    meta_list = [CollectionMeta(name="col", centroid=[0.1, 0.2, 0.3, 0.4], embedding_model=config.embedding_model, namespace="default")]
+    meta_list = [CollectionMeta(name="col", centroid=[0.1, 0.2, 0.3, 0.4], active_embedding_model=config.embedding_model, namespace="default")]
     pipeline.get_all_collections_meta = AsyncMock(return_value=meta_list)
     pipeline._embedder = MagicMock()
     pipeline._embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
@@ -454,7 +454,7 @@ async def test_post_explain_pinned_collection_happy_path(tmp_path: Path) -> None
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -515,7 +515,7 @@ async def test_post_explain_collectionless_includes_routing_block(tmp_path: Path
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -525,7 +525,7 @@ async def test_post_explain_collectionless_includes_routing_block(tmp_path: Path
         CollectionMeta(
             name="code",
             centroid=[0.4, 0.3, 0.2, 0.1],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -600,7 +600,7 @@ async def test_post_explain_routing_covers_every_collection_no_gating(tmp_path: 
             CollectionMeta(
                 name=col,
                 centroid=centroids[col],
-                embedding_model=config.embedding_model,
+                active_embedding_model=config.embedding_model,
                 namespace="default",
             )
         )
@@ -660,7 +660,7 @@ async def test_post_explain_routing_candidates_acl_filtered(tmp_path: Path) -> N
         CollectionMeta(
             name="public-col",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -672,7 +672,7 @@ async def test_post_explain_routing_candidates_acl_filtered(tmp_path: Path) -> N
             CollectionMeta(
                 name=col_name,
                 centroid=[0.1, 0.2, 0.3, 0.4],
-                embedding_model=config.embedding_model,
+                active_embedding_model=config.embedding_model,
                 namespace="other-ns",
             )
         )
@@ -736,7 +736,7 @@ async def test_post_explain_collectionless_all_collections_acl_filtered_returns_
             CollectionMeta(
                 name=col_name,
                 centroid=[0.1, 0.2, 0.3, 0.4],
-                embedding_model=config.embedding_model,
+                active_embedding_model=config.embedding_model,
                 namespace="other-ns",
             )
         )
@@ -789,7 +789,7 @@ async def test_post_explain_search_top_k_equality_at_top_k_return(tmp_path: Path
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -853,7 +853,7 @@ async def test_post_explain_near_miss_no_text_field(tmp_path: Path) -> None:
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -907,7 +907,7 @@ async def test_post_explain_rerank_false_orders_by_rrf(tmp_path: Path) -> None:
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -974,7 +974,7 @@ async def test_post_explain_rerank_false_collectionless(tmp_path: Path) -> None:
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -1046,7 +1046,7 @@ async def test_post_explain_near_miss_pool_sizes(tmp_path: Path) -> None:
             CollectionMeta(
                 name="docs",
                 centroid=[0.1, 0.2, 0.3, 0.4],
-                embedding_model=config.embedding_model,
+                active_embedding_model=config.embedding_model,
                 namespace="default",
             )
         )
@@ -1106,7 +1106,7 @@ async def test_post_explain_near_miss_at_exact_boundary(tmp_path: Path) -> None:
             CollectionMeta(
                 name="docs",
                 centroid=[0.1, 0.2, 0.3, 0.4],
-                embedding_model=config.embedding_model,
+                active_embedding_model=config.embedding_model,
                 namespace="default",
             )
         )
@@ -1161,7 +1161,7 @@ async def test_post_explain_acl_filtered_returns_empty_and_flag(tmp_path: Path) 
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -1222,7 +1222,7 @@ async def test_post_explain_empty_collection_returns_empty_results(tmp_path: Pat
         CollectionMeta(
             name="empty-col",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -1277,7 +1277,7 @@ async def test_post_explain_pinned_collection_wrong_namespace_returns_404(tmp_pa
         CollectionMeta(
             name="priv-col",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="other-ns",
         )
     )
@@ -1332,7 +1332,7 @@ async def test_post_explain_telemetry_emits_no_query(tmp_path: Path) -> None:
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -1417,7 +1417,7 @@ def test_explain_telemetry_has_correlation_id(tmp_path: Path) -> None:
     pipeline = MagicMock()
     pipeline.explain = AsyncMock(return_value=_make_explain_result())
     pipeline.get_collection_meta = AsyncMock(return_value=CollectionMeta(
-        name="docs", centroid=[0.1, 0.2, 0.3, 0.4], embedding_model="mock-embedder", namespace="default"
+        name="docs", centroid=[0.1, 0.2, 0.3, 0.4], active_embedding_model="mock-embedder", namespace="default"
     ))
     pipeline._embedder = MagicMock()
     pipeline._embedder.embed = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
@@ -1483,7 +1483,7 @@ async def test_explain_stage_timings_keys_pinned_collection_with_rerank(tmp_path
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -1547,7 +1547,7 @@ async def test_explain_stage_timings_keys_collectionless(tmp_path: Path) -> None
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -1601,7 +1601,7 @@ async def test_explain_stage_timings_no_rerank(tmp_path: Path) -> None:
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -1658,7 +1658,7 @@ async def test_explain_stage_timings_values_non_negative(tmp_path: Path) -> None
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -1716,7 +1716,7 @@ async def test_explain_stage_timings_disabled(tmp_path: Path) -> None:
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -1785,7 +1785,7 @@ async def test_mcp_explain_emits_stage_timings_log_record(
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -1869,7 +1869,7 @@ async def test_explain_stage_timings_fts_absent_degradation(tmp_path: Path) -> N
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -1937,7 +1937,7 @@ async def test_rest_mcp_explain_key_parity(tmp_path: Path) -> None:
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )

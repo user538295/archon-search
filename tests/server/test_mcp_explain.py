@@ -115,7 +115,7 @@ async def _build_real_pipeline(tmp_path: Path, config: SearchConfig) -> SearchPi
         CollectionMeta(
             name="docs",
             centroid=[0.1, 0.2, 0.3, 0.4],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )
@@ -276,7 +276,7 @@ async def test_mcp_explain_collectionless_rest_parity(tmp_path: Path) -> None:
         CollectionMeta(
             name="code",
             centroid=[0.4, 0.3, 0.2, 0.1],
-            embedding_model=config.embedding_model,
+            active_embedding_model=config.embedding_model,
             namespace="default",
         )
     )

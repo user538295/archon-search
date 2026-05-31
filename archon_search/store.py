@@ -482,7 +482,7 @@ class SearchStore:
             needs_recompute=needs_recompute,
             doc_count=row["doc_count"],
             chunk_count=row["chunk_count"],
-            embedding_model=row["embedding_model"],
+            active_embedding_model=row["embedding_model"],
             last_indexed=last_indexed,
             last_described=last_described,
             described_at_doc_count=described_at,
@@ -689,7 +689,7 @@ class SearchStore:
                         "description_embedding_json": description_embedding_json,
                         "doc_count": meta.doc_count,
                         "chunk_count": meta.chunk_count,
-                        "embedding_model": meta.embedding_model,
+                        "embedding_model": meta.active_embedding_model,
                         "last_indexed": last_indexed_str,
                         "last_described": last_described_str,
                         "described_at_doc_count": described_at,
@@ -740,7 +740,7 @@ class SearchStore:
                 centroid_sum=existing.centroid_sum,
                 doc_count=existing.doc_count,
                 chunk_count=existing.chunk_count,
-                embedding_model=existing.embedding_model,
+                active_embedding_model=existing.active_embedding_model,
                 last_indexed=last_indexed,
                 last_described=last_described,
                 described_at_doc_count=described_at_doc_count,
@@ -814,7 +814,7 @@ class SearchStore:
                     "description_embedding_json": description_embedding_json,
                     "doc_count": meta.doc_count,
                     "chunk_count": meta.chunk_count,
-                    "embedding_model": meta.embedding_model,
+                    "embedding_model": meta.active_embedding_model,
                     "last_indexed": last_indexed_str,
                     "last_described": last_described_str,
                     "described_at_doc_count": described_at,
@@ -872,7 +872,7 @@ class SearchStore:
                     centroid_sum=existing.centroid_sum,
                     doc_count=existing.doc_count,
                     chunk_count=existing.chunk_count,
-                    embedding_model=existing.embedding_model,
+                    active_embedding_model=existing.active_embedding_model,
                     last_indexed=existing.last_indexed,
                     last_described=existing.last_described,
                     described_at_doc_count=existing.described_at_doc_count,
@@ -885,7 +885,7 @@ class SearchStore:
 
             if not _centroid_sum_valid(
                 existing.centroid_sum, embedding_dim,
-                stored_model=existing.embedding_model,
+                stored_model=existing.active_embedding_model,
                 writer_model=embedding_model,
             ):
                 logger.warning("Collection %r centroid stale, recompute queued", collection)
@@ -897,7 +897,7 @@ class SearchStore:
                     centroid_sum=None,
                     doc_count=existing.doc_count,
                     chunk_count=existing.chunk_count,
-                    embedding_model=existing.embedding_model,
+                    active_embedding_model=existing.active_embedding_model,
                     last_indexed=existing.last_indexed,
                     last_described=existing.last_described,
                     described_at_doc_count=existing.described_at_doc_count,
@@ -921,7 +921,7 @@ class SearchStore:
                 centroid_sum=new_sum,
                 doc_count=new_doc_count,
                 chunk_count=new_chunk_count,
-                embedding_model=embedding_model,
+                active_embedding_model=embedding_model,
                 last_indexed=existing.last_indexed,
                 last_described=existing.last_described,
                 described_at_doc_count=existing.described_at_doc_count,
@@ -936,7 +936,7 @@ class SearchStore:
             if not _batch_vectors_valid(batch_vectors):
                 logger.warning("Collection %r batch vectors contain NaN/inf; skipping centroid maintenance", collection)
                 new_meta = CollectionMeta(
-                    name=collection, embedding_model=embedding_model,
+                    name=collection, active_embedding_model=embedding_model,
                     namespace=namespace, needs_recompute=True,
                 )
                 await self._do_write_meta_unlocked(db, collection, new_meta)
@@ -949,7 +949,7 @@ class SearchStore:
                 centroid_sum=batch_sum,
                 doc_count=distinct_doc_count,
                 chunk_count=n,
-                embedding_model=embedding_model,
+                active_embedding_model=embedding_model,
                 namespace=namespace,
                 mutations_since_recompute=n,
             )
@@ -981,8 +981,8 @@ class SearchStore:
         embedding_dim = len(existing.centroid_sum) if existing.centroid_sum is not None else 0
         if not _centroid_sum_valid(
             existing.centroid_sum, embedding_dim,
-            stored_model=existing.embedding_model or "",
-            writer_model=existing.embedding_model or "",
+            stored_model=existing.active_embedding_model or "",
+            writer_model=existing.active_embedding_model or "",
         ):
             logger.warning("Collection %r centroid stale, recompute queued", collection)
             patched = CollectionMeta(
@@ -993,7 +993,7 @@ class SearchStore:
                 centroid_sum=None,
                 doc_count=existing.doc_count,
                 chunk_count=existing.chunk_count,
-                embedding_model=existing.embedding_model,
+                active_embedding_model=existing.active_embedding_model,
                 last_indexed=now,
                 last_described=existing.last_described,
                 described_at_doc_count=existing.described_at_doc_count,
@@ -1024,7 +1024,7 @@ class SearchStore:
             centroid_sum=new_sum,
             doc_count=new_doc_count,
             chunk_count=new_chunk_count,
-            embedding_model=existing.embedding_model,
+            active_embedding_model=existing.active_embedding_model,
             last_indexed=now,
             last_described=existing.last_described,
             described_at_doc_count=existing.described_at_doc_count,

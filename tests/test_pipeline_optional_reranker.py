@@ -160,7 +160,7 @@ async def test_search_many_without_reranker_returns_results() -> None:
 
     col_meta = MagicMock()
     col_meta.name = "col1"
-    col_meta.embedding_model = "mock-embedder"
+    col_meta.active_embedding_model = "mock-embedder"
     col_meta.namespace = DEFAULT_NAMESPACE
     store.get_all_collections_meta = AsyncMock(return_value=[col_meta])
 
@@ -205,11 +205,11 @@ async def test_explain_multi_collection_without_reranker() -> None:
 
     col_meta1 = MagicMock()
     col_meta1.name = "col1"
-    col_meta1.embedding_model = "mock-embedder"
+    col_meta1.active_embedding_model = "mock-embedder"
     col_meta1.namespace = DEFAULT_NAMESPACE
     col_meta2 = MagicMock()
     col_meta2.name = "col2"
-    col_meta2.embedding_model = "mock-embedder"
+    col_meta2.active_embedding_model = "mock-embedder"
     col_meta2.namespace = DEFAULT_NAMESPACE
     store.get_all_collections_meta = AsyncMock(return_value=[col_meta1, col_meta2])
 
@@ -249,7 +249,7 @@ async def test_explain_multi_collection_rerank_false_no_reranker_does_not_raise(
 
     col_meta1 = MagicMock()
     col_meta1.name = "col1"
-    col_meta1.embedding_model = "mock-embedder"
+    col_meta1.active_embedding_model = "mock-embedder"
     col_meta1.namespace = DEFAULT_NAMESPACE
     store.get_all_collections_meta = AsyncMock(return_value=[col_meta1])
 

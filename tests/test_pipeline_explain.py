@@ -488,10 +488,10 @@ def _scored(collection: str, doc_id: str, chunk_id: str, rrf_score: float = 0.5)
     )
 
 
-def _meta(name: str, *, embedding_model: str = "mock-embedder", namespace: str = DEFAULT_NAMESPACE):
+def _meta(name: str, *, active_embedding_model: str = "mock-embedder", namespace: str = DEFAULT_NAMESPACE):
     from archon_search.collection_meta import CollectionMeta
 
-    return CollectionMeta(name=name, embedding_model=embedding_model, namespace=namespace)
+    return CollectionMeta(name=name, active_embedding_model=active_embedding_model, namespace=namespace)
 
 
 def _explain_multi_pipeline(
@@ -586,7 +586,7 @@ async def test_pipeline_explain_multi_model_mismatch_excludes() -> None:
     leg_map = {"A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")]}
     pipeline, _store = _explain_multi_pipeline(
         leg_map=leg_map,
-        meta_list=[_meta("A"), _meta("B", embedding_model="other-model")],
+        meta_list=[_meta("A"), _meta("B", active_embedding_model="other-model")],
     )
 
     result = await pipeline.explain("q", collections=["A", "B"])

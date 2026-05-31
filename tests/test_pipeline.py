@@ -664,7 +664,7 @@ async def test_ingest_computes_centroid_from_all_chunks(connected_store, col_nam
         assert abs(val - 0.1) < 1e-9
     assert meta.doc_count == 3
     assert meta.chunk_count > 0
-    assert meta.embedding_model == "mock-embedder"
+    assert meta.active_embedding_model == "mock-embedder"
     assert meta.last_indexed is not None
     assert before <= meta.last_indexed <= after
 
@@ -2936,10 +2936,10 @@ def _scored(collection: str, doc_id: str, chunk_id: str, rrf_score: float = 0.5)
     )
 
 
-def _meta(name: str, *, embedding_model: str = "mock-embedder", namespace: str = "default"):
+def _meta(name: str, *, active_embedding_model: str = "mock-embedder", namespace: str = "default"):
     from archon_search.collection_meta import CollectionMeta
 
-    return CollectionMeta(name=name, embedding_model=embedding_model, namespace=namespace)
+    return CollectionMeta(name=name, active_embedding_model=active_embedding_model, namespace=namespace)
 
 
 def _search_many_pipeline(
@@ -3096,7 +3096,7 @@ async def test_search_many_model_mismatch_excludes_and_reports() -> None:
     leg_map = {"A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")]}
     pipeline, store, *_ = _search_many_pipeline(
         leg_map=leg_map,
-        meta_list=[_meta("A"), _meta("B", embedding_model="other-model")],
+        meta_list=[_meta("A"), _meta("B", active_embedding_model="other-model")],
     )
     result = await pipeline.search_many("q", ["A", "B"])
     assert ExcludedCollection(name="B", reason="embedding_model_mismatch") in result.excluded_collections
@@ -3205,8 +3205,8 @@ async def test_search_many_all_collections_model_mismatched_returns_empty() -> N
     pipeline, store, *_ = _search_many_pipeline(
         leg_map={},
         meta_list=[
-            _meta("A", embedding_model="other-model"),
-            _meta("B", embedding_model="other-model"),
+            _meta("A", active_embedding_model="other-model"),
+            _meta("B", active_embedding_model="other-model"),
         ],
     )
     result = await pipeline.search_many("q", ["A", "B"])

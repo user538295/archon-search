@@ -44,13 +44,13 @@ def _router(
 def _meta(
     name: str,
     centroid: list[float] | None = None,
-    embedding_model: str = "model-a",
+    active_embedding_model: str = "model-a",
     description: str | None = None,
 ) -> CollectionMeta:
     return CollectionMeta(
         name=name,
         centroid=centroid,
-        embedding_model=embedding_model,
+        active_embedding_model=active_embedding_model,
         description=description,
     )
 
@@ -108,8 +108,8 @@ def test_rank_shortlist_size_cap() -> None:
 def test_rank_skips_collections_with_mismatched_embedding_model() -> None:
     router = _router(shortlist_size=5, confidence_threshold=0.0, embedding_model="model-a")
     collections = [
-        _meta("col-good", centroid=[1.0, 0.0], embedding_model="model-a"),
-        _meta("col-wrong-model", centroid=[1.0, 0.0], embedding_model="model-b"),
+        _meta("col-good", centroid=[1.0, 0.0], active_embedding_model="model-a"),
+        _meta("col-wrong-model", centroid=[1.0, 0.0], active_embedding_model="model-b"),
     ]
     result = router.rank([1.0, 0.0], collections)
     # col-good should come first (valid centroid), col-wrong-model last (treated as no centroid)
@@ -350,7 +350,7 @@ async def test_invalidate_triggers_refetch_with_fresh_data() -> None:
     assert router._cached_metadata is None
 
     # A successful JSON-RPC envelope: list[dict] serialised as one TextContent block.
-    fresh_payload = json.dumps([{"name": "fresh-col", "embedding_model": "model-a"}])
+    fresh_payload = json.dumps([{"name": "fresh-col", "active_embedding_model": "model-a"}])
     response = MagicMock()
     response.raise_for_status = MagicMock(return_value=None)
     response.json = MagicMock(
@@ -487,8 +487,8 @@ def test_rank_with_scores_handles_mismatched_model() -> None:
     """Collection with different embedding_model gets score=None and is placed after scored."""
     router = _router(shortlist_size=5, confidence_threshold=0.0, embedding_model="model-a")
     collections = [
-        _meta("col-scored", centroid=[1.0, 0.0], embedding_model="model-a"),
-        _meta("col-mismatch", centroid=[1.0, 0.0], embedding_model="model-b"),
+        _meta("col-scored", centroid=[1.0, 0.0], active_embedding_model="model-a"),
+        _meta("col-mismatch", centroid=[1.0, 0.0], active_embedding_model="model-b"),
     ]
     result = router.rank_with_scores([1.0, 0.0], collections)
     assert len(result) == 2
@@ -732,8 +732,8 @@ async def test_run_router_for_query_uses_initial_metadata() -> None:
     pipeline._embedder = embedder
 
     collection_metas = [
-        _meta("col-a", centroid=[1.0, 0.0], embedding_model="model-a"),
-        _meta("col-b", centroid=[0.0, 1.0], embedding_model="model-a"),
+        _meta("col-a", centroid=[1.0, 0.0], active_embedding_model="model-a"),
+        _meta("col-b", centroid=[0.0, 1.0], active_embedding_model="model-a"),
     ]
 
     with patch("httpx.AsyncClient") as mock_client_cls:
@@ -766,7 +766,7 @@ async def test_fetch_metadata_deserializes_description_embedding() -> None:
     router = _router()
 
     payload = json.dumps([
-        {"name": "col-a", "embedding_model": "model-a", "description_embedding": [0.1, 0.2]}
+        {"name": "col-a", "active_embedding_model": "model-a", "description_embedding": [0.1, 0.2]}
     ])
     response = MagicMock()
     response.raise_for_status = MagicMock(return_value=None)
@@ -795,7 +795,7 @@ async def test_fetch_metadata_missing_description_embedding_yields_none() -> Non
     """fetch_metadata silently yields description_embedding=None when field is absent in response."""
     router = _router()
 
-    payload = json.dumps([{"name": "col-a", "embedding_model": "model-a"}])
+    payload = json.dumps([{"name": "col-a", "active_embedding_model": "model-a"}])
     response = MagicMock()
     response.raise_for_status = MagicMock(return_value=None)
     response.json = MagicMock(
@@ -828,7 +828,7 @@ async def test_fetch_metadata_passes_include_flag_under_hybrid() -> None:
 
     async def _capture_post(url: str, **kwargs: object) -> MagicMock:
         captured_payloads.append(kwargs.get("json", {}))  # type: ignore[arg-type]
-        payload = json.dumps([{"name": "col-a", "embedding_model": "model-a"}])
+        payload = json.dumps([{"name": "col-a", "active_embedding_model": "model-a"}])
         resp = MagicMock()
         resp.raise_for_status = MagicMock(return_value=None)
         resp.json = MagicMock(
@@ -861,7 +861,7 @@ async def test_fetch_metadata_omits_include_flag_under_centroid() -> None:
 
     async def _capture_post(url: str, **kwargs: object) -> MagicMock:
         captured_payloads.append(kwargs.get("json", {}))  # type: ignore[arg-type]
-        payload = json.dumps([{"name": "col-a", "embedding_model": "model-a"}])
+        payload = json.dumps([{"name": "col-a", "active_embedding_model": "model-a"}])
         resp = MagicMock()
         resp.raise_for_status = MagicMock(return_value=None)
         resp.json = MagicMock(
@@ -894,12 +894,12 @@ def _meta_with_desc_emb(
     name: str,
     centroid: list[float] | None = None,
     description_embedding: list[float] | None = None,
-    embedding_model: str = "model-a",
+    active_embedding_model: str = "model-a",
 ) -> CollectionMeta:
     return CollectionMeta(
         name=name,
         centroid=centroid,
-        embedding_model=embedding_model,
+        active_embedding_model=active_embedding_model,
         description_embedding=description_embedding,
     )
 
@@ -1015,7 +1015,7 @@ def test_model_mismatch_description_embedding_ignored() -> None:
         "col-mismatch",
         centroid=[1.0, 0.0],
         description_embedding=[1.0, 0.0],
-        embedding_model="wrong-model",
+        active_embedding_model="wrong-model",
     )
     router = _router(strategy="hybrid", embedding_model="model-a", confidence_threshold=0.0)
     result = router._score_collections(q, [col_mismatch])
@@ -1024,13 +1024,13 @@ def test_model_mismatch_description_embedding_ignored() -> None:
 
 
 def test_empty_embedding_model_remains_unscored_under_hybrid() -> None:
-    """Collection with embedding_model='' and description_embedding set → unscored tail."""
+    """Collection with active_embedding_model='' and description_embedding set → unscored tail."""
     q = [1.0, 0.0]
     col_empty_model = _meta_with_desc_emb(
         "col-empty",
         centroid=[1.0, 0.0],
         description_embedding=[1.0, 0.0],
-        embedding_model="",
+        active_embedding_model="",
     )
     router = _router(strategy="hybrid", embedding_model="model-a", confidence_threshold=0.0)
     result = router._score_collections(q, [col_empty_model])

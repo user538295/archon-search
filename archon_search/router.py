@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _FETCH_TIMEOUT = 10.0
 
 # Fields used by the router — avoids issues with datetime deserialization
-_ROUTING_FIELDS = {"name", "description", "centroid", "embedding_model", "doc_count", "chunk_count", "description_embedding"}
+_ROUTING_FIELDS = {"name", "description", "centroid", "active_embedding_model", "doc_count", "chunk_count", "description_embedding"}
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -169,7 +169,7 @@ class MultiCollectionRouter:
             unscored: list[CollectionMeta] = []
 
             for col in collections:
-                if col.centroid is not None and col.embedding_model == self._embedding_model:
+                if col.centroid is not None and col.active_embedding_model == self._embedding_model:
                     centroid_sim = _cosine_similarity(query_embedding, col.centroid)
                     if self._strategy == "hybrid":
                         desc = col.description_embedding

@@ -1339,7 +1339,7 @@ async def test_collection_meta_upsert(connected_store: SearchStore) -> None:
         centroid=[0.1, 0.2, 0.3],
         doc_count=5,
         chunk_count=10,
-        embedding_model="BAAI/bge-small-en-v1.5",
+        active_embedding_model="BAAI/bge-small-en-v1.5",
         last_indexed=datetime(2026, 3, 1, tzinfo=timezone.utc),
         last_described=datetime(2026, 3, 2, tzinfo=timezone.utc),
     )
@@ -1353,7 +1353,7 @@ async def test_collection_meta_upsert(connected_store: SearchStore) -> None:
     assert abs(retrieved.centroid[0] - 0.1) < 1e-6
     assert retrieved.doc_count == 5
     assert retrieved.chunk_count == 10
-    assert retrieved.embedding_model == "BAAI/bge-small-en-v1.5"
+    assert retrieved.active_embedding_model == "BAAI/bge-small-en-v1.5"
     assert retrieved.last_indexed == datetime(2026, 3, 1, tzinfo=timezone.utc)
 
 
@@ -1370,7 +1370,7 @@ async def test_collection_meta_upsert_includes_described_at_doc_count(
         centroid=None,
         doc_count=20,
         chunk_count=40,
-        embedding_model="model-x",
+        active_embedding_model="model-x",
         described_at_doc_count=20,
     )
     await connected_store.update_collection_meta(meta)
@@ -1383,7 +1383,7 @@ async def test_collection_meta_upsert_includes_described_at_doc_count(
         name="test-meta-none-desc",
         doc_count=0,
         chunk_count=0,
-        embedding_model="model-x",
+        active_embedding_model="model-x",
         described_at_doc_count=None,
     )
     await connected_store.update_collection_meta(meta2)
@@ -1406,7 +1406,7 @@ async def test_collection_meta_upsert_overwrites_on_same_name(
         centroid=[1.0, 2.0],
         doc_count=1,
         chunk_count=2,
-        embedding_model="model-a",
+        active_embedding_model="model-a",
     )
     await connected_store.update_collection_meta(meta1)
 
@@ -1416,7 +1416,7 @@ async def test_collection_meta_upsert_overwrites_on_same_name(
         centroid=[3.0, 4.0],
         doc_count=10,
         chunk_count=20,
-        embedding_model="model-b",
+        active_embedding_model="model-b",
     )
     await connected_store.update_collection_meta(meta2)
 
@@ -1425,7 +1425,7 @@ async def test_collection_meta_upsert_overwrites_on_same_name(
     assert retrieved.description == "updated"
     assert retrieved.doc_count == 10
     assert retrieved.chunk_count == 20
-    assert retrieved.embedding_model == "model-b"
+    assert retrieved.active_embedding_model == "model-b"
     assert retrieved.centroid is not None
     assert abs(retrieved.centroid[0] - 3.0) < 1e-6
 
@@ -1443,7 +1443,7 @@ async def test_collection_meta_centroid_none_round_trips(
         centroid=None,
         doc_count=0,
         chunk_count=0,
-        embedding_model="model-x",
+        active_embedding_model="model-x",
     )
     await connected_store.update_collection_meta(meta)
     retrieved = await connected_store.get_collection_meta("test-meta-no-centroid")
@@ -1638,7 +1638,7 @@ async def test_list_collections_excludes_archon_prefix(
         centroid=None,
         doc_count=1,
         chunk_count=2,
-        embedding_model="model",
+        active_embedding_model="model",
     )
     await connected_store.update_collection_meta(meta)
 
@@ -2398,7 +2398,7 @@ async def test_get_collection_meta_correct_namespace(connected_store: SearchStor
     """get_collection_meta returns meta when namespace matches."""
     from archon_search.collection_meta import CollectionMeta
 
-    meta = CollectionMeta(name="ns-filter-col", namespace="tenantA", doc_count=1, chunk_count=2, embedding_model="m")
+    meta = CollectionMeta(name="ns-filter-col", namespace="tenantA", doc_count=1, chunk_count=2, active_embedding_model="m")
     await connected_store.update_collection_meta(meta)
 
     result = await connected_store.get_collection_meta("ns-filter-col", namespace="tenantA")
@@ -2411,7 +2411,7 @@ async def test_get_collection_meta_wrong_namespace_returns_none(connected_store:
     """get_collection_meta returns None when namespace does not match."""
     from archon_search.collection_meta import CollectionMeta
 
-    meta = CollectionMeta(name="ns-wrong-col", namespace="tenantA", doc_count=1, chunk_count=2, embedding_model="m")
+    meta = CollectionMeta(name="ns-wrong-col", namespace="tenantA", doc_count=1, chunk_count=2, active_embedding_model="m")
     await connected_store.update_collection_meta(meta)
 
     result = await connected_store.get_collection_meta("ns-wrong-col", namespace="tenantB")
@@ -2424,7 +2424,7 @@ async def test_get_collection_meta_default_namespace(connected_store: SearchStor
     from archon_search.collection_meta import CollectionMeta
     from archon_search.constants import DEFAULT_NAMESPACE
 
-    meta = CollectionMeta(name="ns-default-col", namespace=DEFAULT_NAMESPACE, doc_count=0, chunk_count=0, embedding_model="m")
+    meta = CollectionMeta(name="ns-default-col", namespace=DEFAULT_NAMESPACE, doc_count=0, chunk_count=0, active_embedding_model="m")
     await connected_store.update_collection_meta(meta)
 
     result = await connected_store.get_collection_meta("ns-default-col")
@@ -2491,7 +2491,7 @@ async def test_delete_collection_meta_namespace_safety_filter(connected_store: S
     """delete_collection_meta with wrong namespace is a no-op; correct namespace deletes."""
     from archon_search.collection_meta import CollectionMeta
 
-    meta = CollectionMeta(name="del-ns-col", namespace="tenantA", doc_count=1, chunk_count=2, embedding_model="m")
+    meta = CollectionMeta(name="del-ns-col", namespace="tenantA", doc_count=1, chunk_count=2, active_embedding_model="m")
     await connected_store.update_collection_meta(meta)
 
     # Confirm row exists
@@ -2523,7 +2523,7 @@ async def test_delete_collection_meta_noop_when_row_missing(connected_store: Sea
     from archon_search.collection_meta import CollectionMeta
 
     # Create meta table by inserting an unrelated row
-    meta = CollectionMeta(name="other-col", namespace="default", doc_count=0, chunk_count=0, embedding_model="m")
+    meta = CollectionMeta(name="other-col", namespace="default", doc_count=0, chunk_count=0, active_embedding_model="m")
     await connected_store.update_collection_meta(meta)
 
     # Delete a row that doesn't exist — must not raise
@@ -2573,16 +2573,16 @@ async def test_update_collection_meta_same_namespace_upsert(connected_store: Sea
     """Insert (foo, tenantA), update (foo, tenantA) with new data → only one row, updated."""
     from archon_search.collection_meta import CollectionMeta
 
-    meta1 = CollectionMeta(name="foo-upsert", namespace="tenantA", doc_count=1, chunk_count=2, embedding_model="m1")
+    meta1 = CollectionMeta(name="foo-upsert", namespace="tenantA", doc_count=1, chunk_count=2, active_embedding_model="m1")
     await connected_store.update_collection_meta(meta1)
 
-    meta2 = CollectionMeta(name="foo-upsert", namespace="tenantA", doc_count=5, chunk_count=10, embedding_model="m2")
+    meta2 = CollectionMeta(name="foo-upsert", namespace="tenantA", doc_count=5, chunk_count=10, active_embedding_model="m2")
     await connected_store.update_collection_meta(meta2)
 
     result = await connected_store.get_collection_meta("foo-upsert", namespace="tenantA")
     assert result is not None
     assert result.doc_count == 5
-    assert result.embedding_model == "m2"
+    assert result.active_embedding_model == "m2"
 
     # Only one row for this name
     all_meta = await connected_store.get_all_collections_meta()
@@ -2595,10 +2595,10 @@ async def test_update_collection_meta_cross_namespace_overwrite_raises(connected
     """Existing row (foo, tenantA), call with (foo, tenantB) → ValueError; original row still present."""
     from archon_search.collection_meta import CollectionMeta
 
-    meta_a = CollectionMeta(name="foo-cross", namespace="tenantA", doc_count=1, chunk_count=2, embedding_model="m")
+    meta_a = CollectionMeta(name="foo-cross", namespace="tenantA", doc_count=1, chunk_count=2, active_embedding_model="m")
     await connected_store.update_collection_meta(meta_a)
 
-    meta_b = CollectionMeta(name="foo-cross", namespace="tenantB", doc_count=3, chunk_count=6, embedding_model="m")
+    meta_b = CollectionMeta(name="foo-cross", namespace="tenantB", doc_count=3, chunk_count=6, active_embedding_model="m")
     with pytest.raises(ValueError, match="tenantA"):
         await connected_store.update_collection_meta(meta_b)
 
@@ -2614,7 +2614,7 @@ async def test_update_collection_meta_first_insert(connected_store: SearchStore)
     """No existing row for 'new-name' → completes; row created with namespace='tenantA'."""
     from archon_search.collection_meta import CollectionMeta
 
-    meta = CollectionMeta(name="brand-new-col", namespace="tenantA", doc_count=7, chunk_count=14, embedding_model="m")
+    meta = CollectionMeta(name="brand-new-col", namespace="tenantA", doc_count=7, chunk_count=14, active_embedding_model="m")
     await connected_store.update_collection_meta(meta)
 
     result = await connected_store.get_collection_meta("brand-new-col", namespace="tenantA")
@@ -2644,7 +2644,7 @@ async def test_update_collection_meta_legacy_null_namespace_treated_as_default(
 
     # Insert a row with namespace=None directly to simulate legacy data
     col_name = "legacy-col"
-    meta_initial = CollectionMeta(name=col_name, namespace=DEFAULT_NAMESPACE, doc_count=1, chunk_count=2, embedding_model="m1")
+    meta_initial = CollectionMeta(name=col_name, namespace=DEFAULT_NAMESPACE, doc_count=1, chunk_count=2, active_embedding_model="m1")
     await connected_store.update_collection_meta(meta_initial)
 
     # Patch the stored row to have NULL namespace (simulating pre-namespace schema)
@@ -2660,7 +2660,7 @@ async def test_update_collection_meta_legacy_null_namespace_treated_as_default(
         await table.add(patched_with_null)
 
     # Now update with DEFAULT_NAMESPACE — should succeed (NULL treated as DEFAULT_NAMESPACE)
-    meta_update = CollectionMeta(name=col_name, namespace=DEFAULT_NAMESPACE, doc_count=5, chunk_count=10, embedding_model="m2")
+    meta_update = CollectionMeta(name=col_name, namespace=DEFAULT_NAMESPACE, doc_count=5, chunk_count=10, active_embedding_model="m2")
     await connected_store.update_collection_meta(meta_update)  # must not raise
 
     result = await connected_store.get_collection_meta(col_name, namespace=DEFAULT_NAMESPACE)
@@ -4943,7 +4943,7 @@ async def test_do_update_meta_on_add_accumulates_onto_existing(tmp_path) -> None
         col = "testcol"
         seed = CollectionMeta(
             name=col, centroid_sum=[1.0], centroid=[1.0],
-            chunk_count=1, doc_count=1, embedding_model="m",
+            chunk_count=1, doc_count=1, active_embedding_model="m",
         )
         await store.update_collection_meta(seed)
         await store._do_update_meta_on_add(
@@ -4970,7 +4970,7 @@ async def test_do_update_meta_on_add_signals_recompute_on_invalid_sum(tmp_path) 
         col = "testcol"
         seed = CollectionMeta(
             name=col, centroid_sum=[float("nan")], centroid=[float("nan")],
-            chunk_count=1, doc_count=1, embedding_model="m",
+            chunk_count=1, doc_count=1, active_embedding_model="m",
         )
         await store.update_collection_meta(seed)
         signal = await store._do_update_meta_on_add(
@@ -4998,7 +4998,7 @@ async def test_do_update_meta_on_add_invalid_sum_does_not_bump_mutations(tmp_pat
         col = "testcol"
         seed = CollectionMeta(
             name=col, centroid_sum=[float("nan")], centroid=[float("nan")],
-            chunk_count=5, doc_count=3, embedding_model="m",
+            chunk_count=5, doc_count=3, active_embedding_model="m",
             mutations_since_recompute=7,
         )
         await store.update_collection_meta(seed)
@@ -5027,7 +5027,7 @@ async def test_do_update_meta_on_add_signals_recompute_at_threshold(tmp_path) ->
         col = "testcol"
         seed = CollectionMeta(
             name=col, centroid_sum=[0.0], centroid=[0.0],
-            chunk_count=1, doc_count=1, embedding_model="m",
+            chunk_count=1, doc_count=1, active_embedding_model="m",
             mutations_since_recompute=2,
         )
         await store.update_collection_meta(seed)
@@ -5053,7 +5053,7 @@ async def test_do_update_meta_on_add_nan_batch_vector_triggers_recompute(tmp_pat
         col = "testcol"
         seed = CollectionMeta(
             name=col, centroid_sum=[0.0], centroid=[0.0],
-            chunk_count=1, doc_count=1, embedding_model="m",
+            chunk_count=1, doc_count=1, active_embedding_model="m",
         )
         await store.update_collection_meta(seed)
         signal = await store._do_update_meta_on_add(
@@ -5078,7 +5078,7 @@ async def test_do_update_meta_on_add_none_model_skips_maintenance(tmp_path) -> N
         col = "testcol"
         seed = CollectionMeta(
             name=col, centroid_sum=[1.0], centroid=[1.0],
-            chunk_count=1, doc_count=1, embedding_model="m",
+            chunk_count=1, doc_count=1, active_embedding_model="m",
         )
         await store.update_collection_meta(seed)
         signal = await store._do_update_meta_on_add(
@@ -5106,7 +5106,7 @@ async def test_do_update_meta_on_add_preserves_description_embedding(tmp_path) -
         col = "testcol"
         seed = CollectionMeta(
             name=col, centroid_sum=[1.0], centroid=[1.0],
-            chunk_count=1, doc_count=1, embedding_model="m",
+            chunk_count=1, doc_count=1, active_embedding_model="m",
             description_embedding=[0.1, 0.2, 0.3],
         )
         await store.update_collection_meta(seed)
@@ -5404,7 +5404,7 @@ async def test_do_subtract_meta_decrements_chunk_count(tmp_path) -> None:
         col = "sub_col"
         seed = CollectionMeta(
             name=col, centroid_sum=[10.0, 10.0], centroid=[2.0, 2.0],
-            chunk_count=5, doc_count=2, embedding_model="m",
+            chunk_count=5, doc_count=2, active_embedding_model="m",
         )
         await store.update_collection_meta(seed)
         await store._do_subtract_meta_on_delete(db, col, [[1.0, 1.0], [2.0, 2.0]])
@@ -5426,7 +5426,7 @@ async def test_do_subtract_meta_resets_on_last_doc(tmp_path) -> None:
         col = "sub_col2"
         seed = CollectionMeta(
             name=col, centroid_sum=[4.0, 4.0], centroid=[2.0, 2.0],
-            chunk_count=2, doc_count=1, embedding_model="m",
+            chunk_count=2, doc_count=1, active_embedding_model="m",
         )
         await store.update_collection_meta(seed)
         await store._do_subtract_meta_on_delete(db, col, [[1.0, 1.0], [3.0, 3.0]])
@@ -5451,7 +5451,7 @@ async def test_do_subtract_meta_noop_on_empty_vectors(tmp_path) -> None:
         col = "sub_noop"
         seed = CollectionMeta(
             name=col, centroid_sum=[5.0], centroid=[5.0],
-            chunk_count=1, doc_count=1, embedding_model="m",
+            chunk_count=1, doc_count=1, active_embedding_model="m",
         )
         await store.update_collection_meta(seed)
         await store._do_subtract_meta_on_delete(db, col, [])
@@ -5475,7 +5475,7 @@ async def test_do_subtract_meta_bumps_last_indexed(tmp_path) -> None:
         old_ts = datetime(2020, 1, 1, tzinfo=timezone.utc)
         seed = CollectionMeta(
             name=col, centroid_sum=[6.0], centroid=[6.0],
-            chunk_count=2, doc_count=1, embedding_model="m",
+            chunk_count=2, doc_count=1, active_embedding_model="m",
             last_indexed=old_ts,
         )
         await store.update_collection_meta(seed)
@@ -5498,7 +5498,7 @@ async def test_do_subtract_meta_sets_needs_recompute_on_invalid_sum(tmp_path) ->
         col = "sub_nan"
         seed = CollectionMeta(
             name=col, centroid_sum=[float("nan")], centroid=[float("nan")],
-            chunk_count=2, doc_count=1, embedding_model="m",
+            chunk_count=2, doc_count=1, active_embedding_model="m",
         )
         await store.update_collection_meta(seed)
         await store._do_subtract_meta_on_delete(db, col, [[1.0]])
@@ -5521,7 +5521,7 @@ async def test_do_subtract_meta_doc_count_floor_at_zero(tmp_path) -> None:
         col = "sub_dc_floor"
         seed = CollectionMeta(
             name=col, centroid_sum=[3.0, 3.0], centroid=[1.5, 1.5],
-            chunk_count=2, doc_count=0, embedding_model="m",
+            chunk_count=2, doc_count=0, active_embedding_model="m",
         )
         await store.update_collection_meta(seed)
         await store._do_subtract_meta_on_delete(db, col, [[1.0, 1.0], [2.0, 2.0]])
@@ -5558,7 +5558,7 @@ async def test_do_subtract_meta_chunk_count_floor_at_zero(tmp_path) -> None:
         col = "sub_cc_floor"
         seed = CollectionMeta(
             name=col, centroid_sum=[5.0], centroid=[5.0],
-            chunk_count=1, doc_count=1, embedding_model="m",
+            chunk_count=1, doc_count=1, active_embedding_model="m",
         )
         await store.update_collection_meta(seed)
         await store._do_subtract_meta_on_delete(db, col, [[1.0], [2.0], [3.0]])
@@ -5579,7 +5579,7 @@ async def test_do_subtract_meta_bumps_mutations(tmp_path) -> None:
         col = "sub_muts"
         seed = CollectionMeta(
             name=col, centroid_sum=[10.0], centroid=[5.0],
-            chunk_count=2, doc_count=1, embedding_model="m",
+            chunk_count=2, doc_count=1, active_embedding_model="m",
             mutations_since_recompute=3,
         )
         await store.update_collection_meta(seed)
