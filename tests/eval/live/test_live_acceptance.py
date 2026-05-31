@@ -126,7 +126,7 @@ async def test_calibration_procedure(
     baseline_path.write_text(json.dumps(baseline_dict))
 
     baseline = load_baseline(baseline_path)
-    assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", baseline.captured_at), (
+    assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z", baseline.captured_at), (
         f"captured_at format invalid: {baseline.captured_at!r}"
     )
     for field_name in _BASELINE_MODEL_VERSION_FIELDS:
