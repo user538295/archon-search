@@ -131,13 +131,41 @@ if [ "$ASSUME_YES" != 1 ]; then
     esac
 fi
 
-# 4. Tag + push.
+# 4. Update CHANGELOG.md, commit, and push to main.
+
+NOTES=$(git-cliff --unreleased --tag "$TAG") || bail "git-cliff failed — check cliff.toml and git history"
+
+if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+    bail "No conventional commits found since last tag. Nothing to release."
+fi
+
+[ -f CHANGELOG.md ] || bail 'CHANGELOG.md not found — run git-cliff setup first'
+grep -q '^# Changelog$' CHANGELOG.md || bail 'CHANGELOG.md is missing the exact # Changelog header — cannot prepend. Ensure the file starts with: # Changelog'
+tmp=$(mktemp ./tmp.XXXXXX)
+trap 'rm -f "$tmp"' EXIT
+NOTES="$NOTES" awk '
+  /^# Changelog$/ {
+    print           # print "# Changelog"
+    getline         # consume the blank line following the header
+    print ""        # print one blank line before notes
+    print ENVIRON["NOTES"]
+    print ""        # print one blank line after notes
+    next
+  }
+  { print }
+' CHANGELOG.md > "$tmp" && mv "$tmp" CHANGELOG.md
+
+git add CHANGELOG.md
+git commit -m "chore(release): update CHANGELOG.md for $TAG"
+git push origin main
+
+# 5. Tag + push.
 
 # Verify commit count matches the provisional tag before tagging.
 # This guard fires only after the CHANGELOG.md commit (added in release step 3);
 # without that commit the count is always off by one.
 actual_count="$(git rev-list --count HEAD)"
-[ "$actual_count" -eq "$EXPECTED_COUNT" ] || bail "Unexpected commit count ($actual_count vs $EXPECTED_COUNT) — re-run release.sh from a clean state"
+[ "$actual_count" -eq "$EXPECTED_COUNT" ] || bail "Unexpected commit count ($actual_count vs $EXPECTED_COUNT) — if the CHANGELOG commit succeeded but the tag push failed on a prior run, tag manually: git tag $TAG && git push origin $TAG"
 
 git tag "$TAG"
 git push origin "$TAG"

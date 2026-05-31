@@ -273,7 +273,7 @@ git push origin "$TAG"
   - Checkpoint: `uv run pytest tests/test_release_sh.py::test_provisional_tag_is_count_plus_one tests/test_release_sh.py::test_count_mismatch_bails -v`
 
 #### Task 2.3 — CHANGELOG.md shell-prepend, commit, and push
-- [ ] **File**: `release.sh`
+- [x] **File**: `release.sh`
 - **Depends on**: Task 2.2, Task 1.2
 - **Description**:
   - After the existing confirmation prompt (or `-y` bypass) but before `git tag`, insert the CHANGELOG.md pipeline:

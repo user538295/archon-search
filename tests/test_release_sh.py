@@ -11,10 +11,52 @@ import pytest
 RELEASE_SH = Path(__file__).parent.parent / "release.sh"
 
 
+CHANGELOG_STUB = """\
+# Changelog
+
+All notable changes to archon-search are recorded here.
+Prior release history is available via `git log`.
+"""
+
+SAMPLE_NOTES = """\
+## [26.5.2] - 2026-05-31
+
+### Features
+- feat(core): add new search capability
+"""
+
+
 def _make_stub_git_cliff(bin_dir: Path, version_output: str) -> None:
     """Write a stub git-cliff script that prints version_output and exits 0."""
     stub = bin_dir / "git-cliff"
     stub.write_text(f"#!/usr/bin/env bash\necho '{version_output}'\nexit 0\n")
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _make_stub_git_cliff_with_notes(
+    bin_dir: Path, version_output: str, notes: str, exit_code: int = 0
+) -> None:
+    """
+    Write a stub git-cliff that:
+      - responds to --version by printing version_output and exiting 0
+      - responds to --unreleased --tag by printing notes and exiting exit_code
+    """
+    stub = bin_dir / "git-cliff"
+    # Use printf %s to avoid interpretation of backslashes/special chars in notes
+    # We write the notes into a file to avoid quoting issues in the script body.
+    notes_file = bin_dir / "cliff_notes.txt"
+    notes_file.write_text(notes)
+    script = f"""\
+#!/usr/bin/env bash
+if echo "$*" | grep -q -- '--version'; then
+    echo '{version_output}'
+    exit 0
+fi
+# --unreleased --tag ... invocation
+cat '{notes_file}'
+exit {exit_code}
+"""
+    stub.write_text(script)
     stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
@@ -56,10 +98,12 @@ def _setup_repo(tmp_path: Path) -> Path:
     dest_release_sh = worker / "release.sh"
     shutil.copy2(RELEASE_SH, dest_release_sh)
 
-    # Initial commit (includes release.sh so tree is clean after commit)
+    # Initial commit (includes release.sh and CHANGELOG.md so tree is clean after commit)
     readme = worker / "README.md"
     readme.write_text("hello\n")
-    subprocess.run(["git", "add", "README.md", "release.sh"], check=True, capture_output=True, cwd=worker)
+    changelog = worker / "CHANGELOG.md"
+    changelog.write_text(CHANGELOG_STUB)
+    subprocess.run(["git", "add", "README.md", "release.sh", "CHANGELOG.md"], check=True, capture_output=True, cwd=worker)
     subprocess.run(
         ["git", "commit", "-m", "initial commit"],
         check=True,
@@ -289,3 +333,254 @@ def test_override_without_test_mode_bails(tmp_path):
     assert "unset it before running a real release" in result.stderr, (
         f"Expected guard message in stderr.\nstderr: {result.stderr}"
     )
+
+
+def _make_cliff_path(tmp_path: Path, notes: str = SAMPLE_NOTES, exit_code: int = 0) -> str:
+    """Create a stub bin dir with git-cliff 2.4.0 and given notes. Returns PATH string."""
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir(exist_ok=True)
+    _make_stub_git_cliff_with_notes(stub_bin, "git-cliff 2.4.0", notes, exit_code)
+    original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    return f"{stub_bin}:{original_path}"
+
+
+class TestChangelogPrepend:
+    """Tests for the CHANGELOG.md prepend step in release.sh (Task 2.3)."""
+
+    def _run_full(
+        self,
+        tmp_path: Path,
+        worker: Path,
+        notes: str = SAMPLE_NOTES,
+        exit_code: int = 0,
+        extra_env: dict | None = None,
+    ) -> subprocess.CompletedProcess:
+        """Run release.sh -y in full (non-dry-run) mode with the stub cliff."""
+        # Compute commit count so EXPECTED_COUNT_OVERRIDE = N+1 (after CHANGELOG commit)
+        result_count = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            capture_output=True, text=True, cwd=worker,
+        )
+        n = int(result_count.stdout.strip())
+        # EXPECTED_COUNT = N+1 because the CHANGELOG.md commit brings count to N+1
+        expected = n + 1
+
+        new_path = _make_cliff_path(tmp_path, notes, exit_code)
+        env = {
+            "PATH": new_path,
+            "RELEASE_SH_TEST_MODE": "1",
+            "EXPECTED_COUNT_OVERRIDE": str(expected),
+        }
+        if extra_env:
+            env.update(extra_env)
+        return _run_release_sh(["-y"], env_overrides=env, repo_path=worker)
+
+    def test_changelog_prepend_preserves_header(self, tmp_path):
+        """After a successful release, the first line of CHANGELOG.md must be '# Changelog'."""
+        worker = _setup_repo(tmp_path)
+        result = self._run_full(tmp_path, worker)
+        assert result.returncode == 0, (
+            f"Expected exit 0.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        lines = (worker / "CHANGELOG.md").read_text().splitlines()
+        assert lines[0] == "# Changelog", (
+            f"First line is not '# Changelog': {lines[:5]}"
+        )
+
+    def test_changelog_prepend_adds_notes_after_header(self, tmp_path):
+        """Notes must appear after '# Changelog' but before the original preamble text."""
+        worker = _setup_repo(tmp_path)
+        result = self._run_full(tmp_path, worker)
+        assert result.returncode == 0, (
+            f"Expected exit 0.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        content = (worker / "CHANGELOG.md").read_text()
+        lines = content.splitlines()
+        header_idx = lines.index("# Changelog")
+        # Find where notes start (look for '## [')
+        notes_idx = next(
+            (i for i, l in enumerate(lines) if l.startswith("## [")), None
+        )
+        # Find where the original preamble text appears
+        preamble_idx = next(
+            (i for i, l in enumerate(lines) if "All notable changes" in l), None
+        )
+        assert notes_idx is not None, f"Notes not found in CHANGELOG.md:\n{content}"
+        assert preamble_idx is not None, f"Preamble text not found in CHANGELOG.md:\n{content}"
+        assert header_idx < notes_idx < preamble_idx, (
+            f"Expected header({header_idx}) < notes({notes_idx}) < preamble({preamble_idx})\n{content}"
+        )
+
+    def test_commit_message_format(self, tmp_path):
+        """The CHANGELOG commit must have the exact message 'chore(release): update CHANGELOG.md for TAG'."""
+        import re
+        worker = _setup_repo(tmp_path)
+        result = self._run_full(tmp_path, worker)
+        assert result.returncode == 0, (
+            f"Expected exit 0.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        log = subprocess.run(
+            ["git", "log", "--oneline", "-2"],
+            capture_output=True, text=True, cwd=worker,
+        )
+        # The CHANGELOG commit is the most recent commit (before the tag)
+        commit_msg = log.stdout.strip().splitlines()[0]
+        assert re.search(r"chore\(release\): update CHANGELOG\.md for \d+\.\d+\.\d+", commit_msg), (
+            f"Commit message doesn't match expected pattern: {commit_msg}"
+        )
+
+    def test_empty_notes_bails(self, tmp_path):
+        """git-cliff producing empty output must cause bail with 'No conventional commits found'."""
+        worker = _setup_repo(tmp_path)
+        result = self._run_full(tmp_path, worker, notes="   \n  \n")
+        assert result.returncode != 0, (
+            f"Expected non-zero exit.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "No conventional commits found" in result.stderr, (
+            f"Expected 'No conventional commits found' in stderr.\nstderr: {result.stderr}"
+        )
+
+    def test_git_cliff_execution_failure_bails(self, tmp_path):
+        """git-cliff exiting with code 1 must cause bail with 'git-cliff failed'."""
+        worker = _setup_repo(tmp_path)
+        result = self._run_full(tmp_path, worker, notes=SAMPLE_NOTES, exit_code=1)
+        assert result.returncode != 0, (
+            f"Expected non-zero exit.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "git-cliff failed" in result.stderr, (
+            f"Expected 'git-cliff failed' in stderr.\nstderr: {result.stderr}"
+        )
+
+    def test_missing_changelog_md_exits_with_error(self, tmp_path):
+        """Absence of CHANGELOG.md must cause a clear bail (not a raw awk error)."""
+        worker = _setup_repo(tmp_path)
+        # Remove CHANGELOG.md and commit the deletion so the working tree is clean
+        (worker / "CHANGELOG.md").unlink()
+        subprocess.run(["git", "rm", "CHANGELOG.md"], check=True, capture_output=True, cwd=worker)
+        subprocess.run(
+            ["git", "commit", "-m", "remove changelog for test"],
+            check=True, capture_output=True, cwd=worker,
+        )
+        subprocess.run(
+            ["git", "push", "origin", "main"],
+            check=True, capture_output=True, cwd=worker,
+        )
+
+        result_count = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            capture_output=True, text=True, cwd=worker,
+        )
+        n = int(result_count.stdout.strip())
+
+        new_path = _make_cliff_path(tmp_path)
+        result = _run_release_sh(
+            ["-y"],
+            env_overrides={
+                "PATH": new_path,
+                "RELEASE_SH_TEST_MODE": "1",
+                "EXPECTED_COUNT_OVERRIDE": str(n + 1),
+            },
+            repo_path=worker,
+        )
+        assert result.returncode != 0, (
+            f"Expected non-zero exit.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "CHANGELOG.md not found" in result.stderr, (
+            f"Expected 'CHANGELOG.md not found' in stderr.\nstderr: {result.stderr}"
+        )
+
+    def test_malformed_changelog_header_exits_with_error(self, tmp_path):
+        """A CHANGELOG.md without '# Changelog' as first line must bail with a clear message."""
+        worker = _setup_repo(tmp_path)
+        # Overwrite CHANGELOG.md with wrong header and commit + push so tree is clean
+        (worker / "CHANGELOG.md").write_text("# CHANGELOG\n\nSome content.\n")
+        subprocess.run(["git", "add", "CHANGELOG.md"], check=True, capture_output=True, cwd=worker)
+        subprocess.run(
+            ["git", "commit", "-m", "bad changelog header for test"],
+            check=True, capture_output=True, cwd=worker,
+        )
+        subprocess.run(
+            ["git", "push", "origin", "main"],
+            check=True, capture_output=True, cwd=worker,
+        )
+
+        result_count = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            capture_output=True, text=True, cwd=worker,
+        )
+        n = int(result_count.stdout.strip())
+
+        new_path = _make_cliff_path(tmp_path)
+        result = _run_release_sh(
+            ["-y"],
+            env_overrides={
+                "PATH": new_path,
+                "RELEASE_SH_TEST_MODE": "1",
+                "EXPECTED_COUNT_OVERRIDE": str(n + 1),
+            },
+            repo_path=worker,
+        )
+        assert result.returncode != 0, (
+            f"Expected non-zero exit.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "missing the exact # Changelog header" in result.stderr, (
+            f"Expected 'missing the exact # Changelog header' in stderr.\nstderr: {result.stderr}"
+        )
+
+    def test_dry_run_does_not_modify_changelog(self, tmp_path):
+        """--dry-run must leave CHANGELOG.md completely untouched."""
+        worker = _setup_repo(tmp_path)
+        original = (worker / "CHANGELOG.md").read_text()
+
+        stub_bin = tmp_path / "stub_bin"
+        stub_bin.mkdir()
+        _make_stub_git_cliff_with_notes(stub_bin, "git-cliff 2.4.0", SAMPLE_NOTES)
+        original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+        new_path = f"{stub_bin}:{original_path}"
+
+        _run_release_sh(["--dry-run"], env_overrides={"PATH": new_path}, repo_path=worker)
+
+        assert (worker / "CHANGELOG.md").read_text() == original, (
+            "CHANGELOG.md was modified by --dry-run"
+        )
+
+    def test_changelog_prepend_with_existing_sections(self, tmp_path):
+        """Prepend must insert new notes between header and existing sections."""
+        worker = _setup_repo(tmp_path)
+
+        existing_section = (
+            "## [26.4.1] - 2026-04-15\n\n### Bug Fixes\n- fix: prior release bug\n"
+        )
+        # Pre-populate CHANGELOG.md with an existing release section
+        prior_content = f"{CHANGELOG_STUB}\n{existing_section}"
+        (worker / "CHANGELOG.md").write_text(prior_content)
+        subprocess.run(["git", "add", "CHANGELOG.md"], check=True, capture_output=True, cwd=worker)
+        subprocess.run(
+            ["git", "commit", "-m", "add prior release section for test"],
+            check=True, capture_output=True, cwd=worker,
+        )
+        subprocess.run(
+            ["git", "push", "origin", "main"],
+            check=True, capture_output=True, cwd=worker,
+        )
+
+        result = self._run_full(tmp_path, worker)
+        assert result.returncode == 0, (
+            f"Expected exit 0.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+        content = (worker / "CHANGELOG.md").read_text()
+        lines = content.splitlines()
+        header_idx = lines.index("# Changelog")
+        new_notes_idx = next((i for i, l in enumerate(lines) if "26.5.2" in l), None)
+        prior_idx = next((i for i, l in enumerate(lines) if "26.4.1" in l), None)
+        preamble_idx = next((i for i, l in enumerate(lines) if "All notable changes" in l), None)
+
+        assert new_notes_idx is not None, f"New notes section not found:\n{content}"
+        assert prior_idx is not None, f"Prior section not found:\n{content}"
+        assert header_idx < new_notes_idx < prior_idx, (
+            f"New notes must appear between header and prior sections.\n"
+            f"header={header_idx}, new={new_notes_idx}, prior={prior_idx}\n{content}"
+        )
+        # Preamble text must still be present somewhere (not lost)
+        assert preamble_idx is not None, f"Preamble text was lost from CHANGELOG.md:\n{content}"
