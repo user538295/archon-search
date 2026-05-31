@@ -2,12 +2,11 @@
 header = ""
 body = """
 ## [{{ version }}] - {{ timestamp | date(format="%Y-%m-%d") }}
-{% for group, commits in commits | group_by(attribute="group") %}
-### {{ group }}
-{% for commit in commits %}- {{ commit.message }}
-{% endfor %}
-{% endfor %}
-"""
+
+{% for commit in commits | filter(attribute="group", value="Features") %}{% if loop.first %}**{{ commit.message | capitalize }}**
+
+{% endif %}{% endfor %}{% for commit in commits %}- {{ commit.message | capitalize }}
+{% endfor %}"""
 trim = true
 
 [git]

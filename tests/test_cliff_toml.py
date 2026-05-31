@@ -83,6 +83,22 @@ def test_body_template_heading_matches_awk_pattern():
     )
 
 
+def _make_test_repo(tmpdir: Path, commits: list[str]) -> None:
+    subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=tmpdir, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=tmpdir, check=True, capture_output=True)
+    for msg in commits:
+        subprocess.run(["git", "commit", "--allow-empty", "-m", msg], cwd=tmpdir, check=True, capture_output=True)
+
+
+def _cliff_output(tmpdir: Path) -> str:
+    result = subprocess.run(
+        ["git-cliff", "--config", str(CLIFF_TOML), "--unreleased", "--tag", "26.5.1"],
+        cwd=tmpdir, capture_output=True, text=True,
+    )
+    return result.stdout
+
+
 def test_cliff_output_strips_scope():
     """Integration: git-cliff output should contain description but not 'feat(scope)' prefix."""
     if not shutil.which("git-cliff"):
@@ -91,35 +107,59 @@ def test_cliff_output_strips_scope():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
-
-        subprocess.run(["git", "init"], cwd=tmp, check=True, capture_output=True)
-        subprocess.run(
-            ["git", "config", "user.email", "test@example.com"],
-            cwd=tmp, check=True, capture_output=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=tmp, check=True, capture_output=True,
-        )
-        subprocess.run(
-            ["git", "commit", "--allow-empty", "-m", "feat(myscope): add feature"],
-            cwd=tmp, check=True, capture_output=True,
-        )
-
-        result = subprocess.run(
-            [
-                "git-cliff",
-                "--config", str(CLIFF_TOML),
-                "--unreleased",
-                "--tag", "26.5.1",
-            ],
-            cwd=tmp,
-            capture_output=True,
-            text=True,
-        )
-
-        stdout = result.stdout
-        assert "add feature" in stdout, f"Expected 'add feature' in output:\n{stdout}"
+        _make_test_repo(tmp, ["feat(myscope): add feature"])
+        stdout = _cliff_output(tmp)
+        assert "add feature" in stdout.lower(), f"Expected 'add feature' in output:\n{stdout}"
         assert "feat(myscope)" not in stdout, (
             f"Expected scope to be stripped, but found 'feat(myscope)' in:\n{stdout}"
         )
+
+
+def test_cliff_output_flat_list_no_section_headings():
+    """Integration: output must be a flat bullet list — no ### section headings."""
+    if not shutil.which("git-cliff"):
+        import pytest
+        pytest.skip("git-cliff not found on PATH")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        _make_test_repo(tmp, [
+            "feat(A): add search endpoint",
+            "fix(B): correct model name",
+            "docs(C): update config docs",
+            "refactor(D): simplify install flow",
+        ])
+        stdout = _cliff_output(tmp)
+        assert "###" not in stdout, f"Section headings should not appear:\n{stdout}"
+        for phrase in ["add search endpoint", "correct model name", "update config docs", "simplify install flow"]:
+            assert f"- {phrase.capitalize()}" in stdout or f"- {phrase}" in stdout, (
+                f"Expected bullet for {phrase!r}:\n{stdout}"
+            )
+
+
+def test_cliff_output_bold_title_from_feat():
+    """Integration: a feat commit should produce a bold title line."""
+    if not shutil.which("git-cliff"):
+        import pytest
+        pytest.skip("git-cliff not found on PATH")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        _make_test_repo(tmp, ["feat(X): add router endpoint", "fix(Y): patch timeout"])
+        stdout = _cliff_output(tmp)
+        assert "**Add router endpoint**" in stdout, (
+            f"Expected bold title from feat commit:\n{stdout}"
+        )
+
+
+def test_cliff_output_no_bold_title_without_feat():
+    """Integration: without feat commits, no bold title line should appear."""
+    if not shutil.which("git-cliff"):
+        import pytest
+        pytest.skip("git-cliff not found on PATH")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        _make_test_repo(tmp, ["fix(Y): patch timeout", "docs(Z): update readme"])
+        stdout = _cliff_output(tmp)
+        assert "**" not in stdout, f"No bold title expected without feat commit:\n{stdout}"
