@@ -1,0 +1,27 @@
+[changelog]
+header = ""
+body = """
+## [{{ version }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits %}- {{ commit.message }}
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+
+[git]
+tag_pattern = "^\\d+\\.\\d+\\.\\d+$"
+skip_tags = ""
+sort_commits = "oldest"
+
+commit_parsers = [
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^test", skip = true },
+  { message = "^chore", skip = true },
+  { message = ".*", skip = true },
+]
