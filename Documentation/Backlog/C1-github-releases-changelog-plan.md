@@ -258,7 +258,7 @@ git push origin "$TAG"
   - Checkpoint: `uv run pytest tests/test_release_sh.py::test_missing_git_cliff_exits_with_error tests/test_release_sh.py::test_old_git_cliff_version_exits_with_error tests/test_release_sh.py::test_valid_git_cliff_version_passes_preflight -v`
 
 #### Task 2.2 — Provisional tag computation (count + 1)
-- [ ] **File**: `release.sh`
+- [x] **File**: `release.sh`
 - **Depends on**: Task 2.1
 - **Description**:
   - Replace the current `count="$(git rev-list --count HEAD)"` + `TAG="${yy}.${m}.${count}"` block with the provisional-tag formula: `EXPECTED_COUNT="${EXPECTED_COUNT_OVERRIDE:-$(( $(git rev-list --count HEAD) + 1 ))}"` and `TAG="${yy}.${m}.${EXPECTED_COUNT}"`.

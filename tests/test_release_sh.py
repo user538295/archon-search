@@ -183,3 +183,109 @@ def test_valid_git_cliff_version_passes_preflight(valid_repo, tmp_path):
         f"Expected '[dry-run]' in stdout — script did not reach post-preflight output.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
+
+
+class TestProvisionalTag:
+    def test_provisional_tag_is_count_plus_one(self, tmp_path):
+        """--dry-run output must contain a tag with count+1, not count."""
+        import re
+
+        worker = _setup_repo(tmp_path)
+
+        # Determine N (current commit count) before running the script
+        result_count = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=worker,
+        )
+        n = int(result_count.stdout.strip())
+
+        stub_bin = tmp_path / "stub_bin"
+        stub_bin.mkdir()
+        _make_stub_git_cliff(stub_bin, "git-cliff 2.4.0")
+
+        original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+        new_path = f"{stub_bin}:{original_path}"
+
+        result = _run_release_sh(
+            ["--dry-run"],
+            env_overrides={"PATH": new_path},
+            repo_path=worker,
+        )
+
+        assert result.returncode == 0, (
+            f"Expected exit 0.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+        # Extract the tag from the script's own output to avoid midnight-UTC race.
+        # The script prints "  tag    : YY.M.N" in the banner.
+        tag_match = re.search(r"tag\s*:\s*(\S+)", result.stdout)
+        assert tag_match, (
+            f"Could not find 'tag : ...' in stdout.\nstdout: {result.stdout}"
+        )
+        actual_tag = tag_match.group(1)
+
+        # The tag's numeric suffix must be N+1 (count+1 formula).
+        suffix = int(actual_tag.rsplit(".", 1)[-1])
+        assert suffix == n + 1, (
+            f"Expected tag suffix {n + 1} (count+1), got {suffix} (tag={actual_tag}).\n"
+            f"stdout: {result.stdout}"
+        )
+
+    def test_count_mismatch_bails(self, tmp_path):
+        """A forced count mismatch via EXPECTED_COUNT_OVERRIDE must cause a bail."""
+        worker = _setup_repo(tmp_path)
+
+        stub_bin = tmp_path / "stub_bin"
+        stub_bin.mkdir()
+        _make_stub_git_cliff(stub_bin, "git-cliff 2.4.0")
+
+        original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+        new_path = f"{stub_bin}:{original_path}"
+
+        result = _run_release_sh(
+            ["-y"],
+            env_overrides={
+                "PATH": new_path,
+                "EXPECTED_COUNT_OVERRIDE": "9999",
+                "RELEASE_SH_TEST_MODE": "1",
+            },
+            repo_path=worker,
+        )
+
+        assert result.returncode != 0, (
+            f"Expected non-zero exit.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "Unexpected commit count" in result.stderr, (
+            f"Expected 'Unexpected commit count' in stderr.\nstderr: {result.stderr}"
+        )
+
+
+def test_override_without_test_mode_bails(tmp_path):
+    """Setting EXPECTED_COUNT_OVERRIDE without RELEASE_SH_TEST_MODE must bail immediately."""
+    worker = _setup_repo(tmp_path)
+
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir()
+    _make_stub_git_cliff(stub_bin, "git-cliff 2.4.0")
+
+    original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    new_path = f"{stub_bin}:{original_path}"
+
+    result = _run_release_sh(
+        ["--dry-run"],
+        env_overrides={
+            "PATH": new_path,
+            "EXPECTED_COUNT_OVERRIDE": "5",
+            # RELEASE_SH_TEST_MODE intentionally NOT set
+        },
+        repo_path=worker,
+    )
+
+    assert result.returncode != 0, (
+        f"Expected non-zero exit.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "unset it before running a real release" in result.stderr, (
+        f"Expected guard message in stderr.\nstderr: {result.stderr}"
+    )

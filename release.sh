@@ -4,7 +4,8 @@
 # What this script does:
 #   1. Pre-flight: working tree clean, on `main`, in sync with origin/main,
 #      and git-cliff >= 2.4 is available.
-#   2. Compute the next CalVer tag: YY.M.<git-rev-list-count-HEAD>.
+#   2. Compute the provisional CalVer tag: YY.M.<git-rev-list-count-HEAD + 1>
+#      (the +1 accounts for the CHANGELOG.md commit added in step 3).
 #   3. Confirm the tag is new (locally + on origin).
 #   4. Confirm with the operator (skippable with `--yes` / `-y`).
 #   5. `git tag $TAG` + `git push origin $TAG`.
@@ -84,11 +85,13 @@ check_git_cliff() {
 
 check_git_cliff
 
-# 2. Compute next CalVer tag — same formula as the prior CI workflow.
-count="$(git rev-list --count HEAD)"
+# 2. Compute provisional CalVer tag (count+1 accounts for the CHANGELOG.md commit added later).
+[ -n "${EXPECTED_COUNT_OVERRIDE:-}" ] && [ -z "${RELEASE_SH_TEST_MODE:-}" ] && \
+    bail "EXPECTED_COUNT_OVERRIDE is set — unset it before running a real release"
 yy="$(date -u +%y)"
-m="$(date -u +%-m 2>/dev/null || date -u +%-m 2>/dev/null || date -u +%m | sed 's/^0//')"
-TAG="${yy}.${m}.${count}"
+m="$(date -u +%-m 2>/dev/null || date -u +%m | sed 's/^0//')"
+EXPECTED_COUNT="${EXPECTED_COUNT_OVERRIDE:-$(( $(git rev-list --count HEAD) + 1 ))}"
+TAG="${yy}.${m}.${EXPECTED_COUNT}"
 
 # 3. Tag must be new.
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
@@ -129,6 +132,13 @@ if [ "$ASSUME_YES" != 1 ]; then
 fi
 
 # 4. Tag + push.
+
+# Verify commit count matches the provisional tag before tagging.
+# This guard fires only after the CHANGELOG.md commit (added in release step 3);
+# without that commit the count is always off by one.
+actual_count="$(git rev-list --count HEAD)"
+[ "$actual_count" -eq "$EXPECTED_COUNT" ] || bail "Unexpected commit count ($actual_count vs $EXPECTED_COUNT) — re-run release.sh from a clean state"
+
 git tag "$TAG"
 git push origin "$TAG"
 
