@@ -1497,6 +1497,9 @@ async def test_malformed_centroid_sum_json_parses_to_none(connected_store: Searc
     assert "needs_recompute" in schema.names, "B5 column missing from schema"
     row["mutations_since_recompute"] = 0
     row["needs_recompute"] = False
+    # C1 boolean fields must not be left as "" — LanceDB cannot cast empty string to bool
+    if "needs_reindex" in schema.names:
+        row["needs_reindex"] = False
     await table.add([row])
     retrieved = await connected_store.get_collection_meta("b5-malformed-sum")
     assert retrieved is not None
@@ -5927,3 +5930,80 @@ async def test_update_description_concurrent_with_ingest(tmp_path) -> None:
         assert meta.description == "concurrent desc"
     finally:
         await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# C1 per-collection embedding model field round-trip tests (Task 1.2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_active_embedding_model_round_trips(connected_store: SearchStore) -> None:
+    """active_embedding_model written via update_collection_meta is read back correctly."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="c1-active-model", active_embedding_model="model-X")
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("c1-active-model")
+    assert retrieved is not None
+    assert retrieved.active_embedding_model == "model-X"
+
+
+@pytest.mark.asyncio
+async def test_pending_embedding_model_round_trips_none(connected_store: SearchStore) -> None:
+    """pending_embedding_model=None is stored and read back as None."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="c1-pending-none", active_embedding_model="model-A", pending_embedding_model=None)
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("c1-pending-none")
+    assert retrieved is not None
+    assert retrieved.pending_embedding_model is None
+
+
+@pytest.mark.asyncio
+async def test_pending_embedding_model_round_trips_value(connected_store: SearchStore) -> None:
+    """pending_embedding_model="model-Y" is stored and read back as "model-Y"."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="c1-pending-value", active_embedding_model="model-A", pending_embedding_model="model-Y")
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("c1-pending-value")
+    assert retrieved is not None
+    assert retrieved.pending_embedding_model == "model-Y"
+
+
+@pytest.mark.asyncio
+async def test_needs_reindex_round_trips_true(connected_store: SearchStore) -> None:
+    """needs_reindex=True is stored and read back as True."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="c1-needs-reindex", active_embedding_model="model-A", needs_reindex=True)
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("c1-needs-reindex")
+    assert retrieved is not None
+    assert retrieved.needs_reindex is True
+
+
+@pytest.mark.asyncio
+async def test_reindex_job_id_round_trips(connected_store: SearchStore) -> None:
+    """reindex_job_id="job-123" is stored and read back as "job-123"."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="c1-job-id", active_embedding_model="model-A", reindex_job_id="job-123")
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("c1-job-id")
+    assert retrieved is not None
+    assert retrieved.reindex_job_id == "job-123"
+
+
+@pytest.mark.asyncio
+async def test_reindex_job_id_round_trips_none(connected_store: SearchStore) -> None:
+    """reindex_job_id=None is stored and read back as None."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="c1-job-id-none", active_embedding_model="model-A", reindex_job_id=None)
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("c1-job-id-none")
+    assert retrieved is not None
+    assert retrieved.reindex_job_id is None

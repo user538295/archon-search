@@ -195,7 +195,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_collection_meta.py -v`
 
 #### Task 1.2 — store.py: update `_meta_schema`, `_row_to_meta`, `update_collection_meta` for C1 fields
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - In `_meta_schema()`: replace `pa.field("embedding_model", pa.utf8())` with `pa.field("active_embedding_model", pa.utf8())`. Add `pa.field("pending_embedding_model", pa.utf8(), nullable=True)`, `pa.field("needs_reindex", pa.bool_(), nullable=True)`, `pa.field("reindex_job_id", pa.utf8(), nullable=True)`.
