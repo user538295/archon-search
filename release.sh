@@ -2,7 +2,8 @@
 # Cut a release of archon-search.
 #
 # What this script does:
-#   1. Pre-flight: working tree clean, on `main`, in sync with origin/main.
+#   1. Pre-flight: working tree clean, on `main`, in sync with origin/main,
+#      and git-cliff >= 2.4 is available.
 #   2. Compute the next CalVer tag: YY.M.<git-rev-list-count-HEAD>.
 #   3. Confirm the tag is new (locally + on origin).
 #   4. Confirm with the operator (skippable with `--yes` / `-y`).
@@ -15,6 +16,9 @@
 #
 # Plain pushes to main do NOT trigger publishing. Only this script (or an
 # equivalent tag push) starts a release.
+#
+# Prerequisites:
+#   - git-cliff >= 2.4  (brew install git-cliff  or  cargo install git-cliff --version '>=2.4')
 #
 # Usage:
 #   bash release.sh           # interactive: prints tag, asks to confirm
@@ -64,6 +68,21 @@ remote_head="$(git rev-parse origin/main)"
 if [ "$local_head" != "$remote_head" ]; then
     bail "local main ($local_head) does not match origin/main ($remote_head) — pull or push first"
 fi
+
+check_git_cliff() {
+    command -v git-cliff >/dev/null 2>&1 || bail "git-cliff not found in PATH — install with: brew install git-cliff or cargo install git-cliff --version '>=2.4'"
+    local ver
+    ver=$(git-cliff --version 2>&1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+    [ -n "$ver" ] || bail "could not parse git-cliff version — check 'git-cliff --version' output"
+    local major minor
+    major=$(echo "$ver" | cut -d. -f1)
+    minor=$(echo "$ver" | cut -d. -f2)
+    if ! { [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge 4 ]; }; }; then
+        bail "git-cliff >= 2.4 required, found $ver"
+    fi
+}
+
+check_git_cliff
 
 # 2. Compute next CalVer tag — same formula as the prior CI workflow.
 count="$(git rev-list --count HEAD)"

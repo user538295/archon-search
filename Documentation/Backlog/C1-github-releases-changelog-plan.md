@@ -241,7 +241,7 @@ git push origin "$TAG"
 > **Releasable**: after Task 2.4; `release.sh --dry-run` is the verification path. No live release is needed to validate correctness.
 
 #### Task 2.1 — git-cliff pre-flight check
-- [ ] **File**: `release.sh`
+- [x] **File**: `release.sh`
 - **Depends on**: Task 1.1
 - **Description**:
   - Add `check_git_cliff()` function immediately after the existing pre-flight checks (working-tree-clean, branch, remote-sync block — currently ends at `git fetch --tags origin main`).
