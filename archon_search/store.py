@@ -598,13 +598,97 @@ class SearchStore:
             try:
                 await table.add_columns({col: default})
                 added.append(col)
-            except Exception as exc:
+            except RuntimeError as exc:
                 if "already exists" in str(exc).lower():
                     logger.warning("Concurrent migration: %s already added — %s", col, exc)
                 else:
                     raise
         if added:
             logger.info("centroid_sum migration: added %s to %s", added, _META_TABLE)
+
+    async def migrate_per_collection_model(self) -> None:
+        """Idempotent 3-state crash-recovery migration for per-collection embedding model columns.
+
+        State (a): embedding_model present, active_embedding_model absent
+            → copy embedding_model values into active_embedding_model, add C1 extra columns.
+        State (b): active_embedding_model present, but one or more C1 extra columns absent
+            → add only the missing C1 extra columns (no rename).
+        State (c): all four columns present → no-op.
+        """
+        _C1_EXTRA_COLUMNS = [
+            ("pending_embedding_model", "cast('' as string)"),
+            ("needs_reindex", "cast(false as boolean)"),
+            ("reindex_job_id", "cast('' as string)"),
+        ]
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        table = await db.open_table(_META_TABLE)
+        schema_names = (await table.schema()).names
+
+        has_active = "active_embedding_model" in schema_names
+        has_old = "embedding_model" in schema_names
+        c1_extra_present = all(col in schema_names for col, _ in _C1_EXTRA_COLUMNS)
+
+        if has_active and c1_extra_present:
+            # State (c): fully migrated
+            return
+
+        if not has_active:
+            # State (a): copy embedding_model values into active_embedding_model
+            # Step 1: add the column with empty default
+            try:
+                await table.add_columns({"active_embedding_model": "''"})
+            except RuntimeError as exc:
+                if "already exists" in str(exc).lower():
+                    logger.warning("Concurrent migration: active_embedding_model already added — %s", exc)
+                else:
+                    raise
+
+            # Step 2: read all rows and re-insert with the correct active_embedding_model value
+            rows = await table.query().to_list()
+            for row in rows:
+                original_model = row.get("embedding_model", "")
+                name = row["name"]
+                namespace_val = row.get("namespace", "")
+                # Delete the row (use same delete pattern as _do_write_meta_unlocked)
+                ns_predicate = _where_eq("namespace", namespace_val)
+                if namespace_val == DEFAULT_NAMESPACE:
+                    ns_predicate = f"({ns_predicate} OR namespace IS NULL)"
+                await table.delete(_where_eq("name", name) + " AND " + ns_predicate)
+                # Re-insert with active_embedding_model set to original value
+                new_row = dict(row)
+                new_row["active_embedding_model"] = original_model
+                await table.add([new_row])
+
+            # Step 3: attempt to drop the old embedding_model column
+            if has_old:
+                try:
+                    await table.drop_columns(["embedding_model"])
+                except Exception as exc:
+                    logger.warning("migrate_per_collection_model: could not drop embedding_model column — %s", exc)
+
+            logger.info("per_collection_model migration (state a): renamed embedding_model → active_embedding_model in %s", _META_TABLE)
+
+        # States (a) and (b): add missing C1 extra columns
+        # Refresh schema after potential state-a changes
+        table = await db.open_table(_META_TABLE)
+        schema_names = (await table.schema()).names
+        added = []
+        for col, default in _C1_EXTRA_COLUMNS:
+            if col in schema_names:
+                continue
+            try:
+                await table.add_columns({col: default})
+                added.append(col)
+            except RuntimeError as exc:
+                if "already exists" in str(exc).lower():
+                    logger.warning("Concurrent migration: %s already added — %s", col, exc)
+                else:
+                    raise
+        if added:
+            logger.info("per_collection_model migration: added %s to %s", added, _META_TABLE)
 
     async def migrate_acl(self) -> None:
         """Idempotent: adds acl column (list<utf8>, nullable) to each chunk table that lacks it.

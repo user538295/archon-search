@@ -96,6 +96,7 @@ def create_app(
         await app.state.search_store.migrate_description_embedding()
         await app.state.search_store.migrate_acl()
         await app.state.search_store.migrate_centroid_sum()
+        await app.state.search_store.migrate_per_collection_model()
         # All `migrate_*` calls complete before the lifespan context yields control to the request loop
 
         # Startup: warn if the multi-collection fan-out validation cap is out of

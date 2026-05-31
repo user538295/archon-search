@@ -1315,6 +1315,312 @@ async def test_old_schema_upsert_preserves_new_columns(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# migrate_per_collection_model tests
+# ---------------------------------------------------------------------------
+
+# Pre-C1 schema: has embedding_model but NOT active_embedding_model
+_PRE_C1_SCHEMA_FIELDS = [
+    pa.field("name", pa.utf8()),
+    pa.field("description", pa.utf8()),
+    pa.field("centroid_json", pa.utf8()),
+    pa.field("description_embedding_json", pa.utf8()),
+    pa.field("doc_count", pa.int64()),
+    pa.field("chunk_count", pa.int64()),
+    pa.field("embedding_model", pa.utf8()),
+    pa.field("last_indexed", pa.utf8()),
+    pa.field("last_described", pa.utf8()),
+    pa.field("described_at_doc_count", pa.int64()),
+    pa.field("namespace", pa.utf8()),
+    pa.field("centroid_sum_json", pa.utf8()),
+    pa.field("mutations_since_recompute", pa.int64()),
+    pa.field("needs_recompute", pa.bool_()),
+]
+
+# State-B schema: has active_embedding_model but missing the 3 C1 extra columns
+_STATE_B_SCHEMA_FIELDS = [
+    pa.field("name", pa.utf8()),
+    pa.field("description", pa.utf8()),
+    pa.field("centroid_json", pa.utf8()),
+    pa.field("description_embedding_json", pa.utf8()),
+    pa.field("doc_count", pa.int64()),
+    pa.field("chunk_count", pa.int64()),
+    pa.field("active_embedding_model", pa.utf8()),
+    pa.field("last_indexed", pa.utf8()),
+    pa.field("last_described", pa.utf8()),
+    pa.field("described_at_doc_count", pa.int64()),
+    pa.field("namespace", pa.utf8()),
+    pa.field("centroid_sum_json", pa.utf8()),
+    pa.field("mutations_since_recompute", pa.int64()),
+    pa.field("needs_recompute", pa.bool_()),
+]
+
+
+@pytest.mark.asyncio
+async def test_migrate_per_collection_model_state_a(tmp_path: Path) -> None:
+    """State (a): embedding_model column exists, active_embedding_model absent.
+    After migration, active_embedding_model == original embedding_model value (NOT the literal string).
+    """
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        schema = pa.schema(_PRE_C1_SCHEMA_FIELDS)
+        table = await db.create_table("_archon_collection_meta", schema=schema)
+        await table.add([{
+            "name": "col-a",
+            "description": "",
+            "centroid_json": "",
+            "description_embedding_json": "",
+            "doc_count": 0,
+            "chunk_count": 0,
+            "embedding_model": "bge-small",
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": -1,
+            "namespace": "default",
+            "centroid_sum_json": "",
+            "mutations_since_recompute": 0,
+            "needs_recompute": False,
+        }])
+        await store.migrate_per_collection_model()
+        table = await db.open_table("_archon_collection_meta")
+        schema_names = (await table.schema()).names
+        assert "active_embedding_model" in schema_names
+        rows = await table.query().to_list()
+        row = next(r for r in rows if r["name"] == "col-a")
+        # Must be the value "bge-small", NOT the literal string "embedding_model"
+        assert row["active_embedding_model"] == "bge-small"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_per_collection_model_state_a_multi_row(tmp_path: Path) -> None:
+    """State (a): multiple rows — each gets the correct active_embedding_model value."""
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        schema = pa.schema(_PRE_C1_SCHEMA_FIELDS)
+        table = await db.create_table("_archon_collection_meta", schema=schema)
+        models = {"col-a": "model-A", "col-b": "model-B", "col-c": "model-C"}
+        rows_to_add = [
+            {
+                "name": name,
+                "description": "",
+                "centroid_json": "",
+                "description_embedding_json": "",
+                "doc_count": 0,
+                "chunk_count": 0,
+                "embedding_model": model,
+                "last_indexed": "",
+                "last_described": "",
+                "described_at_doc_count": -1,
+                "namespace": "default",
+                "centroid_sum_json": "",
+                "mutations_since_recompute": 0,
+                "needs_recompute": False,
+            }
+            for name, model in models.items()
+        ]
+        await table.add(rows_to_add)
+        await store.migrate_per_collection_model()
+        table = await db.open_table("_archon_collection_meta")
+        result_rows = await table.query().to_list()
+        for row in result_rows:
+            assert row["active_embedding_model"] == models[row["name"]], (
+                f"Row {row['name']}: expected {models[row['name']]!r}, got {row['active_embedding_model']!r}"
+            )
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_per_collection_model_state_b(tmp_path: Path) -> None:
+    """State (b): active_embedding_model exists, but C1 extra columns absent.
+    Migration adds missing columns without attempting the rename.
+    """
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        schema = pa.schema(_STATE_B_SCHEMA_FIELDS)
+        table = await db.create_table("_archon_collection_meta", schema=schema)
+        await table.add([{
+            "name": "col-b",
+            "description": "",
+            "centroid_json": "",
+            "description_embedding_json": "",
+            "doc_count": 0,
+            "chunk_count": 0,
+            "active_embedding_model": "model-X",
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": -1,
+            "namespace": "default",
+            "centroid_sum_json": "",
+            "mutations_since_recompute": 0,
+            "needs_recompute": False,
+        }])
+        await store.migrate_per_collection_model()
+        table = await db.open_table("_archon_collection_meta")
+        schema_names = (await table.schema()).names
+        assert "pending_embedding_model" in schema_names
+        assert "needs_reindex" in schema_names
+        assert "reindex_job_id" in schema_names
+        # active_embedding_model value must be preserved (no rename touched it)
+        rows = await table.query().to_list()
+        row = next(r for r in rows if r["name"] == "col-b")
+        assert row["active_embedding_model"] == "model-X"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_per_collection_model_state_c(tmp_path: Path) -> None:
+    """State (c): all 4 C1 columns present — migration is no-op, no error."""
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        # Use the full current schema
+        full_schema = store._meta_schema()
+        await db.create_table("_archon_collection_meta", schema=full_schema)
+        # Should return immediately without error
+        await store.migrate_per_collection_model()
+        table = await db.open_table("_archon_collection_meta")
+        schema_names = (await table.schema()).names
+        assert "active_embedding_model" in schema_names
+        assert "pending_embedding_model" in schema_names
+        assert "needs_reindex" in schema_names
+        assert "reindex_job_id" in schema_names
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_per_collection_model_idempotent(tmp_path: Path) -> None:
+    """Running state-a migration twice: second call is no-op with no error."""
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        schema = pa.schema(_PRE_C1_SCHEMA_FIELDS)
+        table = await db.create_table("_archon_collection_meta", schema=schema)
+        await table.add([{
+            "name": "col-idempotent",
+            "description": "",
+            "centroid_json": "",
+            "description_embedding_json": "",
+            "doc_count": 0,
+            "chunk_count": 0,
+            "embedding_model": "my-model",
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": -1,
+            "namespace": "default",
+            "centroid_sum_json": "",
+            "mutations_since_recompute": 0,
+            "needs_recompute": False,
+        }])
+        await store.migrate_per_collection_model()
+        await store.migrate_per_collection_model()  # second call — must not raise
+        table = await db.open_table("_archon_collection_meta")
+        rows = await table.query().to_list()
+        row = next(r for r in rows if r["name"] == "col-idempotent")
+        assert row["active_embedding_model"] == "my-model"
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_per_collection_model_no_meta_table_noop(tmp_path: Path) -> None:
+    """No _META_TABLE: migration returns without error."""
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.migrate_per_collection_model()  # no _archon_collection_meta — must be no-op
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migrate_per_collection_model_backfills_global_default(tmp_path: Path) -> None:
+    """Row with empty embedding_model: after migration, active_embedding_model=""."""
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        schema = pa.schema(_PRE_C1_SCHEMA_FIELDS)
+        table = await db.create_table("_archon_collection_meta", schema=schema)
+        await table.add([{
+            "name": "col-empty",
+            "description": "",
+            "centroid_json": "",
+            "description_embedding_json": "",
+            "doc_count": 0,
+            "chunk_count": 0,
+            "embedding_model": "",  # global default
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": -1,
+            "namespace": "default",
+            "centroid_sum_json": "",
+            "mutations_since_recompute": 0,
+            "needs_recompute": False,
+        }])
+        await store.migrate_per_collection_model()
+        table = await db.open_table("_archon_collection_meta")
+        rows = await table.query().to_list()
+        row = next(r for r in rows if r["name"] == "col-empty")
+        assert row["active_embedding_model"] == ""
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_migrate_per_collection_model_state_b_crash_recovery(tmp_path: Path) -> None:
+    """State (b) crash recovery: rows have active_embedding_model but C1 extra columns absent.
+    After migration all rows get pending_embedding_model, needs_reindex=False, reindex_job_id defaults.
+    """
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        schema = pa.schema(_STATE_B_SCHEMA_FIELDS)
+        table = await db.create_table("_archon_collection_meta", schema=schema)
+        await table.add([
+            {
+                "name": "col-crash-1",
+                "description": "",
+                "centroid_json": "",
+                "description_embedding_json": "",
+                "doc_count": 2,
+                "chunk_count": 6,
+                "active_embedding_model": "model-crash",
+                "last_indexed": "",
+                "last_described": "",
+                "described_at_doc_count": -1,
+                "namespace": "default",
+                "centroid_sum_json": "",
+                "mutations_since_recompute": 0,
+                "needs_recompute": False,
+            },
+        ])
+        await store.migrate_per_collection_model()
+        table = await db.open_table("_archon_collection_meta")
+        rows = await table.query().to_list()
+        row = rows[0]
+        assert row["active_embedding_model"] == "model-crash"
+        assert row.get("needs_reindex") in (False, None)
+        assert row.get("pending_embedding_model") in ("", None)
+        assert row.get("reindex_job_id") in ("", None)
+    finally:
+        await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
 # CollectionMeta tests
 # ---------------------------------------------------------------------------
 

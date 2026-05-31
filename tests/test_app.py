@@ -141,12 +141,16 @@ async def test_lifespan_calls_migrate_namespace(config: SearchConfig, job_store:
     async def fake_migrate_centroid_sum(self: SearchStore) -> None:  # type: ignore[override]
         call_order.append("migrate_centroid_sum")
 
+    async def fake_migrate_per_collection_model(self: SearchStore) -> None:  # type: ignore[override]
+        call_order.append("migrate_per_collection_model")
+
     with (
         patch.object(SearchStore, "connect", new=fake_connect),
         patch.object(SearchStore, "migrate_namespace", new=fake_migrate),
         patch.object(SearchStore, "migrate_description_embedding", new=fake_migrate_description_embedding),
         patch.object(SearchStore, "migrate_acl", new=fake_migrate_acl),
         patch.object(SearchStore, "migrate_centroid_sum", new=fake_migrate_centroid_sum),
+        patch.object(SearchStore, "migrate_per_collection_model", new=fake_migrate_per_collection_model),
         patch.object(SearchStore, "disconnect", new=fake_disconnect),
     ):
         app = create_app(config, job_store)
@@ -162,6 +166,7 @@ async def test_lifespan_calls_migrate_namespace(config: SearchConfig, job_store:
         assert call_order.index("migrate_namespace") < call_order.index("migrate_description_embedding")
         assert call_order.index("migrate_description_embedding") < call_order.index("migrate_acl")
         assert call_order.index("migrate_acl") < call_order.index("migrate_centroid_sum")
+        assert call_order.index("migrate_centroid_sum") < call_order.index("migrate_per_collection_model")
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +213,7 @@ def test_create_app_empty_namespaces_no_error(tmp_path: Path, job_store: JobStor
         patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store)
@@ -236,6 +242,7 @@ def test_health_endpoint_unauthenticated_200(tmp_path: Path, job_store: JobStore
         patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store)
@@ -267,6 +274,7 @@ def _make_test_client(tmp_path: Path, job_store: JobStore):  # type: ignore[no-u
         patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store)
@@ -286,6 +294,7 @@ def test_health_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
         patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store)
@@ -307,6 +316,7 @@ def test_401_has_request_id(tmp_path: Path, job_store: JobStore) -> None:
         patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store)
@@ -329,6 +339,7 @@ def test_options_preflight_has_request_id(tmp_path: Path, job_store: JobStore) -
         patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store)
@@ -372,6 +383,7 @@ def test_inbound_id_echoed(tmp_path: Path, job_store: JobStore) -> None:
         patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
         patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
         patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store)

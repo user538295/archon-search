@@ -220,7 +220,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "active_embedding or pending_embedding or needs_reindex or reindex_job_id"`
 
 #### Task 1.3 — `migrate_per_collection_model()` with 3-state crash-recovery idempotency
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - `async def migrate_per_collection_model(self) -> None:` — follows the pattern of `migrate_namespace` (lines 531–548).
