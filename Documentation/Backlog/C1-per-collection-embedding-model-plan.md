@@ -368,7 +368,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
 > **Releasable**: after Task 3.6 — all pipeline methods accept an embedder parameter; `self._embedder` is fully renamed to `self._global_embedder`; all 6 modified call sites pass the embedder through. Feature is not user-visible yet (routes still call the old way until Phase 5/7 updates them), but pipeline unit tests use the new signatures.
 
 #### Task 3.1 — Rename `self._embedder` → `self._global_embedder` in `pipeline.py`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: nothing (pure rename, no logic change)
 - **Description**:
   - Global replace: `self._embedder` → `self._global_embedder` throughout `pipeline.py`.

@@ -170,7 +170,7 @@ class SearchPipeline:
         fanout_timeout_seconds: float = 30.0,
     ) -> None:
         self.store = store
-        self._embedder = embedder
+        self._global_embedder = embedder
         self._reranker = reranker
         self._chunker = chunker
         self._parser = parser
@@ -190,7 +190,7 @@ class SearchPipeline:
 
     @property
     def embedder_is_warm(self) -> bool:
-        return self._embedder.is_warm
+        return self._global_embedder.is_warm
 
     @property
     def _centroid_incremental_enabled(self) -> bool:
@@ -269,7 +269,7 @@ class SearchPipeline:
             _chunk_collector.extend(r.text for r in records)
 
         # Embed
-        vectors = await self._embedder.embed([r.text for r in records])
+        vectors = await self._global_embedder.embed([r.text for r in records])
         for record, vector in zip(records, vectors):
             record.vector = vector
         if _vector_collector is not None:
@@ -277,14 +277,14 @@ class SearchPipeline:
 
         # Persist
         with record_stage("persist"):
-            await self.store.ensure_collection(collection, self._embedder.embedding_dim)
+            await self.store.ensure_collection(collection, self._global_embedder.embedding_dim)
             try:
                 await self.store.delete_document(collection, doc_id, namespace=namespace)
             except StoreBusyError:
                 return IngestResult(doc_id=doc_id, chunks_created=0, status="error")
             ingest_result = await self.store.ingest_chunks(
                 collection, records,
-                embedding_model=self._embedder.model_name,
+                embedding_model=self._global_embedder.model_name,
                 namespace=namespace,
             )
 
@@ -401,7 +401,7 @@ class SearchPipeline:
             else:
                 # Pre-B5 path: retained until flag default flips in Task 5.3
                 if description is not None:
-                    description_embedding = await self._embedder.embed_one(description)
+                    description_embedding = await self._global_embedder.embed_one(description)
                 else:
                     logger.debug(
                         "description_embedding: description is None for collection %r — skipping",
@@ -415,7 +415,7 @@ class SearchPipeline:
                     description=description,
                     doc_count=batch_doc_count,
                     chunk_count=batch_chunk_count,
-                    active_embedding_model=self._embedder.model_name,
+                    active_embedding_model=self._global_embedder.model_name,
                     last_indexed=datetime.now(UTC),
                     last_described=last_described,
                     described_at_doc_count=described_at,
@@ -442,7 +442,7 @@ class SearchPipeline:
         *,
         filters: SearchFilters | None = None,
     ) -> SearchPipelineResult:
-        vector = await self._embedder.embed_one(query)
+        vector = await self._global_embedder.embed_one(query)
         candidates = await self.store.hybrid_search(
             collection, vector, query, top_k=self._top_k_retrieve, filters=filters
         )
@@ -506,7 +506,7 @@ class SearchPipeline:
             if rerank is False and len(collections) > 1 and self._reranker is not None:
                 raise ExplainMultiCollectionNoRerankError()
 
-            vector = query_vector if query_vector is not None else await self._embedder.embed_one(query)
+            vector = query_vector if query_vector is not None else await self._global_embedder.embed_one(query)
 
             # Metadata lookup, validation, namespace + model partitioning
             # (mirrors search_many step 2).
@@ -523,7 +523,7 @@ class SearchPipeline:
             excluded: list[ExcludedCollection] = []
             collections_in_scope: list[str] = []
             for name in collections:
-                if meta_by_name[name].active_embedding_model != self._embedder.model_name:
+                if meta_by_name[name].active_embedding_model != self._global_embedder.model_name:
                     excluded.append(ExcludedCollection(name=name, reason="embedding_model_mismatch"))
                 else:
                     collections_in_scope.append(name)
@@ -557,7 +557,7 @@ class SearchPipeline:
                 excluded_collections=excluded,
             )
 
-        vector = query_vector if query_vector is not None else await self._embedder.embed_one(query)
+        vector = query_vector if query_vector is not None else await self._global_embedder.embed_one(query)
 
         candidate_depth = max(self._top_k_retrieve * 3, 20)
         try:
@@ -598,7 +598,7 @@ class SearchPipeline:
         parallel, merge with provenance, run a single global rerank pass, and return a
         unified result."""
         # Step 1: embed exactly once.
-        vector = await self._embedder.embed_one(query)
+        vector = await self._global_embedder.embed_one(query)
 
         # Step 2: metadata lookup, validation, namespace + model partitioning.
         try:
@@ -614,7 +614,7 @@ class SearchPipeline:
         excluded_collections: list[ExcludedCollection] = []
         collections_in_scope: list[str] = []
         for name in collections:
-            if meta_by_name[name].active_embedding_model != self._embedder.model_name:
+            if meta_by_name[name].active_embedding_model != self._global_embedder.model_name:
                 excluded_collections.append(
                     ExcludedCollection(name=name, reason="embedding_model_mismatch")
                 )
@@ -838,7 +838,7 @@ class SearchPipeline:
                     description=description,
                     doc_count=doc_count,
                     chunk_count=0,
-                    active_embedding_model=self._embedder.model_name,
+                    active_embedding_model=self._global_embedder.model_name,
                     last_indexed=datetime.now(UTC),
                     last_described=last_described,
                     described_at_doc_count=described_at,
@@ -856,7 +856,7 @@ class SearchPipeline:
         doc_count = await self.store.count_documents(collection)
 
         if description is not None:
-            description_embedding = await self._embedder.embed_one(description)
+            description_embedding = await self._global_embedder.embed_one(description)
         else:
             description_embedding = None
 
@@ -867,7 +867,7 @@ class SearchPipeline:
             description=description,
             doc_count=doc_count,
             chunk_count=chunk_count,
-            active_embedding_model=self._embedder.model_name,
+            active_embedding_model=self._global_embedder.model_name,
             last_indexed=datetime.now(UTC),
             last_described=last_described,
             described_at_doc_count=described_at,

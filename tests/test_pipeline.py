@@ -3970,3 +3970,17 @@ async def test_recompute_new_collection_no_existing_meta_runs_full_scan() -> Non
     store.update_collection_meta.assert_awaited_once()
     saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
     assert saved.centroid_sum == elementwise_sum(vectors)
+
+
+# ---------------------------------------------------------------------------
+# Task 3.1 — self._embedder rename verification
+# ---------------------------------------------------------------------------
+
+def test_self_embedder_does_not_exist():
+    """Verify self._embedder was fully renamed to self._global_embedder in pipeline.py."""
+    import re
+    content = (
+        __import__("pathlib").Path("archon_search/pipeline.py").read_text()
+    )
+    matches = re.findall(r'\bself\._embedder\b', content)
+    assert not matches, f"Found {len(matches)} remaining 'self._embedder' reference(s) in pipeline.py"
