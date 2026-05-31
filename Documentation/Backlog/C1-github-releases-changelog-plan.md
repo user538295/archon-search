@@ -332,7 +332,7 @@ git push origin "$TAG"
 > **Releasable**: after Task 3.1; the GitHub Release appears on the Releases page after the next tag push that passes the eval gate and publishes to PyPI.
 
 #### Task 3.1 — github-release job in archon-search-release.yml
-- [ ] **File**: `.github/workflows/archon-search-release.yml`
+- [x] **File**: `.github/workflows/archon-search-release.yml`
 - **Depends on**: Task 1.2, Task 2.3
 - **Description**:
   - Append a new `github-release` job after the `publish` job:
