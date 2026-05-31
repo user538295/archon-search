@@ -1,6 +1,11 @@
 # Changelog
 
 
+## [26.5.654] - 2026-05-31
+
+- Dynamic git-cliff download url — static url lacks version number
+
+
 ## [26.5.652] - 2026-05-31
 
 **Flat release notes — bold title from first feat, no section headings**
