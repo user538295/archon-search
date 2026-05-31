@@ -1,6 +1,12 @@
 # Changelog
 
 
+## [26.5.647] - 2026-05-31
+
+### Bug Fixes
+- allow fractional seconds in captured_at regex
+
+
 ## [26.5.645] - 2026-05-31
 
 ### Bug Fixes
