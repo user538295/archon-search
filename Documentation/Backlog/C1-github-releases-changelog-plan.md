@@ -215,7 +215,7 @@ git push origin "$TAG"
   - Checkpoint: `uv run pytest tests/test_cliff_toml.py -v`
 
 #### Task 1.2 — Initial CHANGELOG.md stub
-- [ ] **File**: `CHANGELOG.md`
+- [x] **File**: `CHANGELOG.md`
 - **Depends on**: Task 1.1
 - **Description**:
   - New file at repo root. Content:
