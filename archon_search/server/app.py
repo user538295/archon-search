@@ -15,6 +15,7 @@ from fastapi.openapi.utils import get_openapi
 from archon_search.chunker import DocumentChunker
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder, ModelEmbedder
+from archon_search.embedder_cache import EmbedderCache
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import load_or_generate_key
 from archon_search.logging_setup import configure_logging
@@ -97,6 +98,15 @@ def create_app(
         await app.state.search_store.migrate_acl()
         await app.state.search_store.migrate_centroid_sum()
         await app.state.search_store.migrate_per_collection_model()
+
+        # Startup: create embedder cache and optionally preload models
+        embedder_cache = EmbedderCache(config.embedder_cache_size)
+        app.state.embedder_cache = embedder_cache
+        if config.eager_load_embedders:
+            metas = await app.state.search_store.get_all_collections_meta()
+            distinct_models = {m.active_embedding_model for m in metas if m.active_embedding_model}
+            await embedder_cache.preload(list(distinct_models))
+
         # All `migrate_*` calls complete before the lifespan context yields control to the request loop
 
         # Startup: warn if the multi-collection fan-out validation cap is out of

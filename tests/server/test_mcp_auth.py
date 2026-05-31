@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from starlette.testclient import TestClient
 
+from archon_search.embedder_cache import EmbedderCache
+
 VALID_KEY = "ab" * 32  # 64-char hex
 
 # Ensure fastmcp resolves to the real mcp.server.fastmcp so mcp.py can be imported
@@ -35,7 +37,9 @@ def _make_starlette_client(valid_key: str = VALID_KEY) -> TestClient:
     with patch("archon_search.server.mcp.load_or_generate_key", return_value=(valid_key, "test")):
         from archon_search.server import mcp as mcp_module
 
-        starlette_app = mcp_module.create_mcp_http_app(pipeline, "default")
+        starlette_app = mcp_module.create_mcp_http_app(
+            pipeline, "default", embedder_cache=EmbedderCache(max_size=3)
+        )
     return TestClient(starlette_app, raise_server_exceptions=False)
 
 
@@ -102,7 +106,9 @@ def test_mcp_request_id_on_valid_message() -> None:
     pipeline = _make_pipeline()
     with patch("archon_search.server.mcp.load_or_generate_key", return_value=(VALID_KEY, "test")):
         from archon_search.server import mcp as mcp_module
-        starlette_app = mcp_module.create_mcp_http_app(pipeline, "default")
+        starlette_app = mcp_module.create_mcp_http_app(
+            pipeline, "default", embedder_cache=EmbedderCache(max_size=3)
+        )
     with TestClient(starlette_app, raise_server_exceptions=False) as client:
         resp = client.post(
             "/mcp",
@@ -124,7 +130,9 @@ def test_request_id_present_when_timings_disabled() -> None:
 
     with patch("archon_search.server.mcp.load_or_generate_key", return_value=(VALID_KEY, "test")):
         from archon_search.server import mcp as mcp_module
-        starlette_app = mcp_module.create_mcp_http_app(pipeline, "default", config=cfg)
+        starlette_app = mcp_module.create_mcp_http_app(
+            pipeline, "default", config=cfg, embedder_cache=EmbedderCache(max_size=3)
+        )
 
     with TestClient(starlette_app, raise_server_exceptions=False) as client:
         resp = client.post(

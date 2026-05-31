@@ -336,7 +336,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_embedder_cache.py -v`
 
 #### Task 2.2 — App.state integration: cache init, eager loading, lifespan wiring
-- [ ] **File**: `archon_search/server/app.py`, `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/app.py`, `archon_search/server/mcp.py`
 - **Depends on**: Task 2.1, Task 1.3 (migration must run before eager load)
 - **Description**:
   - After all migrations complete in the lifespan startup, add:

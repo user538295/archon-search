@@ -370,6 +370,100 @@ def test_run_server_calls_configure_logging(monkeypatch):
     assert calls[0] is cfg
 
 
+# ---------------------------------------------------------------------------
+# EmbedderCache in app.state — Task 2.2
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_embedder_cache_in_app_state(config: SearchConfig, job_store: JobStore) -> None:
+    """After lifespan startup, app.state.embedder_cache is an EmbedderCache instance."""
+    from unittest.mock import AsyncMock, patch
+    from starlette.testclient import TestClient
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.store import SearchStore
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[])),
+    ):
+        app = create_app(config, job_store)
+        with TestClient(app):
+            assert isinstance(app.state.embedder_cache, EmbedderCache)
+
+
+@pytest.mark.asyncio
+async def test_eager_load_embedders_false_does_not_preload(tmp_path: Path, job_store: JobStore) -> None:
+    """eager_load_embedders=False: cached_models() is empty after startup."""
+    from unittest.mock import AsyncMock, patch
+    from starlette.testclient import TestClient
+    from archon_search.store import SearchStore
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.eager_load_embedders = False
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app):
+            assert app.state.embedder_cache.cached_models() == []
+
+
+@pytest.mark.asyncio
+async def test_eager_load_embedders_true_preloads_collection_models(tmp_path: Path, job_store: JobStore) -> None:
+    """eager_load_embedders=True: collection active_embedding_model is preloaded."""
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from starlette.testclient import TestClient
+    from archon_search.store import SearchStore
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.collection_meta import CollectionMeta
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.eager_load_embedders = True
+
+    fake_meta = MagicMock(spec=CollectionMeta)
+    fake_meta.active_embedding_model = "model-X"
+
+    preloaded: list[list[str]] = []
+
+    async def fake_preload(self: EmbedderCache, model_names: list[str]) -> None:
+        preloaded.append(model_names)
+        # Simulate loading by inserting a stub into the cache
+        for name in model_names:
+            self._cache[name] = MagicMock()
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
+        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[fake_meta])),
+        patch.object(EmbedderCache, "preload", new=fake_preload),
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app):
+            assert "model-X" in app.state.embedder_cache.cached_models()
+    assert any("model-X" in names for names in preloaded)
+
+
 def test_inbound_id_echoed(tmp_path: Path, job_store: JobStore) -> None:
     from unittest.mock import AsyncMock, patch
     from starlette.testclient import TestClient

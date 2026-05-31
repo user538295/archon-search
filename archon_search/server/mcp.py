@@ -42,6 +42,8 @@ from archon_search.observability import bind_stage_recorder, correlation_id as _
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
+from archon_search.embedder_cache import EmbedderCache
+
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
 
@@ -84,6 +86,7 @@ def create_app(
     default_collection: str,
     writer: TelemetryWriter | None = None,
     config: SearchConfig | None = None,
+    embedder_cache: EmbedderCache | None = None,
 ) -> FastMCP:
     """Create a FastMCP app with 10 RAG tools registered.
 
@@ -718,6 +721,7 @@ def create_mcp_http_app(
     writer: TelemetryWriter | None = None,
     config: SearchConfig | None = None,
     request_id_header: str = "X-Request-ID",
+    embedder_cache: EmbedderCache | None = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
@@ -727,7 +731,7 @@ def create_mcp_http_app(
     """
     from archon_search.server.middleware_context import RequestContextMiddleware
 
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config)
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache)
     starlette_app: Starlette = fastmcp_app.streamable_http_app()
     api_key, _ = load_or_generate_key()
     starlette_app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces={})
