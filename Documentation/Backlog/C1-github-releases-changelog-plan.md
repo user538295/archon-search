@@ -411,7 +411,7 @@ git push origin "$TAG"
 > **Releasable**: after Task 4.1, all developer-facing docs reflect the new git-cliff prerequisite and CHANGELOG.md ownership rule.
 
 #### Task 4.1 — CLAUDE.md and contributing.md updates
-- [ ] **File**: `CLAUDE.md`, `contributing.md`
+- [x] **File**: `CLAUDE.md`, `contributing.md`
 - **Depends on**: Task 2.1 (establishes the git-cliff prerequisite)
 - **Description**:
   - `CLAUDE.md` — in the "Common commands" section, add a subsection or inline note under the release command block:

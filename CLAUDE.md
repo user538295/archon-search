@@ -41,6 +41,8 @@ bash release.sh -y        # non-interactive
 bash release.sh --dry-run
 ```
 
+`git-cliff >= 2.4` is a release-only prerequisite (not needed for development): `brew install git-cliff` (macOS) or `cargo install git-cliff --version '>=2.4'` (cross-platform).
+
 Plain pushes to `main` do **not** publish. Only a tag push (typically via `release.sh`) triggers `archon-search-release.yml`.
 
 ## Architecture

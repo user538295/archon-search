@@ -80,7 +80,16 @@ bash release.sh -y        # non-interactive
 bash release.sh --dry-run
 ```
 
-`release.sh` computes the next CalVer tag (`YY.M.<commit-count>`), pushes it, and the tag push triggers [`.github/workflows/archon-search-release.yml`](.github/workflows/archon-search-release.yml) — which runs the eval gate, builds the wheel, and publishes to PyPI via OIDC. Plain pushes to `main` never publish. Versioning, the CalVer formula, and the OIDC publish flow are described in [`Documentation/Architecture/510_release_and_environment_strategy.md`](Documentation/Architecture/510_release_and_environment_strategy.md).
+`release.sh` computes the next CalVer tag (`YY.M.<commit-count>`), prepends a changelog section to `CHANGELOG.md`, commits and pushes it, then pushes the tag. The tag push triggers [`.github/workflows/archon-search-release.yml`](.github/workflows/archon-search-release.yml) — which runs the eval gate, builds the wheel, publishes to PyPI via OIDC, and creates a GitHub Release with the changelog body. Plain pushes to `main` never publish. Versioning, the CalVer formula, and the OIDC publish flow are described in [`Documentation/Architecture/510_release_and_environment_strategy.md`](Documentation/Architecture/510_release_and_environment_strategy.md).
+
+**Release prerequisites** (one-time setup, not a dev dependency):
+
+```bash
+brew install git-cliff          # macOS
+cargo install git-cliff --version '>=2.4'  # cross-platform
+```
+
+`git-cliff >= 2.4` is required by `release.sh` to generate the changelog. `CHANGELOG.md` is managed exclusively by `release.sh` — do not edit it manually.
 
 ## Reporting issues
 
