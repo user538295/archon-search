@@ -1,0 +1,66 @@
+name: Backfill release notes
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        run: curl -sSfL https://github.com/orhun/git-cliff/releases/latest/download/git-cliff-x86_64-unknown-linux-musl.tar.gz | tar -xz --strip-components=1 -C /usr/local/bin git-cliff-x86_64-unknown-linux-musl/git-cliff
+
+      - name: Update release bodies
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Get all releases as JSON
+          releases=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/releases?per_page=100")
+
+          # Get all tags sorted oldest-first so we can compute ranges
+          mapfile -t TAGS < <(git tag | sort -V)
+
+          update_release() {
+            local tag="$1" release_id="$2"
+            local idx range body
+
+            # Find index of this tag
+            for i in "${!TAGS[@]}"; do
+              [[ "${TAGS[$i]}" == "$tag" ]] && idx=$i && break
+            done
+
+            if [[ $idx -eq 0 ]]; then
+              range="${TAGS[0]}"
+            else
+              range="${TAGS[$((idx-1))]}..${TAGS[$idx]}"
+            fi
+
+            body=$(git-cliff $range --tag "$tag" 2>/dev/null \
+              | awk '/^## /{if(found) exit; found=1; next} found')
+
+            [[ -z "$body" ]] && echo "Skipping $tag (empty body)" && return
+
+            http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X PATCH "https://api.github.com/repos/$REPO/releases/$release_id" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -d "$(jq -n --arg b "$body" '{body: $b}')")
+
+            echo "$tag (id=$release_id): HTTP $http_code"
+          }
+
+          echo "$releases" | jq -r '.[] | "\(.tag_name) \(.id)"' | while read -r tag rid; do
+            update_release "$tag" "$rid"
+          done
