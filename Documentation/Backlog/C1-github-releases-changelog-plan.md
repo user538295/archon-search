@@ -296,7 +296,7 @@ git push origin "$TAG"
   - Checkpoint: `uv run pytest tests/test_release_sh.py -k "prepend or commit_message or empty_notes or cliff_execution or missing_changelog or malformed_changelog" -v`
 
 #### Task 2.4 — Updated --dry-run output
-- [ ] **File**: `release.sh`
+- [x] **File**: `release.sh`
 - **Depends on**: Task 2.3
 - **Description**:
   - The existing `--dry-run` exit block (currently after the confirmation message) must be moved to after `$NOTES` is captured (including the empty-notes bail check) but before any writes or pushes. Since the empty-notes path always bails, the dry-run output does not need to handle or mention an empty-notes prompt.

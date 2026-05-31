@@ -584,3 +584,114 @@ class TestChangelogPrepend:
         )
         # Preamble text must still be present somewhere (not lost)
         assert preamble_idx is not None, f"Preamble text was lost from CHANGELOG.md:\n{content}"
+
+
+class TestDryRunOutput:
+    """Tests for the updated --dry-run output (Task 2.4)."""
+
+    def _run_dry(self, tmp_path: Path, worker: Path) -> subprocess.CompletedProcess:
+        stub_bin = tmp_path / "stub_bin"
+        stub_bin.mkdir(exist_ok=True)
+        _make_stub_git_cliff_with_notes(stub_bin, "git-cliff 2.4.0", SAMPLE_NOTES)
+        original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+        new_path = f"{stub_bin}:{original_path}"
+        return _run_release_sh(["--dry-run"], env_overrides={"PATH": new_path}, repo_path=worker)
+
+    def test_dry_run_prints_provisional_tag(self, tmp_path):
+        """--dry-run must print '[dry-run] provisional tag' in stdout."""
+        worker = _setup_repo(tmp_path)
+        result = self._run_dry(tmp_path, worker)
+        assert "[dry-run] provisional tag" in result.stdout, (
+            f"Expected '[dry-run] provisional tag' in stdout.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    def test_dry_run_prints_notes(self, tmp_path):
+        """--dry-run must print the cliff notes content in stdout."""
+        worker = _setup_repo(tmp_path)
+        result = self._run_dry(tmp_path, worker)
+        assert "26.5.2" in result.stdout, (
+            f"Expected SAMPLE_NOTES content ('26.5.2') in stdout.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    def test_dry_run_prints_curl_command(self, tmp_path):
+        """--dry-run must print a curl command preview with api.github.com and releases."""
+        worker = _setup_repo(tmp_path)
+        result = self._run_dry(tmp_path, worker)
+        assert "curl" in result.stdout, (
+            f"Expected 'curl' in stdout.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "api.github.com" in result.stdout, (
+            f"Expected 'api.github.com' in stdout.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "releases" in result.stdout, (
+            f"Expected 'releases' in stdout.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    def test_dry_run_makes_no_git_changes(self, tmp_path):
+        """--dry-run must not create commits, tags, or modify CHANGELOG.md."""
+        worker = _setup_repo(tmp_path)
+        original_changelog = (worker / "CHANGELOG.md").read_text()
+        count_before = int(
+            subprocess.run(
+                ["git", "rev-list", "--count", "HEAD"],
+                capture_output=True, text=True, cwd=worker,
+            ).stdout.strip()
+        )
+
+        self._run_dry(tmp_path, worker)
+
+        count_after = int(
+            subprocess.run(
+                ["git", "rev-list", "--count", "HEAD"],
+                capture_output=True, text=True, cwd=worker,
+            ).stdout.strip()
+        )
+        tags = subprocess.run(
+            ["git", "tag", "-l"],
+            capture_output=True, text=True, cwd=worker,
+        ).stdout.strip()
+
+        assert count_after == count_before, (
+            f"Git log count changed from {count_before} to {count_after}"
+        )
+        assert tags == "", f"Unexpected tags after --dry-run: {tags}"
+        assert (worker / "CHANGELOG.md").read_text() == original_changelog, (
+            "CHANGELOG.md was modified by --dry-run"
+        )
+
+    def test_dry_run_exits_zero(self, tmp_path):
+        """--dry-run must exit with code 0."""
+        worker = _setup_repo(tmp_path)
+        result = self._run_dry(tmp_path, worker)
+        assert result.returncode == 0, (
+            f"Expected exit code 0.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    def test_dry_run_ends_with_no_writes_trailer(self, tmp_path):
+        """--dry-run stdout must end with the 'no writes, no pushes, no API calls.' trailer."""
+        worker = _setup_repo(tmp_path)
+        result = self._run_dry(tmp_path, worker)
+        assert "[dry-run] no writes, no pushes, no API calls." in result.stdout, (
+            f"Expected trailer line in stdout.\nstdout: {result.stdout}"
+        )
+
+    def test_dry_run_empty_notes_still_bails(self, tmp_path):
+        """--dry-run must bail with 'No conventional commits found' when notes are empty."""
+        worker = _setup_repo(tmp_path)
+        stub_bin = tmp_path / "stub_bin"
+        stub_bin.mkdir()
+        _make_stub_git_cliff_with_notes(stub_bin, "git-cliff 2.4.0", "   \n  \n")
+        original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+        new_path = f"{stub_bin}:{original_path}"
+
+        result = _run_release_sh(
+            ["--dry-run"],
+            env_overrides={"PATH": new_path},
+            repo_path=worker,
+        )
+        assert result.returncode != 0, (
+            f"Expected non-zero exit.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "No conventional commits found" in result.stderr, (
+            f"Expected 'No conventional commits found' in stderr.\nstderr: {result.stderr}"
+        )

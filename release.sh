@@ -24,7 +24,8 @@
 # Usage:
 #   bash release.sh           # interactive: prints tag, asks to confirm
 #   bash release.sh -y        # non-interactive: tag + push without prompting
-#   bash release.sh --dry-run # show what would happen; do not tag or push
+#   bash release.sh --dry-run # preview tag, cliff notes, and GitHub Releases API
+#                             # call — no writes, no pushes, no API calls
 
 set -euo pipefail
 
@@ -113,22 +114,18 @@ archon-search-release.yml on GitHub Actions. That workflow runs the eval
 gate, builds the wheel, and publishes to PyPI via OIDC.
 EOF
 
-if [ "$DRY_RUN" = 1 ]; then
-    echo
-    echo "[dry-run] no tag created, no push made."
-    exit 0
-fi
-
-if [ "$ASSUME_YES" != 1 ]; then
-    printf '\nProceed? [y/N] '
-    read -r reply || reply=""
-    case "$reply" in
-        y|Y|yes|YES) : ;;
-        *)
-            echo "release.sh: aborted."
-            exit 1
-            ;;
-    esac
+if [ "$DRY_RUN" != 1 ]; then
+    if [ "$ASSUME_YES" != 1 ]; then
+        printf '\nProceed? [y/N] '
+        read -r reply || reply=""
+        case "$reply" in
+            y|Y|yes|YES) : ;;
+            *)
+                echo "release.sh: aborted."
+                exit 1
+                ;;
+        esac
+    fi
 fi
 
 # 4. Update CHANGELOG.md, commit, and push to main.
@@ -137,6 +134,31 @@ NOTES=$(git-cliff --unreleased --tag "$TAG") || bail "git-cliff failed — check
 
 if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
     bail "No conventional commits found since last tag. Nothing to release."
+fi
+
+if [ "$DRY_RUN" = 1 ]; then
+    FIRST_SECTION=$(printf '%s\n' "$NOTES" | awk '/^## /{if(found) exit; found=1; next} found')
+    REPO=$(git remote get-url origin | sed 's/\.git$//' | sed 's|.*github\.com[/:]||')
+    if command -v jq >/dev/null 2>&1; then
+        PAYLOAD=$(jq -n --arg tag "$TAG" --arg body "$FIRST_SECTION" \
+            '{tag_name: $tag, name: $tag, body: $body}')
+    else
+        PAYLOAD="(install jq to see the full payload)"
+    fi
+    cat <<__ARCHON_DRY_RUN_EOF__
+[dry-run] provisional tag : $TAG
+[dry-run] cliff notes     :
+$NOTES
+[dry-run] CI would call   :
+  curl -s -w "\\n%{http_code}" \\
+    -X POST https://api.github.com/repos/$REPO/releases \\
+    -H "Authorization: Bearer \$GITHUB_TOKEN" \\
+    -H "Accept: application/vnd.github+json" \\
+    -H "X-GitHub-Api-Version: 2022-11-28" \\
+    -d '$PAYLOAD'
+[dry-run] no writes, no pushes, no API calls.
+__ARCHON_DRY_RUN_EOF__
+    exit 0
 fi
 
 [ -f CHANGELOG.md ] || bail 'CHANGELOG.md not found — run git-cliff setup first'
