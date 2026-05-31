@@ -245,7 +245,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "migrate_per_collection_model"`
 
 #### Task 1.4 — `ReindexJob.target_embedding_model` field + JSON serialization
-- [ ] **File**: `archon_search/types.py`, `archon_search/jobs/store.py` (or wherever `IngestJob` is serialized/deserialized)
+- [x] **File**: `archon_search/types.py`, `archon_search/jobs/store.py` (or wherever `IngestJob` is serialized/deserialized)
 - **Depends on**: nothing
 - **Description**:
   - Add `target_embedding_model: str | None = None` to the `ReindexJob` dataclass (subclass of `IngestJob`). `ReindexJob` is already defined with `pass`; add this one field.

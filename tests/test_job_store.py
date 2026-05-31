@@ -51,6 +51,7 @@ def test_atomic_write(tmp_path: Path) -> None:
         {
             **dataclasses.asdict(job),
             "status": job.status.value,
+            "job_type": "ingest",
         }
     ]
     mock_write.assert_called_once_with(jobs_path, expected)

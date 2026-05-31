@@ -29,7 +29,7 @@ class IngestJob:
 
 @dataclass
 class ReindexJob(IngestJob):
-    pass
+    target_embedding_model: str | None = None
 
 
 @dataclass

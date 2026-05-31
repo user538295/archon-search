@@ -12,6 +12,7 @@ from pathlib import Path
 from archon_search._durable_io import atomic_write_json
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import JOBS_FILE, IngestJob, JobStatus
+from archon_search.types import DeleteJob, ReindexJob
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,12 @@ class JobStore:
             updated_at=now,
             namespace=namespace,
         )
+        self._jobs[job.job_id] = job
+        self._write_atomic()
+        return job
+
+    def create_job(self, job: IngestJob) -> IngestJob:
+        """Store a pre-constructed job (subclass-aware, used for ReindexJob/DeleteJob)."""
         self._jobs[job.job_id] = job
         self._write_atomic()
         return job
@@ -110,7 +117,13 @@ class JobStore:
             modified = False
             for item in raw:
                 item["status"] = JobStatus(item["status"])
-                job = IngestJob(**item)
+                job_type = item.pop("job_type", "ingest")
+                if job_type == "reindex":
+                    job: IngestJob = ReindexJob(**item)
+                elif job_type == "delete":
+                    job = DeleteJob(**item)
+                else:
+                    job = IngestJob(**item)
                 if job.status in _CRASH_STATUSES:
                     job = dataclasses.replace(
                         job, status=JobStatus.FAILED, error="process_restart"
@@ -130,10 +143,17 @@ class JobStore:
     def _write_atomic(self) -> None:
         self._evict_old()  # evict BEFORE serializing so stale jobs are never written
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        data = [dataclasses.asdict(job) for job in self._jobs.values()]
-        # Convert JobStatus enum values to strings for JSON serialisation
-        for item in data:
+        data = []
+        for job in self._jobs.values():
+            item = dataclasses.asdict(job)
             item["status"] = item["status"].value if hasattr(item["status"], "value") else item["status"]
+            if isinstance(job, ReindexJob):
+                item["job_type"] = "reindex"
+            elif isinstance(job, DeleteJob):
+                item["job_type"] = "delete"
+            else:
+                item["job_type"] = "ingest"
+            data.append(item)
         atomic_write_json(self._path, data)
 
     def _evict_old(self) -> None:
