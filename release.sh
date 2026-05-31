@@ -5,15 +5,20 @@
 #   1. Pre-flight: working tree clean, on `main`, in sync with origin/main,
 #      and git-cliff >= 2.4 is available.
 #   2. Compute the provisional CalVer tag: YY.M.<git-rev-list-count-HEAD + 1>
-#      (the +1 accounts for the CHANGELOG.md commit added in step 3).
+#      (the +1 accounts for the CHANGELOG.md commit added in step 4).
 #   3. Confirm the tag is new (locally + on origin).
-#   4. Confirm with the operator (skippable with `--yes` / `-y`).
-#   5. `git tag $TAG` + `git push origin $TAG`.
+#   4. Invoke git-cliff to generate the changelog section; prepend it to
+#      CHANGELOG.md, commit as `chore(release): update CHANGELOG.md for $TAG`,
+#      and push the commit to origin/main.
+#   5. Verify the commit count matches the provisional tag segment (guards
+#      against partial-run divergence).
+#   6. `git tag $TAG` + `git push origin $TAG`.
 #
 # After the push, GitHub Actions runs `archon-search-release.yml` which:
 #   - runs the eval gate,
 #   - builds the wheel with `hatch build` (hatch-vcs reads the tag),
-#   - publishes to PyPI via OIDC.
+#   - publishes to PyPI via OIDC,
+#   - creates a GitHub Release from the CHANGELOG.md section (github-release job).
 #
 # Plain pushes to main do NOT trigger publishing. Only this script (or an
 # equivalent tag push) starts a release.

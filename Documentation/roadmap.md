@@ -1,8 +1,8 @@
 **Purpose**: Capture the priority-ordered forward plan for `archon-search` so contributors can see what is next and why.
 **Audience**: Maintainers and contributors planning, prioritising, or scoping work.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
-**Next review**: 2026-08-20
+**Last reviewed**: 2026-05-31
+**Next review**: 2026-08-31
 
 # Roadmap
 
@@ -31,6 +31,7 @@ Done (visible in the current repo):
 - Per-OS service install (`archon_search/platform/`, `cli/install_cmd.py`).
 - Concurrency hardening of the indexing-state store and router cache (A6): `IndexingStateStore` is thread-safe via an internal `RLock` (closes `CON-3` — no lost updates to `.indexing_state.json` under concurrent multi-collection writes), and `MultiCollectionRouter` gained `invalidate()` / `initial_metadata` with the FastAPI per-request router lifecycle pinned by a regression test (addresses `CON-2`). See `Architecture/530_technical_debt_refactoring_roadmap.md`.
 - **Tiered install profiles (C0):** `archon-search install` now presents three profiles (`minimal`, `balanced`, `max`) for both English and multilingual stacks. The profile is written into `[database].profile` / `[database].multilingual` in `archon-search.toml`. The installer includes disk-space checks, a Jina CC-BY-NC-4.0 license gate for multilingual `balanced`/`max`, model pre-warming, reinstall guard with rollback, and a `--force --delete-db` escape hatch. Implemented in `archon_search/profiles.py`, `archon_search/install.py`, and `archon_search/cli/install_cmd.py`.
+- **GitHub Releases with git-cliff changelog (C1):** `release.sh` now requires `git-cliff >= 2.4`, generates release notes via `git-cliff --unreleased`, prepends the section to `CHANGELOG.md` (committed and pushed to `main` before tagging), and verifies the commit count matches the provisional tag. A new `github-release` job in `archon-search-release.yml` (runs after `publish`, tag pushes only) extracts the first section from `CHANGELOG.md` and creates a GitHub Release via the REST API. `cliff.toml` at the repo root controls commit grouping and rendering.
 
 ## Priority 0 — Product Boundary (largely landed; remaining hardening)
 

@@ -1,7 +1,7 @@
 Purpose: Single entry point to all `archon-search` documentation, plus the rules for adding and maintaining docs.
 Audience: Medior engineers contributing to or navigating the `archon-search` documentation set.
 Status: Draft
-Last reviewed: 2026-05-20 / Next review: 2026-08-20
+Last reviewed: 2026-05-31 / Next review: 2026-08-31
 
 # Documentation Index and Contribution Guide
 
@@ -129,6 +129,8 @@ Security-focused documentation for security engineers, IT admins, and reviewers 
 | [`roadmap.md`](../roadmap.md) | Active roadmap and milestones. |
 | [`quick_start.md`](../quick_start.md) | 5-minute onboarding for new contributors. |
 | [`../../BREAKING.md`](../../BREAKING.md) | BREAKING.md — compatibility contract; every release that changes an existing API contract adds an entry here. |
+| [`../../CHANGELOG.md`](../../CHANGELOG.md) | Per-release changelog; generated and prepended by `release.sh` via git-cliff. Do not edit by hand. |
+| [`../../cliff.toml`](../../cliff.toml) | git-cliff configuration — commit grouping, tag pattern, and CHANGELOG.md rendering rules. |
 
 ## Contribution guide
 

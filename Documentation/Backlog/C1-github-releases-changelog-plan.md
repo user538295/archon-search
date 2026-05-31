@@ -432,7 +432,7 @@ git push origin "$TAG"
   - Checkpoint: `uv run pytest tests/test_docs.py -v`
 
 #### Task 4.2 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, API docs, architecture docs, user guides, CHANGELOG) and update every file whose content is affected by the changes delivered in this plan. The agent must not update docs that are unrelated.
