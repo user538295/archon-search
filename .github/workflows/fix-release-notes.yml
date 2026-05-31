@@ -13,42 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Publish high-quality release notes for all tags
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        shell: bash
+      - name: Write release note files
         run: |
-          set -euo pipefail
-          API="https://api.github.com/repos/${REPO}/releases"
+          mkdir -p /tmp/notes
 
-          upsert() {
-            local tag="$1" name="$2" body="$3" existing_id="${4:-}"
-            local payload
-            payload=$(python3 -c "
-          import json, sys
-          print(json.dumps({'tag_name': sys.argv[1], 'name': sys.argv[2], 'body': sys.argv[3], 'draft': False, 'prerelease': False}))
-          " "$tag" "$name" "$body")
-            if [[ -n "$existing_id" ]]; then
-              echo "Updating $tag (id=$existing_id)..."
-              curl -sf -X PATCH "$API/$existing_id" \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "$payload" | python3 -c "import sys,json; r=json.load(sys.stdin); print('  OK:', r.get('html_url','?'))"
-            else
-              echo "Creating $tag..."
-              curl -sf -X POST "$API" \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "$payload" | python3 -c "import sys,json; r=json.load(sys.stdin); print('  OK:', r.get('html_url','?')) if 'html_url' in r else print('  ERROR:', r)"
-            fi
-          }
-
-          # ── 26.5.0 ────────────────────────────────────────────────────────────
-          read -r -d '' BODY_260 <<'NOTES' || true
+          cat > /tmp/notes/26.5.0.md << 'ENDOFNOTES'
 **Initial standalone release: full hybrid retrieval server extracted from the Archon monorepo**
 
 - **Standalone extraction (FEAT-046):** migrated all runtime state from `~/.archon/` to `~/.archon-search/`; added `ARCHON_SEARCH_CONFIG` env var override for config path; switched to self-contained test stubs (removed `_search_stubs_shim.py`); configured dynamic CalVer via `hatch-vcs` (`YY.M.<rev-count>` scheme); `python -m archon_search` entry point
@@ -61,12 +31,9 @@ jobs:
 - **MCP tools (10):** `search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document` — sharing the same auth layer as REST
 - **Opt-in telemetry:** JSONL per-call logging to `~/.archon-search/search-logs/`; no raw query strings logged (structural invariant); `/telemetry/stats` and `/telemetry/entries` endpoints; configurable `retention_days`
 - **Evaluation harness:** deterministic corpus-aware eval suite with `documents.jsonl`, `queries.jsonl`, `labels.jsonl`; latency p50/p95 regression guards; `thresholds.toml` + baseline JSON/Markdown
-NOTES
+ENDOFNOTES
 
-          upsert "26.5.0" "26.5.0" "$BODY_260"
-
-          # ── 26.5.333 ──────────────────────────────────────────────────────────
-          read -r -d '' BODY_333 <<'NOTES' || true
+          cat > /tmp/notes/26.5.333.md << 'ENDOFNOTES'
 **Automated CI/CD: PyPI OIDC publish, PR gate, and eval gate**
 
 - Replaced the manual eval-only `release.yml` with a full automated publish workflow — every push to `main` runs the eval gate (`test` job), and on success the `publish` job computes a `YY.M.<git-rev-list-count>` CalVer tag, pushes it, builds the wheel via `hatch build`, and publishes to PyPI via OIDC trusted publisher (no stored secrets needed)
@@ -75,12 +42,9 @@ NOTES
 - Fixed `coverage combine` failure in CI: both test steps wrote to a single `.coverage` file via `--cov-append`, so `coverage combine` had no shards to merge and exited 1; CI now reports directly on the single file
 - Wheel version verification step added before PyPI upload to catch tag/wheel version mismatches before they reach the index
 - Monorepo-only stub comparison guard in `tests/test_search_stubs_copy.py` now skips cleanly when the monorepo root stubs file is absent (standalone repo)
-NOTES
+ENDOFNOTES
 
-          upsert "26.5.333" "26.5.333" "$BODY_333"
-
-          # ── 26.5.645 ──────────────────────────────────────────────────────────
-          read -r -d '' BODY_645 <<'NOTES' || true
+          cat > /tmp/notes/26.5.645.md << 'ENDOFNOTES'
 **A–C series: search hardening, observability, multi-collection routing, live eval, structured logging, tiered install, git-cliff CHANGELOG**
 
 **Search hardening (A1–A7)**
@@ -115,51 +79,91 @@ NOTES
 - `InstallProfile` registry with `english` (default) and `multilingual` profiles; `profile` + `multilingual` fields on `SearchConfig`; disk-space preflight (`_check_disk_space`), advisory PID-based install lock, model pre-warm with `threading.Timer` timeout (`_prewarm_models`), reinstall guard (`NeedsForceDeleteError`), 5-step rollback on `--force` reinstall; Jina CC-BY-NC-4.0 license gate shown before multilingual profile install; `install_cmd.py` consolidated to a thin Click shim
 
 **git-cliff CHANGELOG (C1)**
-- `cliff.toml` with CalVer pattern; `CHANGELOG.md` stub + `.gitattributes`; awk extraction tests; `release.sh` gains git-cliff ≥ 2.4 preflight check, provisional tag computation with count verification, CHANGELOG shell-prepend + commit + push in one step; `--dry-run` shows tag, cliff notes, and full `curl` preview; `github-release` CI job added to `archon-search-release.yml`
-NOTES
+- `cliff.toml` with CalVer pattern; `CHANGELOG.md` stub + `.gitattributes`; awk extraction tests; `release.sh` gains git-cliff >= 2.4 preflight check, provisional tag computation with count verification, CHANGELOG shell-prepend + commit + push in one step; `--dry-run` shows tag, cliff notes, and full `curl` preview; `github-release` CI job added to `archon-search-release.yml`
+ENDOFNOTES
 
-          upsert "26.5.645" "26.5.645" "$BODY_645"
-
-          # ── 26.5.647 (existing id=332132881) ─────────────────────────────────
-          read -r -d '' BODY_647 <<'NOTES' || true
+          cat > /tmp/notes/26.5.647.md << 'ENDOFNOTES'
 **Fix: fractional seconds rejected in captured_at timestamp regex**
 
 - Fixed a regex in the test suite that matched `captured_at` ISO-8601 timestamps — the pattern only accepted whole-second variants (e.g. `2026-05-27T12:34:56Z`) and rejected fractional-second timestamps (e.g. `2026-05-27T12:34:56.789Z`)
 - Failures were intermittent, occurring only when the system clock produced sub-second precision at capture time, making the root cause hard to reproduce locally
-NOTES
+ENDOFNOTES
 
-          upsert "26.5.647" "26.5.647" "$BODY_647" "332132881"
-
-          # ── 26.5.652 ──────────────────────────────────────────────────────────
-          read -r -d '' BODY_652 <<'NOTES' || true
+          cat > /tmp/notes/26.5.652.md << 'ENDOFNOTES'
 **Release automation: backfill workflow + flat release note format**
 
 - Added `workflow_dispatch` GitHub Actions workflow (`backfill-release-notes.yml`) to retroactively create or update release notes for all existing tags in one run
 - Switched the per-release note format to a flat style: bold title line derived from the first `feat` commit subject, followed by plain bullet points — no section headings within the release body (matches archon-assistant style)
-NOTES
+ENDOFNOTES
 
-          upsert "26.5.652" "26.5.652" "$BODY_652"
-
-          # ── 26.5.654 (existing id=332198797) ─────────────────────────────────
-          read -r -d '' BODY_654 <<'NOTES' || true
+          cat > /tmp/notes/26.5.654.md << 'ENDOFNOTES'
 **Fix: dynamic git-cliff download URL in CI**
 
 - The `github-release` CI job used a static git-cliff download URL that hardcoded a specific version number — the URL silently broke whenever a new git-cliff release was published upstream
 - Switched to a dynamic URL that resolves the latest git-cliff release version at download time via the GitHub releases API, so the CI job stays functional without manual URL updates after each git-cliff release
-NOTES
+ENDOFNOTES
 
-          upsert "26.5.654" "26.5.654" "$BODY_654" "332198797"
+      - name: Publish release notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          API="https://api.github.com/repos/${REPO}/releases"
 
-          # ── Verify ────────────────────────────────────────────────────────────
-          echo ""
-          echo "=== Verification ==="
-          curl -s "$API?per_page=50" \
+          upsert() {
+            local tag="$1" name="$2" notes_file="$3" existing_id="${4:-}"
+            local body
+            body=$(cat "$notes_file")
+            local payload
+            payload=$(python3 -c "
+          import json, sys
+          body = sys.stdin.read()
+          print(json.dumps({'tag_name': sys.argv[1], 'name': sys.argv[2], 'body': body, 'draft': False, 'prerelease': False}))
+          " "$tag" "$name" <<< "$body")
+            if [[ -n "$existing_id" ]]; then
+              echo "Updating $tag (id=$existing_id)..."
+              result=$(curl -sf -X PATCH "$API/$existing_id" \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$payload")
+              echo "  -> $(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('html_url','?'))")"
+            else
+              echo "Creating $tag..."
+              result=$(curl -sf -X POST "$API" \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$payload")
+              echo "  -> $(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('html_url','?')) if 'html_url' in r else print('ERROR:', r)")"
+            fi
+          }
+
+          upsert "26.5.0"   "26.5.0"   /tmp/notes/26.5.0.md
+          upsert "26.5.333" "26.5.333" /tmp/notes/26.5.333.md
+          upsert "26.5.645" "26.5.645" /tmp/notes/26.5.645.md
+          upsert "26.5.647" "26.5.647" /tmp/notes/26.5.647.md   332132881
+          upsert "26.5.652" "26.5.652" /tmp/notes/26.5.652.md
+          upsert "26.5.654" "26.5.654" /tmp/notes/26.5.654.md   332198797
+
+      - name: Verify all 6 releases
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          curl -s "https://api.github.com/repos/${REPO}/releases?per_page=50" \
             -H "Authorization: Bearer $GITHUB_TOKEN" | python3 -c "
           import sys, json
           releases = json.load(sys.stdin)
           print(f'Total releases: {len(releases)}')
-          for r in sorted(releases, key=lambda x: x[\"tag_name\"]):
-              body_chars = len(r[\"body\"] or \"\")
-              status = \"OK\" if body_chars > 200 else \"SHORT\"
-              print(f'  [{status}] {r[\"tag_name\"]:12}  chars={body_chars:5}  {r[\"html_url\"]}')
+          ok = True
+          for r in sorted(releases, key=lambda x: x['tag_name']):
+              chars = len(r.get('body') or '')
+              status = 'OK' if chars > 200 else 'SHORT'
+              if chars <= 200:
+                  ok = False
+              print(f'  [{status}] {r[\"tag_name\"]:12}  chars={chars:5}  {r[\"html_url\"]}')
+          if not ok:
+              print('FAILED: some releases have short bodies')
+              sys.exit(1)
+          print('All releases verified.')
           "
