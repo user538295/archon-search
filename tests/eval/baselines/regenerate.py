@@ -6,13 +6,28 @@ Run from the package root:
     uv run python tests/eval/baselines/regenerate.py
 
 This is a maintenance utility, not part of the pytest run (per spec).
+
+IMPORTANT: installs the same ML stubs that pytest uses (fake chonkie, fake fastembed)
+so calibrated values are consistent with what the gated CI tests measure.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
+
+# Install stubs BEFORE any archon_search imports to mirror the pytest conftest
+# environment. Without this, regenerate.py uses the real chonkie tokenizer while
+# the pytest gated test uses the fake word-count chunker, producing different
+# chunk boundaries and thus different routing centroids.
+_TESTS_DIR = Path(__file__).resolve().parent.parent.parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+from _search_stubs import install_stubs  # noqa: E402
+
+install_stubs()
 
 from archon_search.eval._hashing import (
     compute_eval_hash,
