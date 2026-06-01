@@ -526,7 +526,7 @@ class TestBootstrapCollections:
 
         MockSync.assert_called_once()
         _, kwargs = MockSync.call_args
-        assert kwargs["embedding_model"] == installer.cfg.embedding_model
+        assert kwargs["global_embedding_model"] == installer.cfg.embedding_model
         assert kwargs["chunk_size"] == installer.cfg.chunk_size
         assert kwargs["auto_reindex_on_chunk_size_change"] == installer.cfg.auto_reindex_on_chunk_size_change
         assert kwargs["pinned_collections"] == installer.cfg.pinned_collections

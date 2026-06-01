@@ -3095,7 +3095,7 @@ class TestTask45:
         pipeline = make_mock_pipeline(tmp_path)
         return SearchCollectionSync(
             pipeline,
-            embedding_model=embedding_model,
+            global_embedding_model=embedding_model,
             chunk_size=chunk_size,
             auto_reindex_on_chunk_size_change=auto_reindex,
         )
@@ -3269,11 +3269,11 @@ class TestTask45:
         pipeline = make_mock_pipeline(tmp_path)
         syncer = SearchCollectionSync(
             pipeline,
-            embedding_model="bge-small",
+            global_embedding_model="bge-small",
             chunk_size=256,
             auto_reindex_on_chunk_size_change=True,
         )
-        assert syncer._embedding_model == "bge-small"
+        assert syncer._global_embedding_model == "bge-small"
         assert syncer._chunk_size == 256
         assert syncer._auto_reindex_on_chunk_size_change is True
 
@@ -3478,7 +3478,7 @@ class TestTask46:
         # State: DONE with empty file_mtimes (no files tracked yet)
         state_store = _make_done_state(tmp_path, "myproject", {})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         assert "myproject" in result.updated
@@ -3508,7 +3508,7 @@ class TestTask46:
         # State: file tracked but with stale mtime (0.0)
         state_store = _make_done_state(tmp_path, "myproject", {real_key: 0.0})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         assert "myproject" in result.updated
@@ -3536,7 +3536,7 @@ class TestTask46:
 
         state_store = _make_done_state(tmp_path, "myproject", {ghost_path: 1234567.0})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         pipeline.store.delete_by_source_path.assert_called_once_with("myproject", ghost_path)
@@ -3567,7 +3567,7 @@ class TestTask46:
         # State: file tracked with exact current mtime
         state_store = _make_done_state(tmp_path, "myproject", {real_key: real_mtime})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         pipeline.ingest_file.assert_not_called()
@@ -3596,7 +3596,7 @@ class TestTask46:
 
         state_store = _make_done_state(tmp_path, "myproject", {})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         assert "myproject" in result.updated
@@ -3625,7 +3625,7 @@ class TestTask46:
 
         state_store = _make_done_state(tmp_path, "myproject", {real_key: real_mtime})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         assert "myproject" in result.unchanged
@@ -3656,7 +3656,7 @@ class TestTask46:
         # State with empty mtimes (file appears as new)
         state_store = _make_done_state(tmp_path, "myproject", {})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         await syncer.sync([str(col_dir)])
 
         state = state_store.read()
@@ -3688,7 +3688,7 @@ class TestTask46:
         state_store = _make_done_state(tmp_path, "myproject", {}, embedding_model="model-a", chunk_size=512)
 
         syncer = SearchCollectionSync(
-            pipeline, state_store=state_store, embedding_model="model-b", chunk_size=1024
+            pipeline, state_store=state_store, global_embedding_model="model-b", chunk_size=1024
         )
         await syncer.sync([str(col_dir)])
 
@@ -3718,7 +3718,7 @@ class TestTask46:
 
         state_store = _make_done_state(tmp_path, "myproject", {})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         await syncer.sync([str(col_dir)])
 
         pipeline.store.rebuild_fts_index.assert_called_once_with("myproject")
@@ -3752,7 +3752,7 @@ class TestTask46:
 
         state_store = _make_done_state(tmp_path, "myproject", {})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         await syncer.sync([str(col_dir)])
 
         pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY)
@@ -3787,7 +3787,7 @@ class TestTask46:
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
 
         syncer = SearchCollectionSync(
-            pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512
+            pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512
         )
         await syncer.sync([str(col_dir)])
 
@@ -3840,7 +3840,7 @@ class TestTask46:
         # Initial state includes the to-be-deleted file so sync detects it as removed
         state_store = _make_done_state(tmp_path, "myproject", {deleted_key: 1234567890.0})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         assert len(result.errors) == 1
@@ -3890,7 +3890,7 @@ class TestTask46:
 
         # Syncer uses a different model → full re-index
         syncer = SearchCollectionSync(
-            pipeline, state_store=state_store, embedding_model="model-new", chunk_size=512
+            pipeline, state_store=state_store, global_embedding_model="model-new", chunk_size=512
         )
         result = await syncer.sync([str(col_dir)])
 
@@ -3927,7 +3927,7 @@ class TestTask46:
         )
 
         syncer = SearchCollectionSync(
-            pipeline, state_store=state_store, embedding_model="model-a", chunk_size=1024,
+            pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=1024,
             auto_reindex_on_chunk_size_change=False,
         )
         with caplog.at_level(logging.WARNING, logger="archon"):
@@ -3965,7 +3965,7 @@ class TestTask46:
         )
 
         syncer = SearchCollectionSync(
-            pipeline, state_store=state_store, embedding_model="model-a", chunk_size=1024,
+            pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=1024,
             auto_reindex_on_chunk_size_change=True,
         )
         result = await syncer.sync([str(col_dir)])
@@ -3997,7 +3997,7 @@ class TestTask46:
 
         state_store = _make_done_state(tmp_path, "myproject", {})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
 
         in_progress_writes: list = []
         original_update = syncer._safe_state_update
@@ -4062,7 +4062,7 @@ class TestTask46:
         }
         state_store = _make_done_state(tmp_path, "myproject", file_mtimes)
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         assert "myproject" in result.updated
@@ -4109,7 +4109,7 @@ class TestTask46:
 
         state_store = _make_done_state(tmp_path, "myproject", {ghost_path: 1234567.0})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         await syncer.sync([str(col_dir)])
 
         pipeline.ingest_file.assert_not_called()
@@ -4137,7 +4137,7 @@ class TestTask46:
 
         state_store = _make_done_state(tmp_path, "myproject", {})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         await syncer.sync([str(col_dir)])
 
         state = state_store.read()
@@ -4167,7 +4167,7 @@ class TestTask46:
 
         state_store = _make_done_state(tmp_path, "myproject", {})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         assert len(result.errors) == 1
@@ -4200,7 +4200,7 @@ class TestTask46:
 
         state_store = _make_done_state(tmp_path, "myproject", {real_key: old_mtime})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         # Verify the change-detection path was actually exercised
@@ -4241,7 +4241,7 @@ class TestTask46:
 
         state_store = _make_done_state(tmp_path, "myproject", {real_key: old_mtime})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         # ingest_file must have been called with the changed file, collection name, and rebuild_fts=False
@@ -4291,7 +4291,7 @@ class TestTask46:
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
 
         syncer = SearchCollectionSync(
-            pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512
+            pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512
         )
         result = await syncer.sync([str(col_dir)])
 
@@ -4343,7 +4343,7 @@ class TestTask46:
         # Both files are new (empty file_mtimes)
         state_store = _make_done_state(tmp_path, "myproject", {})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         # Apply should SUCCEED (DONE state) despite the vanished file's stat() raising OSError
@@ -4399,7 +4399,7 @@ class TestTask46:
         # File starts with a stale mtime so it is classified as CHANGED, not new
         state_store = _make_done_state(tmp_path, "myproject", {real_key: old_mtime})
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
         # ingest_file must have been called with the changed file, collection name, and rebuild_fts=False
@@ -4456,7 +4456,7 @@ class TestTask46:
 
         pipeline.ingest_file.side_effect = ingest_side_effect
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         await syncer.sync([str(col_dir)])
 
         state = state_store.read()
@@ -4502,7 +4502,7 @@ class TestTask46:
 
         pipeline.ingest_file.side_effect = ingest_side_effect
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         await syncer.sync([str(col_dir)])
 
         state = state_store.read()
@@ -4544,7 +4544,7 @@ class TestTask46:
 
         pipeline.ingest_file.side_effect = ingest_fail
 
-        syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+        syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
         await syncer.sync([str(col_dir)])
 
         state = state_store.read()
@@ -4595,7 +4595,7 @@ class TestTask46:
         pipeline1.ingest_directory = AsyncMock(side_effect=fake_ingest_ok)
 
         syncer1 = SearchCollectionSync(
-            pipeline1, state_store=state_store, embedding_model="model-a", chunk_size=512
+            pipeline1, state_store=state_store, global_embedding_model="model-a", chunk_size=512
         )
         await syncer1.sync([str(col_dir)])
 
@@ -4610,7 +4610,7 @@ class TestTask46:
         )
 
         syncer2 = SearchCollectionSync(
-            pipeline2, state_store=state_store, embedding_model="model-a", chunk_size=512
+            pipeline2, state_store=state_store, global_embedding_model="model-a", chunk_size=512
         )
         result2 = await syncer2.sync([str(col_dir)])
 
@@ -4948,7 +4948,7 @@ async def test_sync_does_not_call_recompute_below_threshold(tmp_path) -> None:
         tmp_path, "myproject",
         {str((col_dir / "a.md").resolve()): 1.0},
     )
-    syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+    syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
     await syncer.sync([str(col_dir)])
 
     pipeline.recompute_collection_meta.assert_not_called()
@@ -4968,7 +4968,7 @@ async def test_sync_calls_recompute_when_signal_raised(tmp_path) -> None:
     pipeline = _make_pipeline_for_sync_centroid(tmp_path, meta=meta, threshold=10_000)
 
     state_store = _make_done_state(tmp_path, "myproject", {})
-    syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+    syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
     await syncer.sync([str(col_dir)])
 
     pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY)
@@ -4990,7 +4990,7 @@ async def test_sync_incremental_path_no_full_scan(tmp_path) -> None:
     pipeline.store.count_documents = AsyncMock(return_value=0)
 
     state_store = _make_done_state(tmp_path, "myproject", {})
-    syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+    syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
     await syncer.sync([str(col_dir)])
 
     pipeline.store.get_all_vectors.assert_not_called()
@@ -5013,7 +5013,143 @@ async def test_sync_recompute_on_delete_threshold_crossing(tmp_path) -> None:
     pipeline = _make_pipeline_for_sync_centroid(tmp_path, meta=meta, threshold=5)
 
     state_store = _make_done_state(tmp_path, "myproject", {})
-    syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
+    syncer = SearchCollectionSync(pipeline, state_store=state_store, global_embedding_model="model-a", chunk_size=512)
     await syncer.sync([str(col_dir)])
 
     pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY)
+
+
+# ---------------------------------------------------------------------------
+# Task 9.1: per-collection embedding model read-side fix
+# ---------------------------------------------------------------------------
+
+
+def test_sync_no_spurious_reindex_for_non_default_model(tmp_path):
+    """Collection with active_embedding_model='model-X' (different from global) but
+    indexed_embedding_model='model-X' (already correct) → no reindex triggered."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.sync import SearchCollectionSync
+
+    pipeline = make_mock_pipeline(tmp_path)
+    syncer = SearchCollectionSync(pipeline, global_embedding_model="global-m", chunk_size=512)
+
+    source_path = tmp_path / "myproject"
+    source_path.mkdir()
+    doc = source_path / "doc.md"
+    doc.write_text("content")
+    real_key = str(doc.resolve())
+    real_mtime = doc.stat().st_mtime
+
+    meta = CollectionMeta(name="myproject", active_embedding_model="model-X")
+    # indexed model matches collection's active model → no reindex
+    new_f, changed_f, deleted = syncer._check_collection_changes(
+        "myproject",
+        source_path,
+        file_mtimes={real_key: real_mtime},  # up-to-date
+        indexed_embedding_model="model-X",
+        indexed_chunk_size=512,
+        meta=meta,
+    )
+
+    assert new_f == []
+    assert changed_f == []
+    assert deleted == []
+
+
+def test_sync_uses_collection_meta_over_state_store(tmp_path):
+    """CollectionMeta.active_embedding_model is authoritative: even if global model matches
+    indexed_embedding_model, if the collection's active model differs, reindex is triggered."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.sync import SearchCollectionSync
+
+    pipeline = make_mock_pipeline(tmp_path)
+    # Global model matches what was indexed
+    syncer = SearchCollectionSync(pipeline, global_embedding_model="global-m", chunk_size=512)
+
+    source_path = tmp_path / "myproject"
+    source_path.mkdir()
+    doc = source_path / "doc.md"
+    doc.write_text("content")
+    real_key = str(doc.resolve())
+    real_mtime = doc.stat().st_mtime
+
+    # Collection was updated to use a new model that doesn't match what was indexed
+    meta = CollectionMeta(name="myproject", active_embedding_model="model-X")
+    # indexed_embedding_model matches global but not meta.active → reindex triggered
+    new_f, changed_f, deleted = syncer._check_collection_changes(
+        "myproject",
+        source_path,
+        file_mtimes={real_key: real_mtime},
+        indexed_embedding_model="global-m",  # matches global, NOT meta.active
+        indexed_chunk_size=512,
+        meta=meta,
+    )
+
+    # Meta is authoritative: effective_model="model-X" != indexed="global-m" → reindex
+    assert len(changed_f) > 0 or len(new_f) > 0
+
+
+def test_sync_meta_none_falls_back_to_global(tmp_path):
+    """When meta is None (pre-C1 collection), falls back to global model comparison."""
+    from archon_search.sync import SearchCollectionSync
+
+    pipeline = make_mock_pipeline(tmp_path)
+    syncer = SearchCollectionSync(pipeline, global_embedding_model="global-m", chunk_size=512)
+
+    source_path = tmp_path / "myproject"
+    source_path.mkdir()
+    doc = source_path / "doc.md"
+    doc.write_text("content")
+    real_key = str(doc.resolve())
+    real_mtime = doc.stat().st_mtime
+
+    # meta=None, indexed matches global → no reindex
+    new_f, changed_f, deleted = syncer._check_collection_changes(
+        "myproject",
+        source_path,
+        file_mtimes={real_key: real_mtime},
+        indexed_embedding_model="global-m",
+        indexed_chunk_size=512,
+        meta=None,
+    )
+    assert new_f == [] and changed_f == [] and deleted == []
+
+
+def test_sync_model_change_triggers_reindex(tmp_path):
+    """When meta.active_embedding_model changed from indexed model, reindex is triggered."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.sync import SearchCollectionSync
+
+    pipeline = make_mock_pipeline(tmp_path)
+    syncer = SearchCollectionSync(pipeline, global_embedding_model="global-m", chunk_size=512)
+
+    source_path = tmp_path / "myproject"
+    source_path.mkdir()
+    doc = source_path / "doc.md"
+    doc.write_text("content")
+    real_key = str(doc.resolve())
+    real_mtime = doc.stat().st_mtime
+
+    meta = CollectionMeta(name="myproject", active_embedding_model="model-new")
+    # was indexed with model-old, now active is model-new → reindex triggered
+    new_f, changed_f, deleted = syncer._check_collection_changes(
+        "myproject",
+        source_path,
+        file_mtimes={real_key: real_mtime},
+        indexed_embedding_model="model-old",
+        indexed_chunk_size=512,
+        meta=meta,
+    )
+    # force_full_reindex → all eligible files returned as changed
+    assert len(changed_f) > 0
+
+
+def test_no_self_embedding_model_in_sync():
+    """After rename, 'self._embedding_model' must not appear in sync.py."""
+    import archon_search.sync as sync_module
+    import inspect
+
+    source = inspect.getsource(sync_module)
+    assert "self._embedding_model" not in source, (
+        "Found 'self._embedding_model' in sync.py — rename to self._global_embedding_model"
+    )

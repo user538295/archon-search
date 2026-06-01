@@ -436,7 +436,7 @@ class TestS15_4_EmbeddingModelChangedFullReindex:
         syncer_a = SearchCollectionSync(
             pipeline,
             state_store=state_store,
-            embedding_model="model-a",
+            global_embedding_model="model-a",
         )
         result1 = await syncer_a.sync([str(source_dir)])
         assert "modelchange" in result1.added, f"First sync should add; got {result1.added}"
@@ -451,7 +451,7 @@ class TestS15_4_EmbeddingModelChangedFullReindex:
         syncer_b = SearchCollectionSync(
             pipeline,
             state_store=state_store,
-            embedding_model="model-b",
+            global_embedding_model="model-b",
         )
         result2 = await syncer_b.sync([str(source_dir)])
         assert result2.errors == [], f"Unexpected errors: {result2.errors}"

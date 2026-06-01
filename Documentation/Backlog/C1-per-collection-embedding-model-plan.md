@@ -822,7 +822,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
 > **Releasable**: after Task 9.3 — no spurious reindex for non-default-model collections; `IndexingState.indexed_embedding_model` correctly reflects per-collection model after sync; sync ingest call sites pass the correct per-collection embedder. (AC 46, 47, Testing Considerations: sync non-regression)
 
 #### Task 9.1 — Sync read-side fix: `_check_collection_changes` uses `CollectionMeta.active_embedding_model`
-- [ ] **File**: `archon_search/sync.py`
+- [x] **File**: `archon_search/sync.py`
 - **Depends on**: Task 1.2 (CollectionMeta fields), Task 2.2 (store available in sync)
 - **Description**:
   - `_check_collection_changes` (sync.py ~380) currently compares `self._embedding_model != indexed_embedding_model` (global model vs. state store). Change to: fetch `meta = await store.get_collection_meta(collection, namespace)` (or accept it as a parameter from the calling loop that pre-fetches all metas); compare `meta.active_embedding_model != indexed_embedding_model`.

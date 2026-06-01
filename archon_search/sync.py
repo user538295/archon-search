@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Callable
 from archon_search._durable_io import atomic_write_json
 
 if TYPE_CHECKING:
+    from archon_search.collection_meta import CollectionMeta
     from archon_search.pipeline import SearchPipeline
     from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore
 
@@ -91,7 +92,7 @@ class SearchCollectionSync:
         pipeline: SearchPipeline,
         state_store: IndexingStateStore | None = None,
         pinned_collections: list[str] | None = None,
-        embedding_model: str = "",
+        global_embedding_model: str = "",
         chunk_size: int = 0,
         auto_reindex_on_chunk_size_change: bool = False,
     ) -> None:
@@ -99,7 +100,7 @@ class SearchCollectionSync:
         self._state_store = state_store
         self._pinned_collections = pinned_collections or []
         self._collection_locks: dict[str, asyncio.Lock] = {}
-        self._embedding_model = embedding_model
+        self._global_embedding_model = global_embedding_model
         self._chunk_size = chunk_size
         self._auto_reindex_on_chunk_size_change = auto_reindex_on_chunk_size_change
 
@@ -229,10 +230,16 @@ class SearchCollectionSync:
                 cp = state.collections.get(name) if state else None
                 indexed_model = cp.indexed_embedding_model if cp else ""
                 indexed_cs = cp.indexed_chunk_size if cp else 0
+                # TODO: pass namespace when multi-namespace sync is supported
+                try:
+                    meta = await self._pipeline.store.get_collection_meta(name)
+                except Exception:
+                    meta = None
                 new_f, changed_f, deleted_p = self._check_collection_changes(
                     name, p, file_mtimes,
                     indexed_embedding_model=indexed_model,
                     indexed_chunk_size=indexed_cs,
+                    meta=meta,
                 )
                 if new_f or changed_f or deleted_p:
                     to_update.add(name)
@@ -276,6 +283,11 @@ class SearchCollectionSync:
         cp = state.collections.get(collection_name)
         indexed_embedding_model = cp.indexed_embedding_model if cp else ""
         indexed_chunk_size = cp.indexed_chunk_size if cp else 0
+        # TODO: pass namespace when multi-namespace sync is supported
+        try:
+            meta = await self._pipeline.store.get_collection_meta(collection_name)
+        except Exception:
+            meta = None
 
         new_f, changed_f, deleted_p = self._check_collection_changes(
             collection_name,
@@ -283,6 +295,7 @@ class SearchCollectionSync:
             file_mtimes,
             indexed_embedding_model=indexed_embedding_model,
             indexed_chunk_size=indexed_chunk_size,
+            meta=meta,
         )
 
         if new_f or changed_f or deleted_p:
@@ -369,6 +382,7 @@ class SearchCollectionSync:
         file_mtimes: dict[str, float],
         indexed_embedding_model: str,
         indexed_chunk_size: int,
+        meta: CollectionMeta | None = None,
     ) -> tuple[list[Path], list[Path], list[str]]:
         """Detect new, changed, and deleted files compared to stored file_mtimes.
 
@@ -376,12 +390,17 @@ class SearchCollectionSync:
         """
         force_full_reindex = False
 
-        # Embedding model guard
-        if self._embedding_model != indexed_embedding_model and indexed_embedding_model != "":
+        # Embedding model guard: use the collection's own active model if available,
+        # falling back to the global model. This prevents spurious reindexes when a
+        # collection intentionally uses a different model than the global default.
+        effective_model = (
+            meta.active_embedding_model if (meta and meta.active_embedding_model) else self._global_embedding_model
+        )
+        if effective_model != indexed_embedding_model and indexed_embedding_model != "":
             logger.info(
                 "Embedding model changed (%s → %s), triggering full re-index of '%s'",
                 indexed_embedding_model,
-                self._embedding_model,
+                effective_model,
                 name,
             )
             force_full_reindex = True
@@ -543,7 +562,7 @@ class SearchCollectionSync:
                         completed_at=datetime.now(UTC).isoformat(),
                         processed_paths=resume_paths,
                         file_mtimes=partial_mtimes,
-                        indexed_embedding_model=self._embedding_model,
+                        indexed_embedding_model=self._global_embedding_model,
                         indexed_chunk_size=self._chunk_size,
                     ))
                 else:
@@ -558,7 +577,7 @@ class SearchCollectionSync:
                         completed_at=datetime.now(UTC).isoformat(),
                         processed_paths=resume_paths + new_paths,
                         file_mtimes=partial_mtimes,
-                        indexed_embedding_model=self._embedding_model,
+                        indexed_embedding_model=self._global_embedding_model,
                         indexed_chunk_size=self._chunk_size,
                     ))
                 return None
@@ -581,7 +600,7 @@ class SearchCollectionSync:
                     error=str(exc),
                     processed_paths=resume_paths + new_paths,
                     file_mtimes=partial_mtimes,
-                    indexed_embedding_model=self._embedding_model,
+                    indexed_embedding_model=self._global_embedding_model,
                     indexed_chunk_size=self._chunk_size,
                 ))
                 return str(exc)
@@ -615,7 +634,7 @@ class SearchCollectionSync:
                 processed_files=len(file_mtimes),
                 processed_paths=processed_paths,
                 file_mtimes=dict(file_mtimes),
-                indexed_embedding_model=self._embedding_model,
+                indexed_embedding_model=self._global_embedding_model,
                 indexed_chunk_size=self._chunk_size,
             ))
 
@@ -636,7 +655,7 @@ class SearchCollectionSync:
                             processed_files=len(file_mtimes),
                             processed_paths=processed_paths,
                             file_mtimes=dict(file_mtimes),
-                            indexed_embedding_model=self._embedding_model,
+                            indexed_embedding_model=self._global_embedding_model,
                             indexed_chunk_size=self._chunk_size,
                         ))
 
@@ -663,7 +682,7 @@ class SearchCollectionSync:
                             processed_files=len(file_mtimes),
                             processed_paths=processed_paths,
                             file_mtimes=dict(file_mtimes),
-                            indexed_embedding_model=self._embedding_model,
+                            indexed_embedding_model=self._global_embedding_model,
                             indexed_chunk_size=self._chunk_size,
                         ))
 
@@ -686,7 +705,7 @@ class SearchCollectionSync:
                             processed_files=len(file_mtimes),
                             processed_paths=processed_paths,
                             file_mtimes=dict(file_mtimes),
-                            indexed_embedding_model=self._embedding_model,
+                            indexed_embedding_model=self._global_embedding_model,
                             indexed_chunk_size=self._chunk_size,
                         ))
 
@@ -729,7 +748,7 @@ class SearchCollectionSync:
                     processed_files=len(file_mtimes),
                     processed_paths=processed_paths,
                     file_mtimes=file_mtimes,
-                    indexed_embedding_model=self._embedding_model,
+                    indexed_embedding_model=self._global_embedding_model,
                     indexed_chunk_size=self._chunk_size,
                 ))
                 return None
@@ -742,7 +761,7 @@ class SearchCollectionSync:
                     error=str(exc),
                     processed_paths=processed_paths,
                     file_mtimes=dict(file_mtimes),
-                    indexed_embedding_model=self._embedding_model,
+                    indexed_embedding_model=self._global_embedding_model,
                     indexed_chunk_size=self._chunk_size,
                 ))
                 return str(exc)
