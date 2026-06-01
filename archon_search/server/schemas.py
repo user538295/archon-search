@@ -73,6 +73,7 @@ class StatusCollectionEntry(BaseModel):
     total_files: int = 0
     error: str | None = None
     error_count: int = 0
+    needs_reindex: bool = False
 
 
 class StatusResponse(BaseModel):

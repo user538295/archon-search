@@ -920,7 +920,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_cli_collection.py -v -k "reindex"`
 
 #### Task 10.3 — `/status` endpoint: include collections with `needs_reindex: true`
-- [ ] **File**: `archon_search/server/routes_status.py`
+- [x] **File**: `archon_search/server/routes_status.py`
 - **Depends on**: Task 1.2 (CollectionMeta fields), Task 6.3 (CollectionSummary schema)
 - **Description**:
   - In the `/status` response, add a list of collection names (or `CollectionSummary` objects) where `needs_reindex=true`. (AC 19)

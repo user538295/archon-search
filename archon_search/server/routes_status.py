@@ -10,8 +10,6 @@ from archon_search.config import SearchConfig
 from archon_search.progress import compute_eta_seconds
 from archon_search.server.readiness import collect_readiness
 from archon_search.server.schemas import ErrorDetail, StatusCollectionEntry, StatusResponse
-from archon_search.sync import path_to_collection_name
-
 router = APIRouter()
 
 try:
@@ -32,7 +30,9 @@ async def status(request: Request) -> StatusResponse:
     # Resolve which collection names belong to the caller's namespace
     search_store = request.app.state.search_store
     all_meta = await search_store.get_all_collections_meta()
-    ns_names: set[str] = {m.name for m in all_meta if m.namespace == ns}
+    ns_meta = [m for m in all_meta if m.namespace == ns]
+    ns_names: set[str] = {m.name for m in ns_meta}
+    meta_by_name = {m.name: m for m in ns_meta}
 
     # Load indexing state for collection progress (state_store created once in create_app)
     state_store = request.app.state.state_store
@@ -51,18 +51,15 @@ async def status(request: Request) -> StatusResponse:
                 "eta_seconds": eta,
             }
 
-    # Convert config paths to collection names before building the union
-    config_names: set[str] = {path_to_collection_name(p) for p in config.collections}
-    pinned_names: set[str] = {path_to_collection_name(p) for p in config.pinned_collections}
-    all_names: set[str] = config_names | pinned_names | set(collections_progress.keys())
-
-    # Filter to only names in the caller's namespace
-    all_names &= ns_names
+    # ns_names (from the store) is the authoritative, namespace-scoped set of collections.
+    # Config/pinned paths without a store meta row are not yet indexed and won't appear here.
+    all_names: set[str] = ns_names
 
     collection_entries: list[StatusCollectionEntry] = []
     for name in sorted(all_names):
         progress = collections_progress.get(name)
         watching = config.watch
+        col_meta = meta_by_name.get(name)
         collection_entries.append(
             StatusCollectionEntry(
                 name=name,
@@ -76,6 +73,7 @@ async def status(request: Request) -> StatusResponse:
                 total_files=progress["total_files"] if progress else 0,
                 error=progress.get("error") if progress else None,
                 error_count=progress["error_count"] if progress else 0,
+                needs_reindex=col_meta.needs_reindex if col_meta else False,
             )
         )
 

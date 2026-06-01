@@ -498,3 +498,72 @@ def test_status_response_readiness_always_populated_by_handler(tmp_db: Path) -> 
     c = _make_client_with_readiness(tmp_db)
     data = c.get("/status").json()
     assert data["readiness"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 10.3 — needs_reindex surfaced in /status
+# ---------------------------------------------------------------------------
+
+
+def _make_client_with_meta(tmp_db: Path, meta_rows: list[CollectionMeta]) -> TestClient:
+    """Build a TestClient with explicit meta rows (no indexing state)."""
+    config = SearchConfig()
+    config.db_path = str(tmp_db)
+    job_store = JobStore(path=tmp_db / "jobs.json")
+    app = create_app(config, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=meta_rows)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+
+def test_status_lists_needs_reindex_collections(tmp_db: Path) -> None:
+    """Collection with needs_reindex=True must surface in /status response."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta_rows = [
+        CollectionMeta(name="col-a", namespace=DEFAULT_NAMESPACE, needs_reindex=True),
+        CollectionMeta(name="col-b", namespace=DEFAULT_NAMESPACE, needs_reindex=False),
+    ]
+    c = _make_client_with_meta(tmp_db, meta_rows)
+    response = c.get("/status")
+    assert response.status_code == 200
+    data = response.json()
+
+    col_a = next((col for col in data["collections"] if col["name"] == "col-a"), None)
+    col_b = next((col for col in data["collections"] if col["name"] == "col-b"), None)
+
+    assert col_a is not None, "col-a missing from collections"
+    assert col_a["needs_reindex"] is True
+
+    assert col_b is not None, "col-b missing from collections"
+    assert col_b["needs_reindex"] is False
+
+
+def test_status_health_not_degraded_by_needs_reindex(tmp_db: Path) -> None:
+    """needs_reindex=True must NOT affect readiness counters or overall health."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta_rows = [
+        CollectionMeta(name="col-pending", namespace=DEFAULT_NAMESPACE, needs_reindex=True),
+    ]
+    c = _make_client_with_meta(tmp_db, meta_rows)
+    response = c.get("/status")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["running"] is True
+
+    # needs_reindex must NOT increment collections_failed or collections_indexing
+    assert data["readiness"]["collections_failed"] == 0
+    assert data["readiness"]["collections_indexing"] == 0
+
+    # storage_connected is based on ping, not needs_reindex
+    assert data["readiness"]["storage_connected"] is True
