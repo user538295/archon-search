@@ -42,7 +42,7 @@ def ingest(ingest_path: Path | None, collection: str | None, config_path: Path |
                 cid = new_correlation_id()
                 with bind_stage_recorder() as recorder:
                     t0 = time.perf_counter()
-                    results = await pipeline.ingest_directory(ingest_path, collection_name)
+                    results = await pipeline.ingest_directory(ingest_path, collection_name, embedder=pipeline._global_embedder)
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
                     logger.info(
                         "stage timings",
@@ -55,7 +55,7 @@ def ingest(ingest_path: Path | None, collection: str | None, config_path: Path |
                         },
                     )
             else:
-                results = await pipeline.ingest_directory(ingest_path, collection_name)
+                results = await pipeline.ingest_directory(ingest_path, collection_name, embedder=pipeline._global_embedder)
             ok = sum(1 for r in results if r.status == "ok")
             errors = sum(1 for r in results if r.status == "error")
             click.echo(f"Ingest complete: {ok} ingested, {errors} errors.")

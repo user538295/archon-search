@@ -411,7 +411,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_pipeline.py -v -k "ingest_file_uses_passed_embedder or ingest_file_writes_correct_model"`
 
 #### Task 3.4 — Add `embedder: Embedder` to `ingest_directory()`; fix post-ingest `CollectionMeta` construction
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 3.3
 - **Description**:
   - New signature: `async def ingest_directory(self, path: Path, collection: str, ..., *, embedder: Embedder, namespace: str = DEFAULT_NAMESPACE, ...) -> None`.

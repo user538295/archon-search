@@ -113,8 +113,8 @@ async def test_pipeline_ingest_is_idempotent(connected_store, col_name, tmp_path
     md_file.write_text("# Idempotent Test\n\nSome content here.\n" * 10)
 
     # Use ingest_directory so collection meta is written (required by list_documents namespace guard)
-    await pipeline.ingest_directory(tmp_path, col_name)
-    await pipeline.ingest_directory(tmp_path, col_name)
+    await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
+    await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     docs = await pipeline.list_documents(col_name)
     assert len(docs) == 1
@@ -216,7 +216,7 @@ async def test_pipeline_ingest_directory(connected_store, col_name, tmp_path):
     for i in range(3):
         (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent for document {i}.\n" * 5)
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     assert len(results) == 3
     assert all(r.status == "ok" for r in results)
@@ -233,7 +233,7 @@ async def test_pipeline_ingest_directory_calls_progress_cb(connected_store, col_
     def progress_cb(done: int, total: int) -> None:
         calls.append((done, total))
 
-    await pipeline.ingest_directory(tmp_path, col_name, progress_cb=progress_cb)
+    await pipeline.ingest_directory(tmp_path, col_name, progress_cb=progress_cb, embedder=pipeline._global_embedder)
 
     assert len(calls) == 3
     assert calls[-1][0] == 3  # all done
@@ -295,7 +295,7 @@ async def test_pipeline_delete_document(connected_store, col_name, tmp_path):
     md_file.write_text("# Delete Test\n\nContent to be deleted.\n" * 5)
 
     # Use ingest_directory so collection meta is written (required by delete_document namespace guard)
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
     assert len(results) == 1
     result = results[0]
     assert result.status == "ok"
@@ -340,7 +340,7 @@ async def test_pipeline_ingest_directory_empty_dir(connected_store, col_name, tm
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
 
-    results = await pipeline.ingest_directory(empty_dir, col_name)
+    results = await pipeline.ingest_directory(empty_dir, col_name, embedder=pipeline._global_embedder)
 
     assert results == []
 
@@ -365,7 +365,7 @@ async def test_pipeline_ingest_directory_partial_failure(connected_store, col_na
 
     pipeline._parser.parse = _selective_fail  # type: ignore[method-assign]
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     ok_results = [r for r in results if r.status == "ok"]
     error_results = [r for r in results if r.status == "error"]
@@ -405,7 +405,7 @@ async def test_pipeline_ingest_directory_rebuilds_fts_once(connected_store, col_
         for i in range(3):
             (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent.\n" * 5)
 
-        await pipeline.ingest_directory(tmp_path, col_name)
+        await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
         assert rebuild_calls == 1
     finally:
@@ -421,7 +421,7 @@ async def test_pipeline_ingest_directory_skips_subdirectories(connected_store, c
     subdir.mkdir()
     # The subdir itself should not appear as a result (it's a dir, not a file)
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     # Only 2 files, not the subdir
     assert len(results) == 2
@@ -433,7 +433,7 @@ async def test_pipeline_ingest_directory_skips_hidden_files(connected_store, col
     (tmp_path / "visible.md").write_text("# Visible\n\nContent.\n" * 5)
     (tmp_path / ".hidden.md").write_text("# Hidden\n\nContent.\n" * 5)
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     assert len(results) == 1
     assert results[0].status == "ok"
@@ -447,7 +447,7 @@ async def test_pipeline_ingest_directory_skips_files_in_hidden_directories(conne
     hidden_dir.mkdir()
     (hidden_dir / "tracked.md").write_text("# Tracked\n\nContent.\n")
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     assert len(results) == 1
     assert results[0].status == "ok"
@@ -461,7 +461,7 @@ async def test_pipeline_ingest_directory_skips_symlinks(connected_store, col_nam
     symlink_file = tmp_path / "link.md"
     symlink_file.symlink_to(real_file)
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     # Only real file, not symlink
     assert len(results) == 1
@@ -476,7 +476,7 @@ async def test_pipeline_ingest_file_parse_error_preserves_existing_chunks(connec
     md_file.write_text("# Existing Content\n\nThis should be preserved.\n" * 10)
 
     # Use ingest_directory to create collection meta (required by list_documents namespace guard)
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
     first_result = results[0]
     assert first_result.status == "ok"
 
@@ -502,7 +502,7 @@ async def test_pipeline_ingest_file_empty_content_preserves_existing_chunks(conn
     md_file.write_text("# First Ingest\n\nThis should be preserved.\n" * 10)
 
     # Use ingest_directory to create collection meta (required by list_documents namespace guard)
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
     first_result = results[0]
     assert first_result.status == "ok"
     assert first_result.chunks_created > 0
@@ -560,7 +560,7 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
 
     pipeline._parser.parse = _always_fail  # type: ignore[method-assign]
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     assert all(r.status == "error" for r in results)
     assert not rebuild_called
@@ -572,7 +572,7 @@ async def test_pipeline_ingest_directory_skips_binary_extensions(connected_store
     (tmp_path / "data.txt").write_text("Some text content.\n" * 5)
     (tmp_path / "image.gif").write_bytes(b"GIF89a" + b"\x00" * 100)
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     assert len(results) == 1
     assert results[0].status == "ok"
@@ -599,7 +599,7 @@ async def test_pipeline_ingest_directory_skips_binary_image(ext: str, connected_
     pipeline = make_pipeline(connected_store)
     (tmp_path / f"binary{ext}").write_bytes(b"\x00" * 50)
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     assert results == [], f"Binary {ext} file should not be ingested"
 
@@ -613,7 +613,7 @@ async def test_pipeline_ingest_directory_includes_png(connected_store, col_name,
     ocr_text = "Extracted OCR text from image. " * 20
     pipeline._parser.parse = AsyncMock(return_value=ocr_text)  # type: ignore[method-assign]
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     assert len(results) == 1
     assert results[0].status == "ok"
@@ -651,7 +651,7 @@ async def test_ingest_computes_centroid_from_all_chunks(connected_store, col_nam
         (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent for document {i}.\n" * 5)
 
     before = datetime.now(UTC)
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
     after = datetime.now(UTC)
     assert all(r.status == "ok" for r in results)
 
@@ -676,7 +676,7 @@ async def test_ingest_centroid_replaced_on_reingest(connected_store, col_name, t
     (tmp_path / "doc.md").write_text("# Doc\n\nContent.\n" * 5)
 
     # First ingest — MockEmbedderBackend returns [0.1]*4
-    await pipeline.ingest_directory(tmp_path, col_name)
+    await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
     meta1 = await connected_store.get_collection_meta(col_name)
     assert meta1 is not None and meta1.centroid is not None
 
@@ -691,7 +691,7 @@ async def test_ingest_centroid_replaced_on_reingest(connected_store, col_name, t
     pipeline._global_embedder = Embedder(AltEmbedderBackend())
 
     # Re-ingest
-    await pipeline.ingest_directory(tmp_path, col_name)
+    await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
     meta2 = await connected_store.get_collection_meta(col_name)
     assert meta2 is not None
     assert meta2.centroid is not None
@@ -736,7 +736,7 @@ async def test_ingest_centroid_averages_heterogeneous_embeddings(connected_store
     (tmp_path / "a.md").write_text("# A\n\nContent.\n" * 5)
     (tmp_path / "b.md").write_text("# B\n\nContent.\n" * 5)
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
     assert all(r.status == "ok" for r in results)
 
     meta = await connected_store.get_collection_meta(col_name)
@@ -763,7 +763,7 @@ async def test_ingest_directory_calls_generate_description(connected_store, col_
     with _patch(
         "archon_search.pipeline.generate_description", return_value="A fine collection."
     ) as mock_gen:
-        await pipeline.ingest_directory(tmp_path, col_name)
+        await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     mock_gen.assert_awaited_once()
     meta = await connected_store.get_collection_meta(col_name)
@@ -784,7 +784,7 @@ async def test_ingest_directory_preserves_old_description_on_generation_failure(
 
     # First ingest — description successfully generated
     with _patch("archon_search.pipeline.generate_description", return_value="Original description."):
-        await pipeline.ingest_directory(tmp_path, col_name)
+        await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     meta1 = await connected_store.get_collection_meta(col_name)
     assert meta1 is not None and meta1.description == "Original description."
@@ -805,7 +805,7 @@ async def test_ingest_directory_preserves_old_description_on_generation_failure(
 
     with _patch("archon_search.pipeline.generate_description", return_value=None) as mock_gen:
         pipeline._global_embedder = make_embedder()  # reset to standard embedder
-        await pipeline.ingest_directory(tmp_path, new_col)
+        await pipeline.ingest_directory(tmp_path, new_col, embedder=pipeline._global_embedder)
 
     meta2 = await connected_store.get_collection_meta(new_col)
     assert meta2 is not None
@@ -829,7 +829,7 @@ async def test_ingest_directory_sets_described_at_doc_count_on_success(
         (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent.\n" * 5)
 
     with _patch("archon_search.pipeline.generate_description", return_value="Three docs here."):
-        await pipeline.ingest_directory(tmp_path, col_name)
+        await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     meta = await connected_store.get_collection_meta(col_name)
     assert meta is not None
@@ -1191,7 +1191,7 @@ async def test_ingest_calls_progress_callback(connected_store, col_name, tmp_pat
 
     pipeline.ingest_file = _spy_ingest_file
 
-    results = await pipeline.ingest_directory(tmp_path, col_name, progress_cb=_cb)
+    results = await pipeline.ingest_directory(tmp_path, col_name, progress_cb=_cb, embedder=pipeline._global_embedder)
 
     assert len(results) == 2
     assert len(calls) == 2
@@ -1214,7 +1214,7 @@ async def test_ingest_async_progress_callback(connected_store, col_name, tmp_pat
     async def _async_cb(done: int, total: int) -> None:
         calls.append((done, total))
 
-    results = await pipeline.ingest_directory(tmp_path, col_name, progress_cb=_async_cb)
+    results = await pipeline.ingest_directory(tmp_path, col_name, progress_cb=_async_cb, embedder=pipeline._global_embedder)
 
     assert len(results) == 1
     assert calls == [(1, 1)]
@@ -1292,7 +1292,7 @@ async def test_ingest_directory_exclude_paths_skips_files(connected_store, col_n
         (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent for document {i}.\n" * 5)
 
     exclude = frozenset({str(tmp_path / "doc1.md")})
-    results = await pipeline.ingest_directory(tmp_path, col_name, exclude_paths=exclude)
+    results = await pipeline.ingest_directory(tmp_path, col_name, exclude_paths=exclude, embedder=pipeline._global_embedder)
 
     assert len(results) == 2
     assert all(r.status == "ok" for r in results)
@@ -1311,7 +1311,7 @@ async def test_ingest_directory_exclude_paths_adjusts_total(connected_store, col
         calls.append((done, total))
 
     exclude = frozenset({str(tmp_path / "doc1.md")})
-    await pipeline.ingest_directory(tmp_path, col_name, progress_cb=progress_cb, exclude_paths=exclude)
+    await pipeline.ingest_directory(tmp_path, col_name, progress_cb=progress_cb, exclude_paths=exclude, embedder=pipeline._global_embedder)
 
     assert len(calls) == 2
     assert all(total == 2 for _, total in calls)
@@ -1327,7 +1327,8 @@ async def test_ingest_directory_on_file_complete_called_per_file(connected_store
     completed: list[Path] = []
     results = await pipeline.ingest_directory(
         tmp_path, col_name, on_file_complete=lambda p: completed.append(p),
-    )
+        embedder=pipeline._global_embedder,
+)
 
     assert len(completed) == 3
     assert all(isinstance(p, Path) for p in completed)
@@ -1358,7 +1359,8 @@ async def test_ingest_directory_on_file_complete_only_for_ok_results(connected_s
     completed: list[Path] = []
     results = await pipeline.ingest_directory(
         tmp_path, col_name, on_file_complete=lambda p: completed.append(p),
-    )
+        embedder=pipeline._global_embedder,
+)
 
     error_results = [r for r in results if r.status == "error"]
     assert len(error_results) == 1
@@ -1379,7 +1381,8 @@ async def test_ingest_directory_no_new_files_returns_empty(connected_store, col_
 
     results = await pipeline.ingest_directory(
         tmp_path, col_name, progress_cb=lambda d, t: calls.append((d, t)), exclude_paths=exclude,
-    )
+        embedder=pipeline._global_embedder,
+)
 
     assert results == []
     assert calls == []
@@ -1392,7 +1395,7 @@ async def test_ingest_directory_no_exclude_paths_unchanged(connected_store, col_
     for i in range(3):
         (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent for document {i}.\n" * 5)
 
-    results = await pipeline.ingest_directory(tmp_path, col_name, exclude_paths=None)
+    results = await pipeline.ingest_directory(tmp_path, col_name, exclude_paths=None, embedder=pipeline._global_embedder)
 
     assert len(results) == 3
     assert all(r.status == "ok" for r in results)
@@ -1422,7 +1425,8 @@ async def test_ingest_directory_exclude_and_on_file_complete_combined(connected_
         tmp_path, col_name,
         exclude_paths=exclude,
         on_file_complete=lambda p: completed.append(p),
-    )
+        embedder=pipeline._global_embedder,
+)
 
     # doc0 excluded, doc1 errored, doc2 ok → callback only for doc2
     assert len(results) == 2  # doc1 + doc2 (doc0 excluded)
@@ -1477,7 +1481,7 @@ async def test_pipeline_ingest_directory_partial_file_failure_continues(connecte
     def progress_cb(done: int, total: int) -> None:
         calls.append((done, total))
 
-    results = await pipeline.ingest_directory(tmp_path, col_name, progress_cb=progress_cb)
+    results = await pipeline.ingest_directory(tmp_path, col_name, progress_cb=progress_cb, embedder=pipeline._global_embedder)
 
     # One file parse-fails, two succeed
     ok_results = [r for r in results if r.status == "ok"]
@@ -1571,7 +1575,7 @@ async def test_P14_21_pipeline_ingest_directory_zero_markdown_files(connected_st
     (tmp_path / "image.gif").write_bytes(b"GIF89a" + b"\x00" * 50)
     (tmp_path / "archive.zip").write_bytes(b"PK" + b"\x00" * 50)
 
-    results = await pipeline.ingest_directory(tmp_path, col_name)
+    results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     assert results == []
 
@@ -1627,7 +1631,7 @@ async def test_p14_24_delete_document_sql_injection_rejected_by_doc_id_re(connec
     """
     pipeline = make_pipeline(connected_store)
     (tmp_path / "doc.md").write_text("# test\n\nContent.\n" * 5)
-    await pipeline.ingest_directory(tmp_path, col_name)
+    await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder)
 
     with pytest.raises(ValueError, match="Invalid doc_id"):
         await pipeline.delete_document("' OR '1'='1", col_name)
@@ -1988,7 +1992,7 @@ async def test_ingest_directory_namespace_param(tmp_path) -> None:
 
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for namespace test.\n" * 5)
 
-    await pipeline.ingest_directory(tmp_path, "my-col", namespace="tenantA")
+    await pipeline.ingest_directory(tmp_path, "my-col", namespace="tenantA", embedder=pipeline._global_embedder)
 
     # store.get_collection_meta must be called with namespace="tenantA"
     store.get_collection_meta.assert_awaited_once_with("my-col", namespace="tenantA")
@@ -2033,7 +2037,7 @@ async def test_ingest_directory_default_namespace(tmp_path) -> None:
 
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for default namespace test.\n" * 5)
 
-    await pipeline.ingest_directory(tmp_path, "my-col")
+    await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder)
 
     store.get_collection_meta.assert_awaited_once_with("my-col", namespace=DEFAULT_NAMESPACE)
     saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
@@ -3340,7 +3344,7 @@ async def test_ingest_populates_description_embedding(tmp_path) -> None:
         patch("archon_search.pipeline.generate_description", return_value="test desc"),
         patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock(return_value=embed_vec)),
     ):
-        await pipeline.ingest_directory(tmp_path, "my-col")
+        await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder)
 
     store.update_collection_meta.assert_awaited_once()
     saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
@@ -3361,7 +3365,7 @@ async def test_ingest_description_none_sets_embedding_none(tmp_path) -> None:
 
     with patch("archon_search.pipeline.generate_description", return_value=None):
         with patch.object(pipeline._global_embedder, "embed_one", new_callable=AsyncMock) as mock_embed:
-            await pipeline.ingest_directory(tmp_path, "my-col")
+            await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder)
 
     mock_embed.assert_not_awaited()
     store.update_collection_meta.assert_awaited_once()
@@ -3392,7 +3396,7 @@ async def test_ingest_re_embeds_description_on_every_ingest(tmp_path) -> None:
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for re-embed test.\n" * 5)
 
     with patch.object(pipeline._global_embedder, "embed_one", new=embed_one_mock):
-        await pipeline.ingest_directory(tmp_path, "my-col")
+        await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder)
 
     # embed_one must have been called with the preserved description
     embed_one_mock.assert_awaited_once_with("old desc")
@@ -3611,7 +3615,7 @@ async def test_ingest_directory_calls_update_description_not_update_collection_m
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Hello\n\nContent for testing.\n" * 5)
 
-    await pipeline.ingest_directory(tmp_path, "test-col")
+    await pipeline.ingest_directory(tmp_path, "test-col", embedder=pipeline._global_embedder)
 
     store.update_description.assert_awaited_once()
     store.update_collection_meta.assert_not_awaited()
@@ -3633,7 +3637,7 @@ async def test_ingest_directory_triggers_recompute_on_needs_recompute_signal(tmp
         md_file = tmp_path / "doc.md"
         md_file.write_text("# Hello\n\nContent for testing.\n" * 5)
 
-        await pipeline.ingest_directory(tmp_path, "test-col")
+        await pipeline.ingest_directory(tmp_path, "test-col", embedder=pipeline._global_embedder)
 
     mock_recompute.assert_awaited_once()
 
@@ -3653,7 +3657,7 @@ async def test_ingest_directory_no_recompute_below_threshold(tmp_path) -> None:
         md_file = tmp_path / "doc.md"
         md_file.write_text("# Hello\n\nContent for testing.\n" * 5)
 
-        await pipeline.ingest_directory(tmp_path, "test-col")
+        await pipeline.ingest_directory(tmp_path, "test-col", embedder=pipeline._global_embedder)
 
     mock_recompute.assert_not_awaited()
 
@@ -4138,3 +4142,193 @@ async def test_ingest_file_writes_correct_model_name_to_chunks(tmp_path) -> None
     store.ingest_chunks.assert_awaited_once()
     call_kwargs = store.ingest_chunks.call_args
     assert call_kwargs.kwargs.get("embedding_model") == "custom-model-xyz"
+
+
+# ===========================================================================
+# Task 3.4 — ingest_directory embedder parameter and C1 field preservation
+# ===========================================================================
+
+
+def _make_embedder_with_model(model_name: str) -> Embedder:
+    """Build an Embedder whose backend reports a specific model_name."""
+
+    class _Backend:
+        is_warm: bool = False
+
+        def __init__(self, name: str) -> None:
+            self.model_name = name
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            return [[0.1] * 4 for _ in texts]
+
+    return Embedder(_Backend(model_name))
+
+
+def _make_mock_store_c1(existing_meta=None):  # type: ignore[no-untyped-def]
+    """Minimal mock store for C1 tests (centroid_incremental_enabled=False)."""
+    from archon_search.config import SearchConfig
+
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.delete_document = AsyncMock(return_value=0)
+    store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
+    store.rebuild_fts_index = AsyncMock()
+    store.get_collection_meta = AsyncMock(return_value=existing_meta)
+    store.update_collection_meta = AsyncMock()
+    store.update_description = AsyncMock()
+    store._config = SearchConfig(centroid_incremental_enabled=False)
+    return store
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_preserves_active_embedding_model(tmp_path) -> None:
+    """Existing collection with active_embedding_model='model-X'; ingest with embedder_Y;
+    after ingest, active_embedding_model is still 'model-X'."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    existing_meta = CollectionMeta(name="col", active_embedding_model="model-X")
+    store = _make_mock_store_c1(existing_meta=existing_meta)
+
+    embedder_y = _make_embedder_with_model("model-Y")
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),  # global = "mock-embedder"
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    (tmp_path / "doc.md").write_text("# Hello\n\nContent.\n" * 5)
+
+    await pipeline.ingest_directory(tmp_path, "col", embedder=embedder_y)
+
+    store.update_collection_meta.assert_awaited_once()
+    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved.active_embedding_model == "model-X", (
+        f"expected model-X but got {saved.active_embedding_model!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_sets_active_embedding_model_for_new_collection(tmp_path) -> None:
+    """New collection (no existing meta); ingest with embedder_X;
+    active_embedding_model is set to embedder_X.model_name."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = _make_mock_store_c1(existing_meta=None)  # no existing meta → new collection
+
+    embedder_x = _make_embedder_with_model("model-X")
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),  # global = "mock-embedder"
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    (tmp_path / "doc.md").write_text("# Hello\n\nContent.\n" * 5)
+
+    await pipeline.ingest_directory(tmp_path, "col", embedder=embedder_x)
+
+    store.update_collection_meta.assert_awaited_once()
+    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved.active_embedding_model == "model-X", (
+        f"expected model-X but got {saved.active_embedding_model!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_description_uses_global_embedder(tmp_path) -> None:
+    """description_embedding is produced by self._global_embedder.embed_one, not embedder param."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = _make_mock_store_c1(existing_meta=None)
+
+    global_embedder = _make_embedder_with_model("global-model")
+    passed_embedder = _make_embedder_with_model("passed-model")
+
+    # Spy on embed_one for both embedders
+    global_embed_one_mock = AsyncMock(return_value=[0.1] * 4)
+    passed_embed_one_mock = AsyncMock(return_value=[0.2] * 4)
+    global_embedder.embed_one = global_embed_one_mock  # type: ignore[method-assign]
+    passed_embedder.embed_one = passed_embed_one_mock  # type: ignore[method-assign]
+    # Also patch embed so chunks can be embedded
+    global_embedder.embed = AsyncMock(return_value=[[0.1] * 4])  # type: ignore[method-assign]
+    passed_embedder.embed = AsyncMock(return_value=[[0.2] * 4])  # type: ignore[method-assign]
+    global_embedder._embedding_dim = 4
+    passed_embedder._embedding_dim = 4
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=global_embedder,
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    (tmp_path / "doc.md").write_text("# Hello\n\nContent.\n" * 5)
+
+    with patch("archon_search.pipeline._should_regenerate", return_value=True), \
+         patch("archon_search.pipeline.generate_description", new=AsyncMock(return_value="A good description")):
+        await pipeline.ingest_directory(tmp_path, "col", embedder=passed_embedder)
+
+    # global embed_one must have been called (for description embedding)
+    global_embed_one_mock.assert_awaited()
+    # passed embedder's embed_one must NOT have been called for description
+    passed_embed_one_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ingest_directory_preserves_all_c1_fields(tmp_path) -> None:
+    """All four C1 fields are preserved from existing_meta after ingest_directory."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    existing_meta = CollectionMeta(
+        name="col",
+        active_embedding_model="model-A",
+        pending_embedding_model="model-B",
+        needs_reindex=True,
+        reindex_job_id="job-42",
+    )
+    store = _make_mock_store_c1(existing_meta=existing_meta)
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    (tmp_path / "doc.md").write_text("# Hello\n\nContent.\n" * 5)
+
+    await pipeline.ingest_directory(tmp_path, "col", embedder=pipeline._global_embedder)
+
+    store.update_collection_meta.assert_awaited_once()
+    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved.active_embedding_model == "model-A"
+    assert saved.pending_embedding_model == "model-B"
+    assert saved.needs_reindex is True
+    assert saved.reindex_job_id == "job-42"

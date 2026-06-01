@@ -519,6 +519,7 @@ class SearchCollectionSync:
                     progress_cb=wrapped_cb,
                     exclude_paths=exclude_set,
                     on_file_complete=on_complete,
+                    embedder=self._pipeline._global_embedder,
                     ingested_by="watcher",
                 )
 

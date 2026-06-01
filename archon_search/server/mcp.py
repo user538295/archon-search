@@ -599,6 +599,7 @@ def create_app(
                     collection or default_collection,
                     glob_pattern=glob_pattern,
                     progress_cb=progress_cb,
+                    embedder=pipeline._global_embedder,
                     ingested_by="http",
                 )
                 if recorder is not None:

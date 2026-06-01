@@ -313,6 +313,7 @@ class SearchPipeline:
         on_file_complete: Callable[[Path], None] | None = None,
         namespace: str = DEFAULT_NAMESPACE,
         *,
+        embedder: Embedder,
         ingested_by: IngestedBy = "cli",
     ) -> list[IngestResult]:
         # Collect and filter files
@@ -354,7 +355,7 @@ class SearchPipeline:
                 rebuild_fts=False,
                 _vector_collector=all_vectors,
                 _chunk_collector=all_chunks,
-                embedder=self._global_embedder,
+                embedder=embedder,
                 namespace=namespace,
                 ingested_by=ingested_by,
             )
@@ -411,13 +412,28 @@ class SearchPipeline:
                     )
                     description_embedding = None
 
+                # Preserve C1 fields from existing meta; use embedder.model_name only for new collections.
+                if existing_meta is not None:
+                    active_model = existing_meta.active_embedding_model
+                    pending_model = existing_meta.pending_embedding_model
+                    needs_reindex = existing_meta.needs_reindex
+                    reindex_job_id = existing_meta.reindex_job_id
+                else:
+                    active_model = embedder.model_name
+                    pending_model = None
+                    needs_reindex = False
+                    reindex_job_id = None
+
                 meta = CollectionMeta(
                     name=collection,
                     centroid=centroid,
                     description=description,
                     doc_count=batch_doc_count,
                     chunk_count=batch_chunk_count,
-                    active_embedding_model=self._global_embedder.model_name,
+                    active_embedding_model=active_model,
+                    pending_embedding_model=pending_model,
+                    needs_reindex=needs_reindex,
+                    reindex_job_id=reindex_job_id,
                     last_indexed=datetime.now(UTC),
                     last_described=last_described,
                     described_at_doc_count=described_at,

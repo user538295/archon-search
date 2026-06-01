@@ -215,7 +215,7 @@ async def test_ingest_directory_skips_acl_sidecar_files(tmp_path):
     collection = "col_dir"
     await _setup(pipeline, store, collection)
     try:
-        results = await pipeline.ingest_directory(content_dir, collection)
+        results = await pipeline.ingest_directory(content_dir, collection, embedder=pipeline._global_embedder)
         # Only the .md file should be ingested, not the .acl sidecar
         source_paths = [r for r in results]
         assert len(results) == 1, (

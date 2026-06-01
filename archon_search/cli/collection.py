@@ -96,7 +96,7 @@ def add(path: str, config_path: Path | None) -> None:
                 cid = new_correlation_id()
                 with bind_stage_recorder() as recorder:
                     t0 = time.perf_counter()
-                    result = await pipeline.ingest_directory(Path(path).expanduser(), collection_name)
+                    result = await pipeline.ingest_directory(Path(path).expanduser(), collection_name, embedder=pipeline._global_embedder)
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
                     logger.info(
                         "stage timings",
@@ -109,7 +109,7 @@ def add(path: str, config_path: Path | None) -> None:
                         },
                     )
             else:
-                result = await pipeline.ingest_directory(Path(path).expanduser(), collection_name)
+                result = await pipeline.ingest_directory(Path(path).expanduser(), collection_name, embedder=pipeline._global_embedder)
             click.echo(f"Added collection '{collection_name}': {len(result)} files ingested")
         finally:
             await pipeline.store.disconnect()
@@ -326,7 +326,8 @@ def reindex(collection_name: str, config_path: Path | None) -> None:
                 with bind_stage_recorder() as recorder:
                     t0 = time.perf_counter()
                     results = await pipeline.ingest_directory(
-                        Path(source_path).expanduser(), collection_name, force_regenerate_description=True
+                        Path(source_path).expanduser(), collection_name, force_regenerate_description=True,
+                        embedder=pipeline._global_embedder,
                     )
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
                     logger.info(
@@ -341,7 +342,8 @@ def reindex(collection_name: str, config_path: Path | None) -> None:
                     )
             else:
                 results = await pipeline.ingest_directory(
-                    Path(source_path).expanduser(), collection_name, force_regenerate_description=True
+                    Path(source_path).expanduser(), collection_name, force_regenerate_description=True,
+                    embedder=pipeline._global_embedder,
                 )
             ok = sum(1 for r in results if r.status == "ok")
             errors = sum(1 for r in results if r.status == "error")
