@@ -514,7 +514,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_store.py -v -k "get_stored_vector_dimension"`
 
 #### Task 4.2 — `validate_embedding_model()` helper (model name + dimension validation)
-- [ ] **File**: `archon_search/embedder.py` (or new `archon_search/model_validation.py`)
+- [x] **File**: `archon_search/embedder.py` (or new `archon_search/model_validation.py`)
 - **Depends on**: nothing
 - **Description**:
   - `async def validate_embedding_model(model_name: str, timeout_seconds: float = 30.0) -> int`: validates `model_name` and returns its output dimension.
