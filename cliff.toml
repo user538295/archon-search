@@ -3,9 +3,9 @@ header = ""
 body = """
 ## [{{ version }}] - {{ timestamp | date(format="%Y-%m-%d") }}
 
-{% for commit in commits | filter(attribute="group", value="Features") %}{% if loop.first %}**{{ commit.message | capitalize }}**
+{% for commit in commits | filter(attribute="group", value="Features") %}{% if loop.first %}**{{ commit.message | split(pat=": ") | last | capitalize }}**
 
-{% endif %}{% endfor %}{% for commit in commits %}- {{ commit.message | capitalize }}
+{% endif %}{% endfor %}{% for commit in commits %}- {{ commit.message | split(pat=": ") | last | capitalize }}
 {% endfor %}"""
 trim = true
 

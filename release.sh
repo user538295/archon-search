@@ -133,12 +133,30 @@ if [ "$DRY_RUN" != 1 ]; then
     fi
 fi
 
-# 4. Update CHANGELOG.md, commit, and push to main.
+# 4. Generate release notes, then update CHANGELOG.md, commit, and push to main.
 
-NOTES=$(git-cliff --unreleased --tag "$TAG") || bail "git-cliff failed — check cliff.toml and git history"
+CLIFF_NOTES=$(git-cliff --unreleased --tag "$TAG") || bail "git-cliff failed — check cliff.toml and git history"
 
-if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+if [ -z "$(echo "$CLIFF_NOTES" | tr -d '[:space:]')" ]; then
     bail "No conventional commits found since last tag. Nothing to release."
+fi
+
+# Synthesize quality notes with Claude if ANTHROPIC_API_KEY is available.
+# Falls back to git-cliff output silently if the API call fails.
+NOTES="$CLIFF_NOTES"
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    echo "Synthesizing release notes with Claude..."
+    PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+    if [ -n "$PREV_TAG" ]; then
+        RAW_COMMITS=$(git log --format="  %s%n%b" "${PREV_TAG}..HEAD" | sed '/^[[:space:]]*$/d' | head -300)
+    else
+        RAW_COMMITS=$(git log --format="  %s%n%b" | sed '/^[[:space:]]*$/d' | head -300)
+    fi
+    # Keep the ## [version] - date header from cliff; replace only the body.
+    CLIFF_HEADER=$(printf '%s\n' "$CLIFF_NOTES" | head -2)
+    BODY=$(printf '%s' "$RAW_COMMITS" | python3 .github/scripts/synthesize_release_notes.py "$TAG" 2>&1) && \
+        NOTES=$(printf '%s\n\n%s' "$CLIFF_HEADER" "$BODY") || \
+        echo "release.sh: Claude synthesis failed — using git-cliff output" >&2
 fi
 
 if [ "$DRY_RUN" = 1 ]; then
