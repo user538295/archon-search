@@ -500,6 +500,7 @@ class SearchPipeline:
         rerank: bool = True,
         namespace: str = DEFAULT_NAMESPACE,
         query_vector: list[float] | None = None,
+        embedder: Embedder | None = None,
     ) -> ExplainPipelineResult:
         """Fetch an amplified pool (``max(top_k_retrieve*3, 20)`` candidates) and, when
         ``rerank=True``, rerank the entire ACL-filtered pool so near-misses carry real
@@ -576,7 +577,8 @@ class SearchPipeline:
                 excluded_collections=excluded,
             )
 
-        vector = query_vector if query_vector is not None else await self._global_embedder.embed_one(query)
+        _single_embedder = embedder if embedder is not None else self._global_embedder
+        vector = query_vector if query_vector is not None else await _single_embedder.embed_one(query)
 
         candidate_depth = max(self._top_k_retrieve * 3, 20)
         try:

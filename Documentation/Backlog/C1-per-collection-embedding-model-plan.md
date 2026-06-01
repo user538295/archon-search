@@ -431,7 +431,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_pipeline.py -v -k "ingest_directory"`
 
 #### Task 3.5 — Add `embedder: Embedder | None` to `explain()`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 3.1
 - **Description**:
   - New signature: `async def explain(self, query: str, collection: str | None = None, ..., embedder: Embedder | None = None, ...) -> ExplainPipelineResult`.

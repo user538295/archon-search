@@ -630,3 +630,69 @@ async def test_pipeline_explain_missing_collection_raises_not_found() -> None:
     pipeline, _store = _explain_multi_pipeline(meta_list=[_meta("A")])
     with pytest.raises(CollectionNotFoundError):
         await pipeline.explain("q", collections=["A", "MISSING"])
+
+
+# ---------------------------------------------------------------------------
+# Task 3.5 — per-collection embedder parameter for explain()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_explain_single_collection_uses_passed_embedder(connected_store, col_name) -> None:
+    """explain(collection=..., embedder=mock) must use mock.embed_one, not global."""
+    from unittest.mock import AsyncMock
+
+    pipeline = _make_pipeline(connected_store, top_k_retrieve=10, top_k_return=5)
+    await _ingest(connected_store, col_name, _make_records(5))
+
+    mock_embedder = MagicMock(spec=Embedder)
+    mock_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
+
+    global_spy = AsyncMock(side_effect=pipeline._global_embedder.embed_one)
+    pipeline._global_embedder.embed_one = global_spy  # type: ignore[method-assign]
+
+    await pipeline.explain("common alpha beta", col_name, top_k=5, embedder=mock_embedder)
+
+    mock_embedder.embed_one.assert_awaited_once_with("common alpha beta")
+    global_spy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_explain_multi_collection_uses_global_embedder() -> None:
+    """explain(collections=[...], embedder=None) must always use self._global_embedder."""
+    from unittest.mock import AsyncMock
+
+    leg_map = {
+        "A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")],
+        "B": [_scored("B", "b" * 64, f"{'b' * 64}-000000")],
+    }
+    pipeline, _store = _explain_multi_pipeline(leg_map=leg_map, meta_list=[_meta("A"), _meta("B")])
+
+    global_spy = AsyncMock(return_value=[0.1] * 4)
+    pipeline._global_embedder.embed_one = global_spy  # type: ignore[method-assign]
+
+    mock_embedder = MagicMock(spec=Embedder)
+    mock_embedder.embed_one = AsyncMock(return_value=[0.9] * 4)
+
+    # Pass embedder= but multi-collection path must ignore it and use global
+    await pipeline.explain("q", collections=["A", "B"], embedder=mock_embedder)
+
+    global_spy.assert_awaited_once()
+    mock_embedder.embed_one.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_explain_single_collection_no_embedder_falls_back_to_global(connected_store, col_name) -> None:
+    """explain(collection=...) with no embedder kwarg falls back to self._global_embedder."""
+    from unittest.mock import AsyncMock
+
+    pipeline = _make_pipeline(connected_store, top_k_retrieve=10, top_k_return=5)
+    await _ingest(connected_store, col_name, _make_records(5))
+
+    global_spy = AsyncMock(side_effect=pipeline._global_embedder.embed_one)
+    pipeline._global_embedder.embed_one = global_spy  # type: ignore[method-assign]
+
+    # No embedder= passed — should fall back to global
+    await pipeline.explain("common alpha beta", col_name, top_k=5)
+
+    global_spy.assert_awaited_once_with("common alpha beta")
