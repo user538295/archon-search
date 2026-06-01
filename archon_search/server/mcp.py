@@ -81,6 +81,39 @@ def _chunk_to_context_dict(chunk: Any, *, include_metadata: bool = True) -> dict
     return d
 
 
+async def _resolve_embedder_by_model(
+    pipeline: Any,
+    embedder_cache: Any,
+    model: str,
+) -> Any:
+    """Return the Embedder for *model* from cache, or global embedder as fallback."""
+    if embedder_cache is None:
+        return pipeline._global_embedder
+    return await embedder_cache.get_or_load(model)
+
+
+async def _resolve_embedder(
+    pipeline: Any,
+    embedder_cache: Any,
+    collection: str,
+    config: Any,
+) -> Any:
+    """Resolve the Embedder for *collection* by looking up its active_embedding_model.
+
+    Falls back to pipeline._global_embedder when no cache is configured or when
+    the resolved model name is empty (no config and no meta record).
+    """
+    if embedder_cache is None:
+        return pipeline._global_embedder
+    active_model: str = config.embedding_model if config is not None else ""
+    meta = await pipeline.get_collection_meta(collection)
+    if meta is not None:
+        active_model = meta.active_embedding_model or active_model
+    if not active_model:
+        return pipeline._global_embedder
+    return await embedder_cache.get_or_load(active_model)
+
+
 def create_app(
     pipeline: SearchPipeline,
     default_collection: str,
@@ -193,10 +226,12 @@ def create_app(
                 )
             except ValidationError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
+            _col = collection or default_collection
+            _search_embedder = await _resolve_embedder(pipeline, embedder_cache, _col, config)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
-                result_obj = await pipeline.search(query, collection or default_collection, embedder=pipeline._global_embedder, filters=filters)
+                result_obj = await pipeline.search(query, _col, embedder=_search_embedder, filters=filters)
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
                     logger.info(
@@ -205,7 +240,7 @@ def create_app(
                             "event_type": "stage_timings",
                             "correlation_id": _correlation_id.get(),
                             "endpoint": "search",
-                            "collection": collection or default_collection,
+                            "collection": _col,
                             "stage_timings_ms": recorder.stage_timings_ms,
                         },
                     )
@@ -214,7 +249,7 @@ def create_app(
                     writer.enqueue(
                         TelemetryEntry.from_search_tool_result(
                             endpoint="search",
-                            collection=collection or default_collection,
+                            collection=_col,
                             result_doc_ids=[r.doc_id for r in result_obj.results],
                             latency_ms=(monotonic() - start) * 1000.0,
                             filter_flags=FilterFlags.from_search_filters(filters),
@@ -284,11 +319,13 @@ def create_app(
                 )
             except ValidationError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
+            _swc_col = collection or default_collection
+            _swc_embedder = await _resolve_embedder(pipeline, embedder_cache, _swc_col, config)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 results = await pipeline.search_with_context(
-                    query, collection or default_collection, context_window, embedder=pipeline._global_embedder, filters=filters
+                    query, _swc_col, context_window, embedder=_swc_embedder, filters=filters
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -298,7 +335,7 @@ def create_app(
                             "event_type": "stage_timings",
                             "correlation_id": _correlation_id.get(),
                             "endpoint": "search_with_context",
-                            "collection": collection or default_collection,
+                            "collection": _swc_col,
                             "stage_timings_ms": recorder.stage_timings_ms,
                         },
                     )
@@ -307,7 +344,7 @@ def create_app(
                     writer.enqueue(
                         TelemetryEntry.from_search_tool_result(
                             endpoint="search_with_context",
-                            collection=collection or default_collection,
+                            collection=_swc_col,
                             result_doc_ids=[r["result"].doc_id for r in results],
                             latency_ms=(monotonic() - start) * 1000.0,
                             filter_flags=FilterFlags.from_search_filters(filters),
@@ -433,11 +470,13 @@ def create_app(
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
 
+                _explain_active_model: str = config.embedding_model if config is not None else ""
                 if req.collection is not None:
                     meta = await pipeline.get_collection_meta(req.collection, namespace=ns)
                     if meta is None:
                         return McpErrorResponse(error=f"Collection {req.collection!r} not found", code="not_found")
                     chosen = req.collection
+                    _explain_active_model = meta.active_embedding_model or _explain_active_model
                 elif config is None:
                     # No routing config — fall back to the default collection (like search).
                     chosen = default_collection
@@ -456,6 +495,7 @@ def create_app(
                     ranked = col_router.rank_with_scores(query_vector, all_meta)
                     chosen_meta, chosen_score = ranked[0]
                     chosen = chosen_meta.name
+                    _explain_active_model = chosen_meta.active_embedding_model or _explain_active_model
                     threshold = config.routing_confidence_threshold
                     routing = RoutingExplain(
                         invoked=True,
@@ -465,8 +505,17 @@ def create_app(
                         candidates=[RoutingCandidate(collection=m.name, centroid_score=s) for m, s in ranked],
                     )
 
+                _explain_embedder = await _resolve_embedder_by_model(
+                    pipeline, embedder_cache, _explain_active_model
+                )
+                # If the chosen collection uses a different model from the global
+                # embedder, the pre-computed query_vector is in the wrong space.
+                # Nullify it so the pipeline re-embeds with _explain_embedder.
+                if _explain_embedder is not pipeline._global_embedder:
+                    query_vector = None
                 result = await pipeline.explain(
-                    req.query, chosen, top_k=req.top_k, rerank=req.rerank, namespace=ns, query_vector=query_vector
+                    req.query, chosen, top_k=req.top_k, rerank=req.rerank, namespace=ns,
+                    query_vector=query_vector, embedder=_explain_embedder,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -548,11 +597,13 @@ def create_app(
         except PathUnsafeError as e:
             return McpErrorResponse(error=_path_unsafe_message(e.reason), code="path_unsafe")
         try:
+            _ingest_col = collection or default_collection
+            _ingest_embedder = await _resolve_embedder(pipeline, embedder_cache, _ingest_col, config)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 result = await pipeline.ingest_file(
-                    validated, collection or default_collection, embedder=pipeline._global_embedder, ingested_by="http",
+                    validated, _ingest_col, embedder=_ingest_embedder, ingested_by="http",
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -562,7 +613,7 @@ def create_app(
                             "event_type": "stage_timings",
                             "correlation_id": _correlation_id.get(),
                             "endpoint": "ingest",
-                            "collection": collection or default_collection,
+                            "collection": _ingest_col,
                             "stage_timings_ms": recorder.stage_timings_ms,
                         },
                     )
@@ -587,6 +638,9 @@ def create_app(
         except PathUnsafeError as e:
             return McpErrorResponse(error=_path_unsafe_message(e.reason), code="path_unsafe")
         try:
+            _dir_col = collection or default_collection
+            _dir_embedder = await _resolve_embedder(pipeline, embedder_cache, _dir_col, config)
+
             async def progress_cb(done: int, total: int) -> None:
                 if ctx is not None:
                     await ctx.report_progress(done, total)
@@ -596,10 +650,10 @@ def create_app(
                 t0 = time.perf_counter()
                 results = await pipeline.ingest_directory(
                     validated,
-                    collection or default_collection,
+                    _dir_col,
                     glob_pattern=glob_pattern,
                     progress_cb=progress_cb,
-                    embedder=pipeline._global_embedder,
+                    embedder=_dir_embedder,
                     ingested_by="http",
                 )
                 if recorder is not None:
@@ -611,7 +665,7 @@ def create_app(
                             "event_type": "stage_timings",
                             "correlation_id": _correlation_id.get(),
                             "endpoint": "ingest",
-                            "collection": collection or default_collection,
+                            "collection": _dir_col,
                             "stage_timings_ms": aggregated,
                         },
                     )

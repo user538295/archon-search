@@ -692,7 +692,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_routes_explain.py -v -k "per_collection or embedding_model"`
 
 #### Task 7.4 — MCP `search`, `search_with_context`, `explain`: per-collection embedder dispatch
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 3.2 (`search()` signature), Task 3.3 (`ingest_file()` signature), Task 3.4 (`ingest_directory()` signature), Task 3.5 (`explain()` signature), Task 3.6 (`search_with_context()` signature), Task 2.2 (mcp.create_app() gains embedder_cache parameter)
 - **Description**:
   - **Prerequisite — `mcp.create_app()` signature change**: MCP tool functions in `mcp.py` are closures that only have access to parameters passed to `create_app()`. They have NO access to FastAPI's `app.state`. Therefore, `create_app()` (`mcp.py:82`) MUST be extended to accept `embedder_cache: EmbedderCache` as an additional parameter (after `config`). Both `create_mcp_http_app()` and `create_app()` must gain `embedder_cache: EmbedderCache` as a parameter (done in Task 2.2). `create_mcp_http_app` has no production caller in `app.py` (it is served separately or test-only). Callers of `create_mcp_http_app` must pass `embedder_cache` explicitly. Update all test fixtures in `test_mcp_auth.py` that call `create_mcp_http_app(...)` to pass the new parameter. Inside MCP tool closures, access `embedder_cache` as the closure-captured parameter (NOT `app.state`).
