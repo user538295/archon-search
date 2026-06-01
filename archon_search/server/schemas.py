@@ -107,6 +107,8 @@ class CollectionSummary(BaseModel):
     chunk_count: int = 0
     namespace: str
     status: str
+    active_embedding_model: str = ""
+    needs_reindex: bool = False
 
 
 class CollectionDetail(CollectionSummary):

@@ -2627,3 +2627,74 @@ def test_get_collection_reflects_reindex_completion(
     assert data["pending_embedding_model"] is None
     assert data["needs_reindex"] is False
     assert data["reindex_job_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# Task 6.3 — CollectionSummary + GET /collections/ list
+# ---------------------------------------------------------------------------
+
+
+def test_list_collections_includes_active_embedding_model(
+    tmp_path: Path, tmp_store: "JobStore"
+) -> None:
+    """GET /collections/ response includes active_embedding_model in each entry."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default", active_embedding_model="BAAI/bge-small-en-v1.5")
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[meta])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert "active_embedding_model" in data[0]
+    assert data[0]["active_embedding_model"] == "BAAI/bge-small-en-v1.5"
+
+
+def test_list_collections_includes_needs_reindex(
+    tmp_path: Path, tmp_store: "JobStore"
+) -> None:
+    """GET /collections/ includes needs_reindex in each entry."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default", needs_reindex=True)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[meta])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert "needs_reindex" in data[0]
+    assert data[0]["needs_reindex"] is True

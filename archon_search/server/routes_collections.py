@@ -102,6 +102,7 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
         else:
             continue
         status = _collection_status(config, state_store, name)
+        col_meta = meta_by_name.get(name)
         result.append(CollectionSummary(
             name=name,
             path=resolved,
@@ -110,6 +111,8 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
             chunk_count=0,
             namespace=namespace,
             status=status,
+            active_embedding_model=(col_meta.active_embedding_model or config.embedding_model) if col_meta is not None else config.embedding_model,
+            needs_reindex=col_meta.needs_reindex if col_meta is not None else False,
         ))
 
     return result

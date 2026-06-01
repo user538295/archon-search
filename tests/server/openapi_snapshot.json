@@ -1166,6 +1166,11 @@
             "type": "string",
             "title": "Active Embedding Model"
           },
+          "needs_reindex": {
+            "type": "boolean",
+            "title": "Needs Reindex",
+            "default": false
+          },
           "pending_embedding_model": {
             "anyOf": [
               {
@@ -1176,11 +1181,6 @@
               }
             ],
             "title": "Pending Embedding Model"
-          },
-          "needs_reindex": {
-            "type": "boolean",
-            "title": "Needs Reindex",
-            "default": false
           },
           "reindex_job_id": {
             "anyOf": [
@@ -1280,6 +1280,16 @@
           "status": {
             "type": "string",
             "title": "Status"
+          },
+          "active_embedding_model": {
+            "type": "string",
+            "title": "Active Embedding Model",
+            "default": ""
+          },
+          "needs_reindex": {
+            "type": "boolean",
+            "title": "Needs Reindex",
+            "default": false
           }
         },
         "type": "object",
