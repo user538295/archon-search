@@ -551,7 +551,7 @@ async def _ingest_corpus(pipeline, corpus_root: Path, corpus: EvalCorpus) -> Non
         # `ingest_file` does not persist a CollectionMeta (centroid, model). The
         # router needs that meta to rank — recompute it once per collection
         # after all files are ingested.
-        await pipeline.recompute_collection_meta(collection)
+        await pipeline.recompute_collection_meta(collection, pipeline._global_embedder)
 
 
 async def _run_router_for_query(

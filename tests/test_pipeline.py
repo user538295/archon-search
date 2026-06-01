@@ -278,7 +278,7 @@ async def test_pipeline_search_with_context_returns_neighbors(connected_store, c
     md_file.write_text("# Context Test\n\n" + ("Content chunk. " * 50))
     await pipeline2.ingest_file(md_file, col_name, embedder=pipeline2._global_embedder)
 
-    results = await pipeline2.search_with_context("Content chunk", col_name, context_window=1)
+    results = await pipeline2.search_with_context("Content chunk", col_name, context_window=1, embedder=pipeline2._global_embedder)
 
     assert isinstance(results, list)
     assert len(results) > 0
@@ -877,7 +877,7 @@ async def test_search_with_context_records_context_stage(tmp_path):
     await pipeline._global_embedder.embed(["warmup"])
 
     with bind_stage_recorder() as recorder:
-        await pipeline.search_with_context("query", "test-col", context_window=1)
+        await pipeline.search_with_context("query", "test-col", context_window=1, embedder=pipeline._global_embedder)
 
     assert "context" in recorder.stage_timings_ms
     assert recorder.stage_timings_ms["context"] >= 0.0
@@ -977,7 +977,7 @@ async def test_pipeline_noop_when_unbound(tmp_path):
     await pipeline.search("query", "col", embedder=pipeline._global_embedder)
     assert _stage_recorder.get() is None
 
-    await pipeline.search_with_context("query", "col")
+    await pipeline.search_with_context("query", "col", embedder=pipeline._global_embedder)
     assert _stage_recorder.get() is None
 
     await pipeline.ingest_file(md_file, "col", embedder=pipeline._global_embedder)
@@ -1024,7 +1024,7 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
     # Pre-warm embedder dim
     await pipeline._global_embedder.embed(["warmup"])
 
-    results = await pipeline.search_with_context("query", "test-collection", context_window=1)
+    results = await pipeline.search_with_context("query", "test-collection", context_window=1, embedder=pipeline._global_embedder)
 
     assert len(results) == 1
     assert results[0]["result"] == malformed_result
@@ -1554,7 +1554,7 @@ async def test_pipeline_search_with_context_fetch_exception_propagates(tmp_path)
 
     # Current production behavior: exception propagates to caller
     with pytest.raises(RuntimeError, match="fetch_adjacent_chunks exploded"):
-        await pipeline.search_with_context("query", "test-col", context_window=1)
+        await pipeline.search_with_context("query", "test-col", context_window=1, embedder=pipeline._global_embedder)
 
 
 # ===========================================================================
@@ -2073,7 +2073,7 @@ async def test_recompute_collection_meta_namespace_param(tmp_path) -> None:
         top_k_return=5,
     )
 
-    await pipeline.recompute_collection_meta("my-col", namespace="tenantA")
+    await pipeline.recompute_collection_meta("my-col", pipeline._global_embedder, namespace="tenantA")
 
     store.get_collection_meta.assert_awaited_once_with("my-col", namespace="tenantA")
     saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
@@ -2236,7 +2236,7 @@ async def test_search_with_context_still_works_after_type_change(connected_store
     md_file.write_text("# SWC Test\n\n" + ("content chunk. " * 50))
     await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
-    results = await pipeline.search_with_context("content chunk", col_name, context_window=1)
+    results = await pipeline.search_with_context("content chunk", col_name, context_window=1, embedder=pipeline._global_embedder)
 
     assert isinstance(results, list)
     assert len(results) > 0
@@ -2744,7 +2744,7 @@ async def test_pipeline_search_with_context_forwards_filters_to_store() -> None:
     await pipeline._global_embedder.embed(["warmup"])
 
     filters = SearchFilters(file_type="md")
-    await pipeline.search_with_context("test query", "col", filters=filters)
+    await pipeline.search_with_context("test query", "col", embedder=pipeline._global_embedder, filters=filters)
 
     store.hybrid_search.assert_awaited_once()
     call_kwargs = store.hybrid_search.call_args.kwargs
@@ -3444,7 +3444,7 @@ async def test_recompute_populates_description_embedding() -> None:
 
     embed_one_mock = AsyncMock(return_value=embed_vec)
     with patch.object(pipeline._global_embedder, "embed_one", new=embed_one_mock):
-        await pipeline.recompute_collection_meta("my-col")
+        await pipeline.recompute_collection_meta("my-col", pipeline._global_embedder)
 
     embed_one_mock.assert_awaited_once_with("some desc")
     store.update_collection_meta.assert_awaited_once()
@@ -3482,7 +3482,7 @@ async def test_recompute_no_description_embedding_when_description_none() -> Non
 
     embed_one_mock = AsyncMock()
     with patch.object(pipeline._global_embedder, "embed_one", new=embed_one_mock):
-        await pipeline.recompute_collection_meta("my-col")
+        await pipeline.recompute_collection_meta("my-col", pipeline._global_embedder)
 
     embed_one_mock.assert_not_awaited()
     store.update_collection_meta.assert_awaited_once()
@@ -3516,7 +3516,7 @@ async def test_recompute_no_op_when_empty() -> None:
 
     embed_one_mock = AsyncMock()
     with patch.object(pipeline._global_embedder, "embed_one", new=embed_one_mock):
-        await pipeline.recompute_collection_meta("empty-col")
+        await pipeline.recompute_collection_meta("empty-col", pipeline._global_embedder)
 
     embed_one_mock.assert_not_awaited()
     store.update_collection_meta.assert_not_awaited()
@@ -3772,7 +3772,7 @@ async def test_recompute_writes_centroid_sum() -> None:
 
     pipeline = _make_pipeline_for_recompute(store)
     with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
-        await pipeline.recompute_collection_meta("col")
+        await pipeline.recompute_collection_meta("col", pipeline._global_embedder)
 
     saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
     assert saved.centroid_sum == elementwise_sum(vectors)
@@ -3792,7 +3792,7 @@ async def test_recompute_resets_mutations_counter() -> None:
 
     pipeline = _make_pipeline_for_recompute(store)
     with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
-        await pipeline.recompute_collection_meta("col")
+        await pipeline.recompute_collection_meta("col", pipeline._global_embedder)
 
     saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
     assert saved.mutations_since_recompute == 0
@@ -3808,7 +3808,7 @@ async def test_recompute_noop_on_empty_collection() -> None:
     store.update_collection_meta = AsyncMock()
 
     pipeline = _make_pipeline_for_recompute(store)
-    await pipeline.recompute_collection_meta("empty-col")
+    await pipeline.recompute_collection_meta("empty-col", pipeline._global_embedder)
 
     store.update_collection_meta.assert_not_awaited()
 
@@ -3829,7 +3829,7 @@ async def test_recompute_empty_collection_clears_needs_recompute_flag() -> None:
     cfg = SearchConfig()
     cfg.centroid_incremental_enabled = True
     pipeline = _make_pipeline_for_recompute(store, config=cfg)
-    await pipeline.recompute_collection_meta("col", force=True)
+    await pipeline.recompute_collection_meta("col", pipeline._global_embedder, force=True)
 
     store.update_collection_meta.assert_awaited_once()
     saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
@@ -3855,7 +3855,7 @@ async def test_recompute_single_get_all_vectors_call() -> None:
 
     pipeline = _make_pipeline_for_recompute(store)
     with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
-        await pipeline.recompute_collection_meta("col")
+        await pipeline.recompute_collection_meta("col", pipeline._global_embedder)
 
     store.get_all_vectors.assert_awaited_once()
 
@@ -3875,7 +3875,7 @@ async def test_recompute_collection_meta_no_op_when_not_needed() -> None:
     cfg = SearchConfig()
     cfg.centroid_incremental_enabled = True
     pipeline = _make_pipeline_for_recompute(store, config=cfg)
-    await pipeline.recompute_collection_meta("col")
+    await pipeline.recompute_collection_meta("col", pipeline._global_embedder)
 
     store.get_all_vectors.assert_not_awaited()
 
@@ -3897,7 +3897,7 @@ async def test_recompute_collection_meta_force_bypasses_short_circuit() -> None:
     cfg.centroid_incremental_enabled = True
     pipeline = _make_pipeline_for_recompute(store, config=cfg)
     with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
-        await pipeline.recompute_collection_meta("col", force=True)
+        await pipeline.recompute_collection_meta("col", pipeline._global_embedder, force=True)
 
     store.get_all_vectors.assert_awaited_once()
 
@@ -3919,7 +3919,7 @@ async def test_recompute_no_short_circuit_when_flag_disabled() -> None:
     cfg.centroid_incremental_enabled = False
     pipeline = _make_pipeline_for_recompute(store, config=cfg)
     with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
-        await pipeline.recompute_collection_meta("col")
+        await pipeline.recompute_collection_meta("col", pipeline._global_embedder)
 
     store.get_all_vectors.assert_awaited_once()
 
@@ -3940,7 +3940,7 @@ async def test_recompute_empty_collection_with_existing_meta_force_false_writes_
     cfg = SearchConfig()
     cfg.centroid_incremental_enabled = True
     pipeline = _make_pipeline_for_recompute(store, config=cfg)
-    await pipeline.recompute_collection_meta("col", force=False)
+    await pipeline.recompute_collection_meta("col", pipeline._global_embedder, force=False)
 
     store.update_collection_meta.assert_awaited_once()
     saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
@@ -3968,7 +3968,7 @@ async def test_recompute_new_collection_no_existing_meta_runs_full_scan() -> Non
     cfg.centroid_incremental_enabled = True
     pipeline = _make_pipeline_for_recompute(store, config=cfg)
     with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
-        await pipeline.recompute_collection_meta("col", force=False)
+        await pipeline.recompute_collection_meta("col", pipeline._global_embedder, force=False)
 
     store.get_all_vectors.assert_awaited_once()
     store.update_collection_meta.assert_awaited_once()
@@ -4332,3 +4332,185 @@ async def test_ingest_directory_preserves_all_c1_fields(tmp_path) -> None:
     assert saved.pending_embedding_model == "model-B"
     assert saved.needs_reindex is True
     assert saved.reindex_job_id == "job-42"
+
+
+# ===========================================================================
+# C1 Task 3.6 — search_with_context embedder param + recompute_collection_meta C1 fields
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_uses_passed_embedder() -> None:
+    """search_with_context(embedder=X) must forward X to the inner search() call."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.hybrid_search = AsyncMock(return_value=[])
+    store.fetch_adjacent_chunks = AsyncMock(return_value=[])
+
+    global_embedder = make_embedder()
+    passed_embedder = make_embedder()
+
+    global_embed_one = AsyncMock(return_value=[0.1] * 4)
+    passed_embed_one = AsyncMock(return_value=[0.1] * 4)
+    global_embedder.embed_one = global_embed_one  # type: ignore[method-assign]
+    passed_embedder.embed_one = passed_embed_one  # type: ignore[method-assign]
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=global_embedder,
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    await pipeline.search_with_context("test query", "col", embedder=passed_embedder)
+
+    passed_embed_one.assert_awaited_once()
+    global_embed_one.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recompute_collection_meta_preserves_active_embedding_model() -> None:
+    """recompute_collection_meta preserves active_embedding_model from existing meta."""
+    from archon_search.collection_meta import CollectionMeta
+
+    existing_meta = CollectionMeta(name="col", active_embedding_model="model-X", needs_recompute=True)
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing_meta)
+    store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
+    store.count_documents = AsyncMock(return_value=1)
+    store.update_collection_meta = AsyncMock()
+
+    global_embedder = make_embedder()
+    passed_global_embedder = make_embedder()
+
+    class _Backend:
+        model_name = "global-model"
+        is_warm = False
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            return [[0.5] * 4 for _ in texts]
+
+    passed_global_embedder = Embedder(_Backend())
+    pipeline = _make_pipeline_for_recompute(store)
+
+    with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock(return_value=[0.5] * 4)):
+        await pipeline.recompute_collection_meta("col", global_embedder=passed_global_embedder)
+
+    store.update_collection_meta.assert_awaited_once()
+    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved.active_embedding_model == "model-X"
+
+
+@pytest.mark.asyncio
+async def test_recompute_collection_meta_preserves_all_c1_fields() -> None:
+    """recompute_collection_meta preserves all four C1 fields from existing meta."""
+    from archon_search.collection_meta import CollectionMeta
+
+    existing_meta = CollectionMeta(
+        name="col",
+        active_embedding_model="model-X",
+        pending_embedding_model="model-Y",
+        needs_reindex=True,
+        reindex_job_id="job-99",
+        needs_recompute=True,
+    )
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing_meta)
+    store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
+    store.count_documents = AsyncMock(return_value=1)
+    store.update_collection_meta = AsyncMock()
+
+    class _GlobalBackend:
+        model_name = "global-model"
+        is_warm = False
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            return [[0.5] * 4 for _ in texts]
+
+    global_emb = Embedder(_GlobalBackend())
+    pipeline = _make_pipeline_for_recompute(store)
+
+    with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock(return_value=[0.5] * 4)):
+        await pipeline.recompute_collection_meta("col", global_embedder=global_emb)
+
+    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
+    assert saved.active_embedding_model == "model-X"
+    assert saved.pending_embedding_model == "model-Y"
+    assert saved.needs_reindex is True
+    assert saved.reindex_job_id == "job-99"
+
+
+@pytest.mark.asyncio
+async def test_recompute_collection_meta_uses_global_embedder_for_description() -> None:
+    """recompute_collection_meta calls global_embedder.embed_one for the description embedding."""
+    from archon_search.collection_meta import CollectionMeta
+
+    existing_meta = CollectionMeta(name="col", description="desc text", needs_recompute=True)
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=existing_meta)
+    store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
+    store.count_documents = AsyncMock(return_value=1)
+    store.update_collection_meta = AsyncMock()
+
+    class _GlobalBackend:
+        model_name = "global-model"
+        is_warm = False
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            return [[0.5] * 4 for _ in texts]
+
+    global_emb = Embedder(_GlobalBackend())
+    embed_one_mock = AsyncMock(return_value=[0.5] * 4)
+    global_emb.embed_one = embed_one_mock  # type: ignore[method-assign]
+
+    pipeline = _make_pipeline_for_recompute(store)
+
+    await pipeline.recompute_collection_meta("col", global_embedder=global_emb)
+
+    embed_one_mock.assert_awaited_once_with("desc text")
+
+
+def test_no_self_embedder_in_pipeline() -> None:
+    """self._embedder must NOT appear in pipeline.py (fully renamed to _global_embedder)."""
+    import re
+    content = Path("archon_search/pipeline.py").read_text()
+    matches = re.findall(r'\bself\._embedder\b', content)
+    assert not matches, f"Found {len(matches)} 'self._embedder' reference(s) in pipeline.py"
+
+
+def test_search_many_signature_unchanged() -> None:
+    """search_many() must NOT have an embedder parameter."""
+    import inspect
+    from archon_search.pipeline import SearchPipeline
+    sig = inspect.signature(SearchPipeline.search_many)
+    assert "embedder" not in sig.parameters, (
+        "search_many gained an unexpected 'embedder' parameter"
+    )
+
+
+def test_telemetry_entry_no_query_parameter() -> None:
+    """No factory method in archon_search/telemetry/entry.py accepts a 'query' parameter."""
+    import inspect
+    import importlib
+    entry_mod = importlib.import_module("archon_search.telemetry.entry")
+    for name, obj in inspect.getmembers(entry_mod, inspect.isclass):
+        for method_name, method in inspect.getmembers(obj, predicate=inspect.isfunction):
+            sig = inspect.signature(method)
+            assert "query" not in sig.parameters, (
+                f"{name}.{method_name} has a 'query' parameter — raw queries must never be logged"
+            )
+
+
+def test_job_status_enum_values_unchanged() -> None:
+    """JobStatus must have exactly: PENDING, RUNNING, DONE, FAILED, CANCELLED, CANCELLING."""
+    from archon_search.types import JobStatus
+    expected = {"PENDING", "RUNNING", "DONE", "FAILED", "CANCELLED", "CANCELLING"}
+    actual = {m.name for m in JobStatus}
+    assert actual == expected, f"JobStatus members changed: {actual}"

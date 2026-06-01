@@ -448,7 +448,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_pipeline.py -v -k "explain_single_collection or explain_multi_collection"`
 
 #### Task 3.6 — Add `embedder: Embedder` to `search_with_context()` and `global_embedder` to `recompute_collection_meta()`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 3.2 (`search_with_context` delegates to `search()`), Task 3.1 (`recompute_collection_meta` needs global_embedder)
 - **Description**:
   - `search_with_context`: add `embedder: Embedder` keyword parameter; forward to `self.search(..., embedder=embedder)`.

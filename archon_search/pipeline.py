@@ -290,7 +290,7 @@ class SearchPipeline:
             )
 
             if rebuild_fts and self._centroid_incremental_enabled and ingest_result.needs_recompute:
-                await self.recompute_collection_meta(collection, namespace=namespace)
+                await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
 
             if rebuild_fts:
                 await self.store.rebuild_fts_index(collection)
@@ -444,7 +444,7 @@ class SearchPipeline:
 
         # Aggregate needs_recompute signal: if any file triggered it, fire recompute
         if self._centroid_incremental_enabled and any(r.needs_recompute for r in results):
-            await self.recompute_collection_meta(collection, namespace=namespace)
+            await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
 
         return results
 
@@ -753,9 +753,10 @@ class SearchPipeline:
         context_window: int = 1,
         namespace: str = DEFAULT_NAMESPACE,
         *,
+        embedder: Embedder,
         filters: SearchFilters | None = None,
     ) -> list[dict[str, Any]]:
-        result_obj = await self.search(query, collection, namespace=namespace, embedder=self._global_embedder, filters=filters)
+        result_obj = await self.search(query, collection, namespace=namespace, embedder=embedder, filters=filters)
         output: list[dict[str, Any]] = []
 
         with record_stage("context"):
@@ -818,6 +819,7 @@ class SearchPipeline:
     async def recompute_collection_meta(
         self,
         collection: str,
+        global_embedder: Embedder,
         namespace: str = DEFAULT_NAMESPACE,
         force: bool = False,
     ) -> None:
@@ -849,6 +851,18 @@ class SearchPipeline:
         last_described = existing_meta.last_described if existing_meta else None
         described_at = existing_meta.described_at_doc_count if existing_meta else None
 
+        # Determine C1 fields: preserve from existing meta, or use defaults for new collections.
+        if existing_meta is not None:
+            active_embedding_model = existing_meta.active_embedding_model
+            pending_embedding_model = existing_meta.pending_embedding_model
+            needs_reindex = existing_meta.needs_reindex
+            reindex_job_id = existing_meta.reindex_job_id
+        else:
+            active_embedding_model = global_embedder.model_name
+            pending_embedding_model = None
+            needs_reindex = False
+            reindex_job_id = None
+
         if not vectors:
             if force or existing_meta is not None:
                 doc_count = await self.store.count_documents(collection)
@@ -859,7 +873,10 @@ class SearchPipeline:
                     description=description,
                     doc_count=doc_count,
                     chunk_count=0,
-                    active_embedding_model=self._global_embedder.model_name,
+                    active_embedding_model=active_embedding_model,
+                    pending_embedding_model=pending_embedding_model,
+                    needs_reindex=needs_reindex,
+                    reindex_job_id=reindex_job_id,
                     last_indexed=datetime.now(UTC),
                     last_described=last_described,
                     described_at_doc_count=described_at,
@@ -877,7 +894,7 @@ class SearchPipeline:
         doc_count = await self.store.count_documents(collection)
 
         if description is not None:
-            description_embedding = await self._global_embedder.embed_one(description)
+            description_embedding = await global_embedder.embed_one(description)
         else:
             description_embedding = None
 
@@ -888,7 +905,10 @@ class SearchPipeline:
             description=description,
             doc_count=doc_count,
             chunk_count=chunk_count,
-            active_embedding_model=self._global_embedder.model_name,
+            active_embedding_model=active_embedding_model,
+            pending_embedding_model=pending_embedding_model,
+            needs_reindex=needs_reindex,
+            reindex_job_id=reindex_job_id,
             last_indexed=datetime.now(UTC),
             last_described=last_described,
             described_at_doc_count=described_at,

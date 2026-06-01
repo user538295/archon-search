@@ -566,7 +566,7 @@ async def test_search_with_context_acl_filter_applied(tmp_path):
         top_k_retrieve=5, top_k_return=3,
     )
 
-    output = await pipeline.search_with_context("query", "col", namespace="ns1")
+    output = await pipeline.search_with_context("query", "col", namespace="ns1", embedder=pipeline._global_embedder)
 
     assert len(output) == 1
     entry = output[0]
@@ -675,7 +675,7 @@ async def test_search_context_expansion_acl_filtered(tmp_path):
         top_k_retrieve=5, top_k_return=3,
     )
 
-    output = await pipeline.search_with_context("query", "col", namespace="ns1")
+    output = await pipeline.search_with_context("query", "col", namespace="ns1", embedder=pipeline._global_embedder)
 
     assert len(output) == 1
     entry = output[0]

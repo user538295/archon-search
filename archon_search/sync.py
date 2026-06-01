@@ -705,7 +705,7 @@ class SearchCollectionSync:
                             or meta.mutations_since_recompute >= threshold
                         ):
                             logger.debug("Recompute collection meta for %r after sync", name)
-                            await self._pipeline.recompute_collection_meta(name)
+                            await self._pipeline.recompute_collection_meta(name, self._pipeline._global_embedder)
                     except Exception:  # noqa: BLE001
                         logger.warning(
                             "Failed to recompute collection meta for %r after sync; centroid may be stale",
@@ -714,7 +714,7 @@ class SearchCollectionSync:
                         )
                 else:
                     try:
-                        await self._pipeline.recompute_collection_meta(name)
+                        await self._pipeline.recompute_collection_meta(name, self._pipeline._global_embedder)
                     except Exception:  # noqa: BLE001
                         logger.warning(
                             "Failed to recompute collection meta for %r after sync; centroid may be stale",

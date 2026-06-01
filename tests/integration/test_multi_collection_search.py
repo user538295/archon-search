@@ -114,7 +114,7 @@ async def _ingest(
     await store.ingest_chunks(col, records)
     if with_fts:
         await store.rebuild_fts_index(col)
-    await pipeline.recompute_collection_meta(col)
+    await pipeline.recompute_collection_meta(col, pipeline._global_embedder)
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -3755,7 +3755,7 @@ class TestTask46:
         syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
         await syncer.sync([str(col_dir)])
 
-        pipeline.recompute_collection_meta.assert_called_once_with("myproject")
+        pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY)
 
     # ------------------------------------------------------------------
     # Test 11: new collection ingest populates file_mtimes
@@ -4971,7 +4971,7 @@ async def test_sync_calls_recompute_when_signal_raised(tmp_path) -> None:
     syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
     await syncer.sync([str(col_dir)])
 
-    pipeline.recompute_collection_meta.assert_called_once_with("myproject")
+    pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY)
 
 
 @pytest.mark.asyncio
@@ -5016,4 +5016,4 @@ async def test_sync_recompute_on_delete_threshold_crossing(tmp_path) -> None:
     syncer = SearchCollectionSync(pipeline, state_store=state_store, embedding_model="model-a", chunk_size=512)
     await syncer.sync([str(col_dir)])
 
-    pipeline.recompute_collection_meta.assert_called_once_with("myproject")
+    pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY)

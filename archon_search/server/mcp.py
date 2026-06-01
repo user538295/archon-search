@@ -288,7 +288,7 @@ def create_app(
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 results = await pipeline.search_with_context(
-                    query, collection or default_collection, context_window, filters=filters
+                    query, collection or default_collection, context_window, embedder=pipeline._global_embedder, filters=filters
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
