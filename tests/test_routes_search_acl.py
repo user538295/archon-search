@@ -167,3 +167,123 @@ def test_search_response_includes_acl_field(tmp_path: Path) -> None:
     data = response.json()
     assert data["results"], "expected at least one result"
     assert data["results"][0]["acl"] == ["default"]
+
+
+# ---------------------------------------------------------------------------
+# Task 7.2 — per-collection embedder dispatch
+# ---------------------------------------------------------------------------
+
+
+def _make_pipeline_mock_with_model(
+    model_name: str = "model-X",
+    results: list | None = None,
+) -> MagicMock:
+    """Pipeline mock that carries active_embedding_model on returned meta."""
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model=model_name)
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(results=results or [], acl_filtered=False)
+    )
+    pipeline._global_embedder = MagicMock()
+    return pipeline
+
+
+def _make_embedder_cache_mock(embedder: MagicMock | None = None) -> MagicMock:
+    mock_embedder = embedder or MagicMock()
+    cache = MagicMock()
+    cache.get_or_load = AsyncMock(return_value=mock_embedder)
+    return cache
+
+
+def test_search_single_collection_uses_active_embedding_model(tmp_path: Path) -> None:
+    """Single-collection search calls embedder_cache.get_or_load with active_embedding_model."""
+    app, client = _make_app(tmp_path)
+    pipeline = _make_pipeline_mock_with_model(model_name="model-X")
+    cache = _make_embedder_cache_mock()
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    response = client.post("/search", json={"collection": "col", "query": "test"})
+    assert response.status_code == 200
+    cache.get_or_load.assert_awaited_once_with("model-X")
+
+
+def test_search_response_includes_embedding_model(tmp_path: Path) -> None:
+    """Single-collection search response has embedding_model from active_embedding_model."""
+    app, client = _make_app(tmp_path)
+    pipeline = _make_pipeline_mock_with_model(model_name="model-X")
+    cache = _make_embedder_cache_mock()
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    response = client.post("/search", json={"collection": "col", "query": "test"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["embedding_model"] == "model-X"
+
+
+def test_search_during_needs_reindex_uses_active_not_pending(tmp_path: Path) -> None:
+    """During needs_reindex window, search uses active_embedding_model (old), not pending."""
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    meta = CollectionMeta(
+        name="col",
+        namespace="default",
+        active_embedding_model="model-X",
+        pending_embedding_model="model-Y",
+        needs_reindex=True,
+    )
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+    cache = _make_embedder_cache_mock()
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    response = client.post("/search", json={"collection": "col", "query": "test"})
+    assert response.status_code == 200
+    cache.get_or_load.assert_awaited_once_with("model-X")
+    data = response.json()
+    assert data["embedding_model"] == "model-X"
+
+
+def test_search_multi_collection_uses_global_model(tmp_path: Path) -> None:
+    """Multi-collection search populates response.embedding_model with global config model."""
+    app, client = _make_app(tmp_path)
+    config = app.state.config
+    pipeline = MagicMock()
+    pipeline.search_many = AsyncMock(
+        return_value=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+    app.state.pipeline = pipeline
+
+    response = client.post(
+        "/search",
+        json={"collections": ["col1", "col2"], "query": "test"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["embedding_model"] == config.embedding_model
+
+
+def test_search_empty_active_embedding_model_falls_back_to_global(tmp_path: Path) -> None:
+    """Collection with active_embedding_model='' uses config.embedding_model as fallback."""
+    app, client = _make_app(tmp_path)
+    config = app.state.config
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+    cache = _make_embedder_cache_mock()
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    response = client.post("/search", json={"collection": "col", "query": "test"})
+    assert response.status_code == 200
+    cache.get_or_load.assert_awaited_once_with(config.embedding_model)
+    data = response.json()
+    assert data["embedding_model"] == config.embedding_model

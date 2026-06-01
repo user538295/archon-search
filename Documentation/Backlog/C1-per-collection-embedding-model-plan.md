@@ -660,7 +660,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_router.py -v`
 
 #### Task 7.2 — Single-collection search: per-collection embedder dispatch in `routes_search.py`
-- [ ] **File**: `archon_search/server/routes_search.py`
+- [x] **File**: `archon_search/server/routes_search.py`
 - **Depends on**: Task 3.2 (search() signature), Task 2.2 (app.state.embedder_cache), Task 6.4 (SearchResponse.embedding_model)
 - **Description**:
   - In the single-collection search route handler (`GET /search?collection=...`): after resolving the collection and namespace, call `meta = await store.get_collection_meta(collection, namespace)`. Fetch `embedder = await app.state.embedder_cache.get_or_load(meta.active_embedding_model)`. Pass `embedder=embedder` to `pipeline.search(...)`.

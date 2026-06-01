@@ -168,6 +168,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 ExcludedCollectionSchema(name=e.name, reason=e.reason)
                 for e in result.excluded_collections
             ],
+            embedding_model=config.embedding_model,
         )
 
     try:
@@ -198,8 +199,16 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 )
 
         try:
+            embedder_cache = getattr(request.app.state, "embedder_cache", None)
+            active_model = meta.active_embedding_model or config.embedding_model
+            if embedder_cache is not None:
+                embedder = await embedder_cache.get_or_load(active_model)
+            else:
+                logger.warning("search: embedder_cache absent from app.state — falling back to global embedder")
+                embedder = pipeline._global_embedder
+                active_model = config.embedding_model
             result = await asyncio.wait_for(
-                pipeline.search(body.query, body.collection, namespace=ns, embedder=pipeline._global_embedder, filters=body.filters),
+                pipeline.search(body.query, body.collection, namespace=ns, embedder=embedder, filters=body.filters),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
             include_metadata = body.filters is not None and body.filters.include_metadata
@@ -230,6 +239,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                     ExcludedCollectionSchema(name=e.name, reason=e.reason)
                     for e in result.excluded_collections
                 ],
+                embedding_model=active_model,
             )
         except asyncio.TimeoutError:
             _emit_timings()
