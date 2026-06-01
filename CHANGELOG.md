@@ -1,6 +1,17 @@
 # Changelog
 
 
+## [26.6.701] - 2026-06-01
+
+**OpenAPI schema alignment + CI release automation**
+
+**OpenAPI & validation**
+- OpenAPI snapshot regenerated on Python 3.12 to ensure HTTP error responses (e.g. `422 Unprocessable Entity` vs `Content`) match CI environment and published schema
+
+**Release workflow**
+- `make_latest` flag now automatically set to `true` for new releases and `false` for backfill patches, streamlining version promotion and preventing accidental latest-tag overwrites on patch deployments
+
+
 ## [26.6.698] - 2026-06-01
 
 **Per-collection embedding models + reindex lifecycle + MCP tooling**
