@@ -721,7 +721,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
 > **Releasable**: after Task 8.3 — the full reindex lifecycle (PATCH → pending; reindex endpoint → job created; `_reindex_task` → promotes on success) works end-to-end; `_default_ingest_task` uses the collection's `active_embedding_model` for new-collection ingest. (AC 10, 11, 28, 35, 49, 51)
 
 #### Task 8.1 — `_reindex_task` function
-- [ ] **File**: `archon_search/server/routes_jobs.py`
+- [x] **File**: `archon_search/server/routes_jobs.py`
 - **Depends on**: Task 3.4 (`ingest_directory` accepts embedder), Task 2.2 (embedder_cache), Task 1.2 (CollectionMeta fields), Task 1.4 (ReindexJob.target_embedding_model)
 - **Description**:
   - **Invariant and guards** (before step 1 logic executes):

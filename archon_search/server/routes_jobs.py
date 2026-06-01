@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -11,11 +12,13 @@ from pydantic import BaseModel, field_validator
 
 from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.embedder_cache import EmbedderCache
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.schemas import ErrorDetail, JobResponse
+from archon_search.types import ReindexJob
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +134,148 @@ async def _default_ingest_task_with_lock(
         # Release the pre-acquired lock regardless of outcome or cancellation.
         if held_lock is not None and held_lock.locked():
             held_lock.release()
+
+
+async def _reindex_task(
+    job_id: str,
+    store: Any,
+    job_store: JobStore,
+    embedder_cache: EmbedderCache,
+    pipeline: Any,
+    collection: str,
+    namespace: str,
+    collection_path: Path,
+) -> None:
+    """Lifecycle wrapper for reindex: resolves embedder, ingests, promotes model on success.
+
+    Never raises — catches all exceptions.
+    """
+    # --- Guards ---
+    job = job_store.get(job_id)
+    if job is None:
+        meta = await store.get_collection_meta(collection, namespace)
+        if meta is not None:
+            meta.reindex_job_id = None
+            await store.update_collection_meta(meta)
+        logger.error("_reindex_task: job %s not found", job_id)
+        return
+
+    if not isinstance(job, ReindexJob):
+        logger.error("_reindex_task: job %s is not a ReindexJob (got %s)", job_id, type(job))
+        job_store.update(job_id, status=JobStatus.FAILED, error="not a ReindexJob")
+        meta = await store.get_collection_meta(collection, namespace)
+        if meta is not None:
+            meta.reindex_job_id = None
+            await store.update_collection_meta(meta)
+        return
+
+    if job.status in (JobStatus.CANCELLING, JobStatus.CANCELLED):
+        meta = await store.get_collection_meta(collection, namespace)
+        if meta is not None:
+            meta.reindex_job_id = None
+            await store.update_collection_meta(meta)
+        return
+
+    # --- Step 1 & 2: resolve embedder ---
+    target_model = job.target_embedding_model
+    try:
+        if target_model is not None:
+            embedder = await embedder_cache.get_or_load(target_model)
+        else:
+            meta = await store.get_collection_meta(collection, namespace)
+            active_model = meta.active_embedding_model if meta is not None else ""
+            embedder = await embedder_cache.get_or_load(active_model)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("_reindex_task: embedder resolution failed for job %s", job_id)
+        meta = await store.get_collection_meta(collection, namespace)
+        if meta is not None:
+            meta.reindex_job_id = None
+            await store.update_collection_meta(meta)
+        job_store.update(job_id, status=JobStatus.FAILED, error=str(exc))
+        return
+
+    # --- Step 3: mark RUNNING ---
+    job_store.update(job_id, status=JobStatus.RUNNING)
+
+    # --- Step 4: ingest ---
+    ingest_error: Exception | None = None
+    cancelled: bool = False
+    try:
+        await pipeline.ingest_directory(
+            collection_path,
+            collection,
+            embedder=embedder,
+            namespace=namespace,
+            ingested_by="reindex",
+        )
+    except asyncio.CancelledError:
+        cancelled = True
+    except Exception as exc:  # noqa: BLE001
+        ingest_error = exc
+
+    if cancelled or ingest_error is not None:
+        logger.exception("_reindex_task: ingest failed for job %s", job_id) if ingest_error else None
+        # Step 6: failure path — do NOT touch active_embedding_model
+        try:
+            meta = await store.get_collection_meta(collection, namespace)
+            if meta is not None:
+                meta.reindex_job_id = None
+                await store.update_collection_meta(meta)
+        except Exception:  # noqa: BLE001
+            logger.exception("_reindex_task: failed to clear reindex_job_id for job %s", job_id)
+        try:
+            if cancelled:
+                job_store.update(job_id, status=JobStatus.CANCELLED)
+            else:
+                job_store.update(job_id, status=JobStatus.FAILED, error=str(ingest_error))
+        except Exception:  # noqa: BLE001
+            logger.exception("_reindex_task: failed to update job status for job %s", job_id)
+        return
+
+    # Check for cancellation between ingest and DONE (mirrors _default_ingest_task)
+    current_job = job_store.get(job_id)
+    if current_job and current_job.status == JobStatus.CANCELLING:
+        try:
+            meta = await store.get_collection_meta(collection, namespace)
+            if meta is not None:
+                meta.reindex_job_id = None
+                await store.update_collection_meta(meta)
+        except Exception:  # noqa: BLE001
+            logger.exception("_reindex_task: failed to clear reindex_job_id on cancel for job %s", job_id)
+        job_store.update(job_id, status=JobStatus.CANCELLED)
+        return
+
+    # --- Step 5: success path — promote model ---
+    try:
+        meta = await store.get_collection_meta(collection, namespace)
+        if meta is not None:
+            if target_model is not None:
+                # Model-change path
+                meta.active_embedding_model = target_model
+                meta.reindex_job_id = None
+                pending = meta.pending_embedding_model
+                if pending == target_model:
+                    meta.pending_embedding_model = None
+                    meta.needs_reindex = False
+                elif pending is not None:
+                    # Different pending set concurrently — leave pending and needs_reindex as-is
+                    pass
+                else:
+                    # pending is None
+                    meta.needs_reindex = False
+            else:
+                # Data-only path — only clear reindex_job_id
+                meta.reindex_job_id = None
+            await store.update_collection_meta(meta)
+        else:
+            logger.warning("_reindex_task: collection meta not found at success for job %s", job_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("_reindex_task: failed to update collection meta for job %s", job_id)
+
+    try:
+        job_store.update(job_id, status=JobStatus.DONE)
+    except Exception:  # noqa: BLE001
+        logger.exception("_reindex_task: failed to mark job done for job %s", job_id)
 
 
 _ERROR_401 = {401: {"model": ErrorDetail}}

@@ -4,18 +4,19 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from unittest import mock
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from fastapi.testclient import TestClient
 
+from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _run_pipeline
-from archon_search.types import IngestJob
+from archon_search.types import IngestJob, ReindexJob
 
 
 @pytest.fixture
@@ -653,3 +654,383 @@ async def test_background_ingest_cancelled_oserror_suppressed_and_reraises_cance
     assert any(
         "could not persist CANCELLED status" in r.message for r in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# _reindex_task tests (Task 8.1)
+# ---------------------------------------------------------------------------
+
+
+def _make_reindex_job(
+    job_id: str = "job-reindex-1",
+    target_embedding_model: str | None = "model-B",
+    status: JobStatus = JobStatus.PENDING,
+    namespace: str = DEFAULT_NAMESPACE,
+) -> ReindexJob:
+    return ReindexJob(
+        job_id=job_id,
+        status=status,
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+        target_embedding_model=target_embedding_model,
+        namespace=namespace,
+    )
+
+
+def _make_collection_meta(
+    name: str = "col",
+    active_embedding_model: str = "model-A",
+    pending_embedding_model: str | None = None,
+    needs_reindex: bool = False,
+    reindex_job_id: str | None = "job-reindex-1",
+    namespace: str = DEFAULT_NAMESPACE,
+) -> CollectionMeta:
+    return CollectionMeta(
+        name=name,
+        active_embedding_model=active_embedding_model,
+        pending_embedding_model=pending_embedding_model,
+        needs_reindex=needs_reindex,
+        reindex_job_id=reindex_job_id,
+        namespace=namespace,
+    )
+
+
+def _make_mocks(
+    job: ReindexJob,
+    meta: CollectionMeta,
+    ingest_raises: Exception | None = None,
+    embedder_raises: Exception | None = None,
+) -> tuple:
+    """Return (job_store, search_store, embedder_cache, pipeline) mocks."""
+    job_store = MagicMock(spec=JobStore)
+    job_store.get.return_value = job
+    job_store.update.return_value = None
+
+    search_store = MagicMock()
+    search_store.get_collection_meta = AsyncMock(return_value=meta)
+    search_store.update_collection_meta = AsyncMock(return_value=None)
+
+    fake_embedder = MagicMock()
+    embedder_cache = MagicMock()
+    if embedder_raises:
+        embedder_cache.get_or_load = AsyncMock(side_effect=embedder_raises)
+    else:
+        embedder_cache.get_or_load = AsyncMock(return_value=fake_embedder)
+
+    pipeline = MagicMock()
+    if ingest_raises:
+        pipeline.ingest_directory = AsyncMock(side_effect=ingest_raises)
+    else:
+        pipeline.ingest_directory = AsyncMock(return_value=[])
+
+    return job_store, search_store, embedder_cache, pipeline
+
+
+@pytest.mark.anyio
+async def test_reindex_task_promotes_active_on_success(tmp_path: Path) -> None:
+    """After successful reindex: active=target_model, pending=None, needs_reindex=False."""
+    from archon_search.server.routes_jobs import _reindex_task
+
+    job = _make_reindex_job(target_embedding_model="model-B")
+    meta = _make_collection_meta(
+        active_embedding_model="model-A",
+        pending_embedding_model="model-B",
+        needs_reindex=True,
+    )
+    job_store, search_store, embedder_cache, pipeline = _make_mocks(job, meta)
+
+    await _reindex_task(
+        job_id=job.job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=tmp_path,
+    )
+
+    # update_collection_meta was called; inspect the meta that was written
+    assert search_store.update_collection_meta.called
+    written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
+    assert written_meta.active_embedding_model == "model-B"
+    assert written_meta.pending_embedding_model is None
+    assert written_meta.needs_reindex is False
+    assert written_meta.reindex_job_id is None
+
+    # job was marked DONE
+    job_store.update.assert_called_with(job.job_id, status=JobStatus.DONE)
+
+
+@pytest.mark.anyio
+async def test_reindex_task_preserves_active_on_failure(tmp_path: Path) -> None:
+    """When ingest_directory raises, active_embedding_model is left unchanged."""
+    from archon_search.server.routes_jobs import _reindex_task
+
+    job = _make_reindex_job(target_embedding_model="model-B")
+    meta = _make_collection_meta(active_embedding_model="model-A")
+    job_store, search_store, embedder_cache, pipeline = _make_mocks(
+        job, meta, ingest_raises=RuntimeError("ingest boom")
+    )
+    # Return the same meta on success-path fetch
+    search_store.get_collection_meta = AsyncMock(return_value=meta)
+
+    await _reindex_task(
+        job_id=job.job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=tmp_path,
+    )
+
+    written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
+    assert written_meta.active_embedding_model == "model-A"
+    assert written_meta.reindex_job_id is None
+
+    # job was marked FAILED
+    update_calls = [str(c) for c in job_store.update.call_args_list]
+    assert any("FAILED" in c for c in update_calls)
+
+
+@pytest.mark.anyio
+async def test_reindex_task_writes_collection_meta_before_job_done(tmp_path: Path) -> None:
+    """CollectionMeta write must precede the DONE job_store.update."""
+    from archon_search.server.routes_jobs import _reindex_task
+
+    call_order: list[str] = []
+
+    job = _make_reindex_job(target_embedding_model="model-B")
+    meta = _make_collection_meta(active_embedding_model="model-A")
+    job_store, search_store, embedder_cache, pipeline = _make_mocks(job, meta)
+
+    async def track_meta_write(m: CollectionMeta) -> None:
+        call_order.append("meta_write")
+
+    def track_job_update(job_id: str, **kwargs: object) -> None:
+        call_order.append(f"job_update:{kwargs.get('status')}")
+
+    search_store.update_collection_meta = AsyncMock(side_effect=track_meta_write)
+    job_store.update.side_effect = track_job_update
+
+    await _reindex_task(
+        job_id=job.job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=tmp_path,
+    )
+
+    meta_idx = call_order.index("meta_write")
+    done_idx = call_order.index(f"job_update:{JobStatus.DONE}")
+    assert meta_idx < done_idx, f"Expected meta write before DONE, got order: {call_order}"
+
+
+@pytest.mark.anyio
+async def test_reindex_task_uses_target_model_from_job(tmp_path: Path) -> None:
+    """embedder_cache is called with target_embedding_model from the job."""
+    from archon_search.server.routes_jobs import _reindex_task
+
+    job = _make_reindex_job(target_embedding_model="model-X")
+    meta = _make_collection_meta(active_embedding_model="model-A")
+    job_store, search_store, embedder_cache, pipeline = _make_mocks(job, meta)
+
+    await _reindex_task(
+        job_id=job.job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=tmp_path,
+    )
+
+    embedder_cache.get_or_load.assert_called_once_with("model-X")
+
+
+@pytest.mark.anyio
+async def test_reindex_task_concurrent_patch_preserves_new_pending(tmp_path: Path) -> None:
+    """Simulate concurrent PATCH that changes pending to model-C while reindex runs.
+
+    After reindex of model-B: active=B, pending=C, needs_reindex=True (unchanged from PATCH).
+    """
+    from archon_search.server.routes_jobs import _reindex_task
+
+    job = _make_reindex_job(target_embedding_model="model-B")
+    # Initial meta at job start
+    initial_meta = _make_collection_meta(
+        active_embedding_model="model-A",
+        pending_embedding_model="model-B",
+        needs_reindex=True,
+    )
+    # Meta as it appears when read on success-path (concurrent PATCH happened)
+    concurrent_meta = _make_collection_meta(
+        active_embedding_model="model-A",
+        pending_embedding_model="model-C",
+        needs_reindex=True,
+    )
+    job_store, search_store, embedder_cache, pipeline = _make_mocks(job, initial_meta)
+    # First call returns initial_meta (for embedder resolution in data-only path, not needed here)
+    # success-path read returns concurrent_meta
+    search_store.get_collection_meta = AsyncMock(return_value=concurrent_meta)
+
+    await _reindex_task(
+        job_id=job.job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=tmp_path,
+    )
+
+    written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
+    # active promoted to B (we completed the reindex for B)
+    assert written_meta.active_embedding_model == "model-B"
+    # pending=C and needs_reindex=True are preserved (concurrent PATCH set them)
+    assert written_meta.pending_embedding_model == "model-C"
+    assert written_meta.needs_reindex is True
+
+
+@pytest.mark.anyio
+async def test_reindex_task_after_patch_revert_promotes_active_clears_needs_reindex(
+    tmp_path: Path,
+) -> None:
+    """Simulate revert (pending=None, needs_reindex=False) — after reindex: active=B, pending=None, needs_reindex=False."""
+    from archon_search.server.routes_jobs import _reindex_task
+
+    job = _make_reindex_job(target_embedding_model="model-B")
+    # Success-path meta: pending reverted to None
+    reverted_meta = _make_collection_meta(
+        active_embedding_model="model-A",
+        pending_embedding_model=None,
+        needs_reindex=False,
+    )
+    job_store, search_store, embedder_cache, pipeline = _make_mocks(job, reverted_meta)
+    search_store.get_collection_meta = AsyncMock(return_value=reverted_meta)
+
+    await _reindex_task(
+        job_id=job.job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=tmp_path,
+    )
+
+    written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
+    assert written_meta.active_embedding_model == "model-B"
+    assert written_meta.pending_embedding_model is None
+    assert written_meta.needs_reindex is False
+
+
+@pytest.mark.anyio
+async def test_reindex_task_data_only_preserves_active_model(tmp_path: Path) -> None:
+    """data-only reindex (target_embedding_model=None): active and pending unchanged after success."""
+    from archon_search.server.routes_jobs import _reindex_task
+
+    job = _make_reindex_job(target_embedding_model=None)
+    meta = _make_collection_meta(
+        active_embedding_model="model-A",
+        pending_embedding_model="model-B",
+        needs_reindex=True,
+    )
+    job_store, search_store, embedder_cache, pipeline = _make_mocks(job, meta)
+    search_store.get_collection_meta = AsyncMock(return_value=meta)
+
+    await _reindex_task(
+        job_id=job.job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=tmp_path,
+    )
+
+    written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
+    # active and pending untouched
+    assert written_meta.active_embedding_model == "model-A"
+    assert written_meta.pending_embedding_model == "model-B"
+    assert written_meta.needs_reindex is True
+    assert written_meta.reindex_job_id is None
+
+    job_store.update.assert_called_with(job.job_id, status=JobStatus.DONE)
+
+
+@pytest.mark.anyio
+async def test_reindex_task_data_only_failure_clears_job_id_only(tmp_path: Path) -> None:
+    """data-only, ingest_directory raises: active/pending unchanged, reindex_job_id=None, status=FAILED."""
+    from archon_search.server.routes_jobs import _reindex_task
+
+    job = _make_reindex_job(target_embedding_model=None)
+    meta = _make_collection_meta(
+        active_embedding_model="model-A",
+        pending_embedding_model="model-B",
+        needs_reindex=True,
+    )
+    job_store, search_store, embedder_cache, pipeline = _make_mocks(
+        job, meta, ingest_raises=ValueError("data-only boom")
+    )
+    search_store.get_collection_meta = AsyncMock(return_value=meta)
+
+    await _reindex_task(
+        job_id=job.job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=tmp_path,
+    )
+
+    written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
+    assert written_meta.active_embedding_model == "model-A"
+    assert written_meta.pending_embedding_model == "model-B"
+    assert written_meta.reindex_job_id is None
+
+    update_calls = [str(c) for c in job_store.update.call_args_list]
+    assert any("FAILED" in c for c in update_calls)
+
+
+@pytest.mark.anyio
+async def test_reindex_task_embedder_cache_failure_marks_job_failed(tmp_path: Path) -> None:
+    """If embedder_cache.get_or_load raises, job is marked FAILED and reindex_job_id cleared."""
+    from archon_search.server.routes_jobs import _reindex_task
+
+    job = _make_reindex_job(target_embedding_model="model-B")
+    meta = _make_collection_meta(active_embedding_model="model-A")
+    job_store, search_store, embedder_cache, pipeline = _make_mocks(
+        job, meta, embedder_raises=RuntimeError("model load failed")
+    )
+    search_store.get_collection_meta = AsyncMock(return_value=meta)
+
+    await _reindex_task(
+        job_id=job.job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=tmp_path,
+    )
+
+    # reindex_job_id must be cleared
+    written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
+    assert written_meta.reindex_job_id is None
+
+    # status must be FAILED
+    update_calls = [str(c) for c in job_store.update.call_args_list]
+    assert any("FAILED" in c for c in update_calls)
