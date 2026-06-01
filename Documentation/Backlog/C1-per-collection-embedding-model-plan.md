@@ -396,7 +396,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_pipeline.py -v -k "search_uses_passed_embedder"`
 
 #### Task 3.3 — Add `embedder: Embedder` to `ingest_file()`; fix `ingest_chunks` write-path
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 3.1
 - **Description**:
   - New signature: `async def ingest_file(self, path: Path, collection: str, rebuild_fts: bool = True, ..., *, embedder: Embedder, namespace: str = DEFAULT_NAMESPACE, ...) -> None`.

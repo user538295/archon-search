@@ -64,7 +64,7 @@ async def test_cli_ingest_sets_ingested_by_cli(connected_store, col_name, tmp_pa
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Hello\n\nA short document with words to chunk.\n" * 3)
 
-    result = await pipeline.ingest_file(md_file, col_name)
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
     assert result.status == "ok"
 
     row = await _read_first_row(connected_store, col_name, result.doc_id)
@@ -94,7 +94,7 @@ async def test_pipeline_falls_back_when_stat_fails(
     monkeypatch.setattr(Path, "stat", boom)
     caplog.set_level(logging.DEBUG, logger="archon_search")
 
-    result = await pipeline.ingest_file(md_file, col_name)
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
     assert result.status == "ok"
     row = await _read_first_row(connected_store, col_name, result.doc_id)
     # Store-level fallback uses indexed_at when updated_at is empty.
@@ -108,7 +108,7 @@ async def test_file_type_lowercased_MD(connected_store, col_name, tmp_path: Path
     md_file = tmp_path / "FOO.MD"
     md_file.write_text("# Hello\n\nA short document.\n" * 3)
 
-    result = await pipeline.ingest_file(md_file, col_name)
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
     assert result.status == "ok"
 
     row = await _read_first_row(connected_store, col_name, result.doc_id)
@@ -121,7 +121,7 @@ async def test_file_type_empty_for_no_extension(connected_store, col_name, tmp_p
     f = tmp_path / "Makefile"
     f.write_text("all:\n\techo hello\n" * 5)
 
-    result = await pipeline.ingest_file(f, col_name)
+    result = await pipeline.ingest_file(f, col_name, embedder=pipeline._global_embedder)
     assert result.status == "ok"
 
     row = await _read_first_row(connected_store, col_name, result.doc_id)
@@ -136,7 +136,7 @@ async def test_pipeline_ingest_propagates_ingested_by_kwarg(
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Hello\n\nContent.\n" * 3)
 
-    result = await pipeline.ingest_file(md_file, col_name, ingested_by="watcher")
+    result = await pipeline.ingest_file(md_file, col_name, ingested_by="watcher", embedder=pipeline._global_embedder)
     assert result.status == "ok"
     row = await _read_first_row(connected_store, col_name, result.doc_id)
     assert row["ingested_by"] == "watcher"

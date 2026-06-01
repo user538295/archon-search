@@ -77,7 +77,7 @@ async def test_pipeline_ingest_file_ok(connected_store, col_name, tmp_path):
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Hello\n\nThis is a test document with enough content to chunk.\n" * 5)
 
-    result = await pipeline.ingest_file(md_file, col_name)
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
     assert isinstance(result, IngestResult)
     assert result.status == "ok"
@@ -99,7 +99,7 @@ async def test_pipeline_ingest_file_parse_error(connected_store, col_name, tmp_p
 
     pipeline._parser.parse = _fail  # type: ignore[method-assign]
 
-    result = await pipeline.ingest_file(md_file, col_name)
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
     assert result.status == "error"
     assert result.chunks_created == 0
@@ -159,7 +159,7 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
     md_file = tmp_path / "seq.md"
     md_file.write_text("Word " * 200)  # enough tokens for multiple chunks
 
-    result = await pipeline.ingest_file(md_file, col_name)
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
     assert result.status == "ok"
 
     doc_id = result.doc_id
@@ -206,7 +206,7 @@ async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_na
     md_file = tmp_path / "sha.md"
     md_file.write_text("# Test\n\nContent.\n" * 10)
 
-    result = await pipeline.ingest_file(md_file, col_name)
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
     assert re.match(r"^[a-f0-9]{64}$", result.doc_id), f"doc_id {result.doc_id!r} is not 64 hex chars"
 
 
@@ -246,7 +246,7 @@ async def test_pipeline_search_returns_ranked_results(connected_store, col_name,
     md_file = tmp_path / "search_doc.md"
     md_file.write_text("# Search Test\n\nThis document contains searchable content.\n" * 10)
 
-    await pipeline.ingest_file(md_file, col_name)
+    await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
     result = await pipeline.search("searchable content", col_name, embedder=pipeline._global_embedder)
 
     from archon_search.pipeline import SearchPipelineResult
@@ -276,7 +276,7 @@ async def test_pipeline_search_with_context_returns_neighbors(connected_store, c
 
     md_file = tmp_path / "ctx_doc.md"
     md_file.write_text("# Context Test\n\n" + ("Content chunk. " * 50))
-    await pipeline2.ingest_file(md_file, col_name)
+    await pipeline2.ingest_file(md_file, col_name, embedder=pipeline2._global_embedder)
 
     results = await pipeline2.search_with_context("Content chunk", col_name, context_window=1)
 
@@ -314,7 +314,7 @@ async def test_pipeline_list_collections_after_ingest(connected_store, col_name,
     md_file = tmp_path / "col_doc.md"
     md_file.write_text("# Collection Test\n\nSome content.\n" * 5)
 
-    await pipeline.ingest_file(md_file, col_name)
+    await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
     collections = await pipeline.list_collections()
     names = [c.name for c in collections]
@@ -328,7 +328,7 @@ async def test_pipeline_ingest_file_fts_searchable(connected_store, col_name, tm
     md_file = tmp_path / "fts_doc.md"
     md_file.write_text(f"# FTS Test\n\nThis document contains {unique_word} for testing.\n" * 5)
 
-    await pipeline.ingest_file(md_file, col_name)
+    await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
     result = await pipeline.search(unique_word, col_name, embedder=pipeline._global_embedder)
     assert len(result.results) > 0
@@ -487,7 +487,7 @@ async def test_pipeline_ingest_file_parse_error_preserves_existing_chunks(connec
     pipeline._parser.parse = _fail  # type: ignore[method-assign]
 
     # Re-ingest should fail gracefully
-    second_result = await pipeline.ingest_file(md_file, col_name)
+    second_result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
     assert second_result.status == "error"
 
     # Original doc should still be there
@@ -510,7 +510,7 @@ async def test_pipeline_ingest_file_empty_content_preserves_existing_chunks(conn
     # Overwrite with empty content and re-ingest via ingest_file
     md_file.write_text("")
 
-    second_result = await pipeline.ingest_file(md_file, col_name)
+    second_result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
     assert second_result.status == "ok"
     assert second_result.chunks_created == 0
 
@@ -629,7 +629,7 @@ async def test_pipeline_ingest_image_empty_ocr_produces_no_chunk(connected_store
 
     pipeline._parser.parse = AsyncMock(return_value="")  # type: ignore[method-assign]
 
-    result = await pipeline.ingest_file(png_file, col_name)
+    result = await pipeline.ingest_file(png_file, col_name, embedder=pipeline._global_embedder)
 
     assert result.status == "ok"
     assert result.chunks_created == 0
@@ -918,7 +918,7 @@ async def test_ingest_file_records_parse_embed_persist(tmp_path):
     md_file.write_text("# Test\n\nContent for stage recording.\n" * 10)
 
     with bind_stage_recorder() as recorder:
-        result = await pipeline.ingest_file(md_file, "test-col")
+        result = await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
 
     assert result.status == "ok"
     assert {"parse", "embed", "persist"} <= recorder.stage_timings_ms.keys()
@@ -980,7 +980,7 @@ async def test_pipeline_noop_when_unbound(tmp_path):
     await pipeline.search_with_context("query", "col")
     assert _stage_recorder.get() is None
 
-    await pipeline.ingest_file(md_file, "col")
+    await pipeline.ingest_file(md_file, "col", embedder=pipeline._global_embedder)
     assert _stage_recorder.get() is None
 
 
@@ -1451,7 +1451,7 @@ async def test_pipeline_ingest_file_embedder_exception_propagates(connected_stor
     pipeline._global_embedder = Embedder(ExplodingBackend())
 
     with pytest.raises(RuntimeError, match="embedder exploded"):
-        await pipeline.ingest_file(md_file, col_name)
+        await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
 
 @pytest.mark.asyncio
@@ -1596,7 +1596,7 @@ async def test_P14_22_pipeline_ingest_file_chunk_size_1(connected_store, col_nam
     md_file = tmp_path / "tiny.md"
     md_file.write_text("alpha beta gamma delta")
 
-    result = await pipeline.ingest_file(md_file, col_name)
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
     assert result.status == "ok"
     # With chunk_size=1 every token is its own chunk — "alpha beta gamma delta" has 4 words
@@ -1852,7 +1852,7 @@ async def test_eval_trace_matches_search_final_order_with_matching_depths(connec
 
     md_file = tmp_path / "trace_doc.md"
     md_file.write_text("# Trace Test\n\nSearchable content for eval trace matching.\n" * 10)
-    await pipeline.ingest_file(md_file, col_name)
+    await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
     normal_result_obj = await pipeline.search("Searchable content", col_name, embedder=pipeline._global_embedder)
     _, post_rerank = await collect_search_trace(
@@ -1892,7 +1892,7 @@ async def test_eval_trace_common_prefix_matches_search_when_depths_differ(connec
 
     md_file = tmp_path / "prefix_doc.md"
     md_file.write_text("# Prefix Test\n\nContent for prefix comparison.\n" * 10)
-    await pipeline.ingest_file(md_file, col_name)
+    await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
     normal_result_obj = await pipeline.search("prefix comparison", col_name, embedder=pipeline._global_embedder)
     _, post_rerank = await collect_search_trace(
@@ -1933,7 +1933,7 @@ async def test_eval_trace_does_not_change_public_search_response(connected_store
 
     md_file = tmp_path / "unchanged_doc.md"
     md_file.write_text("# Unchanged Test\n\nSearch results must not change.\n" * 10)
-    await pipeline.ingest_file(md_file, col_name)
+    await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
     before = await pipeline.search("Search results", col_name, embedder=pipeline._global_embedder)
 
@@ -2120,7 +2120,7 @@ async def test_search_returns_pipeline_result(connected_store, col_name, tmp_pat
     pipeline = make_pipeline(connected_store)
     md_file = tmp_path / "result_type_doc.md"
     md_file.write_text("# Type Test\n\nContent for return-type check.\n" * 10)
-    await pipeline.ingest_file(md_file, col_name)
+    await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
     result = await pipeline.search("Content for return-type", col_name, embedder=pipeline._global_embedder)
 
@@ -2230,7 +2230,7 @@ async def test_search_with_context_still_works_after_type_change(connected_store
 
     md_file = tmp_path / "swc_type_doc.md"
     md_file.write_text("# SWC Test\n\n" + ("content chunk. " * 50))
-    await pipeline.ingest_file(md_file, col_name)
+    await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
 
     results = await pipeline.search_with_context("content chunk", col_name, context_window=1)
 
@@ -3551,7 +3551,7 @@ async def test_ingest_file_returns_error_on_delete_store_busy(tmp_path) -> None:
     md_file = tmp_path / "busy.md"
     md_file.write_text("Some content to ingest.")
 
-    result = await pipeline.ingest_file(md_file, "test-col")
+    result = await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
 
     assert isinstance(result, IngestResult)
     assert result.status == "error"
@@ -3673,7 +3673,7 @@ async def test_ingest_file_triggers_recompute_on_needs_recompute_signal(tmp_path
         md_file = tmp_path / "doc.md"
         md_file.write_text("# Hello\n\nContent for testing.\n" * 5)
 
-        result = await pipeline.ingest_file(md_file, "test-col")
+        result = await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
 
     assert result.status == "ok"
     assert result.needs_recompute is True
@@ -3690,7 +3690,7 @@ async def test_ingest_file_forwards_namespace_to_store(tmp_path) -> None:
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Hello\n\nContent for testing.\n" * 5)
 
-    await pipeline.ingest_file(md_file, "test-col", namespace="ns1")
+    await pipeline.ingest_file(md_file, "test-col", namespace="ns1", embedder=pipeline._global_embedder)
 
     # delete_document should receive namespace="ns1"
     call_kwargs = store.delete_document.call_args
@@ -4010,7 +4010,7 @@ async def test_search_uses_passed_embedder(connected_store, col_name, tmp_path):
     # Ingest a doc so the collection exists
     doc = tmp_path / "doc.md"
     doc.write_text("# Test\n\nContent for embedder routing test.\n" * 5)
-    await pipeline.ingest_file(doc, col_name)
+    await pipeline.ingest_file(doc, col_name, embedder=pipeline._global_embedder)
 
     # Create a second embedder (embedder_B) and spy on both
     embedder_b = make_embedder()
@@ -4045,7 +4045,7 @@ async def test_search_does_not_call_global_embedder(connected_store, col_name, t
 
     doc = tmp_path / "doc2.md"
     doc.write_text("# Test\n\nAnother content for embedder test.\n" * 5)
-    await pipeline.ingest_file(doc, col_name)
+    await pipeline.ingest_file(doc, col_name, embedder=pipeline._global_embedder)
 
     mock_embedder = make_embedder()
     mock_embedder.embed_one = AsyncMock(return_value=[0.1] * 4)  # type: ignore[method-assign]
@@ -4056,3 +4056,85 @@ async def test_search_does_not_call_global_embedder(connected_store, col_name, t
     await pipeline.search("another query", col_name, embedder=mock_embedder)
 
     global_embed_one.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# C1 Task 3.3 — embedder parameter on ingest_file()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_uses_passed_embedder(tmp_path) -> None:
+    """ingest_file() embeds with the passed embedder, not self._global_embedder."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = _make_mock_store_for_b5()
+    global_embedder = make_embedder()
+    passed_embedder = make_embedder()
+
+    global_embed_mock = AsyncMock(return_value=[[0.1] * 4])
+    passed_embed_mock = AsyncMock(return_value=[[0.1] * 4])
+
+    global_embedder.embed = global_embed_mock  # type: ignore[method-assign]
+    global_embedder._embedding_dim = 4  # pre-initialize so embedding_dim property works
+    passed_embedder.embed = passed_embed_mock  # type: ignore[method-assign]
+    passed_embedder._embedding_dim = 4  # pre-initialize so embedding_dim property works
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=global_embedder,
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Test\n\nContent for embedder routing test.\n" * 5)
+
+    result = await pipeline.ingest_file(md_file, "test-col", embedder=passed_embedder)
+
+    assert result.status == "ok"
+    passed_embed_mock.assert_awaited()
+    global_embed_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_writes_correct_model_name_to_chunks(tmp_path) -> None:
+    """After ingest_file(..., embedder=embedder_X), ingest_chunks receives embedding_model=embedder_X.model_name."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = _make_mock_store_for_b5()
+
+    class CustomBackend:
+        model_name: str = "custom-model-xyz"
+        is_warm: bool = False
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            return [[0.5] * 4 for _ in texts]
+
+    custom_embedder = Embedder(CustomBackend())
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),  # global embedder has model_name="mock-embedder"
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Test\n\nContent for model name test.\n" * 5)
+
+    await pipeline.ingest_file(md_file, "test-col", embedder=custom_embedder)
+
+    store.ingest_chunks.assert_awaited_once()
+    call_kwargs = store.ingest_chunks.call_args
+    assert call_kwargs.kwargs.get("embedding_model") == "custom-model-xyz"

@@ -82,7 +82,7 @@ def test_watcher_replace_no_stale_duplicates(
 
     async def _full() -> tuple[str, str, str]:
         # 1) Initial ingest as watcher
-        first = await pipeline.ingest_file(md_file, col, ingested_by="watcher")
+        first = await pipeline.ingest_file(md_file, col, embedder=pipeline._global_embedder, ingested_by="watcher")
         rows_initial = await _rows_for_doc(store_for_watcher, col, first.doc_id)
         assert rows_initial, "initial ingest must produce rows"
         initial_updated_at = rows_initial[0]["updated_at"]
@@ -95,7 +95,7 @@ def test_watcher_replace_no_stale_duplicates(
         os.utime(md_file, (future_mtime, future_mtime))
 
         # 3) Re-ingest as watcher (same source_path -> same doc_id).
-        second = await pipeline.ingest_file(md_file, col, ingested_by="watcher")
+        second = await pipeline.ingest_file(md_file, col, embedder=pipeline._global_embedder, ingested_by="watcher")
         assert second.doc_id == first.doc_id
         rows_after = await _rows_for_doc(store_for_watcher, col, second.doc_id)
         return initial_updated_at, rows_after, initial_count

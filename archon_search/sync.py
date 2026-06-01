@@ -641,7 +641,7 @@ class SearchCollectionSync:
 
                 # Changed files
                 for file in changed_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, ingested_by="watcher")
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=self._pipeline._global_embedder, ingested_by="watcher")
                     resolved_str = str(file.resolve())
                     if ingest_result.status == "ok":
                         try:
@@ -668,7 +668,7 @@ class SearchCollectionSync:
 
                 # New files
                 for file in new_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, ingested_by="watcher")
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=self._pipeline._global_embedder, ingested_by="watcher")
                     if ingest_result.status == "ok":
                         try:
                             file_mtimes[str(file.resolve())] = file.stat().st_mtime

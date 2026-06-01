@@ -212,6 +212,7 @@ class SearchPipeline:
         _vector_collector: list[list[float]] | None = None,
         _chunk_collector: list[str] | None = None,
         *,
+        embedder: Embedder,
         namespace: str = DEFAULT_NAMESPACE,
         ingested_by: IngestedBy = "cli",
     ) -> IngestResult:
@@ -269,7 +270,7 @@ class SearchPipeline:
             _chunk_collector.extend(r.text for r in records)
 
         # Embed
-        vectors = await self._global_embedder.embed([r.text for r in records])
+        vectors = await embedder.embed([r.text for r in records])
         for record, vector in zip(records, vectors):
             record.vector = vector
         if _vector_collector is not None:
@@ -277,14 +278,14 @@ class SearchPipeline:
 
         # Persist
         with record_stage("persist"):
-            await self.store.ensure_collection(collection, self._global_embedder.embedding_dim)
+            await self.store.ensure_collection(collection, embedder.embedding_dim)
             try:
                 await self.store.delete_document(collection, doc_id, namespace=namespace)
             except StoreBusyError:
                 return IngestResult(doc_id=doc_id, chunks_created=0, status="error")
             ingest_result = await self.store.ingest_chunks(
                 collection, records,
-                embedding_model=self._global_embedder.model_name,
+                embedding_model=embedder.model_name,
                 namespace=namespace,
             )
 
@@ -353,6 +354,7 @@ class SearchPipeline:
                 rebuild_fts=False,
                 _vector_collector=all_vectors,
                 _chunk_collector=all_chunks,
+                embedder=self._global_embedder,
                 namespace=namespace,
                 ingested_by=ingested_by,
             )

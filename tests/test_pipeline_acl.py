@@ -121,7 +121,7 @@ async def test_ingest_file_front_matter_acl_propagated_to_chunks(tmp_path):
     collection = "col1"
     await _setup(pipeline, store, collection)
     try:
-        result = await pipeline.ingest_file(doc, collection)
+        result = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result.status == "ok"
         assert result.chunks_created > 0
 
@@ -145,7 +145,7 @@ async def test_ingest_file_sidecar_acl_propagated_to_chunks(tmp_path):
     collection = "col2"
     await _setup(pipeline, store, collection)
     try:
-        result = await pipeline.ingest_file(doc, collection)
+        result = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result.status == "ok"
         assert result.chunks_created > 0
 
@@ -167,7 +167,7 @@ async def test_ingest_file_strips_acl_from_chunk_text(tmp_path):
     collection = "col3"
     await _setup(pipeline, store, collection)
     try:
-        result = await pipeline.ingest_file(doc, collection)
+        result = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result.status == "ok"
 
         chunks = await _read_chunks(store, collection)
@@ -191,7 +191,7 @@ async def test_ingest_file_skips_acl_sidecar_files(tmp_path):
     await _setup(pipeline, store, collection)
     try:
         # Ingest the sidecar directly — must return 0 chunks (skipped)
-        result = await pipeline.ingest_file(sidecar, collection)
+        result = await pipeline.ingest_file(sidecar, collection, embedder=pipeline._global_embedder)
         # .acl files should be skipped: 0 chunks
         assert result.chunks_created == 0, (
             f"Expected 0 chunks for .acl sidecar, got {result.chunks_created}"
@@ -238,7 +238,7 @@ async def test_ingest_file_front_matter_precedence_over_sidecar(tmp_path):
     collection = "col5"
     await _setup(pipeline, store, collection)
     try:
-        result = await pipeline.ingest_file(doc, collection)
+        result = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result.status == "ok"
 
         chunks = await _read_chunks(store, collection)
@@ -263,7 +263,7 @@ async def test_ingest_file_empty_sidecar_defaults_open(tmp_path):
     collection = "col6"
     await _setup(pipeline, store, collection)
     try:
-        result = await pipeline.ingest_file(doc, collection)
+        result = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result.status == "ok"
 
         chunks = await _read_chunks(store, collection)
@@ -285,7 +285,7 @@ async def test_ingest_file_deny_all_sidecar(tmp_path):
     collection = "col7"
     await _setup(pipeline, store, collection)
     try:
-        result = await pipeline.ingest_file(doc, collection)
+        result = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result.status == "ok"
 
         chunks = await _read_chunks(store, collection)
@@ -309,7 +309,7 @@ async def test_ingest_file_all_invalid_acl_defaults_open_with_warning(tmp_path, 
     await _setup(pipeline, store, collection)
     try:
         with caplog.at_level(logging.WARNING, logger="archon_search"):
-            result = await pipeline.ingest_file(doc, collection)
+            result = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result.status == "ok"
 
         chunks = await _read_chunks(store, collection)
@@ -332,7 +332,7 @@ async def test_reingest_updates_acl_for_all_chunks(tmp_path):
     await _setup(pipeline, store, collection)
     try:
         # First ingest
-        result1 = await pipeline.ingest_file(doc, collection)
+        result1 = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result1.status == "ok"
         chunks_after_first = await _read_chunks(store, collection)
         for chunk in chunks_after_first:
@@ -340,7 +340,7 @@ async def test_reingest_updates_acl_for_all_chunks(tmp_path):
 
         # Update ACL and re-ingest
         doc.write_text("---\n_acl: ns_second\n---\n\nContent to re-index.\n")
-        result2 = await pipeline.ingest_file(doc, collection)
+        result2 = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result2.status == "ok"
 
         chunks_after_second = await _read_chunks(store, collection)
@@ -367,7 +367,7 @@ async def test_ingest_binary_file_no_front_matter_parsing(tmp_path):
     collection = "col10"
     await _setup(pipeline, store, collection)
     try:
-        result = await pipeline.ingest_file(doc, collection)
+        result = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result.status == "ok"
 
         chunks = await _read_chunks(store, collection)
@@ -397,7 +397,7 @@ async def test_ingest_file_front_matter_block_stripped_from_chunk_text(tmp_path)
     collection = "col11"
     await _setup(pipeline, store, collection)
     try:
-        result = await pipeline.ingest_file(doc, collection)
+        result = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result.status == "ok"
 
         chunks = await _read_chunks(store, collection)
@@ -603,7 +603,7 @@ async def test_e2e_ingest_and_search_acl_enforcement(tmp_path):
     pipeline._reranker.rerank = _passthrough_rerank
 
     try:
-        result = await pipeline.ingest_file(doc, collection)
+        result = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
         assert result.status == "ok"
         assert result.chunks_created > 0
 

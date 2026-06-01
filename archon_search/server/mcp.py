@@ -552,7 +552,7 @@ def create_app(
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 result = await pipeline.ingest_file(
-                    validated, collection or default_collection, ingested_by="http",
+                    validated, collection or default_collection, embedder=pipeline._global_embedder, ingested_by="http",
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)

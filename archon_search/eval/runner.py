@@ -542,7 +542,7 @@ async def _ingest_corpus(pipeline, corpus_root: Path, corpus: EvalCorpus) -> Non
         )
     for collection, paths in by_collection.items():
         for p in paths:
-            result = await pipeline.ingest_file(p, collection, rebuild_fts=False)
+            result = await pipeline.ingest_file(p, collection, rebuild_fts=False, embedder=pipeline._global_embedder)
             if result.status != "ok":
                 raise RuntimeError(
                     f"failed to ingest {p}: {result.error}"
