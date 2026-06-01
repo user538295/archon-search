@@ -496,7 +496,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
 > **Releasable**: after Task 4.2 — both validators callable from PATCH and POST handlers. No REST behavior change yet.
 
 #### Task 4.1 — `_get_stored_vector_dimension(collection, db)` helper
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: nothing
 - **Description**:
   - `async def get_stored_vector_dimension(self, collection: str, namespace: str = DEFAULT_NAMESPACE) -> int | None`: opens the collection's chunk table; reads the PyArrow schema of the `vector` column; returns the fixed-size list dimension. Returns `None` if the table does not exist or has no rows (empty collection, no schema yet).

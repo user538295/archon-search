@@ -6313,3 +6313,73 @@ async def test_reindex_job_id_round_trips_none(connected_store: SearchStore) -> 
     retrieved = await connected_store.get_collection_meta("c1-job-id-none")
     assert retrieved is not None
     assert retrieved.reindex_job_id is None
+
+
+# ---------------------------------------------------------------------------
+# Task 4.1 — get_stored_vector_dimension + count_chunks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_stored_vector_dimension_returns_correct_dim(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """After ingesting a chunk with a 384-dim vector, get_stored_vector_dimension returns 384."""
+    dim = 384
+    doc_id = _doc_id()
+    chunk = ChunkRecord(
+        doc_id=doc_id,
+        chunk_id=f"{doc_id}-000000",
+        text="hello",
+        vector=[0.1] * dim,
+        source_path=f"/tmp/{doc_id[:8]}.md",
+        indexed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    await connected_store.ensure_collection(col_name, dim)
+    await connected_store.ingest_chunks(col_name, [chunk])
+    result = await connected_store.get_stored_vector_dimension(col_name)
+    assert result == dim
+
+
+@pytest.mark.asyncio
+async def test_get_stored_vector_dimension_returns_none_for_missing_table(
+    connected_store: SearchStore,
+) -> None:
+    """Non-existent collection returns None (no exception)."""
+    result = await connected_store.get_stored_vector_dimension("nonexistent-dim-xyz")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_count_chunks_returns_correct_count(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """After ingesting 3 chunks, count_chunks returns 3."""
+    doc_id = _doc_id()
+    chunks = [_chunk(doc_id, i) for i in range(3)]
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, chunks)
+    from archon_search.constants import DEFAULT_NAMESPACE
+    count = await connected_store.count_chunks(col_name, DEFAULT_NAMESPACE)
+    assert count == 3
+
+
+@pytest.mark.asyncio
+async def test_count_chunks_empty_collection_returns_zero(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Collection that exists but has no chunks returns 0."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+    await connected_store.ensure_collection(col_name, _DIM)
+    count = await connected_store.count_chunks(col_name, DEFAULT_NAMESPACE)
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_count_chunks_nonexistent_collection_returns_zero(
+    connected_store: SearchStore,
+) -> None:
+    """Non-existent collection returns 0 (no exception)."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+    count = await connected_store.count_chunks("nonexistent-count-xyz", DEFAULT_NAMESPACE)
+    assert count == 0

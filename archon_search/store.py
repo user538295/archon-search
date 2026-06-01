@@ -1679,6 +1679,47 @@ class SearchStore:
         rows = await table.query().select(["doc_id"]).to_list()
         return len({r["doc_id"] for r in rows})
 
+    async def get_stored_vector_dimension(
+        self, collection: str, namespace: str = DEFAULT_NAMESPACE
+    ) -> int | None:
+        """Return the fixed-size list dimension of the ``vector`` column in *collection*.
+
+        Returns ``None`` if the table does not exist.  This is O(1) — reads Arrow
+        schema metadata only, no row scan.
+
+        The *namespace* parameter is accepted for API symmetry but does not affect
+        table-name resolution (the collection name is the table name).
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return None
+        schema = await table.schema()
+        try:
+            vector_field = schema.field("vector")
+        except KeyError:
+            return None
+        return vector_field.type.list_size
+
+    async def count_chunks(self, collection: str, namespace: str) -> int:
+        """Return the total number of chunks (rows) in *collection*.
+
+        Returns ``0`` if the collection does not exist.  This is O(1) —
+        uses ``table.count_rows()`` which reads metadata only.
+
+        The *namespace* parameter is accepted for API symmetry but does not
+        affect table-name resolution (the collection name is the table name).
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return 0
+        return await table.count_rows()
+
     async def get_acl_stats(self, collection: str) -> tuple[int, int]:
         """Return (acl_protected_count, acl_open_count) for all chunks in a collection.
 
