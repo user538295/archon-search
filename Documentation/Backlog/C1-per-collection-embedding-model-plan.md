@@ -883,7 +883,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
 > **Releasable**: after Task 10.3 — `update_collection` MCP tool works; CLI reindex handles per-collection models correctly; `/status` surfaces `needs_reindex` collections. (AC 19–24, 34, 53)
 
 #### Task 10.1 — `update_collection` MCP tool
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 5.1 (PATCH endpoint is live)
 - **Description**:
   - **Prerequisite**: Task 7.4 updates all existing MCP pipeline call sites (`search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory`) with per-collection embedder resolution. Task 10.1 adds only the new `update_collection` tool; it must NOT touch the call sites already updated in Task 7.4.

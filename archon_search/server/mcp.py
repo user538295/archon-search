@@ -43,9 +43,12 @@ from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
 from archon_search.embedder_cache import EmbedderCache
+from archon_search.model_validation import ModelValidationError, validate_embedding_model
+from archon_search.types import JobStatus
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
+    from archon_search.jobs.store import JobStore
 
 logger = logging.getLogger(__name__)
 
@@ -120,12 +123,16 @@ def create_app(
     writer: TelemetryWriter | None = None,
     config: SearchConfig | None = None,
     embedder_cache: EmbedderCache | None = None,
+    job_store: JobStore | None = None,
 ) -> FastMCP:
-    """Create a FastMCP app with 10 RAG tools registered.
+    """Create a FastMCP app with 11 RAG tools registered.
 
     ``config`` is required only for the collectionless ``explain`` routing path;
     when omitted, ``explain`` without a collection falls back to
     ``default_collection`` (mirroring the ``search`` tool).
+
+    ``job_store`` is required for the ``update_collection`` tool's 409 guard
+    (active reindex check).
     """
     app = FastMCP("archon-search")
 
@@ -763,6 +770,103 @@ def create_app(
             logger.exception("delete_document failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
 
+    @app.tool()
+    async def update_collection(
+        collection_name: str,
+        embedding_model: str,
+        ctx: Context,
+    ) -> dict[str, Any]:
+        """Update the embedding model for a collection. Triggers reindex if needed.
+
+        Returns the updated collection metadata dict (same shape as PATCH /collections/{name}).
+        Error cases:
+        - Collection not found in config or for caller's namespace → error dict (not_found).
+        - Invalid embedding model → error dict (validation_error, 422-equivalent).
+        - Active reindex job in progress → error dict (conflict, 409-equivalent).
+        """
+        try:
+            ns: str = ctx.meta.get("namespace", DEFAULT_NAMESPACE)
+            store = pipeline.store
+
+            # 404 if collection not in config
+            if config is not None:
+                from archon_search.server.routes_collections import _all_collection_paths  # noqa: PLC0415
+                path_to_name = _all_collection_paths(config)
+                if collection_name not in path_to_name:
+                    return McpErrorResponse(error=f"Collection {collection_name!r} not found", code="not_found")
+
+            # 404 if meta not found for this namespace
+            meta = await store.get_collection_meta(collection_name, namespace=ns)
+            if meta is None:
+                return McpErrorResponse(error=f"Collection {collection_name!r} not found", code="not_found")
+
+            # Validate embedding model — 422-equivalent on ModelValidationError
+            try:
+                new_dim = await validate_embedding_model(embedding_model)
+            except ModelValidationError as exc:
+                return McpErrorResponse(error=str(exc), code="validation_error")
+
+            # Dimension mismatch guard
+            stored_dim = await store.get_stored_vector_dimension(collection_name, namespace=ns)
+            if stored_dim is not None and stored_dim != new_dim:
+                return McpErrorResponse(
+                    error=(
+                        f"model dimension mismatch: current vectors are {stored_dim}-dim, "
+                        f"new model produces {new_dim}-dim; delete and recreate collection to change dimensions"
+                    ),
+                    code="validation_error",
+                )
+
+            # 409 guard: check if reindex job is still active (after validation, before state machine)
+            stale_cleared = False
+            if meta.reindex_job_id is not None and job_store is not None:
+                job = job_store.get(meta.reindex_job_id)
+                if job is not None and job.status in (JobStatus.RUNNING, JobStatus.PENDING):
+                    return McpErrorResponse(
+                        error="reindex in progress; wait for job to complete before changing embedding model",
+                        code="conflict",
+                    )
+                # Stale (DONE/FAILED/CANCELLED) — clear it
+                meta.reindex_job_id = None
+                stale_cleared = True
+
+            # State machine (mirrors patch_collection logic)
+            active = meta.active_embedding_model
+            pending = meta.pending_embedding_model
+            requested = embedding_model
+
+            if active == requested and pending is None:
+                # (a) no-op — persist only if stale reindex_job_id was cleared
+                if stale_cleared:
+                    await store.update_collection_meta(meta)
+            elif pending == requested:
+                # (a') no-op — persist only if stale reindex_job_id was cleared
+                if stale_cleared:
+                    await store.update_collection_meta(meta)
+            elif pending is not None and active == requested:
+                # (c) revert: clear pending and any stale reindex_job_id
+                meta.pending_embedding_model = None
+                meta.needs_reindex = False
+                meta.reindex_job_id = None
+                await store.update_collection_meta(meta)
+            else:
+                # (b) or (d): new model requested
+                chunk_count = await store.count_chunks(collection_name, namespace=ns)
+                if chunk_count > 0:
+                    meta.pending_embedding_model = requested
+                    meta.needs_reindex = True
+                else:
+                    meta.active_embedding_model = requested
+                    meta.pending_embedding_model = None
+                    meta.needs_reindex = False
+                    meta.reindex_job_id = None
+                await store.update_collection_meta(meta)
+
+            return asdict(meta)
+        except Exception as exc:
+            logger.exception("update_collection failed")
+            return McpErrorResponse(error=str(exc), code="internal_error")
+
     @app.custom_route("/health", methods=["GET"])
     async def health_check(request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
@@ -777,6 +881,7 @@ def create_mcp_http_app(
     config: SearchConfig | None = None,
     request_id_header: str = "X-Request-ID",
     embedder_cache: EmbedderCache | None = None,
+    job_store: JobStore | None = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
@@ -786,7 +891,7 @@ def create_mcp_http_app(
     """
     from archon_search.server.middleware_context import RequestContextMiddleware
 
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache)
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store)
     starlette_app: Starlette = fastmcp_app.streamable_http_app()
     api_key, _ = load_or_generate_key()
     starlette_app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces={})

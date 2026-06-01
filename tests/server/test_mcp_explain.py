@@ -136,10 +136,10 @@ async def _build_real_pipeline(tmp_path: Path, config: SearchConfig) -> SearchPi
 
 
 def test_mcp_app_registers_explain_tool() -> None:
-    """The MCP app registers `explain`; total tool count is 10."""
+    """The MCP app registers `explain`; total tool count is 11."""
     app = _make_mcp_app(MagicMock())
     assert "explain" in app.tools
-    assert len(app.tools) == 10
+    assert len(app.tools) == 11
 
 
 @pytest.mark.asyncio
