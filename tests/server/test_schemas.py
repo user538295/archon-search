@@ -43,7 +43,10 @@ def test_collection_detail_inherits_summary_fields() -> None:
         chunk_count=100,
         namespace="default",
         status="DONE",
-        embedding_model="all-MiniLM-L6-v2",
+        active_embedding_model="all-MiniLM-L6-v2",
+        pending_embedding_model=None,
+        needs_reindex=False,
+        reindex_job_id=None,
         centroid_present=True,
         last_indexed="2026-01-01T00:00:00Z",
         acl_protected_count=2,
@@ -58,7 +61,10 @@ def test_collection_detail_inherits_summary_fields() -> None:
     assert detail.namespace == "default"
     assert detail.status == "DONE"
     # CollectionDetail-specific fields
-    assert detail.embedding_model == "all-MiniLM-L6-v2"
+    assert detail.active_embedding_model == "all-MiniLM-L6-v2"
+    assert detail.pending_embedding_model is None
+    assert detail.needs_reindex is False
+    assert detail.reindex_job_id is None
     assert detail.centroid_present is True
     assert detail.last_indexed == "2026-01-01T00:00:00Z"
     assert detail.acl_protected_count == 2

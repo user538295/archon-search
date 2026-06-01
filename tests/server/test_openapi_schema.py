@@ -284,7 +284,7 @@ def test_list_collections_returns_typed_list(
 
 
 def test_collection_detail_schema_in_spec(app) -> None:  # type: ignore[no-untyped-def]
-    """GET /collections/{name} 200 response schema includes acl_protected_count and embedding_model."""
+    """GET /collections/{name} 200 response schema includes acl_protected_count and active_embedding_model."""
     schema = app.openapi()
     get_op = schema["paths"]["/collections/{name}"]["get"]
     resp_200 = get_op["responses"]["200"]
@@ -296,7 +296,9 @@ def test_collection_detail_schema_in_spec(app) -> None:  # type: ignore[no-untyp
     model_schema = schema["components"]["schemas"][schema_name]
     props = model_schema.get("properties", {})
     assert "acl_protected_count" in props, "CollectionDetail schema must have 'acl_protected_count'"
-    assert "embedding_model" in props, "CollectionDetail schema must have 'embedding_model'"
+    assert "active_embedding_model" in props, "CollectionDetail schema must have 'active_embedding_model'"
+    assert "pending_embedding_model" in props, "CollectionDetail schema must have 'pending_embedding_model'"
+    assert "needs_reindex" in props, "CollectionDetail schema must have 'needs_reindex'"
     # Also verify it inherits CollectionSummary fields
     for field in ("name", "path", "description", "doc_count", "chunk_count", "namespace", "status"):
         assert field in props, f"CollectionDetail schema must have '{field}' from CollectionSummary"

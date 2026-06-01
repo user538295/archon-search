@@ -110,7 +110,10 @@ class CollectionSummary(BaseModel):
 
 
 class CollectionDetail(CollectionSummary):
-    embedding_model: str
+    active_embedding_model: str
+    pending_embedding_model: str | None = None
+    needs_reindex: bool = False
+    reindex_job_id: str | None = None
     centroid_present: bool = False
     last_indexed: str | None = None
     acl_protected_count: int = 0

@@ -8,6 +8,30 @@
 
 ## Changelog
 
+### [next release] — C1 per-collection embedding model (schema changes)
+
+**Surface**: REST `GET /collections/{name}` response (breaking rename); `GET /collections/` response (additive); `POST /collections/` request (additive); `POST /search` response (additive).
+
+**`GET /collections/{name}` — breaking rename + additive fields**:
+- `embedding_model` field **renamed** to `active_embedding_model`. Clients that read `embedding_model` will receive `null`/`undefined` — update to read `active_embedding_model`.
+- Three new fields added: `pending_embedding_model` (nullable string), `needs_reindex` (bool), `reindex_job_id` (nullable string).
+
+**`GET /collections/` — additive fields**:
+- Each `CollectionSummary` entry gains `active_embedding_model: str` and `needs_reindex: bool`. Non-breaking for tolerant consumers.
+
+**`POST /collections/` — additive optional request field**:
+- Request body gains optional `embedding_model: str | null`. When provided, the collection is initialized with that model as `active_embedding_model`; when omitted, the global `config.embedding_model` is used. Unknown models return 422.
+
+**`POST /search` — additive field**:
+- `SearchResponse` gains `embedding_model: str` (defaults to `""`; will be populated per-collection in a future task).
+
+**Migration**:
+- `GET /collections/{name}` consumers: replace `embedding_model` with `active_embedding_model` in client code. Add handling for the three new nullable fields.
+- `GET /collections/` consumers: tolerate the new `active_embedding_model` and `needs_reindex` keys.
+- `POST /search` consumers: tolerate the new `embedding_model` key.
+
+**Announced in**: this release.
+
 ### [next release] — B5 incremental centroid maintenance (additive internal columns)
 
 **Surface**: `_archon_collection_meta` LanceDB table (internal schema). No public REST or MCP contract change.

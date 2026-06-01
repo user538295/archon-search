@@ -332,7 +332,6 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
     status = _collection_status(config, state_store, name)
 
     # Pull extra detail from state if available
-    embedding_model = config.embedding_model
     last_indexed: str | None = None
     try:
         state = state_store.read()
@@ -364,7 +363,10 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
         "doc_count": doc_count,
         "chunk_count": 0,
         "status": status,
-        "embedding_model": embedding_model,
+        "active_embedding_model": (meta.active_embedding_model or config.embedding_model) if meta is not None else config.embedding_model,
+        "pending_embedding_model": meta.pending_embedding_model if meta is not None else None,
+        "needs_reindex": meta.needs_reindex if meta is not None else False,
+        "reindex_job_id": meta.reindex_job_id if meta is not None else None,
         "centroid_present": centroid_present,
         "last_indexed": last_indexed,
         "namespace": meta.namespace if meta is not None else DEFAULT_NAMESPACE,
@@ -467,7 +469,6 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
     resolved = path_to_name[name]
     status = _collection_status(config, state_store, name)
 
-    embedding_model = meta.active_embedding_model or config.embedding_model
     last_indexed: str | None = None
     try:
         state = state_store.read()
@@ -497,7 +498,10 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
         doc_count=doc_count,
         chunk_count=0,
         status=status,
-        embedding_model=embedding_model,
+        active_embedding_model=meta.active_embedding_model or config.embedding_model,
+        pending_embedding_model=meta.pending_embedding_model,
+        needs_reindex=meta.needs_reindex,
+        reindex_job_id=meta.reindex_job_id,
         centroid_present=centroid_present,
         last_indexed=last_indexed,
         namespace=meta.namespace,

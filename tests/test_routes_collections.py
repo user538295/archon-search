@@ -282,9 +282,10 @@ def test_get_collection_info(
     app = create_app(cfg, tmp_store)
 
     name = path_to_collection_name(str(src))
-    meta = CollectionMeta(name=name, namespace="default")
+    meta = CollectionMeta(name=name, namespace="default", active_embedding_model=cfg.embedding_model)
     mock_store = MagicMock()
     mock_store.count_documents = AsyncMock(return_value=0)
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.get_collection_meta = AsyncMock(return_value=meta)
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
@@ -299,12 +300,12 @@ def test_get_collection_info(
     data = response.json()
     assert data["name"] == name
     assert "path" in data
-    assert "embedding_model" in data
+    assert "active_embedding_model" in data
     assert "centroid_present" in data
     assert "last_indexed" in data
 
-    # Fix 8: assert embedding_model value matches config
-    assert data["embedding_model"] == cfg.embedding_model
+    # active_embedding_model comes from meta, which was set to cfg.embedding_model
+    assert data["active_embedding_model"] == cfg.embedding_model
 
 
 def test_get_collection_info_unknown_returns_404(client: TestClient) -> None:
@@ -2480,3 +2481,149 @@ def test_create_collection_unknown_model_returns_422(
         )
 
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Task 6.2 — CollectionDetail schema + GET /collections/{name}
+# ---------------------------------------------------------------------------
+
+
+def test_get_collection_returns_active_embedding_model(
+    tmp_path: Path, tmp_store: "JobStore"
+) -> None:
+    """GET /collections/{name} returns active_embedding_model from meta, not global config."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default", active_embedding_model="model-X")
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=0)
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["active_embedding_model"] == "model-X"
+    assert data["active_embedding_model"] != cfg.embedding_model
+
+
+def test_get_collection_pending_null_before_patch(
+    tmp_path: Path, tmp_store: "JobStore"
+) -> None:
+    """GET /collections/{name} returns pending_embedding_model=null before any PATCH."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs2"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default", active_embedding_model="BAAI/bge-small-en-v1.5")
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=0)
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["pending_embedding_model"] is None
+    assert data["needs_reindex"] is False
+    assert data["reindex_job_id"] is None
+
+
+def test_get_collection_reflects_patch_state(
+    tmp_path: Path, tmp_store: "JobStore"
+) -> None:
+    """GET after PATCH: active unchanged, pending set, needs_reindex=true."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs3"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(
+        name=name,
+        namespace="default",
+        active_embedding_model="BAAI/bge-small-en-v1.5",
+        pending_embedding_model="BAAI/bge-base-en-v1.5",
+        needs_reindex=True,
+    )
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=5)
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["active_embedding_model"] == "BAAI/bge-small-en-v1.5"
+    assert data["pending_embedding_model"] == "BAAI/bge-base-en-v1.5"
+    assert data["needs_reindex"] is True
+
+
+def test_get_collection_reflects_reindex_completion(
+    tmp_path: Path, tmp_store: "JobStore"
+) -> None:
+    """After reindex completes: active promoted, pending=null, needs_reindex=false."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs4"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(
+        name=name,
+        namespace="default",
+        active_embedding_model="BAAI/bge-base-en-v1.5",
+        pending_embedding_model=None,
+        needs_reindex=False,
+        reindex_job_id=None,
+    )
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=5)
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["active_embedding_model"] == "BAAI/bge-base-en-v1.5"
+    assert data["pending_embedding_model"] is None
+    assert data["needs_reindex"] is False
+    assert data["reindex_job_id"] is None
