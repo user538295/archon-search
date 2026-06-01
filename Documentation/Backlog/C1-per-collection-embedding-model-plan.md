@@ -472,7 +472,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_pipeline.py -v -k "search_with_context or recompute_collection_meta"`
 
 #### Task 3.7 — Update `meta.embedding_model` references in `search_many` and explain multi-collection path
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - In `search_many()`: replace every `meta.embedding_model` attribute access with `meta.active_embedding_model`.

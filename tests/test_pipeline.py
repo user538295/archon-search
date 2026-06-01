@@ -4485,6 +4485,104 @@ def test_no_self_embedder_in_pipeline() -> None:
     assert not matches, f"Found {len(matches)} 'self._embedder' reference(s) in pipeline.py"
 
 
+def test_no_embedding_model_attribute_accesses() -> None:
+    """No non-config .embedding_model attribute accesses must remain in archon_search/.
+
+    Allowed: cfg.embedding_model, existing_cfg.embedding_model (Config object accesses).
+    Forbidden: meta.embedding_model, collection.embedding_model, or any other object
+    (these were migrated to active_embedding_model).
+    """
+    import subprocess
+    result = subprocess.run(
+        [
+            "grep", "-rn", r"\.embedding_model\b",
+            "archon_search/",
+            "--include=*.py",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    lines = [
+        line for line in result.stdout.splitlines()
+        if "config.embedding_model" not in line
+        and "existing_cfg.embedding_model" not in line
+        and "cfg.embedding_model" not in line
+        and "migrate_per_collection_model" not in line
+        and "__pycache__" not in line
+    ]
+    assert not lines, (
+        f"Found {len(lines)} non-config .embedding_model reference(s) — "
+        f"use active_embedding_model instead:\n" + "\n".join(lines)
+    )
+
+
+def test_no_underscore_embedder_anywhere() -> None:
+    """._embedder must not appear in any archon_search/ file except router.py.
+
+    router.py legitimately has self._embedder (the Router's own embedder).
+    All other files must use _global_embedder or equivalent.
+    """
+    import subprocess
+    result = subprocess.run(
+        [
+            "grep", "-rn", r"\._embedder\b",
+            "archon_search/",
+            "--include=*.py",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    lines = [
+        line for line in result.stdout.splitlines()
+        if "router.py" not in line
+        and "__pycache__" not in line
+    ]
+    assert not lines, (
+        f"Found {len(lines)} '._embedder' reference(s) outside router.py — "
+        f"pipeline must use _global_embedder:\n" + "\n".join(lines)
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_many_no_embedding_model_attribute_error() -> None:
+    """search_many() must not raise AttributeError when collections have active_embedding_model.
+
+    Verifies that search_many uses meta.active_embedding_model (not meta.embedding_model).
+    """
+    cols = ["A", "B"]
+    leg_map = {c: [_scored(c, "e" * 64, f"{'e' * 64}-000000")] for c in cols}
+    pipeline, *_ = _search_many_pipeline(
+        leg_map=leg_map,
+        meta_list=[_meta(c) for c in cols],
+    )
+    # Should not raise AttributeError
+    result = await pipeline.search_many("query text", cols)
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_explain_multi_collection_no_embedding_model_attribute_error() -> None:
+    """explain() with collections= must not raise AttributeError when meta has active_embedding_model.
+
+    Verifies that the multi-collection explain path uses meta.active_embedding_model.
+    """
+    cols = ["X", "Y"]
+    leg_map = {c: [_scored(c, "f" * 64, f"{'f' * 64}-000000")] for c in cols}
+    pipeline, store, *_ = _search_many_pipeline(
+        leg_map=leg_map,
+        meta_list=[_meta(c) for c in cols],
+    )
+
+    async def _hybrid_explain(collection, vector, query_text, candidate_depth):
+        return list(leg_map.get(collection, []))
+
+    store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid_explain)
+
+    # Should not raise AttributeError
+    result = await pipeline.explain("query text", collections=cols)
+    assert result is not None
+
+
 def test_search_many_signature_unchanged() -> None:
     """search_many() must NOT have an embedder parameter."""
     import inspect
