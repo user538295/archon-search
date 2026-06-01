@@ -5312,3 +5312,199 @@ def test_no_global_embedding_model_in_sync():
     assert "self._global_embedding_model" not in source, (
         "Found 'self._global_embedding_model' in sync.py — should be removed after Task 9.2"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 9.3 — Sync engine: per-collection embedder at ingest call sites
+# ---------------------------------------------------------------------------
+
+class TestTask93PerCollectionEmbedderAtIngestSites:
+    """Task 9.3: _ingest_collection and _apply_collection_changes must use
+    make_embedder(active_model) when active_embedding_model is set, and fall
+    back to _global_embedder otherwise."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["initial_sync", "file_modify", "file_add"])
+    async def test_sync_ingest_calls_use_per_collection_embedder(self, tmp_path, path):
+        """make_embedder result is passed to ingest_directory/ingest_file when
+        active_embedding_model is set on CollectionMeta."""
+        from archon_search.collection_meta import CollectionMeta
+        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "testcol"
+        col_dir.mkdir()
+        a_file = col_dir / "doc.md"
+        a_file.write_text("hello")
+
+        pipeline = _make_mock_pipeline_with_ingest_file(tmp_path)
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        meta = CollectionMeta(name="testcol", active_embedding_model="model-X")
+        sentinel_embedder = object()
+
+        with patch("archon_search.sync.make_embedder") as mock_make_embedder:
+            mock_make_embedder.return_value = sentinel_embedder
+
+            syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=256)
+
+            if path == "initial_sync":
+                from archon_search.progress import CollectionProgress as CP, IndexingStatus as IS
+                result = await syncer._ingest_collection(
+                    "testcol",
+                    col_dir,
+                    progress_cb=None,
+                    CollectionProgress=CP,
+                    IndexingStatus=IS,
+                    meta=meta,
+                )
+                assert result is None
+                call_kwargs = pipeline.ingest_directory.call_args
+                assert call_kwargs is not None
+                assert call_kwargs.kwargs.get("embedder") is sentinel_embedder
+
+            elif path == "file_modify":
+                result = await syncer._apply_collection_changes(
+                    "testcol",
+                    col_dir,
+                    new_files=[],
+                    changed_files=[a_file],
+                    deleted_paths=[],
+                    file_mtimes={},
+                    meta=meta,
+                )
+                assert result is None
+                call_kwargs = pipeline.ingest_file.call_args
+                assert call_kwargs is not None
+                assert call_kwargs.kwargs.get("embedder") is sentinel_embedder
+
+            else:  # file_add
+                result = await syncer._apply_collection_changes(
+                    "testcol",
+                    col_dir,
+                    new_files=[a_file],
+                    changed_files=[],
+                    deleted_paths=[],
+                    file_mtimes={},
+                    meta=meta,
+                )
+                assert result is None
+                call_kwargs = pipeline.ingest_file.call_args
+                assert call_kwargs is not None
+                assert call_kwargs.kwargs.get("embedder") is sentinel_embedder
+
+    @pytest.mark.asyncio
+    async def test_sync_ingest_creates_embedder_once_per_cycle_not_per_event(self, tmp_path):
+        """make_embedder is called exactly ONCE per _apply_collection_changes cycle,
+        and the same embedder object is reused for all ingest_file calls."""
+        from archon_search.collection_meta import CollectionMeta
+        from archon_search.progress import IndexingStateStore
+        from archon_search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "testcol"
+        col_dir.mkdir()
+        files = [col_dir / f"doc{i}.md" for i in range(3)]
+        for f in files:
+            f.write_text("content")
+
+        pipeline = _make_mock_pipeline_with_ingest_file(tmp_path)
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        meta = CollectionMeta(name="testcol", active_embedding_model="model-X")
+        sentinel_embedder = object()
+
+        with patch("archon_search.sync.make_embedder") as mock_make_embedder:
+            mock_make_embedder.return_value = sentinel_embedder
+
+            syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=256)
+            result = await syncer._apply_collection_changes(
+                "testcol",
+                col_dir,
+                new_files=[],
+                changed_files=files,
+                deleted_paths=[],
+                file_mtimes={},
+                meta=meta,
+            )
+            assert result is None
+
+        # make_embedder called exactly once
+        assert mock_make_embedder.call_count == 1
+
+        # All 3 ingest_file calls received the same sentinel embedder
+        assert pipeline.ingest_file.call_count == 3
+        for call in pipeline.ingest_file.call_args_list:
+            assert call.kwargs.get("embedder") is sentinel_embedder, (
+                f"Expected sentinel_embedder; got {call.kwargs.get('embedder')!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_sync_ingest_empty_active_model_falls_back_to_global(self, tmp_path):
+        """When active_embedding_model is empty, make_embedder is NOT called and
+        _global_embedder is passed to ingest_file."""
+        from archon_search.collection_meta import CollectionMeta
+        from archon_search.progress import IndexingStateStore
+        from archon_search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "testcol"
+        col_dir.mkdir()
+        a_file = col_dir / "doc.md"
+        a_file.write_text("hello")
+
+        pipeline = _make_mock_pipeline_with_ingest_file(tmp_path)
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        meta = CollectionMeta(name="testcol", active_embedding_model="")
+
+        with patch("archon_search.sync.make_embedder") as mock_make_embedder:
+            syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=256)
+            result = await syncer._apply_collection_changes(
+                "testcol",
+                col_dir,
+                new_files=[a_file],
+                changed_files=[],
+                deleted_paths=[],
+                file_mtimes={},
+                meta=meta,
+            )
+            assert result is None
+
+        # make_embedder must NOT have been called
+        mock_make_embedder.assert_not_called()
+
+        # ingest_file was called with pipeline._global_embedder
+        call_kwargs = pipeline.ingest_file.call_args
+        assert call_kwargs is not None
+        assert call_kwargs.kwargs.get("embedder") is pipeline._global_embedder
+
+    @pytest.mark.asyncio
+    async def test_sync_ingest_collection_meta_none_falls_back_to_global(self, tmp_path):
+        """_ingest_collection with meta=None falls back to _global_embedder (not make_embedder)."""
+        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "testcol"
+        col_dir.mkdir()
+
+        pipeline = _make_mock_pipeline_with_ingest_file(tmp_path)
+        pipeline.ingest_directory = AsyncMock(return_value=[])
+        state_store = IndexingStateStore(tmp_path / "state")
+
+        sentinel_embedder = object()
+        pipeline._global_embedder = sentinel_embedder
+
+        with patch("archon_search.sync.make_embedder") as mock_make_embedder:
+            syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=256)
+            from archon_search.progress import CollectionProgress, IndexingStatus
+            await syncer._ingest_collection(
+                "testcol", col_dir, None, CollectionProgress, IndexingStatus,
+                meta=None,
+            )
+
+        # make_embedder must NOT have been called (meta=None → fallback to global)
+        mock_make_embedder.assert_not_called()
+
+        # ingest_directory was called with pipeline._global_embedder
+        call_kwargs = pipeline.ingest_directory.call_args
+        assert call_kwargs is not None
+        assert call_kwargs.kwargs.get("embedder") is sentinel_embedder

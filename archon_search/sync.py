@@ -13,6 +13,7 @@ from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Callable
 
 from archon_search._durable_io import atomic_write_json
+from archon_search.embedder import make_embedder
 
 if TYPE_CHECKING:
     from archon_search.collection_meta import CollectionMeta
@@ -531,6 +532,7 @@ class SearchCollectionSync:
             on_complete = _make_on_file_complete(name)
             wrapped_cb = _make_progress_wrapper(name)
             _active_model = (meta.active_embedding_model or "") if meta else ""
+            embedder = make_embedder(_active_model) if _active_model else self._pipeline._global_embedder
 
             try:
                 results = await self._pipeline.ingest_directory(
@@ -538,7 +540,7 @@ class SearchCollectionSync:
                     progress_cb=wrapped_cb,
                     exclude_paths=exclude_set,
                     on_file_complete=on_complete,
-                    embedder=self._pipeline._global_embedder,
+                    embedder=embedder,
                     ingested_by="watcher",
                 )
 
@@ -623,6 +625,7 @@ class SearchCollectionSync:
         from archon_search.progress import CollectionProgress, IndexingStatus
 
         _active_model = (meta.active_embedding_model or "") if meta else ""
+        embedder = make_embedder(_active_model) if _active_model else self._pipeline._global_embedder
 
         async with self._get_lock(name):
             # Read current state and get processed_paths
@@ -664,7 +667,7 @@ class SearchCollectionSync:
 
                 # Changed files
                 for file in changed_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=self._pipeline._global_embedder, ingested_by="watcher")
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by="watcher")
                     resolved_str = str(file.resolve())
                     if ingest_result.status == "ok":
                         try:
@@ -691,7 +694,7 @@ class SearchCollectionSync:
 
                 # New files
                 for file in new_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=self._pipeline._global_embedder, ingested_by="watcher")
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by="watcher")
                     if ingest_result.status == "ok":
                         try:
                             file_mtimes[str(file.resolve())] = file.stat().st_mtime
@@ -727,6 +730,7 @@ class SearchCollectionSync:
                             or centroid_meta.mutations_since_recompute >= threshold
                         ):
                             logger.debug("Recompute collection meta for %r after sync", name)
+                            # TODO(C1): pass per-collection embedder once centroid IoC is updated
                             await self._pipeline.recompute_collection_meta(name, self._pipeline._global_embedder)
                     except Exception:  # noqa: BLE001
                         logger.warning(
@@ -736,6 +740,7 @@ class SearchCollectionSync:
                         )
                 else:
                     try:
+                        # TODO(C1): pass per-collection embedder once centroid IoC is updated
                         await self._pipeline.recompute_collection_meta(name, self._pipeline._global_embedder)
                     except Exception:  # noqa: BLE001
                         logger.warning(

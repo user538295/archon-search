@@ -857,7 +857,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_sync.py -v -k "writes_per_collection_model"`
 
 #### Task 9.3 — Sync engine: update `ingest_file`/`ingest_directory` call sites with per-collection embedder
-- [ ] **File**: `archon_search/sync.py`
+- [x] **File**: `archon_search/sync.py`
 - **Depends on**: Task 9.1 (CollectionMeta pre-fetch in place), Task 3.3 (`ingest_file` requires `embedder`), Task 3.4 (`ingest_directory` requires `embedder`)
 - **Description**:
   - After Phase 3, `pipeline.ingest_file()` and `pipeline.ingest_directory()` require `embedder: Embedder` as a mandatory keyword argument. The sync engine calls these methods at approximately lines 517, 644, and 671 in `sync.py`. These call sites will raise `TypeError` unless updated.
