@@ -585,7 +585,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
 > **Releasable**: after Task 6.4 — `POST /collections/` accepts `embedding_model`; `GET /collections/{name}` returns C1 fields; `GET /collections/` includes `active_embedding_model` and `needs_reindex`; `SearchResponse` has `embedding_model` field.
 
 #### Task 6.1 — `POST /collections/` gains `embedding_model` field
-- [ ] **File**: `archon_search/server/routes_collections.py`, `archon_search/server/schemas.py`
+- [x] **File**: `archon_search/server/routes_collections.py`, `archon_search/server/schemas.py`
 - **Depends on**: Task 4.2 (validate model name), Task 1.2 (store schema)
 - **Description**:
   - Add `embedding_model: str | None = None` to the collection creation request schema. `None` means "use global default".
@@ -600,7 +600,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_routes_collections.py -v -k "create_collection"`
 
 #### Task 6.2 — `CollectionDetail` schema: add `active_embedding_model`, `pending_embedding_model`, `needs_reindex`, `reindex_job_id`; fix `GET /collections/{name}`
-- [ ] **File**: `archon_search/server/schemas.py`, `archon_search/server/routes_collections.py`
+- [x] **File**: `archon_search/server/schemas.py`, `archon_search/server/routes_collections.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Update `CollectionDetail` Pydantic schema: remove `embedding_model: str`; add `active_embedding_model: str`, `pending_embedding_model: str | None`, `needs_reindex: bool`, `reindex_job_id: str | None`.
@@ -616,7 +616,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_routes_collections.py -v -k "get_collection"`
 
 #### Task 6.3 — `CollectionSummary` schema + `GET /collections/` list response
-- [ ] **File**: `archon_search/server/schemas.py`, `archon_search/server/routes_collections.py`
+- [x] **File**: `archon_search/server/schemas.py`, `archon_search/server/routes_collections.py`
 - **Depends on**: Task 6.2
 - **Description**:
   - Add `active_embedding_model: str` and `needs_reindex: bool` to `CollectionSummary`.
@@ -628,7 +628,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_routes_collections.py -v -k "list_collections"`
 
 #### Task 6.4 — `SearchResponse.embedding_model` field
-- [ ] **File**: `archon_search/server/routes_search.py` (or verify the actual location of `SearchResponse` by grepping — if it was moved to `schemas.py` it may already be there; the implementer must confirm before proceeding)
+- [x] **File**: `archon_search/server/routes_search.py` (or verify the actual location of `SearchResponse` by grepping — if it was moved to `schemas.py` it may already be there; the implementer must confirm before proceeding)
 - **Depends on**: nothing (schema-only change)
 - **Description**:
   - Verify location of `SearchResponse` via `grep -n 'class SearchResponse' archon_search/server/` before making changes.
@@ -647,7 +647,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
 > **Releasable**: after Task 7.4 — single-collection search and explain use the collection's `active_embedding_model` (REST and MCP); multi-collection search correctly excludes mismatched collections; router uses the renamed field. (AC 1–3, 33, 43)
 
 #### Task 7.1 — Router: update `_ROUTING_FIELDS` and `_score_collections` to `active_embedding_model`
-- [ ] **File**: `archon_search/router.py`
+- [x] **File**: `archon_search/router.py`
 - **Depends on**: Task 1.1 (field rename)
 - **Description**:
   - `_ROUTING_FIELDS` (router.py:23): replace `'embedding_model'` with `'active_embedding_model'`.

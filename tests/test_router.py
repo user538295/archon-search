@@ -117,6 +117,43 @@ def test_rank_skips_collections_with_mismatched_embedding_model() -> None:
     assert result[1].name == "col-wrong-model"
 
 
+def test_router_excludes_mismatched_active_embedding_model() -> None:
+    """Collection with active_embedding_model != global model gets score=None (unscored)."""
+    router = _router(shortlist_size=5, confidence_threshold=0.0, embedding_model="model-Y")
+    collections = [
+        _meta("col-match", centroid=[1.0, 0.0], active_embedding_model="model-Y"),
+        _meta("col-mismatch", centroid=[1.0, 0.0], active_embedding_model="model-X"),
+    ]
+    scored = router.rank_with_scores([1.0, 0.0], collections)
+    # col-match has a score; col-mismatch has None (unscored = excluded from centroid routing)
+    by_name = {m.name: s for m, s in scored}
+    assert by_name["col-match"] is not None
+    assert by_name["col-mismatch"] is None
+
+
+def test_router_does_not_default_to_empty_string() -> None:
+    """Collection with active_embedding_model='' is treated as unscored (not silently matched)."""
+    router = _router(shortlist_size=5, confidence_threshold=0.0, embedding_model="model-Y")
+    collections = [
+        _meta("col-empty-model", centroid=[1.0, 0.0], active_embedding_model=""),
+    ]
+    scored = router.rank_with_scores([1.0, 0.0], collections)
+    assert scored[0][1] is None, "empty active_embedding_model must not match any real model name"
+
+
+def test_router_does_not_match_none_active_embedding_model() -> None:
+    """Collection with active_embedding_model=None (legacy) is treated as unscored."""
+    from archon_search.collection_meta import CollectionMeta
+
+    router = _router(shortlist_size=5, confidence_threshold=0.0, embedding_model="model-Y")
+    # Bypass _meta helper to set None explicitly (pre-migration legacy data)
+    col = CollectionMeta(name="col-none-model", namespace="default")
+    col.active_embedding_model = None  # type: ignore[assignment]
+    col.centroid = [1.0, 0.0]
+    scored = router.rank_with_scores([1.0, 0.0], [col])
+    assert scored[0][1] is None, "None active_embedding_model must not match any real model name"
+
+
 # ---------------------------------------------------------------------------
 # fetch_metadata() timeout test
 # ---------------------------------------------------------------------------
