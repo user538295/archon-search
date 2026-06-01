@@ -38,6 +38,7 @@ router = APIRouter(prefix="/collections")
 
 class AddCollectionRequest(BaseModel):
     path: str
+    embedding_model: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -130,13 +131,20 @@ _ERROR_400_401_409_503 = {
 }
 
 
-@router.post("/", status_code=202, response_model=JobResponse, responses=_ERROR_400_401_409_503)
+@router.post("/", status_code=202, response_model=JobResponse, responses={**_ERROR_400_401_409_503, 422: {"model": ErrorDetail}})
 async def add_collection(body: AddCollectionRequest, request: Request) -> JobResponse | JSONResponse:
     """Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob."""
     config: SearchConfig = request.app.state.config
     store: JobStore = request.app.state.job_store
     search_store = request.app.state.search_store
     ns: str = request.state.namespace
+
+    # Validate embedding_model early, before any side-effects
+    if body.embedding_model is not None:
+        try:
+            await validate_embedding_model(body.embedding_model)
+        except ModelValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
     try:
         resolved = str(validate_ingest_path(body.path))
@@ -162,8 +170,18 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
 
     # Write stub meta — update_collection_meta acquires the per-collection lock internally.
     # StoreBusyError → 503; ValueError → 409 TOCTOU race; other → 500.
+    active_model = body.embedding_model if body.embedding_model is not None else config.embedding_model
     try:
-        await search_store.update_collection_meta(CollectionMeta(name=collection_name, namespace=ns))
+        await search_store.update_collection_meta(
+            CollectionMeta(
+                name=collection_name,
+                namespace=ns,
+                active_embedding_model=active_model,
+                pending_embedding_model=None,
+                needs_reindex=False,
+                reindex_job_id=None,
+            )
+        )
     except StoreBusyError as e:
         config.collections.remove(resolved)
         _maybe_save_config(config, request)

@@ -2362,3 +2362,121 @@ def test_patch_nonexistent_collection_returns_404(
         response = c.patch("/collections/nonexistent-collection", json={"embedding_model": "BAAI/bge-small-en-v1.5"})
 
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Task 6.1 — POST /collections/ gains embedding_model field
+# ---------------------------------------------------------------------------
+
+
+def _make_post_app(
+    tmp_path: Path,
+    tmp_store: "JobStore",
+    *,
+    validate_raises: Exception | None = None,
+) -> "tuple[object, MagicMock]":
+    """Helper: app + mock_store for POST /collections/ embedding_model tests."""
+    import asyncio as _asyncio
+
+    src = tmp_path / "myproject"
+    src.mkdir(exist_ok=True)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    app.state.search_store = mock_store
+
+    if validate_raises is not None:
+        validate_patch = patch(
+            "archon_search.server.routes_collections.validate_embedding_model",
+            side_effect=validate_raises,
+        )
+    else:
+        validate_patch = patch(
+            "archon_search.server.routes_collections.validate_embedding_model",
+            return_value=384,
+        )
+
+    return app, mock_store, validate_patch, src
+
+
+def test_create_collection_with_embedding_model(
+    tmp_path: Path, tmp_store: "JobStore"
+) -> None:
+    """POST /collections/ with embedding_model stores it as active_embedding_model in stub meta."""
+    from archon_search.collection_meta import CollectionMeta
+
+    app, mock_store, validate_patch, src = _make_post_app(tmp_path, tmp_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    with validate_patch:
+        with patch(
+            "archon_search.server.routes_collections.asyncio.create_task",
+            side_effect=lambda coro: (coro.close(), MagicMock())[1],
+        ):
+            response = c.post(
+                "/collections/",
+                json={"path": str(src), "embedding_model": "model-X"},
+            )
+
+    assert response.status_code == 202
+    mock_store.update_collection_meta.assert_called_once()
+    call_arg = mock_store.update_collection_meta.call_args[0][0]
+    assert isinstance(call_arg, CollectionMeta)
+    assert call_arg.active_embedding_model == "model-X"
+    assert call_arg.pending_embedding_model is None
+    assert call_arg.needs_reindex is False
+    assert call_arg.reindex_job_id is None
+
+
+def test_create_collection_without_embedding_model_uses_global(
+    tmp_path: Path, tmp_store: "JobStore"
+) -> None:
+    """POST /collections/ without embedding_model uses config.embedding_model as active."""
+    from archon_search.collection_meta import CollectionMeta
+
+    app, mock_store, validate_patch, src = _make_post_app(tmp_path, tmp_store)
+    cfg: SearchConfig = app.state.config
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    with patch(
+        "archon_search.server.routes_collections.asyncio.create_task",
+        side_effect=lambda coro: (coro.close(), MagicMock())[1],
+    ):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 202
+    mock_store.update_collection_meta.assert_called_once()
+    call_arg = mock_store.update_collection_meta.call_args[0][0]
+    assert isinstance(call_arg, CollectionMeta)
+    assert call_arg.active_embedding_model == cfg.embedding_model
+
+
+def test_create_collection_unknown_model_returns_422(
+    tmp_path: Path, tmp_store: "JobStore"
+) -> None:
+    """POST /collections/ with unknown embedding_model returns 422."""
+    from archon_search.model_validation import ModelValidationError
+
+    app, mock_store, validate_patch, src = _make_post_app(
+        tmp_path, tmp_store, validate_raises=ModelValidationError("unknown model")
+    )
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    with validate_patch:
+        response = c.post(
+            "/collections/",
+            json={"path": str(src), "embedding_model": "not/a/real/model"},
+        )
+
+    assert response.status_code == 422
