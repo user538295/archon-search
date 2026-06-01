@@ -124,6 +124,7 @@ class SearchResponse(BaseModel):
     results: list[SearchResultSchema]
     acl_filtered: bool
     excluded_collections: list[ExcludedCollectionSchema] = Field(default_factory=list)
+    embedding_model: str = ""
 
 
 @router.post("/search", response_model=SearchResponse)
