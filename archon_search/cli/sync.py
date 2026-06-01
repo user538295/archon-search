@@ -31,7 +31,6 @@ def sync(config_path: Path | None) -> None:
                 pipeline,
                 state_store=state_store,
                 pinned_collections=cfg.pinned_collections,
-                global_embedding_model=cfg.embedding_model,
                 chunk_size=cfg.chunk_size,
                 auto_reindex_on_chunk_size_change=cfg.auto_reindex_on_chunk_size_change,
             )

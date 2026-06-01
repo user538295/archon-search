@@ -92,7 +92,6 @@ class SearchCollectionSync:
         pipeline: SearchPipeline,
         state_store: IndexingStateStore | None = None,
         pinned_collections: list[str] | None = None,
-        global_embedding_model: str = "",
         chunk_size: int = 0,
         auto_reindex_on_chunk_size_change: bool = False,
     ) -> None:
@@ -100,7 +99,6 @@ class SearchCollectionSync:
         self._state_store = state_store
         self._pinned_collections = pinned_collections or []
         self._collection_locks: dict[str, asyncio.Lock] = {}
-        self._global_embedding_model = global_embedding_model
         self._chunk_size = chunk_size
         self._auto_reindex_on_chunk_size_change = auto_reindex_on_chunk_size_change
 
@@ -202,8 +200,12 @@ class SearchCollectionSync:
             if not p.exists():
                 result.errors.append(f"path does not exist: {path_str}")
                 continue
+            try:
+                resume_meta = await self._pipeline.store.get_collection_meta(name)
+            except Exception:  # noqa: BLE001
+                resume_meta = None
             error = await self._ingest_collection(
-                name, p, progress_cb, CollectionProgress, IndexingStatus,
+                name, p, progress_cb, CollectionProgress, IndexingStatus, meta=resume_meta,
             )
             if error is None:
                 result.added.append(name)
@@ -244,7 +246,7 @@ class SearchCollectionSync:
                 if new_f or changed_f or deleted_p:
                     to_update.add(name)
                     error = await self._apply_collection_changes(
-                        name, p, new_f, changed_f, deleted_p, file_mtimes, progress_cb,
+                        name, p, new_f, changed_f, deleted_p, file_mtimes, progress_cb, meta=meta,
                     )
                     if error is None:
                         result.updated.append(name)
@@ -300,7 +302,7 @@ class SearchCollectionSync:
 
         if new_f or changed_f or deleted_p:
             result = await self._apply_collection_changes(
-                collection_name, source_path, new_f, changed_f, deleted_p, file_mtimes
+                collection_name, source_path, new_f, changed_f, deleted_p, file_mtimes, meta=meta,
             )
             if result is not None:
                 logger.warning(
@@ -390,12 +392,8 @@ class SearchCollectionSync:
         """
         force_full_reindex = False
 
-        # Embedding model guard: use the collection's own active model if available,
-        # falling back to the global model. This prevents spurious reindexes when a
-        # collection intentionally uses a different model than the global default.
-        effective_model = (
-            meta.active_embedding_model if (meta and meta.active_embedding_model) else self._global_embedding_model
-        )
+        # Embedding model guard: use the collection's own active model if available.
+        effective_model = (meta.active_embedding_model or "") if meta else ""
         if effective_model != indexed_embedding_model and indexed_embedding_model != "":
             logger.info(
                 "Embedding model changed (%s → %s), triggering full re-index of '%s'",
@@ -480,6 +478,7 @@ class SearchCollectionSync:
         progress_cb: Callable[[int, int], None | Awaitable[None]] | None,
         CollectionProgress: type,  # noqa: N803 — forwarded from caller
         IndexingStatus: type,  # noqa: N803
+        meta=None,
     ) -> str | None:
         """Ingest a single collection with resume support. Returns None on success, error string on failure."""
         resume_paths = self._load_processed_paths(name)
@@ -531,6 +530,7 @@ class SearchCollectionSync:
 
             on_complete = _make_on_file_complete(name)
             wrapped_cb = _make_progress_wrapper(name)
+            _active_model = (meta.active_embedding_model or "") if meta else ""
 
             try:
                 results = await self._pipeline.ingest_directory(
@@ -562,7 +562,7 @@ class SearchCollectionSync:
                         completed_at=datetime.now(UTC).isoformat(),
                         processed_paths=resume_paths,
                         file_mtimes=partial_mtimes,
-                        indexed_embedding_model=self._global_embedding_model,
+                        indexed_embedding_model=_active_model,
                         indexed_chunk_size=self._chunk_size,
                     ))
                 else:
@@ -577,7 +577,7 @@ class SearchCollectionSync:
                         completed_at=datetime.now(UTC).isoformat(),
                         processed_paths=resume_paths + new_paths,
                         file_mtimes=partial_mtimes,
-                        indexed_embedding_model=self._global_embedding_model,
+                        indexed_embedding_model=_active_model,
                         indexed_chunk_size=self._chunk_size,
                     ))
                 return None
@@ -600,7 +600,7 @@ class SearchCollectionSync:
                     error=str(exc),
                     processed_paths=resume_paths + new_paths,
                     file_mtimes=partial_mtimes,
-                    indexed_embedding_model=self._global_embedding_model,
+                    indexed_embedding_model=_active_model,
                     indexed_chunk_size=self._chunk_size,
                 ))
                 return str(exc)
@@ -614,12 +614,15 @@ class SearchCollectionSync:
         deleted_paths: list[str],
         file_mtimes: dict[str, float],
         progress_cb=None,
+        meta=None,
     ) -> str | None:
         """Apply incremental file changes (add/update/delete) to an existing collection.
 
         Returns None on success, an error string on failure.
         """
         from archon_search.progress import CollectionProgress, IndexingStatus
+
+        _active_model = (meta.active_embedding_model or "") if meta else ""
 
         async with self._get_lock(name):
             # Read current state and get processed_paths
@@ -634,7 +637,7 @@ class SearchCollectionSync:
                 processed_files=len(file_mtimes),
                 processed_paths=processed_paths,
                 file_mtimes=dict(file_mtimes),
-                indexed_embedding_model=self._global_embedding_model,
+                indexed_embedding_model=_active_model,
                 indexed_chunk_size=self._chunk_size,
             ))
 
@@ -655,7 +658,7 @@ class SearchCollectionSync:
                             processed_files=len(file_mtimes),
                             processed_paths=processed_paths,
                             file_mtimes=dict(file_mtimes),
-                            indexed_embedding_model=self._global_embedding_model,
+                            indexed_embedding_model=_active_model,
                             indexed_chunk_size=self._chunk_size,
                         ))
 
@@ -682,7 +685,7 @@ class SearchCollectionSync:
                             processed_files=len(file_mtimes),
                             processed_paths=processed_paths,
                             file_mtimes=dict(file_mtimes),
-                            indexed_embedding_model=self._global_embedding_model,
+                            indexed_embedding_model=_active_model,
                             indexed_chunk_size=self._chunk_size,
                         ))
 
@@ -705,7 +708,7 @@ class SearchCollectionSync:
                             processed_files=len(file_mtimes),
                             processed_paths=processed_paths,
                             file_mtimes=dict(file_mtimes),
-                            indexed_embedding_model=self._global_embedding_model,
+                            indexed_embedding_model=_active_model,
                             indexed_chunk_size=self._chunk_size,
                         ))
 
@@ -718,10 +721,10 @@ class SearchCollectionSync:
                     try:
                         store_cfg = getattr(self._pipeline.store, "_config", None)
                         threshold = int(getattr(store_cfg, "centroid_recompute_threshold", 10_000))
-                        meta = await self._pipeline.store.get_collection_meta(name)
-                        if meta and (
-                            meta.needs_recompute
-                            or meta.mutations_since_recompute >= threshold
+                        centroid_meta = await self._pipeline.store.get_collection_meta(name)
+                        if centroid_meta and (
+                            centroid_meta.needs_recompute
+                            or centroid_meta.mutations_since_recompute >= threshold
                         ):
                             logger.debug("Recompute collection meta for %r after sync", name)
                             await self._pipeline.recompute_collection_meta(name, self._pipeline._global_embedder)
@@ -748,7 +751,7 @@ class SearchCollectionSync:
                     processed_files=len(file_mtimes),
                     processed_paths=processed_paths,
                     file_mtimes=file_mtimes,
-                    indexed_embedding_model=self._global_embedding_model,
+                    indexed_embedding_model=_active_model,
                     indexed_chunk_size=self._chunk_size,
                 ))
                 return None
@@ -761,7 +764,7 @@ class SearchCollectionSync:
                     error=str(exc),
                     processed_paths=processed_paths,
                     file_mtimes=dict(file_mtimes),
-                    indexed_embedding_model=self._global_embedding_model,
+                    indexed_embedding_model=_active_model,
                     indexed_chunk_size=self._chunk_size,
                 ))
                 return str(exc)

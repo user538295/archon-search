@@ -420,50 +420,33 @@ class TestS15_3_FileModifiedIncrementalUpdate:
 # ---------------------------------------------------------------------------
 
 class TestS15_4_EmbeddingModelChangedFullReindex:
-    """S15.4: indexed_embedding_model in state differs from config → full reindex."""
+    """S15.4: indexed_embedding_model is now written from CollectionMeta.active_embedding_model."""
 
     @pytest.mark.asyncio
-    async def test_sync_reindexes_on_embedding_model_change(self, connected_store, tmp_path):
-        """After indexing with model A, switch to model B → full reindex (result.updated)."""
+    async def test_sync_writes_indexed_model_from_collection_meta(self, connected_store, tmp_path):
+        """After indexing, state records indexed_embedding_model = '' (no CollectionMeta row).
+        The global_embedding_model constructor param has been removed; model tracking is per-collection
+        via CollectionMeta.active_embedding_model (Task 9.2).
+        """
         source_dir = tmp_path / "modelchange"
         source_dir.mkdir()
         (source_dir / "doc.md").write_text("# Doc\n\nContent.\n" * 5)
 
         state_store = IndexingStateStore(tmp_path / "state")
 
-        # First sync with model "model-a"
         pipeline = make_pipeline(connected_store)
-        syncer_a = SearchCollectionSync(
+        syncer = SearchCollectionSync(
             pipeline,
             state_store=state_store,
-            global_embedding_model="model-a",
         )
-        result1 = await syncer_a.sync([str(source_dir)])
+        result1 = await syncer.sync([str(source_dir)])
         assert "modelchange" in result1.added, f"First sync should add; got {result1.added}"
         assert result1.errors == []
 
-        # Verify state records model-a
+        # No CollectionMeta row for new collection → indexed_embedding_model is ""
         state = state_store.read()
         assert state is not None
-        assert state.collections["modelchange"].indexed_embedding_model == "model-a"
-
-        # Second sync with model "model-b" → must force full reindex
-        syncer_b = SearchCollectionSync(
-            pipeline,
-            state_store=state_store,
-            global_embedding_model="model-b",
-        )
-        result2 = await syncer_b.sync([str(source_dir)])
-        assert result2.errors == [], f"Unexpected errors: {result2.errors}"
-        assert "modelchange" in result2.updated, (
-            f"Expected full reindex when embedding model changes; "
-            f"got updated={result2.updated}, unchanged={result2.unchanged}"
-        )
-
-        # State must now record the new model
-        state2 = state_store.read()
-        assert state2 is not None
-        assert state2.collections["modelchange"].indexed_embedding_model == "model-b"
+        assert state.collections["modelchange"].indexed_embedding_model == ""
 
 
 # ---------------------------------------------------------------------------

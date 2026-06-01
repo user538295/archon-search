@@ -512,7 +512,7 @@ class TestBootstrapCollections:
         mock_store.disconnect.assert_called_once()
 
     def test_bootstrap_collections_passes_config_params(self, tmp_path: Path) -> None:
-        """SearchCollectionSync must receive embedding_model, chunk_size, auto_reindex_on_chunk_size_change."""
+        """SearchCollectionSync must receive chunk_size, auto_reindex_on_chunk_size_change, pinned_collections."""
         installer = _make_installer(tmp_path)
 
         mock_store = AsyncMock()
@@ -526,7 +526,7 @@ class TestBootstrapCollections:
 
         MockSync.assert_called_once()
         _, kwargs = MockSync.call_args
-        assert kwargs["global_embedding_model"] == installer.cfg.embedding_model
+        assert "global_embedding_model" not in kwargs
         assert kwargs["chunk_size"] == installer.cfg.chunk_size
         assert kwargs["auto_reindex_on_chunk_size_change"] == installer.cfg.auto_reindex_on_chunk_size_change
         assert kwargs["pinned_collections"] == installer.cfg.pinned_collections

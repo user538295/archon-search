@@ -843,7 +843,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_sync.py -v -k "sync_no_spurious or collection_meta_authoritative"`
 
 #### Task 9.2 — Sync write-side fix: write `active_embedding_model` to state store
-- [ ] **File**: `archon_search/sync.py`
+- [x] **File**: `archon_search/sync.py`
 - **Depends on**: Task 9.1
 - **Description**:
   - After every successful sync operation (all ~9 write sites that currently write `indexed_embedding_model=self._embedding_model`): replace `self._embedding_model` with `meta.active_embedding_model` (the per-collection value fetched in Task 9.1).

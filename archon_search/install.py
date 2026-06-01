@@ -752,7 +752,6 @@ class SearchInstaller:
                 pipeline,
                 state_store=state_store,
                 pinned_collections=self.cfg.pinned_collections,
-                global_embedding_model=self.cfg.embedding_model,
                 chunk_size=self.cfg.chunk_size,
                 auto_reindex_on_chunk_size_change=self.cfg.auto_reindex_on_chunk_size_change,
             )
