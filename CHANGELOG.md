@@ -1,6 +1,46 @@
 # Changelog
 
 
+## [26.6.698] - 2026-06-01
+
+**Per-collection embedding models + reindex lifecycle + MCP tooling**
+
+**Per-Collection Embedding Models**
+
+- `POST /collections/` now accepts optional `embedding_model` field; when provided, validates it and stores as `active_embedding_model` in CollectionMeta. Omitting it falls back to the global config model, enabling mixed-model deployments where different collections use different fastembed models.
+- `GET /collections/{name}` returns `active_embedding_model`, `pending_embedding_model`, `needs_reindex`, and `reindex_job_id` in CollectionDetail, replacing the old `embedding_model` field (breaking change documented in BREAKING.md).
+- `GET /collections/` list endpoint now includes `active_embedding_model` and `needs_reindex` in each CollectionSummary.
+- `PATCH /collections/{name}` endpoint implements a full 5-case state machine: validates the new model, checks dimension compatibility against stored vectors via O(1) `count_chunks()` and `get_stored_vector_dimension()`, guards against in-flight reindex jobs (409 on PENDING/RUNNING with auto-clear of stale IDs), and fast-paths empty collections without reindexing. Dimension mismatch returns 422.
+- All search routes (`POST /search`, `GET /explain`) now dispatch via per-collection embedder: single-collection queries fetch `active_embedding_model` from CollectionMeta and resolve the embedder from EmbedderCache; multi-collection queries use the global config model. `SearchResponse` gains `embedding_model: str` field.
+- Router automatically excludes results from collections whose `active_embedding_model` differs from the chosen collection's model, preventing cross-space vector contamination.
+
+**Reindex Job Lifecycle & CLI**
+
+- `POST /collections/{name}/reindex` creates a ReindexJob with `target_embedding_model` captured from the request, enforces the 409 guard for active jobs, and spawns `_reindex_task` instead of the default ingest task. On successful reindex, `pending_embedding_model` is promoted to `active_embedding_model`, and `needs_reindex` and `reindex_job_id` are cleared.
+- CLI `archon-search sync` now resolves the per-collection embedder from `active_embedding_model` before ingesting files, falling back to the global embedder for legacy collections without CollectionMeta. Spurious reindex triggers are eliminated by reading the authoritative `active_embedding_model` from the database rather than comparing against config.
+- `needs_reindex` field in `/status` response indicates which collections require reindexing after a model change, without affecting readiness counters (`collections_failed`, `collections_indexing`).
+
+**EmbedderCache & Configuration**
+
+- New `EmbedderCache` class provides async LRU caching of Embedder instances with concurrent-load deduplication: multiple concurrent requests for the same model are serialized via `asyncio.Event` so only one thread calls `make_embedder`, while others await the result. Failed loads clean up the event so waiters retry rather than deadlock.
+- `embedder_cache_size` (default 3, min 1) and `eager_load_embedders` (default false) configuration keys added to SearchConfig. When `eager_load_embedders=true`, the cache preloads all distinct `active_embedding_model` values from the database at startup, improving first-request latency for multi-model deployments.
+- EmbedderCache is wired into app.state during lifespan startup and passed to MCP factories, enabling all ingest/search/explain paths to resolve embedders on-demand.
+
+**MCP Tooling**
+
+- New `update_collection(collection_name, embedding_model)` MCP tool (#11) mirrors the PATCH endpoint state machine: validates the model, checks dimensions, enforces the 409 guard, promotes pending models on success, and handles stale job clearance. Uses namespace isolation via `ctx.meta.get("namespace")`.
+- `search`, `search_with_context`, `explain`, `ingest_file`, and `ingest_directory` MCP tools updated to dispatch via per-collection embedder, falling back to `pipeline._global_embedder` when the cache is absent or the model is empty.
+- Single-collection `explain` nullifies the pre-computed query vector when the chosen collection's embedder differs from the global one, preventing cross-space vector scoring.
+
+**Testing & Documentation**
+
+- Mixed-model eval fixtures added: alt-model collection with 2 corpus files and 2 documents, configurable `EvalEmbedderBackend.model_name` parameter, and new test `test_eval_exercises_per_collection_dispatch` verifying that distinct embedder models produce distinct `active_embedding_model` values in CollectionMeta.
+- ADR-08 documents the EmbedderCache design decision, including OrderedDict LRU eviction, `asyncio.Lock` serialization, `asyncio.Event` concurrent-load deduplication, `asyncio.to_thread` for ONNX init, and eager-load opt-in.
+- README config section corrected for key grouping (`[database]`, `[search]`, `[routing]`, `[collections]`); embedder_cache_size and eager_load_embedders added to `[database]`; MCP tool count updated to 11 and `update_collection` listed.
+- UserManual section 04 adds per-collection model configuration and reindex lifecycle guide.
+- Baseline eval metrics refreshed for 57 docs / 33 queries reflecting C1 corpus expansion.
+
+
 ## [26.5.654] - 2026-05-31
 
 - Dynamic git-cliff download url — static url lacks version number
