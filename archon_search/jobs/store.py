@@ -51,6 +51,20 @@ class JobStore:
         self._write_atomic()
         return job
 
+    def create_reindex(self, namespace: str = DEFAULT_NAMESPACE, target_embedding_model: str | None = None) -> ReindexJob:
+        now = _now_iso()
+        job = ReindexJob(
+            job_id=str(uuid.uuid4()),
+            status=JobStatus.PENDING,
+            created_at=now,
+            updated_at=now,
+            namespace=namespace,
+            target_embedding_model=target_embedding_model,
+        )
+        self._jobs[job.job_id] = job
+        self._write_atomic()
+        return job
+
     def create_job(self, job: IngestJob) -> IngestJob:
         """Store a pre-constructed job (subclass-aware, used for ReindexJob/DeleteJob)."""
         self._jobs[job.job_id] = job

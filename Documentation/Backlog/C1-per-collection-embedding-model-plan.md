@@ -797,7 +797,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_routes_jobs.py -v -k "default_ingest_task"`
 
 #### Task 8.3 — Reindex endpoint: read `pending_embedding_model`, set `target_embedding_model` + `reindex_job_id`
-- [ ] **File**: `archon_search/server/routes_collections.py`, `archon_search/jobs/store.py`
+- [x] **File**: `archon_search/server/routes_collections.py`, `archon_search/jobs/store.py`
 - **Depends on**: Task 8.1, Task 1.4 (ReindexJob.target_embedding_model), Task 1.2 (CollectionMeta fields)
 - **Description**:
   - **`JobStore.create_reindex()` method** (add to `archon_search/jobs/store.py`): `def create_reindex(self, namespace: str = DEFAULT_NAMESPACE, target_embedding_model: str | None = None) -> ReindexJob`. Constructs `ReindexJob(job_id=..., status=PENDING, namespace=namespace, target_embedding_model=target_embedding_model)` (using the same ID generation as `create()`). Include `"job_type": "reindex"` in the serialized JSON via `_write_atomic` (Task 1.4 handles this automatically via `isinstance` dispatch). Add this method's file to Task 8.3's **File** field alongside `routes_collections.py`.

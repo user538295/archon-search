@@ -20,7 +20,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
-from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock
+from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _reindex_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse, PatchCollectionBody
 from archon_search.store import StoreBusyError
 from archon_search.sync import path_to_collection_name
@@ -539,19 +539,42 @@ async def reindex_collection(name: str, request: Request) -> JobResponse | JSONR
 
     resolved = path_to_name[name]
 
-    ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
+    # 409 guard: reject if an active reindex is already in progress
+    if meta.reindex_job_id is not None:
+        existing_job = store.get(meta.reindex_job_id)
+        if existing_job is not None and existing_job.status in {JobStatus.RUNNING, JobStatus.PENDING}:
+            return JSONResponse({"detail": "reindex already in progress"}, status_code=409)
+        # Stale: job missing or terminal — clear and proceed
+        meta.reindex_job_id = None
+
     try:
-        job = store.create(namespace=ns)
+        job = store.create_reindex(namespace=ns, target_embedding_model=meta.pending_embedding_model)
     except OSError:
         return JSONResponse({"detail": "internal error"}, status_code=500)
-    ingest_body = IngestRequest(collection=name, path=resolved, ingested_by=ingested_by)
-    pipeline = getattr(request.app.state, "pipeline", None)
+
+    meta.reindex_job_id = job.job_id
+    try:
+        await search_store.update_collection_meta(meta)
+    except Exception:
+        store.update(job.job_id, JobStatus.FAILED)
+        return JSONResponse({"detail": "internal error"}, status_code=500)
+
     embedder_cache = getattr(request.app.state, "embedder_cache", None)
-    config_state = getattr(request.app.state, "config", None)
+    pipeline_obj = getattr(request.app.state, "pipeline", None)
+    if embedder_cache is None or pipeline_obj is None:
+        store.update(job.job_id, JobStatus.FAILED)
+        return JSONResponse({"detail": "service not ready"}, status_code=503)
+
     task = asyncio.create_task(
-        _default_ingest_task(
-            job.job_id, store, ingest_body, namespace=ns,
-            search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config_state,
+        _reindex_task(
+            job_id=job.job_id,
+            store=search_store,
+            job_store=store,
+            embedder_cache=embedder_cache,
+            pipeline=pipeline_obj,
+            collection=name,
+            namespace=ns,
+            collection_path=Path(resolved),
         )
     )
     request.app.state._background_tasks.add(task)

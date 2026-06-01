@@ -336,10 +336,13 @@ def test_reindex_returns_ingest_job(
     meta = CollectionMeta(name=name, namespace="default")
     mock_store = MagicMock()
     mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.update_collection_meta = AsyncMock()
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     app.state.search_store = mock_store
+    app.state.embedder_cache = MagicMock()
+    app.state.pipeline = MagicMock()
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
@@ -1154,12 +1157,15 @@ def test_reindex_same_namespace_succeeds(
 
     mock_store = MagicMock()
     mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.update_collection_meta = AsyncMock()
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
+    app.state.embedder_cache = MagicMock()
+    app.state.pipeline = MagicMock()
 
     c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
 
@@ -1194,12 +1200,15 @@ def test_reindex_job_namespace(
 
     mock_store = MagicMock()
     mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.update_collection_meta = AsyncMock()
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
+    app.state.embedder_cache = MagicMock()
+    app.state.pipeline = MagicMock()
 
     c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
 
@@ -1516,7 +1525,7 @@ def test_collection_reindex_oserror_returns_500_envelope(
     meta = CollectionMeta(name=name, namespace="default")
 
     job_store = MagicMock()
-    job_store.create.side_effect = OSError("disk full")
+    job_store.create_reindex.side_effect = OSError("disk full")
 
     search_store = MagicMock()
     search_store.get_collection_meta = AsyncMock(return_value=meta)
@@ -1528,6 +1537,8 @@ def test_collection_reindex_oserror_returns_500_envelope(
     with mock.patch("archon_search.server.app.DocumentChunker"):
         app = create_app(cfg, job_store)
     app.state.search_store = search_store
+    app.state.embedder_cache = MagicMock()
+    app.state.pipeline = MagicMock()
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
@@ -2698,3 +2709,222 @@ def test_list_collections_includes_needs_reindex(
     assert len(data) == 1
     assert "needs_reindex" in data[0]
     assert data[0]["needs_reindex"] is True
+
+
+# ---------------------------------------------------------------------------
+# POST /collections/{name}/reindex — Task 8.3: ReindexJob + 409 guard
+# ---------------------------------------------------------------------------
+
+
+def _make_reindex_app(tmp_path: Path, tmp_store: JobStore, meta_kwargs: dict | None = None) -> tuple:
+    """Helper: create an app with one collection and a mock search_store."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    name = path_to_collection_name(str(src))
+    extra = meta_kwargs or {}
+    meta = CollectionMeta(name=name, namespace="default", **extra)
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+    app.state.embedder_cache = MagicMock()
+    app.state.pipeline = MagicMock()
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    return c, name, meta, mock_store
+
+
+def test_reindex_endpoint_sets_reindex_job_id(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST reindex sets meta.reindex_job_id before spawning the task."""
+    from archon_search.collection_meta import CollectionMeta
+
+    c, name, meta, mock_store = _make_reindex_app(tmp_path, tmp_store)
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 202
+    data = response.json()
+    job_id = data["job_id"]
+    assert job_id
+
+    # update_collection_meta was called with the job_id set
+    mock_store.update_collection_meta.assert_called_once()
+    updated_meta: CollectionMeta = mock_store.update_collection_meta.call_args[0][0]
+    assert updated_meta.reindex_job_id == job_id
+
+
+def test_reindex_endpoint_captures_pending_model(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """ReindexJob gets target_embedding_model from meta.pending_embedding_model."""
+    from archon_search.types import ReindexJob
+
+    c, name, meta, mock_store = _make_reindex_app(
+        tmp_path, tmp_store, {"pending_embedding_model": "model-X"}
+    )
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    job = tmp_store.get(job_id)
+    assert isinstance(job, ReindexJob)
+    assert job.target_embedding_model == "model-X"
+
+
+def test_reindex_endpoint_data_only_sets_null_target(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """When pending_embedding_model is None, job has target_embedding_model=None."""
+    from archon_search.types import ReindexJob
+
+    c, name, meta, mock_store = _make_reindex_app(
+        tmp_path, tmp_store, {"pending_embedding_model": None}
+    )
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    job = tmp_store.get(job_id)
+    assert isinstance(job, ReindexJob)
+    assert job.target_embedding_model is None
+
+
+def test_reindex_endpoint_returns_409_on_active_reindex(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST returns 409 when meta.reindex_job_id points to a RUNNING job."""
+    from archon_search.types import ReindexJob
+    from archon_search.jobs.model import JobStatus
+
+    # Pre-create a RUNNING ReindexJob in tmp_store
+    import uuid
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    running_job = ReindexJob(
+        job_id=str(uuid.uuid4()),
+        status=JobStatus.RUNNING,
+        created_at=now,
+        updated_at=now,
+        namespace="default",
+        target_embedding_model=None,
+    )
+    tmp_store.create_job(running_job)
+
+    c, name, meta, mock_store = _make_reindex_app(
+        tmp_path, tmp_store, {"reindex_job_id": running_job.job_id}
+    )
+
+    response = c.post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "reindex already in progress"
+    # No new job should have been created
+    assert len(tmp_store.list()) == 1
+
+
+def test_reindex_endpoint_returns_409_on_pending_reindex(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST returns 409 when meta.reindex_job_id points to a PENDING job."""
+    from archon_search.types import ReindexJob
+    from archon_search.jobs.model import JobStatus
+
+    import uuid
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    pending_job = ReindexJob(
+        job_id=str(uuid.uuid4()),
+        status=JobStatus.PENDING,
+        created_at=now,
+        updated_at=now,
+        namespace="default",
+        target_embedding_model=None,
+    )
+    tmp_store.create_job(pending_job)
+
+    c, name, meta, mock_store = _make_reindex_app(
+        tmp_path, tmp_store, {"reindex_job_id": pending_job.job_id}
+    )
+
+    response = c.post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "reindex already in progress"
+    assert len(tmp_store.list()) == 1
+
+
+def test_reindex_endpoint_clears_stale_reindex_job_id_and_proceeds(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST proceeds when meta.reindex_job_id points to a DONE (terminal) job."""
+    from archon_search.types import ReindexJob
+    from archon_search.jobs.model import JobStatus
+
+    import uuid
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    done_job = ReindexJob(
+        job_id=str(uuid.uuid4()),
+        status=JobStatus.DONE,
+        created_at=now,
+        updated_at=now,
+        namespace="default",
+        target_embedding_model=None,
+    )
+    tmp_store.create_job(done_job)
+
+    c, name, meta, mock_store = _make_reindex_app(
+        tmp_path, tmp_store, {"reindex_job_id": done_job.job_id}
+    )
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 202
+    new_job_id = response.json()["job_id"]
+    assert new_job_id != done_job.job_id
+
+
+def test_reindex_endpoint_creates_reindex_job_not_ingest_job(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/reindex stores a ReindexJob (not a plain IngestJob)."""
+    from archon_search.types import ReindexJob
+    from archon_search.jobs.model import IngestJob
+
+    c, name, meta, mock_store = _make_reindex_app(tmp_path, tmp_store)
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    job = tmp_store.get(job_id)
+    assert isinstance(job, ReindexJob), f"Expected ReindexJob, got {type(job)}"
