@@ -10,6 +10,7 @@ import click
 import tomlkit
 
 from archon_search.config import get_default_config_path, load_config
+from archon_search.embedder import make_embedder
 from archon_search.observability import bind_stage_recorder, new_correlation_id
 from archon_search.pipeline import create_pipeline
 
@@ -311,6 +312,18 @@ def reindex(collection_name: str, config_path: Path | None) -> None:
         pipeline = create_pipeline(cfg)
         try:
             await pipeline.store.connect()
+
+            # Resolve per-collection embedder from CollectionMeta
+            meta = await pipeline.store.get_collection_meta(collection_name)
+            if meta is not None and meta.pending_embedding_model:
+                embedder = make_embedder(meta.pending_embedding_model)
+            elif meta is not None and meta.active_embedding_model:
+                embedder = make_embedder(meta.active_embedding_model)
+                if cfg.embedding_model and meta.active_embedding_model != cfg.embedding_model:
+                    logger.warning("using per-collection model %s for %s", meta.active_embedding_model, collection_name)
+            else:
+                embedder = pipeline._global_embedder
+
             # Clear state to force full reindex
             state_store = IndexingStateStore(Path(cfg.db_path).expanduser())
             state_store.remove_collection(collection_name)
@@ -319,7 +332,7 @@ def reindex(collection_name: str, config_path: Path | None) -> None:
                 await pipeline.store.drop_collection(collection_name)
             except Exception:
                 pass
-            # Reindex
+            # Reindex — failure must NOT write state back
             timings_enabled = getattr(getattr(cfg, "observability", None), "stage_timings_enabled", True)
             if timings_enabled:
                 cid = new_correlation_id()
@@ -327,7 +340,7 @@ def reindex(collection_name: str, config_path: Path | None) -> None:
                     t0 = time.perf_counter()
                     results = await pipeline.ingest_directory(
                         Path(source_path).expanduser(), collection_name, force_regenerate_description=True,
-                        embedder=pipeline._global_embedder,
+                        embedder=embedder,
                     )
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
                     logger.info(
@@ -343,11 +356,19 @@ def reindex(collection_name: str, config_path: Path | None) -> None:
             else:
                 results = await pipeline.ingest_directory(
                     Path(source_path).expanduser(), collection_name, force_regenerate_description=True,
-                    embedder=pipeline._global_embedder,
+                    embedder=embedder,
                 )
             ok = sum(1 for r in results if r.status == "ok")
             errors = sum(1 for r in results if r.status == "error")
             click.echo(f"Reindex complete for '{collection_name}': {ok} ingested, {errors} errors.")
+
+            # Promote pending → active on success (model-change reindex)
+            if meta is not None and meta.pending_embedding_model:
+                meta.active_embedding_model = meta.pending_embedding_model
+                meta.pending_embedding_model = None
+                meta.needs_reindex = False
+                meta.reindex_job_id = None
+                await pipeline.store.update_collection_meta(meta)
         finally:
             await pipeline.store.disconnect()
 

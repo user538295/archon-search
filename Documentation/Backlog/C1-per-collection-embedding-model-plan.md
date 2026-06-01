@@ -903,7 +903,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_mcp.py -v -k "update_collection"`
 
 #### Task 10.2 — CLI `archon-search collection reindex {name}` fix
-- [ ] **File**: `archon_search/cli/collection.py`
+- [x] **File**: `archon_search/cli/collection.py`
 - **Depends on**: Task 3.4 (`ingest_directory` accepts embedder), Task 1.2 (CollectionMeta fields)
 - **Description**:
   - Resolution rules for the CLI reindex path (does NOT use `JobStore` or `_reindex_task`):

@@ -356,6 +356,7 @@ def test_collection_reindex_calls_ingest_directory(runner: CliRunner, tmp_path: 
     mock_pipeline.store.connect = AsyncMock()
     mock_pipeline.store.disconnect = AsyncMock()
     mock_pipeline.store.drop_collection = AsyncMock()
+    mock_pipeline.store.get_collection_meta = AsyncMock(return_value=None)
     mock_pipeline.ingest_directory = AsyncMock(return_value=[])
 
     from archon_search.sync import path_to_collection_name

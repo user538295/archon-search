@@ -1,13 +1,10 @@
-"""Tests for Task 5.1: --normalize-timestamps flag on reindex-metadata CLI.
-
-Implements Task 5.1 of A2 plan.
-"""
+"""Tests for CLI collection subcommands."""
 from __future__ import annotations
 
 import hashlib
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from click.testing import CliRunner
@@ -240,3 +237,201 @@ async def test_reindex_metadata_normalize_timestamps_progress_logged(
     )
     assert calls, "progress_cb must be invoked at least once"
     assert calls[-1][0] == calls[-1][1]  # processed == total at final call
+
+
+# ---------------------------------------------------------------------------
+# Task 10.2 — CLI reindex per-collection embedding model resolution
+# ---------------------------------------------------------------------------
+
+
+def _make_reindex_pipeline(meta, ingest_results=None, ingest_raise=None):
+    """Build a mock pipeline for the reindex command tests."""
+    from archon_search._types import IngestResult
+
+    pipeline = MagicMock()
+    pipeline.store.connect = AsyncMock()
+    pipeline.store.disconnect = AsyncMock()
+    pipeline.store.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.store.update_collection_meta = AsyncMock()
+    pipeline.store.drop_collection = AsyncMock()
+    pipeline._global_embedder = MagicMock(name="global_embedder")
+
+    results = ingest_results or [IngestResult(doc_id="doc1", chunks_created=2, status="ok")]
+
+    async def _ingest(*args, **kwargs):
+        if ingest_raise is not None:
+            raise ingest_raise
+        return results
+
+    pipeline.ingest_directory = AsyncMock(side_effect=_ingest)
+    return pipeline
+
+
+def _invoke_reindex(collection_name, meta, ingest_results=None, ingest_raise=None, config_collections=None):
+    """Invoke the `reindex` CLI command with mocked pipeline."""
+    from archon_search.collection_meta import CollectionMeta
+
+    runner = CliRunner()
+    pipeline = _make_reindex_pipeline(meta, ingest_results, ingest_raise)
+
+    cfg = MagicMock()
+    cfg.pinned_collections = []
+    cfg.collections = config_collections or [f"/data/{collection_name}"]
+    cfg.embedding_model = "global-model"
+    cfg.db_path = "~/.archon-search"
+    observability = MagicMock()
+    observability.stage_timings_enabled = False
+    cfg.observability = observability
+
+    state_store_mock = MagicMock()
+    state_store_mock.remove_collection = MagicMock()
+
+    with (
+        patch("archon_search.cli.collection.load_config", return_value=cfg),
+        patch("archon_search.cli.collection.create_pipeline", return_value=pipeline),
+        patch("archon_search.progress.IndexingStateStore", return_value=state_store_mock),
+    ):
+        result = runner.invoke(collection, ["reindex", collection_name])
+
+    return result, pipeline
+
+
+def test_cli_reindex_uses_pending_model_for_model_change() -> None:
+    """When pending_embedding_model is set, reindex uses it and promotes it on success."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(
+        name="mycol",
+        active_embedding_model="old-model",
+        pending_embedding_model="new-model",
+        needs_reindex=True,
+    )
+
+    fake_embedder = MagicMock(name="new_embedder")
+
+    with patch("archon_search.cli.collection.make_embedder", return_value=fake_embedder) as mock_make:
+        result, pipeline = _invoke_reindex("mycol", meta)
+
+    assert result.exit_code == 0, result.output
+
+    # make_embedder called with the pending model
+    mock_make.assert_called_once_with("new-model")
+
+    # ingest_directory called with the new embedder
+    _, kwargs = pipeline.ingest_directory.call_args
+    assert kwargs.get("embedder") is fake_embedder
+
+    # active promoted to pending on success
+    update_call = pipeline.store.update_collection_meta.call_args[0][0]
+    assert update_call.active_embedding_model == "new-model"
+    assert update_call.pending_embedding_model is None
+    assert update_call.needs_reindex is False
+    assert update_call.reindex_job_id is None
+
+
+def test_cli_reindex_uses_active_model_for_data_only() -> None:
+    """When pending_embedding_model is None, reindex uses active_embedding_model."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(
+        name="mycol",
+        active_embedding_model="active-model",
+        pending_embedding_model=None,
+        needs_reindex=False,
+    )
+
+    fake_embedder = MagicMock(name="active_embedder")
+
+    with patch("archon_search.cli.collection.make_embedder", return_value=fake_embedder) as mock_make:
+        result, pipeline = _invoke_reindex("mycol", meta)
+
+    assert result.exit_code == 0, result.output
+
+    # make_embedder called with active model
+    mock_make.assert_called_once_with("active-model")
+
+    # ingest_directory called with that embedder
+    _, kwargs = pipeline.ingest_directory.call_args
+    assert kwargs.get("embedder") is fake_embedder
+
+    # no state write (data-only reindex)
+    pipeline.store.update_collection_meta.assert_not_called()
+
+
+def test_cli_reindex_failure_leaves_state_unchanged() -> None:
+    """If ingest_directory raises, state is NOT written back."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(
+        name="mycol",
+        active_embedding_model="old-model",
+        pending_embedding_model="new-model",
+        needs_reindex=True,
+    )
+
+    with patch("archon_search.cli.collection.make_embedder", return_value=MagicMock()):
+        result, pipeline = _invoke_reindex("mycol", meta, ingest_raise=RuntimeError("boom"))
+
+    # CLI exits with error (non-zero) or at least doesn't write state
+    # The key invariant: update_collection_meta must NOT have been called
+    pipeline.store.update_collection_meta.assert_not_called()
+
+    # active/pending remain unchanged on the meta object
+    assert meta.active_embedding_model == "old-model"
+    assert meta.pending_embedding_model == "new-model"
+    assert meta.needs_reindex is True
+
+
+def test_cli_reindex_logs_warning_when_active_differs_from_global() -> None:
+    """When active_embedding_model differs from config model, a warning is logged."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(
+        name="mycol",
+        active_embedding_model="custom-model",
+        pending_embedding_model=None,
+        needs_reindex=False,
+    )
+
+    with (
+        patch("archon_search.cli.collection.make_embedder", return_value=MagicMock()),
+        patch("archon_search.cli.collection.logger") as mock_logger,
+    ):
+        result, _ = _invoke_reindex("mycol", meta)
+
+    assert result.exit_code == 0, result.output
+    mock_logger.warning.assert_called_once()
+    warning_msg = mock_logger.warning.call_args[0]
+    assert "custom-model" in warning_msg[1]
+    assert "mycol" in warning_msg[2]
+
+
+def test_cli_reindex_meta_none_uses_global_embedder() -> None:
+    """When get_collection_meta returns None, the global embedder is used and no state is written."""
+    with patch("archon_search.cli.collection.make_embedder") as mock_make:
+        result, pipeline = _invoke_reindex("mycol", meta=None)
+
+    assert result.exit_code == 0, result.output
+    # make_embedder must NOT be called — global embedder is used directly
+    mock_make.assert_not_called()
+    # No state write
+    pipeline.store.update_collection_meta.assert_not_called()
+
+
+def test_cli_reindex_empty_active_model_uses_global_embedder() -> None:
+    """When active_embedding_model is empty string, the global embedder is used."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(
+        name="mycol",
+        active_embedding_model="",
+        pending_embedding_model=None,
+        needs_reindex=False,
+    )
+
+    with patch("archon_search.cli.collection.make_embedder") as mock_make:
+        result, pipeline = _invoke_reindex("mycol", meta)
+
+    assert result.exit_code == 0, result.output
+    mock_make.assert_not_called()
+    pipeline.store.update_collection_meta.assert_not_called()

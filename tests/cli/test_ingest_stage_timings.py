@@ -35,6 +35,7 @@ def _make_mock_pipeline() -> MagicMock:
         return [IngestResult(doc_id="doc1", chunks_created=1, status="ok")]
 
     pipeline.ingest_directory = AsyncMock(side_effect=_ingest_directory)
+    pipeline.store.get_collection_meta = AsyncMock(return_value=None)
     return pipeline
 
 
