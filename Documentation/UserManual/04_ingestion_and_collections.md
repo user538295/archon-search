@@ -125,6 +125,82 @@ A collection is reindexed automatically when:
 - The previous indexing run was marked `IN_PROGRESS` (interpreted as a crash mid-index) — `IN_PROGRESS` is reset to `PENDING` by `archon_search/sync.py:_reset_stale_in_progress` so the next sync re-runs it. Server startup separately gates whether to enqueue an install/sync job via `archon_search/server/mcp.py:_needs_install_trigger` (any status other than `DONE` re-triggers); the actual reindex work runs in `sync.py`, not `mcp.py`.
 - `archon-search collection reindex <name>` is invoked explicitly.
 
+## Per-collection embedding model
+
+By default every collection uses the global `[database].embedding_model` from `archon-search.toml`. You can override this per collection to use a different embedding model — useful when you have collections with different domain vocabularies or want to experiment with a new model without rebuilding everything.
+
+### Setting a model when creating a collection
+
+Pass `embedding_model` in the `POST /collections/` request body:
+
+```bash
+curl -X POST http://localhost:9700/collections/ \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/Users/me/code", "embedding_model": "BAAI/bge-small-en-v1.5"}'
+```
+
+Unknown model names return `422`. When omitted the global model is used.
+
+### Changing the model on an existing collection
+
+Use `PATCH /collections/{name}`:
+
+```bash
+curl -X PATCH http://localhost:9700/collections/code \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"embedding_model": "BAAI/bge-large-en-v1.5"}'
+```
+
+The endpoint implements a safe state machine:
+
+- **If the model is the same as the current active model** — clears any pending model change; no reindex needed.
+- **If the collection has indexed data and the model differs** — sets `pending_embedding_model` and `needs_reindex = true`. The existing index continues to serve search traffic until you explicitly run a reindex.
+- **If the collection has no indexed data yet** — updates `active_embedding_model` directly; no reindex needed.
+
+The response is the full `CollectionDetail` object, including the updated `active_embedding_model`, `pending_embedding_model`, `needs_reindex`, and `reindex_job_id` fields.
+
+### Checking reindex status
+
+`GET /collections/{name}` returns:
+
+| Field | Meaning |
+|---|---|
+| `active_embedding_model` | The model currently serving search requests for this collection. |
+| `pending_embedding_model` | The new model waiting for a reindex, or `null` if no change is pending. |
+| `needs_reindex` | `true` when a reindex is required before the new model becomes active. |
+| `reindex_job_id` | The job ID of the most recent model-change reindex, or `null`. |
+
+`GET /collections/` also surfaces `active_embedding_model` and `needs_reindex` on each summary entry, so you can quickly scan which collections are waiting for a reindex.
+
+`GET /status` includes `needs_reindex` per collection in the `collections` map.
+
+### Triggering the reindex
+
+After `PATCH` sets `needs_reindex = true`, issue a reindex job:
+
+```bash
+curl -X POST http://localhost:9700/collections/code/reindex \
+  -H "Authorization: Bearer $KEY"
+```
+
+The reindex job rebuilds the collection using `pending_embedding_model`. On success, `active_embedding_model` is updated and `needs_reindex` is cleared.
+
+### MCP surface
+
+The `update_collection` MCP tool (11th tool) exposes the same state machine:
+
+```json
+{"tool": "update_collection", "collection_name": "code", "embedding_model": "BAAI/bge-large-en-v1.5"}
+```
+
+Returns the updated `CollectionMeta` dict or `{error, code}` on failure.
+
+### Embedder cache
+
+When multiple collections use different models, the server keeps a small LRU cache of loaded embedder instances (capacity `[database].embedder_cache_size`, default 3). A frequently-queried collection's embedder stays warm; the least-recently-used is evicted when the cache is full. Set `[database].eager_load_embedders = true` to pre-warm all known collection models at startup.
+
 ## Related documents
 
 - [`02_configuration.md`](./02_configuration.md) — `[collections]` and `[database].chunk_size`.

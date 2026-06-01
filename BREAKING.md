@@ -10,7 +10,7 @@
 
 ### [next release] — C1 per-collection embedding model (schema changes)
 
-**Surface**: REST `GET /collections/{name}` response (breaking rename); `GET /collections/` response (additive); `POST /collections/` request (additive); `POST /search` response (additive).
+**Surface**: REST `GET /collections/{name}` response (breaking rename); `GET /collections/` response (additive); `POST /collections/` request (additive); `PATCH /collections/{name}` (new endpoint); `POST /search` response (additive); MCP (new `update_collection` tool).
 
 **`GET /collections/{name}` — breaking rename + additive fields**:
 - `embedding_model` field **renamed** to `active_embedding_model`. Clients that read `embedding_model` will receive `null`/`undefined` — update to read `active_embedding_model`.
@@ -22,11 +22,20 @@
 **`POST /collections/` — additive optional request field**:
 - Request body gains optional `embedding_model: str | null`. When provided, the collection is initialized with that model as `active_embedding_model`; when omitted, the global `config.embedding_model` is used. Unknown models return 422.
 
+**`PATCH /collections/{name}` — new endpoint**:
+- Updates the embedding model for a collection. Implements the per-collection model state machine: clearing `pending_embedding_model` (when setting the same model as active), setting `pending_embedding_model` (model change requiring reindex), or directly updating `active_embedding_model` (when no data exists yet). Returns `CollectionDetail` (same shape as `GET /collections/{name}`). Dimension validation runs before any state mutation. Returns 404 for unknown collections, 409 when a reindex job is already in progress, 422 for unknown models or dimension mismatches.
+
 **`POST /search` — additive field**:
-- `SearchResponse` gains `embedding_model: str` (defaults to `""`; will be populated per-collection in a future task).
+- `SearchResponse` gains `embedding_model: str`. For single-collection searches this is the collection's `active_embedding_model`; for multi-collection fan-out it is `config.embedding_model` (the global default).
+
+**`PATCH /collections/{name}` — 422 conditions**:
+- Returns `422` for unknown models **and** for dimension mismatches (when the requested model produces vectors of a different dimension than the existing index).
+
+**MCP — new `update_collection` tool** (11th tool):
+- Accepts `collection_name: str` and `embedding_model: str`. Implements the same state machine as `PATCH /collections/{name}`. Returns the updated `CollectionMeta` dict or `{error, code}` on failure.
 
 **Migration**:
-- `GET /collections/{name}` consumers: replace `embedding_model` with `active_embedding_model` in client code. Add handling for the three new nullable fields.
+- `GET /collections/{name}` consumers: replace `embedding_model` with `active_embedding_model` in client code. Add handling for the three new fields (`pending_embedding_model`, `needs_reindex`, `reindex_job_id`).
 - `GET /collections/` consumers: tolerate the new `active_embedding_model` and `needs_reindex` keys.
 - `POST /search` consumers: tolerate the new `embedding_model` key.
 

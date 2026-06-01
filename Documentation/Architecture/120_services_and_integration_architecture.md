@@ -20,7 +20,7 @@
 
 ### FastAPI HTTP control plane
 
-Built by `archon_search.server.app.create_app`. The lifespan handler connects `SearchStore` and runs `migrate_namespace` + `migrate_acl` before traffic flows. Routes are registered as separate `APIRouter`s and grouped by resource. The authoritative wire contract is `GET /openapi.json` (BearerAuth applied to every non-exempt path).
+Built by `archon_search.server.app.create_app`. The lifespan handler connects `SearchStore` and runs `migrate_namespace` + `migrate_acl` + `migrate_per_collection_model` before traffic flows. **C1**: an `EmbedderCache` (LRU, capacity `config.embedder_cache_size`, default 3) is constructed in the lifespan and injected into `SearchPipeline` so per-collection embedder instances are shared across requests rather than reconstructed per call. Routes are registered as separate `APIRouter`s and grouped by resource. The authoritative wire contract is `GET /openapi.json` (BearerAuth applied to every non-exempt path).
 
 | Group | File | Endpoints |
 |---|---|---|
@@ -29,7 +29,7 @@ Built by `archon_search.server.app.create_app`. The lifespan handler connects `S
 | State | `server/routes_state.py` | `GET /indexing-state` |
 | Search | `server/routes_search.py` | `POST /search` (single-collection or multi-collection fan-out — see below) |
 | Route | `server/routes_route.py` | `POST /route` |
-| Collections | `server/routes_collections.py` | `GET /collections/`, `POST /collections/` (202), `GET /collections/{name}`, `DELETE /collections/{name}`, `POST /collections/{name}/reindex` (202) |
+| Collections | `server/routes_collections.py` | `GET /collections/`, `POST /collections/` (202), `GET /collections/{name}`, `DELETE /collections/{name}`, `PATCH /collections/{name}`, `POST /collections/{name}/reindex` (202) |
 | Jobs / Ingest | `server/routes_jobs.py` | `POST /ingest` (202), `GET /jobs/{job_id}`, `DELETE /jobs/{job_id}` |
 | Telemetry | `server/routes_telemetry.py` | `GET /telemetry/stats`, `GET /telemetry/entries` |
 
@@ -76,6 +76,7 @@ Tools registered in `server/mcp.py` (verified against source):
 | `get_collection_meta` | `SearchPipeline.get_collection_meta` | |
 | `list_documents` | `SearchPipeline.list_documents` | |
 | `delete_document` | `SearchPipeline.delete_document` | |
+| `update_collection` | `SearchStore.update_collection_meta` (direct) | **C1** — 11th tool. Accepts `collection_name: str` and `embedding_model: str`; implements the per-collection model state machine (same logic as `PATCH /collections/{name}`). Returns the updated `CollectionMeta` dict or `{error, code}`. |
 
 > **Discrepancy with CLAUDE.md:** the project description names MCP tools such as `search_status`, `search_start`, `search_stop`, `search_ingest`, `search_collection_{list,add,remove,info,reindex}`. The current `server/mcp.py` does not register those names. The list above is what the running server actually exposes. See source: `archon_search/server/mcp.py`.
 

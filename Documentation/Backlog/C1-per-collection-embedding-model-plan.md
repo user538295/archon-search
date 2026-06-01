@@ -955,7 +955,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
 ### Phase 12 — Verification & Documentation
 
 #### Task 12.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (`Documentation/`, `BREAKING.md`, `archon-search.toml.example`, `CLAUDE.md` references, `README`, ADRs, API reference, architecture docs, user guides) and update every file whose content is affected by C1. The agent must not update docs that are unrelated.

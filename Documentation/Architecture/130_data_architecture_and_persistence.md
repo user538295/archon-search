@@ -121,7 +121,10 @@ The per-field partition map (**system** / **filterable** / **ranking** / **audit
 | `centroid_json` | `utf8` | JSON-encoded list of floats — the routing centroid; `""` if unset |
 | `doc_count` | `int64` | |
 | `chunk_count` | `int64` | |
-| `embedding_model` | `utf8` | model used at index time |
+| `active_embedding_model` | `utf8` | embedding model currently used for this collection's index; `""` when not yet set (defaults to global `config.embedding_model` at query time) |
+| `pending_embedding_model` | `utf8` (nullable) | model requested via `PATCH /collections/{name}` that requires a reindex before becoming active; `null` when no model change is pending |
+| `needs_reindex` | `bool` | `true` when `pending_embedding_model` differs from `active_embedding_model` and a reindex has not yet completed; cleared to `false` after successful reindex |
+| `reindex_job_id` | `utf8` (nullable) | job ID of the in-progress or most-recent reindex triggered by a model change; `null` when no such job has been issued |
 | `last_indexed` | `utf8` | ISO 8601 or `""` |
 | `last_described` | `utf8` | ISO 8601 or `""` |
 | `described_at_doc_count` | `int64` | `-1` sentinel = unset |
@@ -157,6 +160,7 @@ Because glob and ACL filtering happen after retrieval, the store over-fetches ca
 
 - `migrate_namespace` — adds `namespace` column to `_archon_collection_meta` if absent.
 - `migrate_acl` — adds nullable `acl` column to each chunk table that lacks it.
+- `migrate_per_collection_model` — adds `active_embedding_model`, `pending_embedding_model`, `needs_reindex`, and `reindex_job_id` columns to `_archon_collection_meta` if absent, backfilling `active_embedding_model` from the pre-C1 `embedding_model` column. Idempotent: a second run is a no-op. The old `embedding_model` column is dropped after backfill.
 
 ## Entity relationships
 
@@ -171,7 +175,10 @@ erDiagram
         string centroid_json
         int doc_count
         int chunk_count
-        string embedding_model
+        string active_embedding_model
+        string pending_embedding_model
+        bool needs_reindex
+        string reindex_job_id
         string namespace
     }
     COLLECTION {
