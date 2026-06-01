@@ -50,8 +50,10 @@ class EvalEmbedderBackend:
     Satisfies the EmbedderBackend protocol.
     """
 
-    model_name: str = "eval-sha256-v1"
     is_warm: bool = False
+
+    def __init__(self, model_name: str = "eval-sha256-v1") -> None:
+        self.model_name = model_name
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         result: list[list[float]] = []

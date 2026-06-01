@@ -29,3 +29,5 @@
 {"query_id": "q-route-04", "text": "billing subscription invoice refund account expiry", "collection": null, "metric_scope": "routing"}
 {"query_id": "q-route-05", "text": "implement priority queue scheduler task worker", "collection": null, "metric_scope": "routing"}
 {"query_id": "q-route-06", "text": "deployment environment variables production server configuration", "collection": null, "metric_scope": "routing"}
+{"query_id": "q-alt-01", "text": "product quantization codebook subspace vector compression approximate nearest neighbor", "collection": "alt-model", "metric_scope": "retrieval"}
+{"query_id": "q-alt-02", "text": "multi-head self-attention transformer query key value softmax", "collection": "alt-model", "metric_scope": "retrieval"}

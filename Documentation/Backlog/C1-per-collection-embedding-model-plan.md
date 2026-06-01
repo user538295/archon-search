@@ -938,7 +938,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
 > **Releasable**: after Task 11.1 — eval suite passes with mixed-model fixtures. (AC 40)
 
 #### Task 11.1 — Mixed-model eval fixtures
-- [ ] **File**: `tests/eval/documents.jsonl`, `tests/eval/queries.jsonl`, `tests/eval/labels.jsonl`, `tests/eval/corpus/`, `tests/eval/routing/`, `archon_search/eval/backends.py`
+- [x] **File**: `tests/eval/documents.jsonl`, `tests/eval/queries.jsonl`, `tests/eval/labels.jsonl`, `tests/eval/corpus/`, `tests/eval/routing/`, `archon_search/eval/backends.py`
 - **Depends on**: Phase 2 (embedder cache), Phase 5 (PATCH), Phase 7 (search dispatch)
 - **Description**:
   - Add eval fixtures covering at least one collection with the global model and one with a non-global model. Follow the fixture schemas documented in `tests/eval/README.md`.

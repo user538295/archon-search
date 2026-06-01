@@ -53,3 +53,5 @@
 {"doc_id": "faq-003", "collection": "faq", "relative_path": "faq/installation_wizard.md"}
 {"doc_id": "faq-004", "collection": "faq", "relative_path": "faq/license_activation.md"}
 {"doc_id": "faq-005", "collection": "faq", "relative_path": "faq/common_error_messages.md"}
+{"doc_id": "alt-001", "collection": "alt-model", "relative_path": "alt-model/vector_quantization.txt"}
+{"doc_id": "alt-002", "collection": "alt-model", "relative_path": "alt-model/attention_mechanisms.txt"}
