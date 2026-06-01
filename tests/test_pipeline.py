@@ -4508,6 +4508,7 @@ def test_no_embedding_model_attribute_accesses() -> None:
         and "existing_cfg.embedding_model" not in line
         and "cfg.embedding_model" not in line
         and "migrate_per_collection_model" not in line
+        and "body.embedding_model" not in line
         and "__pycache__" not in line
     ]
     assert not lines, (

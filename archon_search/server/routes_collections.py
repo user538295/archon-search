@@ -17,12 +17,14 @@ from archon_search.config import SearchConfig, save_config
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
+from archon_search.model_validation import ModelValidationError, validate_embedding_model
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock
-from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse
+from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse, PatchCollectionBody
 from archon_search.store import StoreBusyError
 from archon_search.sync import path_to_collection_name
+from archon_search.types import JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -352,6 +354,138 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
         "acl_open_count": acl_open,
     }
     return CollectionDetail(**data)
+
+
+_ERROR_401_404_409_422 = {
+    401: {"model": ErrorDetail},
+    404: {"model": ErrorDetail},
+    409: {"model": ErrorDetail},
+    422: {"model": ErrorDetail},
+}
+
+
+@router.patch("/{name}", response_model=CollectionDetail, responses=_ERROR_401_404_409_422)
+async def patch_collection(name: str, body: PatchCollectionBody, request: Request) -> CollectionDetail | JSONResponse:
+    """Update the embedding model for a collection. Triggers reindex if needed."""
+    config: SearchConfig = request.app.state.config
+    search_store = request.app.state.search_store
+    job_store: JobStore = request.app.state.job_store
+    ns: str = request.state.namespace
+
+    # 404 if collection not in config
+    path_to_name = _all_collection_paths(config)
+    if name not in path_to_name:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    # 404 if meta not found for this namespace
+    meta = await search_store.get_collection_meta(name, namespace=ns)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    # Validate embedding model — 422 on ModelValidationError
+    try:
+        new_dim = await validate_embedding_model(body.embedding_model)
+    except ModelValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # Dimension mismatch guard
+    stored_dim = await search_store.get_stored_vector_dimension(name, namespace=ns)
+    if stored_dim is not None and stored_dim != new_dim:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"model dimension mismatch: current vectors are {stored_dim}-dim, "
+                f"new model produces {new_dim}-dim; delete and recreate collection to change dimensions"
+            ),
+        )
+
+    # 409 guard: check if reindex job is still active
+    stale_cleared = False
+    if meta.reindex_job_id is not None:
+        job = job_store.get(meta.reindex_job_id)
+        if job is not None and job.status in (JobStatus.RUNNING, JobStatus.PENDING):
+            return JSONResponse(
+                {"detail": "reindex in progress; wait for job to complete before changing embedding model"},
+                status_code=409,
+            )
+        # Stale (DONE/FAILED/CANCELLED) — clear it (must persist below)
+        meta.reindex_job_id = None
+        stale_cleared = True
+
+    requested = body.embedding_model
+    active = meta.active_embedding_model
+    pending = meta.pending_embedding_model
+
+    # State machine
+    if active == requested and pending is None:
+        # (a) no-op — persist only if stale reindex_job_id was cleared
+        if stale_cleared:
+            await search_store.update_collection_meta(meta)
+    elif pending == requested:
+        # (a') no-op — persist only if stale reindex_job_id was cleared
+        if stale_cleared:
+            await search_store.update_collection_meta(meta)
+    elif pending is not None and active == requested:
+        # (c) revert: clear pending and any stale reindex_job_id
+        meta.pending_embedding_model = None
+        meta.needs_reindex = False
+        meta.reindex_job_id = None
+        await search_store.update_collection_meta(meta)
+    else:
+        # (b) or (d): new model requested
+        chunk_count = await search_store.count_chunks(name, namespace=ns)
+        if chunk_count > 0:
+            meta.pending_embedding_model = requested
+            meta.needs_reindex = True
+        else:
+            meta.active_embedding_model = requested
+            meta.pending_embedding_model = None
+            meta.needs_reindex = False
+            meta.reindex_job_id = None
+        await search_store.update_collection_meta(meta)
+
+    # Build CollectionDetail response
+    state_store = request.app.state.state_store
+    resolved = path_to_name[name]
+    status = _collection_status(config, state_store, name)
+
+    embedding_model = meta.active_embedding_model or config.embedding_model
+    last_indexed: str | None = None
+    try:
+        state = state_store.read()
+        if state and name in state.collections:
+            cp = state.collections[name]
+            last_indexed = getattr(cp, "completed_at", None)
+    except Exception:  # noqa: BLE001
+        pass
+
+    doc_count = 0
+    centroid_present = bool(meta.centroid)
+    acl_protected = 0
+    acl_open = 0
+    try:
+        doc_count = await search_store.count_documents(name)
+    except Exception:  # noqa: BLE001
+        doc_count = 0
+    try:
+        acl_protected, acl_open = await search_store.get_acl_stats(name)
+    except Exception:  # noqa: BLE001
+        acl_protected, acl_open = 0, 0
+
+    return CollectionDetail(
+        name=name,
+        path=resolved,
+        description="",
+        doc_count=doc_count,
+        chunk_count=0,
+        status=status,
+        embedding_model=embedding_model,
+        centroid_present=centroid_present,
+        last_indexed=last_indexed,
+        namespace=meta.namespace,
+        acl_protected_count=acl_protected,
+        acl_open_count=acl_open,
+    )
 
 
 @router.post("/{name}/reindex", status_code=202, response_model=JobResponse, responses=_ERROR_401_404)

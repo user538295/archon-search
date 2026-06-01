@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class CheckStatus(str, Enum):
@@ -139,3 +139,14 @@ class ErrorDetail(BaseModel):
 class ExcludedCollectionSchema(BaseModel):
     name: str
     reason: str
+
+
+class PatchCollectionBody(BaseModel):
+    embedding_model: str
+
+    @field_validator("embedding_model")
+    @classmethod
+    def validate_embedding_model_not_empty(cls, v: str) -> str:
+        if not v:
+            raise ValueError("embedding_model field required")
+        return v

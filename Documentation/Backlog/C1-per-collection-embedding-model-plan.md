@@ -538,7 +538,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
 > **Releasable**: after Task 5.1 — `PATCH /collections/{name}` is fully functional with the complete state machine, dimension validation, and 409 guard. (AC 4–9, 30–31, 36, 42, 48, 56)
 
 #### Task 5.1 — `PATCH /collections/{name}` endpoint + `PatchCollectionBody` schema
-- [ ] **File**: `archon_search/server/routes_collections.py`, `archon_search/server/schemas.py`
+- [x] **File**: `archon_search/server/routes_collections.py`, `archon_search/server/schemas.py`
 - **Depends on**: Task 4.2 (model validation), Task 4.1 (stored dimension), Task 1.2 (CollectionMeta fields), Task 2.2 (app.state.embedder_cache)
 - **Description**:
   - **`PatchCollectionBody`** (Pydantic): `embedding_model: str` (required — Pydantic default; missing key → 422 automatically). Validate in `@validator`: reject empty string or None → 422 with 'embedding_model field required'. (AC 42)
