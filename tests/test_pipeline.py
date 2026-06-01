@@ -247,7 +247,7 @@ async def test_pipeline_search_returns_ranked_results(connected_store, col_name,
     md_file.write_text("# Search Test\n\nThis document contains searchable content.\n" * 10)
 
     await pipeline.ingest_file(md_file, col_name)
-    result = await pipeline.search("searchable content", col_name)
+    result = await pipeline.search("searchable content", col_name, embedder=pipeline._global_embedder)
 
     from archon_search.pipeline import SearchPipelineResult
     assert isinstance(result, SearchPipelineResult)
@@ -330,7 +330,7 @@ async def test_pipeline_ingest_file_fts_searchable(connected_store, col_name, tm
 
     await pipeline.ingest_file(md_file, col_name)
 
-    result = await pipeline.search(unique_word, col_name)
+    result = await pipeline.search(unique_word, col_name, embedder=pipeline._global_embedder)
     assert len(result.results) > 0
 
 
@@ -688,7 +688,7 @@ async def test_ingest_centroid_replaced_on_reingest(connected_store, col_name, t
         def encode(self, texts: list[str]) -> list[list[float]]:
             return [[0.5] * 4 for _ in texts]
 
-    pipeline._embedder = Embedder(AltEmbedderBackend())
+    pipeline._global_embedder = Embedder(AltEmbedderBackend())
 
     # Re-ingest
     await pipeline.ingest_directory(tmp_path, col_name)
@@ -795,7 +795,7 @@ async def test_ingest_directory_preserves_old_description_on_generation_failure(
         def encode(self, texts: list[str]) -> list[list[float]]:
             return [[0.9] * 4 for _ in texts]
 
-    pipeline._embedder = Embedder(AltBackend())
+    pipeline._global_embedder = Embedder(AltBackend())
 
     # Second ingest — described_at=1, current=1 → no 20% change → no regeneration
     # Force regeneration by using a new collection that has no existing description
@@ -804,7 +804,7 @@ async def test_ingest_directory_preserves_old_description_on_generation_failure(
     (tmp_path / "doc2.md").write_text("# Doc2\n\nNew content.\n" * 5)
 
     with _patch("archon_search.pipeline.generate_description", return_value=None) as mock_gen:
-        pipeline._embedder = make_embedder()  # reset to standard embedder
+        pipeline._global_embedder = make_embedder()  # reset to standard embedder
         await pipeline.ingest_directory(tmp_path, new_col)
 
     meta2 = await connected_store.get_collection_meta(new_col)
@@ -874,7 +874,7 @@ async def test_search_with_context_records_context_stage(tmp_path):
         top_k_retrieve=10,
         top_k_return=5,
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     with bind_stage_recorder() as recorder:
         await pipeline.search_with_context("query", "test-col", context_window=1)
@@ -968,13 +968,13 @@ async def test_pipeline_noop_when_unbound(tmp_path):
         top_k_retrieve=10,
         top_k_return=5,
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     md_file = tmp_path / "doc.md"
     md_file.write_text("# Test\n\nSome content.\n" * 5)
 
     assert _stage_recorder.get() is None
-    await pipeline.search("query", "col")
+    await pipeline.search("query", "col", embedder=pipeline._global_embedder)
     assert _stage_recorder.get() is None
 
     await pipeline.search_with_context("query", "col")
@@ -1022,7 +1022,7 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
     )
 
     # Pre-warm embedder dim
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     results = await pipeline.search_with_context("query", "test-collection", context_window=1)
 
@@ -1056,7 +1056,7 @@ async def test_create_pipeline_wires_all_components():
         pipeline = create_pipeline(cfg)
 
     assert pipeline.store is not None
-    assert pipeline._embedder is not None
+    assert pipeline._global_embedder is not None
     assert pipeline._reranker is not None
     assert pipeline._chunker is not None
     assert pipeline._parser is not None
@@ -1448,7 +1448,7 @@ async def test_pipeline_ingest_file_embedder_exception_propagates(connected_stor
         def encode(self, texts: list[str]) -> list[list[float]]:
             raise RuntimeError("embedder exploded")
 
-    pipeline._embedder = Embedder(ExplodingBackend())
+    pipeline._global_embedder = Embedder(ExplodingBackend())
 
     with pytest.raises(RuntimeError, match="embedder exploded"):
         await pipeline.ingest_file(md_file, col_name)
@@ -1501,10 +1501,10 @@ async def test_pipeline_search_embedder_exception_propagates(connected_store, co
         def encode(self, texts: list[str]) -> list[list[float]]:
             raise RuntimeError("search embedder exploded")
 
-    pipeline._embedder = Embedder(ExplodingBackend())
+    exploding_embedder = Embedder(ExplodingBackend())
 
     with pytest.raises(RuntimeError, match="search embedder exploded"):
-        await pipeline.search("any query", col_name)
+        await pipeline.search("any query", col_name, embedder=exploding_embedder)
 
 
 @pytest.mark.asyncio
@@ -1546,7 +1546,7 @@ async def test_pipeline_search_with_context_fetch_exception_propagates(tmp_path)
     )
 
     # Pre-warm embedder so embedding_dim is set
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     # Current production behavior: exception propagates to caller
     with pytest.raises(RuntimeError, match="fetch_adjacent_chunks exploded"):
@@ -1815,8 +1815,8 @@ async def test_eval_trace_fails_if_trace_path_diverges_from_search_components(tm
     )
 
     # Tamper: replace embedder with a different instance after construction
-    original_embedder = pipeline._embedder
-    pipeline._embedder = make_embedder()  # different object — drift!
+    original_embedder = pipeline._global_embedder
+    pipeline._global_embedder = make_embedder()  # different object — drift!
 
     # The drift guard must detect that the pipeline's embedder changed
     # We simulate this by verifying object identity check is performed
@@ -1854,7 +1854,7 @@ async def test_eval_trace_matches_search_final_order_with_matching_depths(connec
     md_file.write_text("# Trace Test\n\nSearchable content for eval trace matching.\n" * 10)
     await pipeline.ingest_file(md_file, col_name)
 
-    normal_result_obj = await pipeline.search("Searchable content", col_name)
+    normal_result_obj = await pipeline.search("Searchable content", col_name, embedder=pipeline._global_embedder)
     _, post_rerank = await collect_search_trace(
         pipeline, "Searchable content", col_name,
         candidate_depth=pipeline._top_k_retrieve,
@@ -1894,7 +1894,7 @@ async def test_eval_trace_common_prefix_matches_search_when_depths_differ(connec
     md_file.write_text("# Prefix Test\n\nContent for prefix comparison.\n" * 10)
     await pipeline.ingest_file(md_file, col_name)
 
-    normal_result_obj = await pipeline.search("prefix comparison", col_name)
+    normal_result_obj = await pipeline.search("prefix comparison", col_name, embedder=pipeline._global_embedder)
     _, post_rerank = await collect_search_trace(
         pipeline, "prefix comparison", col_name,
         candidate_depth=5,   # different from pipeline default (10)
@@ -1935,14 +1935,14 @@ async def test_eval_trace_does_not_change_public_search_response(connected_store
     md_file.write_text("# Unchanged Test\n\nSearch results must not change.\n" * 10)
     await pipeline.ingest_file(md_file, col_name)
 
-    before = await pipeline.search("Search results", col_name)
+    before = await pipeline.search("Search results", col_name, embedder=pipeline._global_embedder)
 
     await collect_search_trace(
         pipeline, "Search results", col_name,
         candidate_depth=10, return_depth=5, metric_depth=5,
     )
 
-    after = await pipeline.search("Search results", col_name)
+    after = await pipeline.search("Search results", col_name, embedder=pipeline._global_embedder)
 
     assert [r.chunk_id for r in before.results] == [r.chunk_id for r in after.results]
     assert [r.score for r in before.results] == [r.score for r in after.results]
@@ -2122,7 +2122,7 @@ async def test_search_returns_pipeline_result(connected_store, col_name, tmp_pat
     md_file.write_text("# Type Test\n\nContent for return-type check.\n" * 10)
     await pipeline.ingest_file(md_file, col_name)
 
-    result = await pipeline.search("Content for return-type", col_name)
+    result = await pipeline.search("Content for return-type", col_name, embedder=pipeline._global_embedder)
 
     assert isinstance(result, SearchPipelineResult)
     assert isinstance(result.results, list)
@@ -2163,9 +2163,9 @@ async def test_search_acl_filtered_true_when_chunks_filtered(tmp_path) -> None:
         top_k_return=5,
     )
     # Pre-warm embedder
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
-    result = await pipeline.search("secret", "test-col")
+    result = await pipeline.search("secret", "test-col", embedder=pipeline._global_embedder)
 
     assert isinstance(result, SearchPipelineResult)
     assert result.acl_filtered is True
@@ -2202,9 +2202,9 @@ async def test_search_acl_filtered_false_when_all_pass(tmp_path) -> None:
         top_k_retrieve=10,
         top_k_return=5,
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
-    result = await pipeline.search("open", "test-col")
+    result = await pipeline.search("open", "test-col", embedder=pipeline._global_embedder)
 
     assert isinstance(result, SearchPipelineResult)
     assert result.acl_filtered is False
@@ -2444,10 +2444,10 @@ async def test_pipeline_search_forwards_filters_to_store() -> None:
         top_k_retrieve=10,
         top_k_return=5,
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     filters = SearchFilters(file_type="md")
-    await pipeline.search("test query", "col", filters=filters)
+    await pipeline.search("test query", "col", filters=filters, embedder=pipeline._global_embedder)
 
     store.hybrid_search.assert_awaited_once()
     call_kwargs = store.hybrid_search.call_args.kwargs
@@ -2482,12 +2482,12 @@ async def test_pipeline_warns_on_filter_plus_acl_under_delivery(caplog) -> None:
         top_k_retrieve=10,
         top_k_return=5,  # survivors (2) < top_k_return (5) → warning
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     filters = SearchFilters(file_type="md")
 
     with caplog.at_level(logging.WARNING, logger="archon"):
-        await pipeline.search("query", "col", filters=filters)
+        await pipeline.search("query", "col", filters=filters, embedder=pipeline._global_embedder)
 
     warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert any("filter+ACL combined attrition" in m for m in warning_messages), (
@@ -2525,10 +2525,10 @@ async def test_pipeline_no_warning_when_no_filter_set(caplog) -> None:
         top_k_retrieve=10,
         top_k_return=5,
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     with caplog.at_level(logging.WARNING, logger="archon"):
-        await pipeline.search("query", "col", filters=None)
+        await pipeline.search("query", "col", filters=None, embedder=pipeline._global_embedder)
 
     attrition_warnings = [
         r for r in caplog.records
@@ -2563,12 +2563,12 @@ async def test_pipeline_no_warning_when_pool_above_top_k(caplog) -> None:
         top_k_retrieve=10,
         top_k_return=5,
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     filters = SearchFilters(file_type="md")
 
     with caplog.at_level(logging.WARNING, logger="archon"):
-        await pipeline.search("query", "col", filters=filters)
+        await pipeline.search("query", "col", filters=filters, embedder=pipeline._global_embedder)
 
     attrition_warnings = [
         r for r in caplog.records
@@ -2613,12 +2613,12 @@ async def test_pipeline_search_filter_then_acl_order() -> None:
         top_k_retrieve=10,
         top_k_return=5,
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     filters = SearchFilters(file_type="md")
 
     with patch.object(_pipeline_mod, "apply_acl_filter", side_effect=spy_acl_filter):
-        await pipeline.search("query", "col", filters=filters)
+        await pipeline.search("query", "col", filters=filters, embedder=pipeline._global_embedder)
 
     # ACL filter received exactly the 3 store results (filter already applied by store)
     assert acl_inputs[0] == 3, (
@@ -2663,10 +2663,10 @@ async def test_pipeline_search_filter_then_reranker_order() -> None:
         top_k_retrieve=10,
         top_k_return=5,
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     filters = SearchFilters(file_type="md")
-    await pipeline.search("query", "col", filters=filters)
+    await pipeline.search("query", "col", filters=filters, embedder=pipeline._global_embedder)
 
     # Reranker must receive only the 2 open results
     assert len(reranker_inputs) == 1
@@ -2702,12 +2702,12 @@ async def test_pipeline_no_warning_when_filters_has_no_active_fields(caplog) -> 
         top_k_retrieve=10,
         top_k_return=5,
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     # SearchFilters() with all defaults — filter_flags will be empty, warning must NOT fire
     filters = SearchFilters()
     with caplog.at_level(logging.WARNING, logger="archon"):
-        await pipeline.search("query", "col", filters=filters)
+        await pipeline.search("query", "col", filters=filters, embedder=pipeline._global_embedder)
 
     assert not any(
         "filter+ACL combined attrition" in r.message
@@ -2737,7 +2737,7 @@ async def test_pipeline_search_with_context_forwards_filters_to_store() -> None:
         top_k_retrieve=10,
         top_k_return=5,
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     filters = SearchFilters(file_type="md")
     await pipeline.search_with_context("test query", "col", filters=filters)
@@ -2775,11 +2775,11 @@ async def test_pipeline_warns_when_filter_alone_causes_under_delivery(caplog) ->
         top_k_retrieve=10,
         top_k_return=5,  # 3 < 5 → warning should fire
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     filters = SearchFilters(file_type="md")
     with caplog.at_level(logging.WARNING, logger="archon"):
-        await pipeline.search("query", "col", filters=filters)
+        await pipeline.search("query", "col", filters=filters, embedder=pipeline._global_embedder)
 
     warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert any("filter+ACL combined attrition" in m for m in warning_messages), (
@@ -2812,11 +2812,11 @@ async def test_pipeline_warns_when_store_returns_zero_results_with_filters(caplo
         top_k_retrieve=10,
         top_k_return=5,
     )
-    await pipeline._embedder.embed(["warmup"])
+    await pipeline._global_embedder.embed(["warmup"])
 
     filters = SearchFilters(file_type="md")
     with caplog.at_level(logging.WARNING, logger="archon"):
-        result = await pipeline.search("query", "col", filters=filters)
+        result = await pipeline.search("query", "col", filters=filters, embedder=pipeline._global_embedder)
 
     assert result.results == []
     warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
@@ -3338,7 +3338,7 @@ async def test_ingest_populates_description_embedding(tmp_path) -> None:
 
     with (
         patch("archon_search.pipeline.generate_description", return_value="test desc"),
-        patch.object(pipeline._embedder, "embed_one", new=AsyncMock(return_value=embed_vec)),
+        patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock(return_value=embed_vec)),
     ):
         await pipeline.ingest_directory(tmp_path, "my-col")
 
@@ -3360,7 +3360,7 @@ async def test_ingest_description_none_sets_embedding_none(tmp_path) -> None:
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for null embedding test.\n" * 5)
 
     with patch("archon_search.pipeline.generate_description", return_value=None):
-        with patch.object(pipeline._embedder, "embed_one", new_callable=AsyncMock) as mock_embed:
+        with patch.object(pipeline._global_embedder, "embed_one", new_callable=AsyncMock) as mock_embed:
             await pipeline.ingest_directory(tmp_path, "my-col")
 
     mock_embed.assert_not_awaited()
@@ -3391,7 +3391,7 @@ async def test_ingest_re_embeds_description_on_every_ingest(tmp_path) -> None:
 
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for re-embed test.\n" * 5)
 
-    with patch.object(pipeline._embedder, "embed_one", new=embed_one_mock):
+    with patch.object(pipeline._global_embedder, "embed_one", new=embed_one_mock):
         await pipeline.ingest_directory(tmp_path, "my-col")
 
     # embed_one must have been called with the preserved description
@@ -3439,7 +3439,7 @@ async def test_recompute_populates_description_embedding() -> None:
     )
 
     embed_one_mock = AsyncMock(return_value=embed_vec)
-    with patch.object(pipeline._embedder, "embed_one", new=embed_one_mock):
+    with patch.object(pipeline._global_embedder, "embed_one", new=embed_one_mock):
         await pipeline.recompute_collection_meta("my-col")
 
     embed_one_mock.assert_awaited_once_with("some desc")
@@ -3477,7 +3477,7 @@ async def test_recompute_no_description_embedding_when_description_none() -> Non
     )
 
     embed_one_mock = AsyncMock()
-    with patch.object(pipeline._embedder, "embed_one", new=embed_one_mock):
+    with patch.object(pipeline._global_embedder, "embed_one", new=embed_one_mock):
         await pipeline.recompute_collection_meta("my-col")
 
     embed_one_mock.assert_not_awaited()
@@ -3511,7 +3511,7 @@ async def test_recompute_no_op_when_empty() -> None:
     )
 
     embed_one_mock = AsyncMock()
-    with patch.object(pipeline._embedder, "embed_one", new=embed_one_mock):
+    with patch.object(pipeline._global_embedder, "embed_one", new=embed_one_mock):
         await pipeline.recompute_collection_meta("empty-col")
 
     embed_one_mock.assert_not_awaited()
@@ -3767,7 +3767,7 @@ async def test_recompute_writes_centroid_sum() -> None:
     store.update_collection_meta = AsyncMock()
 
     pipeline = _make_pipeline_for_recompute(store)
-    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+    with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
         await pipeline.recompute_collection_meta("col")
 
     saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
@@ -3787,7 +3787,7 @@ async def test_recompute_resets_mutations_counter() -> None:
     store.update_collection_meta = AsyncMock()
 
     pipeline = _make_pipeline_for_recompute(store)
-    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+    with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
         await pipeline.recompute_collection_meta("col")
 
     saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
@@ -3850,7 +3850,7 @@ async def test_recompute_single_get_all_vectors_call() -> None:
     store.update_collection_meta = AsyncMock()
 
     pipeline = _make_pipeline_for_recompute(store)
-    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+    with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
         await pipeline.recompute_collection_meta("col")
 
     store.get_all_vectors.assert_awaited_once()
@@ -3892,7 +3892,7 @@ async def test_recompute_collection_meta_force_bypasses_short_circuit() -> None:
     cfg = SearchConfig()
     cfg.centroid_incremental_enabled = True
     pipeline = _make_pipeline_for_recompute(store, config=cfg)
-    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+    with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
         await pipeline.recompute_collection_meta("col", force=True)
 
     store.get_all_vectors.assert_awaited_once()
@@ -3914,7 +3914,7 @@ async def test_recompute_no_short_circuit_when_flag_disabled() -> None:
     cfg = SearchConfig()
     cfg.centroid_incremental_enabled = False
     pipeline = _make_pipeline_for_recompute(store, config=cfg)
-    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+    with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
         await pipeline.recompute_collection_meta("col")
 
     store.get_all_vectors.assert_awaited_once()
@@ -3963,7 +3963,7 @@ async def test_recompute_new_collection_no_existing_meta_runs_full_scan() -> Non
     cfg = SearchConfig()
     cfg.centroid_incremental_enabled = True
     pipeline = _make_pipeline_for_recompute(store, config=cfg)
-    with patch.object(pipeline._embedder, "embed_one", new=AsyncMock()):
+    with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
         await pipeline.recompute_collection_meta("col", force=False)
 
     store.get_all_vectors.assert_awaited_once()
@@ -3984,3 +3984,75 @@ def test_self_embedder_does_not_exist():
     )
     matches = re.findall(r'\bself\._embedder\b', content)
     assert not matches, f"Found {len(matches)} remaining 'self._embedder' reference(s) in pipeline.py"
+
+
+# ---------------------------------------------------------------------------
+# Task 3.2 — embedder parameter on search()
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_search_uses_passed_embedder(connected_store, col_name, tmp_path):
+    """search() embeds with the passed embedder, not self._global_embedder."""
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+
+    pipeline = SearchPipeline(
+        store=connected_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    # Ingest a doc so the collection exists
+    doc = tmp_path / "doc.md"
+    doc.write_text("# Test\n\nContent for embedder routing test.\n" * 5)
+    await pipeline.ingest_file(doc, col_name)
+
+    # Create a second embedder (embedder_B) and spy on both
+    embedder_b = make_embedder()
+    embedder_b_embed_one = AsyncMock(return_value=[0.1] * 4)
+    global_embed_one = AsyncMock(return_value=[0.1] * 4)
+
+    pipeline._global_embedder.embed_one = global_embed_one  # type: ignore[method-assign]
+    embedder_b.embed_one = embedder_b_embed_one  # type: ignore[method-assign]
+
+    await pipeline.search("test query", col_name, embedder=embedder_b)
+
+    embedder_b_embed_one.assert_awaited_once()
+    global_embed_one.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_does_not_call_global_embedder(connected_store, col_name, tmp_path):
+    """search() must NOT call self._global_embedder.embed_one."""
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+
+    pipeline = SearchPipeline(
+        store=connected_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    doc = tmp_path / "doc2.md"
+    doc.write_text("# Test\n\nAnother content for embedder test.\n" * 5)
+    await pipeline.ingest_file(doc, col_name)
+
+    mock_embedder = make_embedder()
+    mock_embedder.embed_one = AsyncMock(return_value=[0.1] * 4)  # type: ignore[method-assign]
+
+    global_embed_one = AsyncMock(return_value=[0.1] * 4)
+    pipeline._global_embedder.embed_one = global_embed_one  # type: ignore[method-assign]
+
+    await pipeline.search("another query", col_name, embedder=mock_embedder)
+
+    global_embed_one.assert_not_called()

@@ -590,10 +590,10 @@ async def _run_router_for_query(
     # service and not part of the offline contract.
     router = MultiCollectionRouter(
         search_url="http://invalid.example/route",  # unused — cache is pre-populated
-        embedder=pipeline._embedder,
+        embedder=pipeline._global_embedder,
         shortlist_size=max(1, len(collection_metas)),
         confidence_threshold=0.0,  # accept any non-zero similarity
-        embedding_model=pipeline._embedder.model_name,
+        embedding_model=pipeline._global_embedder.model_name,
         initial_metadata=list(collection_metas),
         strategy=strategy,
         description_weight=description_weight,

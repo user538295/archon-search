@@ -228,7 +228,7 @@ _DATE_AFTER = "2025-07-01"
 async def test_no_filter_no_acl(matrix_store, matrix_col):
     """no_filter + no_acl (ns=no-acl-ns): open chunks only {alpha,beta,gamma,theta}."""
     pipeline = _make_pipeline(matrix_store, top_k_return=8)
-    result = await pipeline.search("test", matrix_col, namespace="no-acl-ns", filters=None)
+    result = await pipeline.search("test", matrix_col, namespace="no-acl-ns", filters=None, embedder=pipeline._global_embedder)
 
     expected = {_CID["alpha"], _CID["beta"], _CID["gamma"], _CID["theta"]}
     assert _ids(result) == expected
@@ -240,7 +240,7 @@ async def test_no_filter_no_acl(matrix_store, matrix_col):
 async def test_no_filter_acl_match(matrix_store, matrix_col):
     """no_filter + acl_match (ns=test-ns): open + test-ns chunks {alpha,beta,gamma,delta,epsilon,theta}."""
     pipeline = _make_pipeline(matrix_store, top_k_return=8)
-    result = await pipeline.search("test", matrix_col, namespace=_NS_TEST, filters=None)
+    result = await pipeline.search("test", matrix_col, namespace=_NS_TEST, filters=None, embedder=pipeline._global_embedder)
 
     expected = {
         _CID["alpha"], _CID["beta"], _CID["gamma"],
@@ -255,7 +255,7 @@ async def test_no_filter_acl_match(matrix_store, matrix_col):
 async def test_no_filter_acl_deny(matrix_store, matrix_col):
     """no_filter + acl_deny (ns=other-ns): open + other-ns chunks {alpha,beta,gamma,zeta,eta,theta}."""
     pipeline = _make_pipeline(matrix_store, top_k_return=8)
-    result = await pipeline.search("test", matrix_col, namespace=_NS_OTHER, filters=None)
+    result = await pipeline.search("test", matrix_col, namespace=_NS_OTHER, filters=None, embedder=pipeline._global_embedder)
 
     expected = {
         _CID["alpha"], _CID["beta"], _CID["gamma"],
@@ -275,7 +275,7 @@ async def test_prefix_no_acl(matrix_store, matrix_col):
     """prefix=/docs/ + no_acl (ns=no-acl-ns): only open /docs/ chunks {alpha,beta}."""
     pipeline = _make_pipeline(matrix_store)
     filters = SearchFilters(source_path_prefix="/docs/")
-    result = await pipeline.search("test", matrix_col, namespace="no-acl-ns", filters=filters)
+    result = await pipeline.search("test", matrix_col, namespace="no-acl-ns", filters=filters, embedder=pipeline._global_embedder)
 
     expected = {_CID["alpha"], _CID["beta"]}
     assert _ids(result) == expected
@@ -288,7 +288,7 @@ async def test_prefix_acl_match(matrix_store, matrix_col):
     """prefix=/docs/ + acl_match (ns=test-ns): open + test-ns /docs/ chunks {alpha,beta,delta}."""
     pipeline = _make_pipeline(matrix_store)
     filters = SearchFilters(source_path_prefix="/docs/")
-    result = await pipeline.search("test", matrix_col, namespace=_NS_TEST, filters=filters)
+    result = await pipeline.search("test", matrix_col, namespace=_NS_TEST, filters=filters, embedder=pipeline._global_embedder)
 
     expected = {_CID["alpha"], _CID["beta"], _CID["delta"]}
     assert _ids(result) == expected
@@ -301,7 +301,7 @@ async def test_prefix_acl_deny(matrix_store, matrix_col):
     """prefix=/docs/ + acl_deny (ns=other-ns): open + other-ns /docs/ chunks {alpha,beta,zeta}."""
     pipeline = _make_pipeline(matrix_store)
     filters = SearchFilters(source_path_prefix="/docs/")
-    result = await pipeline.search("test", matrix_col, namespace=_NS_OTHER, filters=filters)
+    result = await pipeline.search("test", matrix_col, namespace=_NS_OTHER, filters=filters, embedder=pipeline._global_embedder)
 
     expected = {_CID["alpha"], _CID["beta"], _CID["zeta"]}
     assert _ids(result) == expected
@@ -318,7 +318,7 @@ async def test_glob_no_acl(matrix_store, matrix_col):
     """glob=*.md + no_acl (ns=no-acl-ns): open .md chunks {alpha,beta,theta}."""
     pipeline = _make_pipeline(matrix_store)
     filters = SearchFilters(source_path_glob="*.md")
-    result = await pipeline.search("test", matrix_col, namespace="no-acl-ns", filters=filters)
+    result = await pipeline.search("test", matrix_col, namespace="no-acl-ns", filters=filters, embedder=pipeline._global_embedder)
 
     expected = {_CID["alpha"], _CID["beta"], _CID["theta"]}
     assert _ids(result) == expected
@@ -331,7 +331,7 @@ async def test_glob_acl_match(matrix_store, matrix_col):
     """glob=*.md + acl_match (ns=test-ns): open + test-ns .md chunks {alpha,beta,delta,epsilon,theta}."""
     pipeline = _make_pipeline(matrix_store)
     filters = SearchFilters(source_path_glob="*.md")
-    result = await pipeline.search("test", matrix_col, namespace=_NS_TEST, filters=filters)
+    result = await pipeline.search("test", matrix_col, namespace=_NS_TEST, filters=filters, embedder=pipeline._global_embedder)
 
     expected = {_CID["alpha"], _CID["beta"], _CID["delta"], _CID["epsilon"], _CID["theta"]}
     assert _ids(result) == expected
@@ -349,7 +349,7 @@ async def test_glob_acl_deny(matrix_store, matrix_col, caplog):
     filters = SearchFilters(source_path_glob="*.md")
 
     with caplog.at_level(logging.WARNING, logger="archon"):
-        result = await pipeline.search("test", matrix_col, namespace=_NS_OTHER, filters=filters)
+        result = await pipeline.search("test", matrix_col, namespace=_NS_OTHER, filters=filters, embedder=pipeline._global_embedder)
 
     expected = {_CID["alpha"], _CID["beta"], _CID["zeta"], _CID["theta"]}
     assert _ids(result) == expected
@@ -375,7 +375,7 @@ async def test_date_range_no_acl(matrix_store, matrix_col, caplog):
     filters = SearchFilters(indexed_after=_DATE_AFTER)
 
     with caplog.at_level(logging.WARNING, logger="archon"):
-        result = await pipeline.search("test", matrix_col, namespace="no-acl-ns", filters=filters)
+        result = await pipeline.search("test", matrix_col, namespace="no-acl-ns", filters=filters, embedder=pipeline._global_embedder)
 
     assert _ids(result) == set()
     assert result.acl_filtered is True  # all 3 in range are denied
@@ -394,7 +394,7 @@ async def test_date_range_acl_match(matrix_store, matrix_col, caplog):
     filters = SearchFilters(indexed_after=_DATE_AFTER)
 
     with caplog.at_level(logging.WARNING, logger="archon"):
-        result = await pipeline.search("test", matrix_col, namespace=_NS_TEST, filters=filters)
+        result = await pipeline.search("test", matrix_col, namespace=_NS_TEST, filters=filters, embedder=pipeline._global_embedder)
 
     expected = {_CID["delta"], _CID["epsilon"]}
     assert _ids(result) == expected
@@ -416,7 +416,7 @@ async def test_date_range_acl_deny(matrix_store, matrix_col, caplog):
     filters = SearchFilters(indexed_after=_DATE_AFTER)
 
     with caplog.at_level(logging.WARNING, logger="archon"):
-        result = await pipeline.search("test", matrix_col, namespace=_NS_OTHER, filters=filters)
+        result = await pipeline.search("test", matrix_col, namespace=_NS_OTHER, filters=filters, embedder=pipeline._global_embedder)
 
     expected = {_CID["zeta"]}
     assert _ids(result) == expected
@@ -438,7 +438,7 @@ async def test_prefix_misc_no_denial(matrix_store, matrix_col):
     """prefix=/misc/ + test-ns: only theta matches (acl=None) → no ACL denials → acl_filtered=False."""
     pipeline = _make_pipeline(matrix_store)
     filters = SearchFilters(source_path_prefix="/misc/")
-    result = await pipeline.search("test", matrix_col, namespace=_NS_TEST, filters=filters)
+    result = await pipeline.search("test", matrix_col, namespace=_NS_TEST, filters=filters, embedder=pipeline._global_embedder)
 
     assert _ids(result) == {_CID["theta"]}
     assert result.acl_filtered is False

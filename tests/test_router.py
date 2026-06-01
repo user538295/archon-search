@@ -727,9 +727,9 @@ async def test_run_router_for_query_uses_initial_metadata() -> None:
     # router skips centroid scoring and the non-empty assertion is meaningless.
     embedder.model_name = "model-a"
 
-    # `_run_router_for_query` only touches `pipeline._embedder`.
+    # `_run_router_for_query` only touches `pipeline._global_embedder`.
     pipeline = MagicMock()
-    pipeline._embedder = embedder
+    pipeline._global_embedder = embedder
 
     collection_metas = [
         _meta("col-a", centroid=[1.0, 0.0], active_embedding_model="model-a"),

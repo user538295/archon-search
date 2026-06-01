@@ -155,7 +155,7 @@ async def test_explain_top_k_matches_search_when_rerank_true_and_top_k_equals_to
     await _ingest(connected_store, col_name, records)
 
     query = "common alpha beta"
-    search_result = await pipeline.search(query, col_name)
+    search_result = await pipeline.search(query, col_name, embedder=pipeline._global_embedder)
     explain_result = await pipeline.explain(
         query, col_name, top_k=pipeline._top_k_return, rerank=True
     )
@@ -238,7 +238,7 @@ async def test_explain_accepts_precomputed_query_vector_and_skips_embedding(
     async def _embed_one_raises(text: str) -> list[float]:
         raise RuntimeError("embed_one must not be called when query_vector is provided")
 
-    pipeline._embedder.embed_one = _embed_one_raises  # type: ignore[method-assign]
+    pipeline._global_embedder.embed_one = _embed_one_raises  # type: ignore[method-assign]
 
     captured_vectors: list[list[float]] = []
     original = pipeline.store.hybrid_search_with_trace

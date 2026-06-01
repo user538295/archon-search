@@ -35,9 +35,9 @@ def _check_component_drift(
 
     Uses object identity (``is``) — not equality — to detect drift.
     """
-    if pipeline._embedder is not expected_embedder:
+    if pipeline._global_embedder is not expected_embedder:
         raise RuntimeError(
-            "eval trace drift: pipeline._embedder is not the expected embedder instance"
+            "eval trace drift: pipeline._global_embedder is not the expected embedder instance"
         )
     if pipeline.store is not expected_store:
         raise RuntimeError(
@@ -88,7 +88,7 @@ async def collect_search_trace(
         their respective ranking scores (RRF for pre-rerank, reranker score for post-rerank).
     """
     # Snapshot component references before execution
-    embedder = pipeline._embedder
+    embedder = pipeline._global_embedder
     store = pipeline.store
     reranker = pipeline._reranker
 

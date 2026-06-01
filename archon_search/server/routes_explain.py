@@ -395,10 +395,10 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             # boundary in this codebase: a caller only ever sees collections in its own
             # namespace, so disallowed collections can never leak into routing.candidates.
             try:
-                query_vector = await pipeline._embedder.embed_one(body.query)
+                query_vector = await pipeline._global_embedder.embed_one(body.query)
                 col_router = MultiCollectionRouter(
                     search_url=f"http://{config.host}:{config.port}",
-                    embedder=pipeline._embedder,
+                    embedder=pipeline._global_embedder,
                     shortlist_size=config.routing_shortlist_size,
                     confidence_threshold=config.routing_confidence_threshold,
                     embedding_model=config.embedding_model,

@@ -382,7 +382,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_pipeline.py -v -k "global_embedder or embedder_rename"`
 
 #### Task 3.2 — Add `embedder: Embedder` parameter to `search()`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 3.1
 - **Description**:
   - New signature: `async def search(self, query: str, collection: str, namespace: str = DEFAULT_NAMESPACE, *, embedder: Embedder, filters: SearchFilters | None = None) -> SearchPipelineResult`.

@@ -196,7 +196,7 @@ def create_app(
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
-                result_obj = await pipeline.search(query, collection or default_collection, filters=filters)
+                result_obj = await pipeline.search(query, collection or default_collection, embedder=pipeline._global_embedder, filters=filters)
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
                     logger.info(
@@ -445,10 +445,10 @@ def create_app(
                     all_meta = await pipeline.get_all_collections_meta(namespace=ns)
                     if not all_meta:
                         return McpErrorResponse(error="no collections available", code="not_found")
-                    query_vector = await pipeline._embedder.embed_one(req.query)
+                    query_vector = await pipeline._global_embedder.embed_one(req.query)
                     col_router = MultiCollectionRouter(
                         search_url="http://mcp",
-                        embedder=pipeline._embedder,
+                        embedder=pipeline._global_embedder,
                         shortlist_size=config.routing_shortlist_size,
                         confidence_threshold=config.routing_confidence_threshold,
                         embedding_model=config.embedding_model,

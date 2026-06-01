@@ -198,7 +198,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
 
         try:
             result = await asyncio.wait_for(
-                pipeline.search(body.query, body.collection, namespace=ns, filters=body.filters),
+                pipeline.search(body.query, body.collection, namespace=ns, embedder=pipeline._global_embedder, filters=body.filters),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
             include_metadata = body.filters is not None and body.filters.include_metadata

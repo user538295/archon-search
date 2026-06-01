@@ -120,7 +120,7 @@ async def test_search_without_reranker_returns_results() -> None:
     store = _make_mock_store(candidates)
     pipeline = make_pipeline_no_reranker(store)
 
-    result = await pipeline.search(query="test", collection="col1")
+    result = await pipeline.search(query="test", collection="col1", embedder=pipeline._global_embedder)
 
     assert result is not None
     assert len(result.results) <= pipeline._top_k_return

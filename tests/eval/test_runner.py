@@ -1313,7 +1313,7 @@ def test_run_router_for_query_accepts_strategy_param() -> None:
     mock_pipeline = MagicMock()
     mock_embedder = MagicMock()
     mock_embedder.model_name = "eval-sha256-v1"
-    mock_pipeline._embedder = mock_embedder
+    mock_pipeline._global_embedder = mock_embedder
 
     metas = [
         CollectionMeta(name="code", centroid=[0.1] * 128, active_embedding_model="eval-sha256-v1"),
@@ -1339,7 +1339,7 @@ def test_run_router_for_query_returns_full_ranked_order() -> None:
     mock_pipeline = MagicMock()
     mock_embedder = MagicMock()
     mock_embedder.model_name = "eval-sha256-v1"
-    mock_pipeline._embedder = mock_embedder
+    mock_pipeline._global_embedder = mock_embedder
 
     metas = [
         CollectionMeta(name="alpha", centroid=[0.9] * 128, active_embedding_model="eval-sha256-v1"),

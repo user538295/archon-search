@@ -459,7 +459,7 @@ async def test_search_pipeline_search_acl_filter_applied(tmp_path):
         top_k_retrieve=5, top_k_return=3,
     )
 
-    result_obj = await pipeline.search("query", "col", namespace="ns1")
+    result_obj = await pipeline.search("query", "col", namespace="ns1", embedder=pipeline._global_embedder)
 
     texts = [r.text for r in result_obj.results]
     assert "allowed chunk" in texts, "ns1 chunk must be returned"
@@ -507,7 +507,7 @@ async def test_search_pipeline_search_default_namespace_denies_protected(tmp_pat
         top_k_retrieve=5, top_k_return=3,
     )
 
-    result_obj = await pipeline.search("query", "col", namespace="")
+    result_obj = await pipeline.search("query", "col", namespace="", embedder=pipeline._global_embedder)
 
     texts = [r.text for r in result_obj.results]
     assert "open content" in texts, "open chunk (acl=None) must be returned"
@@ -608,15 +608,15 @@ async def test_e2e_ingest_and_search_acl_enforcement(tmp_path):
         assert result.chunks_created > 0
 
         # tenantA can see the chunk
-        results_a = await pipeline.search("Confidential tenantA content", collection, namespace="tenantA")
+        results_a = await pipeline.search("Confidential tenantA content", collection, namespace="tenantA", embedder=pipeline._global_embedder)
         assert len(results_a.results) > 0, "tenantA must see its own chunk"
 
         # tenantB cannot see it
-        results_b = await pipeline.search("Confidential tenantA content", collection, namespace="tenantB")
+        results_b = await pipeline.search("Confidential tenantA content", collection, namespace="tenantB", embedder=pipeline._global_embedder)
         assert len(results_b.results) == 0, "tenantB must not see tenantA chunk"
 
         # empty namespace also cannot see it
-        results_empty = await pipeline.search("Confidential tenantA content", collection, namespace="")
+        results_empty = await pipeline.search("Confidential tenantA content", collection, namespace="", embedder=pipeline._global_embedder)
         assert len(results_empty.results) == 0, "empty namespace must not see protected chunk"
     finally:
         await _teardown(store)

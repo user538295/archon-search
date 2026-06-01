@@ -440,9 +440,10 @@ class SearchPipeline:
         collection: str,
         namespace: str = DEFAULT_NAMESPACE,
         *,
+        embedder: Embedder,
         filters: SearchFilters | None = None,
     ) -> SearchPipelineResult:
-        vector = await self._global_embedder.embed_one(query)
+        vector = await embedder.embed_one(query)
         candidates = await self.store.hybrid_search(
             collection, vector, query, top_k=self._top_k_retrieve, filters=filters
         )
@@ -734,7 +735,7 @@ class SearchPipeline:
         *,
         filters: SearchFilters | None = None,
     ) -> list[dict[str, Any]]:
-        result_obj = await self.search(query, collection, namespace=namespace, filters=filters)
+        result_obj = await self.search(query, collection, namespace=namespace, embedder=self._global_embedder, filters=filters)
         output: list[dict[str, Any]] = []
 
         with record_stage("context"):

@@ -243,7 +243,7 @@ async def test_single_item_collections_matches_single_collection_field_subset(tm
         pipeline = _make_pipeline(store)
         await _ingest(pipeline, "x", _records("x", 6))
 
-        r_single = await pipeline.search("common query terms", "x")
+        r_single = await pipeline.search("common query terms", "x", embedder=pipeline._global_embedder)
         r_multi = await pipeline.search_many("common query terms", ["x"])
 
         single_by_chunk = {r.chunk_id: r for r in r_single.results}

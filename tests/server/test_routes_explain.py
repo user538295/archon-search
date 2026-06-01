@@ -314,8 +314,8 @@ def test_post_explain_collectionless_router_failure_returns_503(
     pipeline.get_all_collections_meta = AsyncMock(
         return_value=[CollectionMeta(name="col", namespace="default")]
     )
-    pipeline._embedder = MagicMock()
-    pipeline._embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
+    pipeline._global_embedder = MagicMock()
+    pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
     app.state.pipeline = pipeline
 
     monkeypatch.setattr(
@@ -401,8 +401,8 @@ async def test_post_explain_concurrent_collectionless_requests(tmp_path: Path) -
     pipeline = MagicMock()
     meta_list = [CollectionMeta(name="col", centroid=[0.1, 0.2, 0.3, 0.4], active_embedding_model=config.embedding_model, namespace="default")]
     pipeline.get_all_collections_meta = AsyncMock(return_value=meta_list)
-    pipeline._embedder = MagicMock()
-    pipeline._embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
+    pipeline._global_embedder = MagicMock()
+    pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
     pipeline.explain = AsyncMock(return_value=_make_explain_result())
     app.state.pipeline = pipeline
 
@@ -468,7 +468,7 @@ async def test_post_explain_pinned_collection_happy_path(tmp_path: Path) -> None
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     top_k = 3
     transport = httpx.ASGITransport(app=app)
@@ -540,7 +540,7 @@ async def test_post_explain_collectionless_includes_routing_block(tmp_path: Path
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -615,7 +615,7 @@ async def test_post_explain_routing_covers_every_collection_no_gating(tmp_path: 
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -687,7 +687,7 @@ async def test_post_explain_routing_candidates_acl_filtered(tmp_path: Path) -> N
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -751,7 +751,7 @@ async def test_post_explain_collectionless_all_collections_acl_filtered_returns_
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -804,11 +804,11 @@ async def test_post_explain_search_top_k_equality_at_top_k_return(tmp_path: Path
         top_k_return=top_k_return,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     query = "common alpha beta"
     # Call pipeline.search directly for baseline
-    search_result = await pipeline.search(query, "docs")
+    search_result = await pipeline.search(query, "docs", embedder=pipeline._global_embedder)
     search_ids = [(r.doc_id, r.chunk_id) for r in search_result.results]
     # Guard against a vacuous [] == [] pass: search must return a full top_k_return slice.
     assert len(search_ids) == top_k_return
@@ -868,7 +868,7 @@ async def test_post_explain_near_miss_no_text_field(tmp_path: Path) -> None:
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -922,7 +922,7 @@ async def test_post_explain_rerank_false_orders_by_rrf(tmp_path: Path) -> None:
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -989,7 +989,7 @@ async def test_post_explain_rerank_false_collectionless(tmp_path: Path) -> None:
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -1061,7 +1061,7 @@ async def test_post_explain_near_miss_pool_sizes(tmp_path: Path) -> None:
             top_k_return=5,
         )
         app.state.pipeline = pipeline
-        app.state.embedder = pipeline._embedder
+        app.state.embedder = pipeline._global_embedder
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
@@ -1121,7 +1121,7 @@ async def test_post_explain_near_miss_at_exact_boundary(tmp_path: Path) -> None:
             top_k_return=5,
         )
         app.state.pipeline = pipeline
-        app.state.embedder = pipeline._embedder
+        app.state.embedder = pipeline._global_embedder
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
@@ -1176,7 +1176,7 @@ async def test_post_explain_acl_filtered_returns_empty_and_flag(tmp_path: Path) 
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -1237,7 +1237,7 @@ async def test_post_explain_empty_collection_returns_empty_results(tmp_path: Pat
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -1292,7 +1292,7 @@ async def test_post_explain_pinned_collection_wrong_namespace_returns_404(tmp_pa
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -1347,7 +1347,7 @@ async def test_post_explain_telemetry_emits_no_query(tmp_path: Path) -> None:
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     logs_dir = tmp_path / "telemetry-logs"
     logs_dir.mkdir()
@@ -1419,11 +1419,11 @@ def test_explain_telemetry_has_correlation_id(tmp_path: Path) -> None:
     pipeline.get_collection_meta = AsyncMock(return_value=CollectionMeta(
         name="docs", centroid=[0.1, 0.2, 0.3, 0.4], active_embedding_model="mock-embedder", namespace="default"
     ))
-    pipeline._embedder = MagicMock()
-    pipeline._embedder.embed = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
-    pipeline._embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
+    pipeline._global_embedder = MagicMock()
+    pipeline._global_embedder.embed = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
+    pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     with TestClient(app, headers={"Authorization": f"Bearer {os.environ.get('ARCHON_SEARCH_API_KEY', '')}"}) as c:
         # Set writer AFTER lifespan startup (lifespan sets it to None when telemetry disabled)
@@ -1497,7 +1497,7 @@ async def test_explain_stage_timings_keys_pinned_collection_with_rerank(tmp_path
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -1561,7 +1561,7 @@ async def test_explain_stage_timings_keys_collectionless(tmp_path: Path) -> None
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -1615,7 +1615,7 @@ async def test_explain_stage_timings_no_rerank(tmp_path: Path) -> None:
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -1672,7 +1672,7 @@ async def test_explain_stage_timings_values_non_negative(tmp_path: Path) -> None
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -1730,7 +1730,7 @@ async def test_explain_stage_timings_disabled(tmp_path: Path) -> None:
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -1883,7 +1883,7 @@ async def test_explain_stage_timings_fts_absent_degradation(tmp_path: Path) -> N
         top_k_return=5,
     )
     app.state.pipeline = pipeline
-    app.state.embedder = pipeline._embedder
+    app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -1951,7 +1951,7 @@ async def test_rest_mcp_explain_key_parity(tmp_path: Path) -> None:
         top_k_return=5,
     )
     rest_app.state.pipeline = pipeline
-    rest_app.state.embedder = pipeline._embedder
+    rest_app.state.embedder = pipeline._global_embedder
 
     transport = httpx.ASGITransport(app=rest_app)
     async with httpx.AsyncClient(

@@ -244,7 +244,7 @@ async def test_mcp_explain_rest_parity(tmp_path: Path) -> None:
     # REST side — same pipeline injected onto the app state
     rest_app = create_rest_app(config, JobStore(path=tmp_path / "jobs.json"))
     rest_app.state.pipeline = pipeline
-    rest_app.state.embedder = pipeline._embedder
+    rest_app.state.embedder = pipeline._global_embedder
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     transport = httpx.ASGITransport(app=rest_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t", headers={"Authorization": f"Bearer {key}"}) as ac:
@@ -286,7 +286,7 @@ async def test_mcp_explain_collectionless_rest_parity(tmp_path: Path) -> None:
 
     rest_app = create_rest_app(config, JobStore(path=tmp_path / "jobs.json"))
     rest_app.state.pipeline = pipeline
-    rest_app.state.embedder = pipeline._embedder
+    rest_app.state.embedder = pipeline._global_embedder
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     transport = httpx.ASGITransport(app=rest_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t", headers={"Authorization": f"Bearer {key}"}) as ac:
