@@ -69,7 +69,10 @@ On first start, the server auto-generates a key and writes it to `~/.archon-sear
 
 Server-side configuration lives in `~/.archon-search/archon-search.toml`. Notable sections:
 
-- `[search]` — `db_path`, `embedding_model`, `chunk_size`, `top_k_return`, `pinned_collections`, routing parameters, watcher settings
+- `[database]` — `db_path`, `embedding_model`, `chunk_size`, `top_k_return`, model paths, and per-collection embedder pool keys: `embedder_cache_size` (int, default `3`) controls how many embedding model instances are kept in the LRU cache; `eager_load_embedders` (bool, default `false`) pre-warms all distinct models at startup
+- `[search]` — multi-collection fan-out bounds (`max_fanout`, `fanout_timeout_seconds`)
+- `[routing]` — `routing_shortlist_size`, `routing_confidence_threshold`, routing strategy
+- `[collections]` — `pinned_collections`, static collection definitions, watcher settings
 - `[telemetry]` — opt-in local query logging (see below)
 
 See `examples/archon-search.toml.example` in the repo for the full annotated reference.
@@ -82,7 +85,7 @@ Breaking changes to the REST or MCP surface are recorded in [`BREAKING.md`](BREA
 
 ## MCP tools
 
-The MCP server registers 10 tools (see `archon_search/server/mcp.py`), sharing the REST API's auth layer:
+The MCP server registers 11 tools (see `archon_search/server/mcp.py`), sharing the REST API's auth layer:
 
 - `search` — hybrid vector + FTS search; returns `{"results": [...], "acl_filtered": bool}`
 - `search_with_context` — same as `search` with adjacent-chunk context
@@ -94,6 +97,7 @@ The MCP server registers 10 tools (see `archon_search/server/mcp.py`), sharing t
 - `get_collection_meta` — metadata for one collection
 - `list_documents` — list documents in a collection
 - `delete_document` — remove a document by `doc_id`
+- `update_collection` — change a collection's embedding model (mirrors `PATCH /collections/{name}`)
 
 ## Telemetry (opt-in)
 
