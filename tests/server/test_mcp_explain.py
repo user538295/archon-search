@@ -252,7 +252,10 @@ async def test_mcp_explain_rest_parity(tmp_path: Path) -> None:
 
     assert rest_resp.status_code == 200, rest_resp.text
     # Deep-equal after a JSON round trip (dodges float-formatting drift).
-    assert json.loads(json.dumps(mcp_result)) == rest_resp.json()
+    # embedding_model is excluded: REST populates it (Task 7.2/7.3); MCP does so in Task 7.4.
+    mcp_cmp = {k: v for k, v in json.loads(json.dumps(mcp_result)).items() if k != "embedding_model"}
+    rest_cmp = {k: v for k, v in rest_resp.json().items() if k != "embedding_model"}
+    assert mcp_cmp == rest_cmp
 
     await pipeline.store.disconnect()
 
@@ -296,7 +299,10 @@ async def test_mcp_explain_collectionless_rest_parity(tmp_path: Path) -> None:
     # Routing must be populated over MCP (the config-driven collectionless path).
     assert mcp_result["routing"] is not None
     assert len(mcp_result["routing"]["candidates"]) == 2
-    assert json.loads(json.dumps(mcp_result)) == rest_resp.json()
+    # embedding_model is excluded: REST populates it (Task 7.3); MCP does so in Task 7.4.
+    mcp_cmp = {k: v for k, v in json.loads(json.dumps(mcp_result)).items() if k != "embedding_model"}
+    rest_cmp = {k: v for k, v in rest_resp.json().items() if k != "embedding_model"}
+    assert mcp_cmp == rest_cmp
 
     await store.disconnect()
 

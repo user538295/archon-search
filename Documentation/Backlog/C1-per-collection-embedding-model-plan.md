@@ -677,7 +677,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_routes_search.py -v -k "embedding_model"`
 
 #### Task 7.3 — Explain endpoint: per-collection embedder dispatch
-- [ ] **File**: `archon_search/server/routes_explain.py`
+- [x] **File**: `archon_search/server/routes_explain.py`
 - **Depends on**: Task 3.5 (explain() signature), Task 2.2 (embedder_cache)
 - **Description**:
   - In the `/explain` route handler, for single-collection mode (`collection` is provided): resolve `meta.active_embedding_model`; fetch embedder from cache; pass `embedder=embedder` to `pipeline.explain(...)`.

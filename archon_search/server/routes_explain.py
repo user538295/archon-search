@@ -237,6 +237,7 @@ class ExplainResponse(BaseModel):
     results: list[ExplainResult]
     near_misses: list[ExplainNearMiss]
     excluded_collections: list[ExcludedCollectionSchema] = Field(default_factory=list)
+    embedding_model: str = ""
     stage_timings_ms: dict[str, float] | None = None
 
     @classmethod
@@ -247,6 +248,7 @@ class ExplainResponse(BaseModel):
         collection: str,
         routing: RoutingExplain | None,
         result: ExplainPipelineResult,
+        embedding_model: str = "",
         stage_timings_ms: dict[str, float] | None = None,
     ) -> ExplainResponse:
         return cls(
@@ -260,6 +262,7 @@ class ExplainResponse(BaseModel):
                 ExcludedCollectionSchema(name=e.name, reason=e.reason)
                 for e in result.excluded_collections
             ],
+            embedding_model=embedding_model,
             stage_timings_ms=stage_timings_ms,
         )
 
@@ -328,6 +331,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     top_k=body.top_k,
                     rerank=body.rerank,
                     namespace=ns,
+                    embedder=None,
                 )
             except CollectionNotFoundError:
                 return JSONResponse({"detail": "collection not found"}, status_code=404)
@@ -364,6 +368,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             stage_timings = recorder.stage_timings_ms if recorder is not None else None
             response = ExplainResponse.from_pipeline_result(
                 rerank=body.rerank, collection="", routing=None, result=result,
+                embedding_model=config.embedding_model,
                 stage_timings_ms=stage_timings,
             )
             _emit_ok("", len(response.results))
@@ -372,6 +377,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 result_dict.pop("stage_timings_ms", None)
             return JSONResponse(content=result_dict, status_code=200)
 
+        active_model: str = config.embedding_model
         if body.collection is not None:
             try:
                 meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
@@ -382,6 +388,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             if meta is None:
                 return JSONResponse({"detail": "collection not found"}, status_code=404)
             chosen = body.collection
+            active_model = meta.active_embedding_model or config.embedding_model
         else:
             try:
                 all_meta = await pipeline.get_all_collections_meta(namespace=ns)
@@ -411,6 +418,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             # rank_with_scores returns every supplied collection, so ranked is non-empty.
             chosen_meta, chosen_score = ranked[0]
             chosen = chosen_meta.name
+            active_model = chosen_meta.active_embedding_model or config.embedding_model
             threshold = config.routing_confidence_threshold
             routing = RoutingExplain(
                 invoked=True,
@@ -420,6 +428,13 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 candidates=[RoutingCandidate(collection=m.name, centroid_score=s) for m, s in ranked],
             )
 
+        embedder_cache = getattr(request.app.state, "embedder_cache", None)
+        if embedder_cache is not None:
+            _embedder = await embedder_cache.get_or_load(active_model)
+        else:
+            logger.warning("explain: embedder_cache absent from app.state — falling back to global embedder")
+            _embedder = pipeline._global_embedder
+
         try:
             result = await pipeline.explain(
                 body.query,
@@ -428,6 +443,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 rerank=body.rerank,
                 namespace=ns,
                 query_vector=query_vector,
+                embedder=_embedder,
             )
         except ExplainStageError as exc:
             # Full original is logged server-side; the response detail is sanitized to
@@ -459,6 +475,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
     stage_timings = recorder.stage_timings_ms if recorder is not None else None
     response = ExplainResponse.from_pipeline_result(
         rerank=body.rerank, collection=chosen, routing=routing, result=result,
+        embedding_model=active_model,
         stage_timings_ms=stage_timings,
     )
     _emit_ok(chosen, len(response.results))

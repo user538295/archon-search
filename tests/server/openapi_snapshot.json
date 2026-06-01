@@ -1678,6 +1678,11 @@
             "type": "array",
             "title": "Excluded Collections"
           },
+          "embedding_model": {
+            "type": "string",
+            "title": "Embedding Model",
+            "default": ""
+          },
           "stage_timings_ms": {
             "anyOf": [
               {
