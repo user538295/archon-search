@@ -169,7 +169,7 @@ jobs:
           NOTES: ${{ steps.notes.outputs.notes }}
         run: |
           payload=$(jq -n --arg tag "$TAG" --arg body "$NOTES" \
-            '{tag_name: $tag, name: $tag, body: $body}')
+            '{tag_name: $tag, name: $tag, body: $body, make_latest: "true"}')
           response=$(curl -s -w "\n%{http_code}" \
             -X POST "https://api.github.com/repos/$GITHUB_REPOSITORY/releases" \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
@@ -217,7 +217,7 @@ jobs:
                 -X PATCH "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$rid" \
                 -H "Authorization: Bearer $GITHUB_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
-                -d "$(jq -n --arg b "$notes" '{body: $b}')")
+                -d "$(jq -n --arg b "$notes" '{body: $b, make_latest: "false"}')")
               echo "Backfilled $tag: HTTP $code"
               break
             done
