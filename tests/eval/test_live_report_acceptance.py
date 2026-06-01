@@ -44,7 +44,7 @@ async def test_deterministic_backend_uses_stubs(tmp_path: Path) -> None:
     from archon_search.eval.runner import _build_pipeline_with_eval_backends
 
     pipeline = await _build_pipeline_with_eval_backends(tmp_path)
-    assert isinstance(pipeline._embedder._backend, EvalEmbedderBackend)
+    assert isinstance(pipeline._global_embedder._backend, EvalEmbedderBackend)
     assert isinstance(pipeline._reranker._backend, EvalRerankerBackend)
 
 

@@ -38,9 +38,9 @@ async def test_live_backend_uses_real_models(
     """Real models produce 384-dim embeddings, not the stub's 128-dim."""
     pipeline = await _build_pipeline_with_eval_backends(tmp_path, backend="live")
     try:
-        vecs = pipeline._embedder._backend.encode(["hello world"])
+        vecs = pipeline._global_embedder._backend.encode(["hello world"])
         assert len(vecs[0]) == 384, f"expected 384-dim vectors, got {len(vecs[0])}"
-        assert pipeline._embedder.model_name == "BAAI/bge-small-en-v1.5"
+        assert pipeline._global_embedder.model_name == "BAAI/bge-small-en-v1.5"
     finally:
         await pipeline.store.disconnect()
 
@@ -155,7 +155,7 @@ async def test_fixture_isolation(
     # Deterministic stubs still work in the live directory
     pipeline = await _build_pipeline_with_eval_backends(tmp_path, backend="deterministic")
     try:
-        assert isinstance(pipeline._embedder._backend, EvalEmbedderBackend)
+        assert isinstance(pipeline._global_embedder._backend, EvalEmbedderBackend)
     finally:
         await pipeline.store.disconnect()
 

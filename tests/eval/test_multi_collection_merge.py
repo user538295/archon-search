@@ -51,7 +51,7 @@ def _scored(collection: str, doc_id: str, chunk_id: str, text: str, rrf_score: f
 def _meta(name: str, *, embedding_model: str = "eval-sha256-v1", namespace: str = "default"):
     from archon_search.collection_meta import CollectionMeta
 
-    return CollectionMeta(name=name, embedding_model=embedding_model, namespace=namespace)
+    return CollectionMeta(name=name, active_embedding_model=embedding_model, namespace=namespace)
 
 
 def _build_pipeline(leg_map: dict, meta_list: list, *, top_k_return: int = 10):
