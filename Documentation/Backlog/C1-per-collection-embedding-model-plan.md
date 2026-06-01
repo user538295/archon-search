@@ -772,7 +772,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
   - Checkpoint: `uv run pytest tests/test_routes_jobs.py -v -k "reindex_task"`
 
 #### Task 8.2 — `_default_ingest_task` update: read `active_embedding_model` from `CollectionMeta`
-- [ ] **File**: `archon_search/server/routes_jobs.py`
+- [x] **File**: `archon_search/server/routes_jobs.py`
 - **Depends on**: Task 3.3 (`ingest_file` accepts embedder), Task 3.4 (`ingest_directory` accepts embedder), Task 2.2 (embedder_cache), Task 1.2 (CollectionMeta fields)
 - **Description**:
   - **Architectural prerequisite — verify `pipeline_fn` behavior**: Before implementing this task, verify whether `app.state.ingest_pipeline` is wired to an actual callable in `app.py`. Run `grep -n "ingest_pipeline" archon_search/server/app.py` to check. If it is NOT wired (i.e., `pipeline_fn` is always `None` or a no-op), restructure `_default_ingest_task` to call pipeline methods **directly** (via `pipeline.ingest_file()` or `pipeline.ingest_directory()`) rather than delegating to `pipeline_fn`. In that case, `search_store` is `request.app.state.search_store`, `embedder_cache` is `request.app.state.embedder_cache`, and `pipeline` is `request.app.state.search_pipeline`. This is the recommended path. If `pipeline_fn` IS wired to an actual callable, the embedder resolution must happen inside `pipeline_fn`'s closure (not in `_default_ingest_task` itself). Whichever approach is used, the implementer must ensure the per-collection embedder is resolved before calling `pipeline.ingest_file()` or `pipeline.ingest_directory()`.

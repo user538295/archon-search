@@ -64,17 +64,59 @@ async def _run_pipeline(
         await asyncio.sleep(0)
 
 
+async def _dispatch_ingest(
+    body: IngestRequest,
+    namespace: str,
+    search_store: Any,
+    embedder_cache: "EmbedderCache",
+    pipeline: Any,
+    config: Any,
+) -> None:
+    """Resolve per-collection embedder and dispatch to pipeline.ingest_file / ingest_directory."""
+    meta = await search_store.get_collection_meta(body.collection, namespace)
+    active_model = (meta.active_embedding_model if meta else "") or config.embedding_model
+    embedder = await embedder_cache.get_or_load(active_model)
+
+    if body.path is not None:
+        p = Path(body.path)
+        if p.is_file():
+            await pipeline.ingest_file(
+                p, body.collection, embedder=embedder, namespace=namespace, ingested_by=body.ingested_by
+            )
+        elif p.is_dir():
+            await pipeline.ingest_directory(
+                p, body.collection, embedder=embedder, namespace=namespace, ingested_by=body.ingested_by
+            )
+        else:
+            raise FileNotFoundError(f"path does not exist or is not a file/directory: {body.path}")
+    elif body.documents is not None:
+        if hasattr(pipeline, "ingest_documents"):
+            await pipeline.ingest_documents(
+                body.documents, body.collection, embedder=embedder, namespace=namespace, ingested_by=body.ingested_by
+            )
+        else:
+            logger.warning("pipeline has no ingest_documents method; skipping documents ingest for collection %s", body.collection)
+
+
 async def _default_ingest_task(
     job_id: str,
     store: JobStore,
     body: IngestRequest,
     namespace: str = DEFAULT_NAMESPACE,
     pipeline_fn: Callable[..., Awaitable[None]] | None = None,
+    *,
+    search_store: Any = None,
+    embedder_cache: "EmbedderCache | None" = None,
+    pipeline: Any = None,
+    config: Any = None,
 ) -> None:
     """Lifecycle wrapper: PENDING → RUNNING → DONE/FAILED/CANCELLED."""
     try:
         store.update(job_id, status=JobStatus.RUNNING)
-        await _run_pipeline(job_id, store, body, pipeline_fn, namespace=namespace)
+        if pipeline_fn is None and search_store is not None and embedder_cache is not None and pipeline is not None and config is not None:
+            await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
+        else:
+            await _run_pipeline(job_id, store, body, pipeline_fn, namespace=namespace)
         # Check for cancellation before marking DONE
         job = store.get(job_id)
         if job and job.status == JobStatus.CANCELLING:
@@ -102,6 +144,11 @@ async def _default_ingest_task_with_lock(
     namespace: str = DEFAULT_NAMESPACE,
     pipeline_fn: Callable[..., Awaitable[None]] | None = None,
     held_lock: "asyncio.Lock | None" = None,
+    *,
+    search_store: Any = None,
+    embedder_cache: "EmbedderCache | None" = None,
+    pipeline: Any = None,
+    config: Any = None,
 ) -> None:
     """Lifecycle wrapper that releases held_lock in try/finally on success, failure, and cancellation.
 
@@ -110,9 +157,17 @@ async def _default_ingest_task_with_lock(
     """
     try:
         store.update(job_id, status=JobStatus.RUNNING)
-        await _run_pipeline(
-            job_id, store, body, pipeline_fn, namespace=namespace, locked_by_caller=True
-        )
+        if pipeline_fn is None and search_store is not None and embedder_cache is not None and pipeline is not None and config is not None:
+            # Release the pre-acquired lock before dispatch: pipeline.ingest_file /
+            # ingest_directory will acquire it internally. Holding it here would
+            # deadlock since asyncio.Lock is not reentrant.
+            if held_lock is not None and held_lock.locked():
+                held_lock.release()
+            await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
+        else:
+            await _run_pipeline(
+                job_id, store, body, pipeline_fn, namespace=namespace, locked_by_caller=True
+            )
         job = store.get(job_id)
         if job and job.status == JobStatus.CANCELLING:
             store.update(job_id, status=JobStatus.CANCELLED)
@@ -315,15 +370,23 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
     if isinstance(lock_result, JSONResponse):
         return lock_result
 
+    pipeline = getattr(request.app.state, "pipeline", None)
+    embedder_cache = getattr(request.app.state, "embedder_cache", None)
+    config = getattr(request.app.state, "config", None)
+
     if lock_result is not None:
         task = asyncio.create_task(
             _default_ingest_task_with_lock(
-                job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn, held_lock=lock_result
+                job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn, held_lock=lock_result,
+                search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config,
             )
         )
     else:
         task = asyncio.create_task(
-            _default_ingest_task(job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn)
+            _default_ingest_task(
+                job.job_id, store, body, namespace=ns, pipeline_fn=pipeline_fn,
+                search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config,
+            )
         )
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)

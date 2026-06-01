@@ -1034,3 +1034,186 @@ async def test_reindex_task_embedder_cache_failure_marks_job_failed(tmp_path: Pa
     # status must be FAILED
     update_calls = [str(c) for c in job_store.update.call_args_list]
     assert any("FAILED" in c for c in update_calls)
+
+
+# ---------------------------------------------------------------------------
+# _default_ingest_task — Task 8.2: per-collection embedding model dispatch
+# ---------------------------------------------------------------------------
+
+
+def _make_ingest_mocks(
+    active_model: str = "model-X",
+    config_model: str = "global-default",
+) -> tuple:
+    """Return (search_store, embedder_cache, pipeline, config, fake_embedder) mocks."""
+    fake_embedder = MagicMock()
+
+    search_store = MagicMock()
+    meta = CollectionMeta(
+        name="col",
+        active_embedding_model=active_model,
+        namespace=DEFAULT_NAMESPACE,
+    )
+    search_store.get_collection_meta = AsyncMock(return_value=meta)
+
+    embedder_cache = MagicMock()
+    embedder_cache.get_or_load = AsyncMock(return_value=fake_embedder)
+
+    pipeline = MagicMock()
+    pipeline.ingest_file = AsyncMock(return_value=MagicMock())
+    pipeline.ingest_directory = AsyncMock(return_value=[])
+
+    config = MagicMock()
+    config.embedding_model = config_model
+
+    return search_store, embedder_cache, pipeline, config, fake_embedder
+
+
+@pytest.mark.anyio
+async def test_default_ingest_task_reads_embedder_from_collection_meta(
+    tmp_path: Path,
+) -> None:
+    """_default_ingest_task resolves the embedder from active_embedding_model on CollectionMeta."""
+    from archon_search.server.routes_jobs import _default_ingest_task
+
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create()
+    body = IngestRequest(collection="col")
+    search_store, embedder_cache, pipeline, config, _ = _make_ingest_mocks(active_model="model-X")
+
+    await _default_ingest_task(
+        job.job_id, store, body,
+        search_store=search_store, embedder_cache=embedder_cache,
+        pipeline=pipeline, config=config,
+    )
+
+    embedder_cache.get_or_load.assert_called_once_with("model-X")
+
+
+@pytest.mark.anyio
+async def test_default_ingest_task_does_not_use_target_embedding_model(
+    tmp_path: Path,
+) -> None:
+    """_default_ingest_task reads from CollectionMeta, not from any 'target_embedding_model' field."""
+    from archon_search.server.routes_jobs import _default_ingest_task
+
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create()
+    body = IngestRequest(collection="col")
+    search_store, embedder_cache, pipeline, config, _ = _make_ingest_mocks(active_model="model-X")
+
+    await _default_ingest_task(
+        job.job_id, store, body,
+        search_store=search_store, embedder_cache=embedder_cache,
+        pipeline=pipeline, config=config,
+    )
+
+    # "model-Y" is a hypothetical target model — must never be used
+    for call_args in embedder_cache.get_or_load.call_args_list:
+        assert call_args[0][0] != "model-Y"
+
+
+@pytest.mark.anyio
+async def test_default_ingest_task_with_lock_reads_embedder_from_collection_meta(
+    tmp_path: Path,
+) -> None:
+    """_default_ingest_task_with_lock also reads embedder from CollectionMeta.active_embedding_model."""
+    from archon_search.server.routes_jobs import _default_ingest_task_with_lock
+
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create()
+    body = IngestRequest(collection="col")
+    search_store, embedder_cache, pipeline, config, _ = _make_ingest_mocks(active_model="model-X")
+
+    await _default_ingest_task_with_lock(
+        job.job_id, store, body,
+        search_store=search_store, embedder_cache=embedder_cache,
+        pipeline=pipeline, config=config,
+    )
+
+    embedder_cache.get_or_load.assert_called_once_with("model-X")
+
+
+@pytest.mark.anyio
+async def test_default_ingest_task_empty_active_model_uses_global_fallback(
+    tmp_path: Path,
+) -> None:
+    """When active_embedding_model is empty, falls back to config.embedding_model."""
+    from archon_search.server.routes_jobs import _default_ingest_task
+
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create()
+    body = IngestRequest(collection="col")
+    search_store, embedder_cache, pipeline, config, _ = _make_ingest_mocks(
+        active_model="", config_model="global-default"
+    )
+
+    await _default_ingest_task(
+        job.job_id, store, body,
+        search_store=search_store, embedder_cache=embedder_cache,
+        pipeline=pipeline, config=config,
+    )
+
+    embedder_cache.get_or_load.assert_called_once_with("global-default")
+
+
+@pytest.mark.anyio
+async def test_default_ingest_task_file_path_calls_ingest_file(
+    tmp_path: Path,
+) -> None:
+    """When body.path points to a file, pipeline.ingest_file is called."""
+    from archon_search.server.routes_jobs import _default_ingest_task
+
+    # Create a real file so is_file() returns True
+    test_file = tmp_path / "doc.md"
+    test_file.write_text("hello")
+
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create()
+    body = IngestRequest(collection="col", path=str(test_file))
+    search_store, embedder_cache, pipeline, config, fake_embedder = _make_ingest_mocks(
+        active_model="model-X"
+    )
+
+    await _default_ingest_task(
+        job.job_id, store, body,
+        search_store=search_store, embedder_cache=embedder_cache,
+        pipeline=pipeline, config=config,
+    )
+
+    pipeline.ingest_file.assert_called_once()
+    call_kwargs = pipeline.ingest_file.call_args
+    # First positional arg is the Path
+    assert call_kwargs[0][0] == test_file
+    assert call_kwargs[1]["embedder"] is fake_embedder
+    pipeline.ingest_directory.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_default_ingest_task_dir_path_calls_ingest_directory(
+    tmp_path: Path,
+) -> None:
+    """When body.path points to a directory, pipeline.ingest_directory is called."""
+    from archon_search.server.routes_jobs import _default_ingest_task
+
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create()
+    body = IngestRequest(collection="col", path=str(corpus_dir))
+    search_store, embedder_cache, pipeline, config, fake_embedder = _make_ingest_mocks(
+        active_model="model-X"
+    )
+
+    await _default_ingest_task(
+        job.job_id, store, body,
+        search_store=search_store, embedder_cache=embedder_cache,
+        pipeline=pipeline, config=config,
+    )
+
+    pipeline.ingest_directory.assert_called_once()
+    call_kwargs = pipeline.ingest_directory.call_args
+    assert call_kwargs[0][0] == corpus_dir
+    assert call_kwargs[1]["embedder"] is fake_embedder
+    pipeline.ingest_file.assert_not_called()

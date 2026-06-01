@@ -233,15 +233,23 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         collection=collection_name, path=resolved, ingested_by=ingested_by
     )
 
+    pipeline = getattr(request.app.state, "pipeline", None)
+    embedder_cache = getattr(request.app.state, "embedder_cache", None)
+    config_state = getattr(request.app.state, "config", None)
+
     if lock_result is not None:
         task = asyncio.create_task(
             _default_ingest_task_with_lock(
-                job.job_id, store, ingest_body, namespace=ns, held_lock=lock_result
+                job.job_id, store, ingest_body, namespace=ns, held_lock=lock_result,
+                search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config_state,
             )
         )
     else:
         task = asyncio.create_task(
-            _default_ingest_task(job.job_id, store, ingest_body, namespace=ns)
+            _default_ingest_task(
+                job.job_id, store, ingest_body, namespace=ns,
+                search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config_state,
+            )
         )
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
@@ -537,7 +545,15 @@ async def reindex_collection(name: str, request: Request) -> JobResponse | JSONR
     except OSError:
         return JSONResponse({"detail": "internal error"}, status_code=500)
     ingest_body = IngestRequest(collection=name, path=resolved, ingested_by=ingested_by)
-    task = asyncio.create_task(_default_ingest_task(job.job_id, store, ingest_body, namespace=ns))
+    pipeline = getattr(request.app.state, "pipeline", None)
+    embedder_cache = getattr(request.app.state, "embedder_cache", None)
+    config_state = getattr(request.app.state, "config", None)
+    task = asyncio.create_task(
+        _default_ingest_task(
+            job.job_id, store, ingest_body, namespace=ns,
+            search_store=search_store, embedder_cache=embedder_cache, pipeline=pipeline, config=config_state,
+        )
+    )
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
 
