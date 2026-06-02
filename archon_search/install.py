@@ -219,7 +219,10 @@ def _prewarm_models(profile: InstallProfile, timeout: int | None = None) -> None
     """
     import fastembed  # noqa: PLC0415 — lazy; not installed at import time
     TextEmbedding = fastembed.TextEmbedding  # noqa: N806
-    TextCrossEncoder = fastembed.TextCrossEncoder  # noqa: N806
+    try:
+        TextCrossEncoder = fastembed.TextCrossEncoder  # noqa: N806
+    except AttributeError:
+        from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
 
     if timeout is None:
         timeout = _prewarm_timeout(profile)
