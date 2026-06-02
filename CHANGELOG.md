@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [26.6.707] - 2026-06-02
+
+**CI fix for CalVer tag parsing in initial release backfill**
+
+- Fixed `git-cliff` OID parsing error when generating initial release notes — dotted CalVer version tags (e.g. `26.5.333`) are not valid git object IDs. Now uses git range syntax (`..${TAG}`) instead of bare tag names to correctly reference the tag as a range endpoint, allowing proper commit backfill for first releases.
+
+
 ## [26.6.705] - 2026-06-02
 
 **Evaluation baseline recalibration and test suite fixes**
