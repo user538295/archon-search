@@ -1,6 +1,15 @@
 # Changelog
 
 
+## [26.6.710] - 2026-06-02
+
+**fastembed 0.8.0 compatibility + wizard command**
+
+**Installation & Setup**
+- Fixed cross-encoder import fallback for fastembed 0.8.0, which moved `TextCrossEncoder` from top-level to `fastembed.rerank.cross_encoder`; pre-warm now succeeds regardless of fastembed version
+- Added `archon-search wizard` as the recommended post-install entry point, consolidating shared CLI options into a reusable decorator and improving first-run UX
+
+
 ## [26.6.707] - 2026-06-02
 
 **CI fix for CalVer tag parsing in initial release backfill**
