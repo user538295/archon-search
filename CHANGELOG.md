@@ -1,6 +1,20 @@
 # Changelog
 
 
+## [26.6.705] - 2026-06-02
+
+**Evaluation baseline recalibration and test suite fixes**
+
+**Evaluation & Metrics Calibration**
+
+- Fixed baseline calibration in `regenerate.py` to match pytest stub environment, eliminating inconsistency between local measurement and gated CI runs. The script now installs `_search_stubs` before calibrating, ensuring routing centroids are computed under the same chunking strategy (`_FakeRecursiveChunker` word-count splitter) as CI tests. Retrieval metrics improved to `recall_at_3: 0.9630`, `recall_at_5: 1.0`, `ndcg_at_5/10: 0.9879`; routing metrics floor values updated to reflect new measured baselines (`routing_accuracy: 0.9394`, `routing_mrr_centroid: 0.6667`).
+
+**Test Suite & CI**
+
+- Updated evaluation test files to reflect C1 pipeline/meta field renames: `pipeline._embedder` → `pipeline._global_embedder` and `CollectionMeta(embedding_model=...)` → `active_embedding_model=...`. Fixes `AttributeError`/`TypeError` failures in the `live_eval` suite.
+- Excluded `live_eval` marker from default CI test suite. Live evaluation tests require real model weights (fastembed + cross-encoder) and are now gated to explicit `uv run pytest -m live_eval` invocation, preventing artifact download failures in standard CI runs.
+
+
 ## [26.6.701] - 2026-06-01
 
 **OpenAPI schema alignment + CI release automation**
