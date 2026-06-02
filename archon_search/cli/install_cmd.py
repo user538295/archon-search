@@ -18,17 +18,23 @@ def _get_db_path(config_path: Path | None = None) -> Path:
     return Path(cfg.db_path).expanduser()
 
 
-@click.command()
-@click.option("--profile", type=click.Choice(["minimal", "balanced", "max"]), default=None, help="Install profile")
-@click.option("--multilingual", is_flag=True, default=False, help="Use multilingual models")
-@click.option("--skip-preload", is_flag=True, default=False, help="Skip model pre-download")
-@click.option("--force", is_flag=True, default=False, help="Force reinstall")
-@click.option("--delete-db", is_flag=True, default=False, help="Delete database on reinstall")
-@click.option("--dry-run", is_flag=True, default=False, help="Print actions without executing")
-@click.option("--non-interactive", is_flag=True, default=False, help="Skip interactive prompts")
-@click.option("--accept-jina-license", is_flag=True, default=False, help="Accept Jina CC-BY-NC-4.0 license")
-@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
-def install(
+def _install_options(f: click.decorators.FC) -> click.decorators.FC:
+    for decorator in reversed([
+        click.option("--profile", type=click.Choice(["minimal", "balanced", "max"]), default=None, help="Install profile"),
+        click.option("--multilingual", is_flag=True, default=False, help="Use multilingual models"),
+        click.option("--skip-preload", is_flag=True, default=False, help="Skip model pre-download"),
+        click.option("--force", is_flag=True, default=False, help="Force reinstall"),
+        click.option("--delete-db", is_flag=True, default=False, help="Delete database on reinstall"),
+        click.option("--dry-run", is_flag=True, default=False, help="Print actions without executing"),
+        click.option("--non-interactive", is_flag=True, default=False, help="Skip interactive prompts"),
+        click.option("--accept-jina-license", is_flag=True, default=False, help="Accept Jina CC-BY-NC-4.0 license"),
+        click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml"),
+    ]):
+        f = decorator(f)
+    return f
+
+
+def _run_installer(
     profile: str | None,
     multilingual: bool,
     skip_preload: bool,
@@ -39,7 +45,6 @@ def install(
     accept_jina_license: bool,
     config_path: Path | None,
 ) -> None:
-    """Install archon-search service."""
     sys.exit(
         SearchInstaller(
             config_file=str(config_path) if config_path else None,
@@ -54,6 +59,40 @@ def install(
             accept_jina_license=accept_jina_license,
         )
     )
+
+
+@click.command()
+@_install_options
+def wizard(
+    profile: str | None,
+    multilingual: bool,
+    skip_preload: bool,
+    force: bool,
+    delete_db: bool,
+    dry_run: bool,
+    non_interactive: bool,
+    accept_jina_license: bool,
+    config_path: Path | None,
+) -> None:
+    """Interactive setup wizard: choose a profile, download models, start service."""
+    _run_installer(profile, multilingual, skip_preload, force, delete_db, dry_run, non_interactive, accept_jina_license, config_path)
+
+
+@click.command()
+@_install_options
+def install(
+    profile: str | None,
+    multilingual: bool,
+    skip_preload: bool,
+    force: bool,
+    delete_db: bool,
+    dry_run: bool,
+    non_interactive: bool,
+    accept_jina_license: bool,
+    config_path: Path | None,
+) -> None:
+    """Install archon-search service."""
+    _run_installer(profile, multilingual, skip_preload, force, delete_db, dry_run, non_interactive, accept_jina_license, config_path)
 
 
 @click.command()

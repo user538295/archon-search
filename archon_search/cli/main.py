@@ -5,7 +5,7 @@ import click
 from archon_search.cli.collection import collection
 from archon_search.cli.config_cmd import config
 from archon_search.cli.ingest import ingest
-from archon_search.cli.install_cmd import install, uninstall
+from archon_search.cli.install_cmd import install, uninstall, wizard
 from archon_search.cli.start import start
 from archon_search.cli.status import status
 from archon_search.cli.stop import stop
@@ -26,6 +26,7 @@ def main() -> None:
 main.add_command(start)
 main.add_command(stop)
 main.add_command(status)
+main.add_command(wizard)
 main.add_command(install)
 main.add_command(uninstall)
 main.add_command(ingest)

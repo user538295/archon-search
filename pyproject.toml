@@ -1,6 +1,7 @@
 [project]
 name = "archon-search"
 dynamic = ["version"]
+readme = "README.md"
 description = "Standalone hybrid retrieval + routing server: LanceDB, fastembed, cross-encoder reranker, FastAPI"
 requires-python = ">=3.12"
 dependencies = [
