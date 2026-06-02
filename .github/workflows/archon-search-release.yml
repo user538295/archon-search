@@ -206,7 +206,7 @@ jobs:
             for i in "${!TAGS[@]}"; do
               [[ "${TAGS[$i]}" == "$tag" ]] || continue
               if [[ $i -eq 0 ]]; then
-                range="${TAGS[0]}"
+                range="..${TAGS[0]}"
               else
                 range="${TAGS[$((i-1))]}..${TAGS[$i]}"
               fi
