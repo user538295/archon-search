@@ -184,8 +184,30 @@ class TestDetectGpuType:
 
 
 class TestGetSearchService:
-    def test_get_search_service_raises_not_implemented(self) -> None:
+    def test_get_search_service_returns_lifecycle_instance(self) -> None:
+        import platform as _platform
+        from unittest.mock import patch
+
+        from archon_search.platform.runtime import get_search_service
+        from archon_search.platform.service import SearchServiceLifecycle
+
+        # Verify each supported platform returns a SearchServiceLifecycle subclass.
+        for system, expected_cls_name in [
+            ("Darwin", "LaunchdSearchService"),
+            ("Linux", "SystemdSearchService"),
+            ("Windows", "WindowsSearchService"),
+        ]:
+            with patch.object(_platform, "system", return_value=system):
+                svc = get_search_service()
+            assert isinstance(svc, SearchServiceLifecycle)
+            assert type(svc).__name__ == expected_cls_name
+
+    def test_get_search_service_unknown_platform_raises(self) -> None:
+        import platform as _platform
+        from unittest.mock import patch
+
         from archon_search.platform.runtime import get_search_service
 
-        with pytest.raises(NotImplementedError):
-            get_search_service()
+        with patch.object(_platform, "system", return_value="FreeBSD"):
+            with pytest.raises(NotImplementedError, match="FreeBSD"):
+                get_search_service()

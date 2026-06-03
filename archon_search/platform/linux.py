@@ -44,21 +44,27 @@ class SystemdSearchService(SearchServiceLifecycle):
     def _run(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(cmd, capture_output=True, text=True)
 
-    def start(self) -> None:
+    def start(self, dry_run: bool = False) -> int:
+        if dry_run:
+            return 0
         try:
             result = self._run(["systemctl", "--user", "start", _SERVICE_NAME])
             if result.returncode != 0:
                 raise RuntimeError(f"systemctl start failed (rc={result.returncode}): {result.stderr}")
         except FileNotFoundError as exc:
             raise RuntimeError("systemctl binary not found") from exc
+        return 0
 
-    def stop(self) -> None:
+    def stop(self, dry_run: bool = False) -> int:
+        if dry_run:
+            return 0
         try:
             result = self._run(["systemctl", "--user", "stop", _SERVICE_NAME])
             if result.returncode != 0:
                 raise RuntimeError(f"systemctl stop failed (rc={result.returncode}): {result.stderr}")
         except FileNotFoundError as exc:
             raise RuntimeError("systemctl binary not found") from exc
+        return 0
 
     def status(self) -> ServiceStatus:
         try:
@@ -88,7 +94,9 @@ class SystemdSearchService(SearchServiceLifecycle):
         pid = int(match.group(1))
         return pid if pid != 0 else None
 
-    def register(self) -> None:
+    def register(self, dry_run: bool = False) -> None:
+        if dry_run:
+            return
         cwd = str(Path.home() / ".archon-search")
         config_path = str(Path.home() / ".archon-search" / "archon-search.toml")
 
@@ -123,7 +131,9 @@ class SystemdSearchService(SearchServiceLifecycle):
         except FileNotFoundError as exc:
             raise RuntimeError("systemctl binary not found") from exc
 
-    def restart(self) -> None:
+    def restart(self, dry_run: bool = False) -> None:
+        if dry_run:
+            return
         try:
             result = self._run(["systemctl", "--user", "restart", _SERVICE_NAME])
             if result.returncode != 0:
@@ -131,7 +141,9 @@ class SystemdSearchService(SearchServiceLifecycle):
         except FileNotFoundError as exc:
             raise RuntimeError("systemctl binary not found") from exc
 
-    def unregister(self) -> None:
+    def unregister(self, dry_run: bool = False) -> None:
+        if dry_run:
+            return
         try:
             self._run(["systemctl", "--user", "stop", _SERVICE_NAME])
             self._run(["systemctl", "--user", "disable", _SERVICE_NAME])

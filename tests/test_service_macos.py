@@ -395,8 +395,8 @@ def test_restart_calls_stop_then_start() -> None:
     svc = LaunchdSearchService()
     calls: list[str] = []
     with (
-        patch.object(svc, "stop", side_effect=lambda: calls.append("stop")),
-        patch.object(svc, "start", side_effect=lambda: calls.append("start")),
+        patch.object(svc, "stop", side_effect=lambda **_: calls.append("stop")),
+        patch.object(svc, "start", side_effect=lambda **_: calls.append("start")),
     ):
         svc.restart()
     assert calls == ["stop", "start"]

@@ -10,19 +10,21 @@ class ConcreteService(SearchServiceLifecycle):
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def start(self) -> None:
+    def start(self, dry_run: bool = False) -> int:
         self.calls.append("start")
+        return 0
 
-    def stop(self) -> None:
+    def stop(self, dry_run: bool = False) -> int:
         self.calls.append("stop")
+        return 0
 
     def status(self) -> ServiceStatus:
         return ServiceStatus(running=True, pid=1, uptime_seconds=0.0)
 
-    def register(self) -> None:
+    def register(self, dry_run: bool = False) -> None:
         self.calls.append("register")
 
-    def unregister(self) -> None:
+    def unregister(self, dry_run: bool = False) -> None:
         self.calls.append("unregister")
 
 

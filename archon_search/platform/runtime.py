@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from archon_search.platform.service import SearchServiceLifecycle
 from archon_search.platform.types import GpuType
 
 _runtime_singleton: SearchRuntime | None = None
@@ -58,9 +59,16 @@ def get_runtime() -> SearchRuntime:
     return _runtime_singleton
 
 
-def get_search_service() -> None:  # type: ignore[return]
-    """Placeholder — service lifecycle is implemented in Phase 3 (Tasks 3.1–3.4)."""
-    raise NotImplementedError(
-        "archon-search service lifecycle is not yet implemented. "
-        "Use `archon-search start/stop` CLI once Phase 3 is complete."
-    )
+def get_search_service() -> SearchServiceLifecycle:
+    """Return the platform-appropriate service lifecycle implementation."""
+    system = platform.system()
+    if system == "Darwin":
+        from archon_search.platform.macos import LaunchdSearchService  # noqa: PLC0415
+        return LaunchdSearchService()
+    if system == "Linux":
+        from archon_search.platform.linux import SystemdSearchService  # noqa: PLC0415
+        return SystemdSearchService()
+    if system == "Windows":
+        from archon_search.platform.windows import WindowsSearchService  # noqa: PLC0415
+        return WindowsSearchService()
+    raise NotImplementedError(f"Service lifecycle not implemented for platform: {system}")

@@ -67,10 +67,13 @@ class LaunchdSearchService(SearchServiceLifecycle):
         except FileNotFoundError:
             return False
 
-    def register(self) -> None:
+    def register(self, dry_run: bool = False) -> None:
         cwd = str(Path.home() / ".archon-search")
         config_path = str(Path.home() / ".archon-search" / "archon-search.toml")
         log_path = str(Path.home() / ".archon-search" / "logs" / "archon-search.log")
+
+        if dry_run:
+            return
 
         content = _PLIST_TEMPLATE.format(
             label=_LABEL,
@@ -87,7 +90,9 @@ class LaunchdSearchService(SearchServiceLifecycle):
         except PermissionError as e:
             raise RuntimeError(f"Permission denied writing {self._plist_path}") from e
 
-    def unregister(self) -> None:
+    def unregister(self, dry_run: bool = False) -> None:
+        if dry_run:
+            return
         if self._is_loaded():
             try:
                 result = self._run(["launchctl", "unload", str(self._plist_path)])
@@ -98,11 +103,13 @@ class LaunchdSearchService(SearchServiceLifecycle):
         if self._plist_path.exists():
             self._plist_path.unlink()
 
-    def start(self) -> None:
+    def start(self, dry_run: bool = False) -> int:
+        if dry_run:
+            return 0
         if not self._plist_path.exists():
             raise RuntimeError(f"Plist not installed at {self._plist_path}")
         if self._is_loaded():
-            return
+            return 0
         try:
             r1 = self._run(["launchctl", "load", str(self._plist_path)])
             if r1.returncode != 0:
@@ -112,16 +119,20 @@ class LaunchdSearchService(SearchServiceLifecycle):
                 raise RuntimeError(f"launchctl start failed (rc={r2.returncode}): {r2.stderr}")
         except FileNotFoundError as exc:
             raise RuntimeError("launchctl binary not found") from exc
+        return 0
 
-    def stop(self) -> None:
+    def stop(self, dry_run: bool = False) -> int:
+        if dry_run:
+            return 0
         if not self._is_loaded():
-            return
+            return 0
         try:
             result = self._run(["launchctl", "unload", str(self._plist_path)])
             if result.returncode != 0:
                 raise RuntimeError(f"launchctl unload failed (rc={result.returncode}): {result.stderr}")
         except FileNotFoundError as exc:
             raise RuntimeError("launchctl binary not found") from exc
+        return 0
 
     def status(self) -> ServiceStatus:
         try:

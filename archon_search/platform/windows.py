@@ -7,19 +7,19 @@ _MSG = "Windows service management not yet supported — run archon-search start
 
 
 class WindowsSearchService(SearchServiceLifecycle):
-    def start(self) -> None:
+    def start(self, dry_run: bool = False) -> int:
         raise NotImplementedError(_MSG)
 
-    def stop(self) -> None:
+    def stop(self, dry_run: bool = False) -> int:
         raise NotImplementedError(_MSG)
 
-    def restart(self) -> None:
+    def restart(self, dry_run: bool = False) -> None:
         raise NotImplementedError(_MSG)
 
-    def register(self) -> None:
+    def register(self, dry_run: bool = False) -> None:
         raise NotImplementedError(_MSG)
 
-    def unregister(self) -> None:
+    def unregister(self, dry_run: bool = False) -> None:
         raise NotImplementedError(_MSG)
 
     def status(self) -> ServiceStatus:
