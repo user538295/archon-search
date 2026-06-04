@@ -957,6 +957,43 @@ class SearchInstaller:
             return 0
 
     # ------------------------------------------------------------------
+    # Register-and-start flow (used by `archon-search install`)
+    # ------------------------------------------------------------------
+
+    def run_register_and_start(self) -> int:
+        """Register and start the service. Requires wizard to have been run first.
+
+        Returns 0 on success, non-zero on failure.
+        """
+        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
+        if not config_path.exists():
+            click.echo(
+                "No configuration found. Run 'archon-search wizard' first to choose a profile"
+                " and download models.",
+                err=True,
+            )
+            return 1
+
+        self.write_service_file()
+        rc = self.load_service()
+        if rc != 0:
+            click.echo(f"Service start returned exit code {rc}.", err=True)
+            return rc
+
+        if not self.dry_run:
+            ready = self._wait_for_service()
+            if not ready:
+                click.echo(
+                    f"Warning: Search service did not become ready within"
+                    f" {_WAIT_FOR_SERVICE_TIMEOUT} seconds.",
+                    err=True,
+                )
+                return 1
+
+        click.echo("archon-search service registered and running.")
+        return 0
+
+    # ------------------------------------------------------------------
     # Uninstall flow
     # ------------------------------------------------------------------
 

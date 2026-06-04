@@ -79,20 +79,19 @@ def wizard(
 
 
 @click.command()
-@_install_options
-def install(
-    profile: str | None,
-    multilingual: bool,
-    skip_preload: bool,
-    force: bool,
-    delete_db: bool,
-    dry_run: bool,
-    non_interactive: bool,
-    accept_jina_license: bool,
-    config_path: Path | None,
-) -> None:
-    """Install archon-search service."""
-    _run_installer(profile, multilingual, skip_preload, force, delete_db, dry_run, non_interactive, accept_jina_license, config_path)
+@click.option("--dry-run", is_flag=True, default=False, help="Print actions without executing")
+@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
+def install(dry_run: bool, config_path: Path | None) -> None:
+    """Register and start the archon-search service.
+
+    Run 'archon-search wizard' first to choose a profile and download models.
+    """
+    import sys
+    rc = SearchInstaller(
+        config_file=str(config_path) if config_path else None,
+        dry_run=dry_run,
+    ).run_register_and_start()
+    sys.exit(rc)
 
 
 @click.command()

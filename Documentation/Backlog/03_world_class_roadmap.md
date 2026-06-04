@@ -66,14 +66,14 @@ Goal: stand up the measurement surface before adding ranking features, and ship 
 - [x] **B3. Server-side multi-collection search primitive (item 8)** — embed the query once; one merge + rerank pass across collections. Co-designed with `/explain` (A4) so the routing path is debuggable.
 - [x] **B4. Stronger collection routing (item 9)** — description-embedding + centroid hybrid blend shipped; centroid remains the default (`routing_strategy = "centroid"`), hybrid is opt-in via `routing_strategy = "hybrid"` + `routing_description_weight`. One new artifact: `CollectionMeta.description_embedding` stored per-collection and used by the router in hybrid mode. Multi-centroid routing (per-cluster centroids for diffuse corpora) deferred to a future item; roadmap item 9's multi-centroid scope is narrowed to this single-artifact implementation. Gated by the eval harness (`routing_mrr_hybrid ≥ routing_mrr_centroid` baseline).
 - [x] **B5. Hardening: incremental centroid update (`CON-4`, item 17)** — incremental `(centroid_sum, chunk_count)` maintenance at store layer — three concrete defects fixed (batch-only overwrite, delete-ignores-centroid, O(chunks) sync-path rescan). Ingest is O(batch); delete is O(chunks-in-document); O(chunks) full scan retained only for explicit `recompute_collection_meta` (reindex, crash recovery, drift reset). Controlled by `centroid_incremental_enabled` flag (default `True`).
-- [ ] **B6. Hardening: production-model eval lane (`EVL-1`, item 4 follow-up)** — `live`-marker job on tag pushes that runs the eval harness against the real embedder/reranker (not the deterministic stubs). Gated by `tests/eval/thresholds.toml`.
-- [ ] **B7. Hardening: structured logs + log rotation (item 25)** — JSON log option, telemetry JSONL rotation policy beyond retention-day pruning.
+- [x] **B6. Hardening: production-model eval lane (`EVL-1`, item 4 follow-up)** — `live`-marker job on tag pushes that runs the eval harness against the real embedder/reranker (not the deterministic stubs). Gated by `tests/eval/thresholds.toml`.
+- [x] **B7. Hardening: structured logs + log rotation (item 25)** — JSON log option, telemetry JSONL rotation policy beyond retention-day pruning.
 
 ## Phase C — Quality features (ranking leaps, gated by the eval harness)
 
 Goal: ship the features users actually came for. Each item must show a measurable eval lift to land.
 
-- [ ] **C1. Per-collection embedding model (item 13)** — honour `CollectionMeta.embedding_model` at ingest and query; reject or downgrade cross-model routing explicitly; collection-level reindex workflow.
+- [x] **C1. Per-collection embedding model (item 13)** — honour `CollectionMeta.embedding_model` at ingest and query; reject or downgrade cross-model routing explicitly; collection-level reindex workflow.
 - [ ] **C2. Multilingual retrieval (item 14)** — multilingual embedding option, language metadata on chunks, language-aware FTS/tokenisation where the backend supports it.
 - [ ] **C3. Chunk-level enrichment at ingest (item 19)** — local title / section path / heading ancestry / page / source-subtype / code-symbol context. Drives both ranking and filter quality.
 - [ ] **C4. HyDE / query expansion (item 10)** — optional, opt-in; must clear the eval-harness bar before becoming default.

@@ -519,3 +519,79 @@ def test_run_calls_legacy_service_cleanup(tmp_path: Path) -> None:
         )
 
     remove_legacy_mock.assert_called_once_with(fake_legacy)
+
+
+# ---------------------------------------------------------------------------
+# run_register_and_start() — new method for `archon-search install`
+# ---------------------------------------------------------------------------
+
+
+def test_run_register_and_start_no_config_returns_1(tmp_path: Path) -> None:
+    config_path = tmp_path / "archon-search.toml"
+    assert not config_path.exists()
+
+    installer = SearchInstaller(config_file=str(config_path))
+    rc = installer.run_register_and_start()
+
+    assert rc == 1
+
+
+def test_run_register_and_start_with_config_registers_and_starts(tmp_path: Path) -> None:
+    from archon_search.install import _profile_toml
+
+    config_path = tmp_path / "archon-search.toml"
+    config_path.write_text(_profile_toml("minimal", False))
+
+    write_svc_mock = MagicMock()
+    load_svc_mock = MagicMock(return_value=0)
+    wait_mock = MagicMock(return_value=True)
+
+    with (
+        patch.object(SearchInstaller, "write_service_file", write_svc_mock),
+        patch.object(SearchInstaller, "load_service", load_svc_mock),
+        patch.object(SearchInstaller, "_wait_for_service", wait_mock),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run_register_and_start()
+
+    assert rc == 0
+    write_svc_mock.assert_called_once()
+    load_svc_mock.assert_called_once()
+    wait_mock.assert_called_once()
+
+
+def test_run_register_and_start_service_start_failure_returns_nonzero(tmp_path: Path) -> None:
+    from archon_search.install import _profile_toml
+
+    config_path = tmp_path / "archon-search.toml"
+    config_path.write_text(_profile_toml("minimal", False))
+
+    with (
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=2),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run_register_and_start()
+
+    assert rc == 2
+
+
+def test_run_register_and_start_dry_run_skips_wait(tmp_path: Path) -> None:
+    from archon_search.install import _profile_toml
+
+    config_path = tmp_path / "archon-search.toml"
+    config_path.write_text(_profile_toml("minimal", False))
+
+    wait_mock = MagicMock(return_value=True)
+
+    with (
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", wait_mock),
+    ):
+        installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+        rc = installer.run_register_and_start()
+
+    assert rc == 0
+    wait_mock.assert_not_called()

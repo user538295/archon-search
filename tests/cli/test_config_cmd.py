@@ -116,33 +116,39 @@ def test_config_show_defaults_include_all_sections(runner: CliRunner, tmp_path: 
 # install subcommand
 # ---------------------------------------------------------------------------
 
-def test_install_delegates_to_search_installer(runner: CliRunner) -> None:
-    """install command is a thin shim — verify SearchInstaller.run() is called."""
+def test_install_delegates_to_search_installer(runner: CliRunner, tmp_path: Path) -> None:
+    """install command is a thin shim — verify run_register_and_start() is called."""
+    config_path = tmp_path / "archon-search.toml"
+    config_path.write_text("[database]\n")
     run_mock = MagicMock(return_value=0)
     with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
-        installer_cls.return_value.run = run_mock
-        result = runner.invoke(main, ["install", "--non-interactive"])
+        installer_cls.return_value.run_register_and_start = run_mock
+        result = runner.invoke(main, ["install", "--config", str(config_path)])
     assert result.exit_code == 0, result.output
     run_mock.assert_called_once()
 
 
-def test_install_dry_run_passed_to_installer(runner: CliRunner) -> None:
+def test_install_dry_run_passed_to_installer(runner: CliRunner, tmp_path: Path) -> None:
     """--dry-run flag is forwarded to SearchInstaller constructor."""
+    config_path = tmp_path / "archon-search.toml"
+    config_path.write_text("[database]\n")
     run_mock = MagicMock(return_value=0)
     with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
-        installer_cls.return_value.run = run_mock
-        result = runner.invoke(main, ["install", "--non-interactive", "--dry-run"])
+        installer_cls.return_value.run_register_and_start = run_mock
+        result = runner.invoke(main, ["install", "--config", str(config_path), "--dry-run"])
     assert result.exit_code == 0, result.output
     _, kwargs = installer_cls.call_args
     assert kwargs.get("dry_run") is True
 
 
 def test_install_migrates_legacy_service_definition(runner: CliRunner, mock_service: MagicMock, tmp_path: Path) -> None:
-    """Legacy service migration is handled inside SearchInstaller.run()."""
+    """Legacy service migration is now the wizard's responsibility; install just registers."""
+    config_path = tmp_path / "archon-search.toml"
+    config_path.write_text("[database]\n")
     run_mock = MagicMock(return_value=0)
     with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
-        installer_cls.return_value.run = run_mock
-        result = runner.invoke(main, ["install", "--non-interactive"])
+        installer_cls.return_value.run_register_and_start = run_mock
+        result = runner.invoke(main, ["install", "--config", str(config_path)])
     assert result.exit_code == 0, result.output
     run_mock.assert_called_once()
 
