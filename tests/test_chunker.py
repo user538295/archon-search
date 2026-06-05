@@ -170,3 +170,32 @@ def test_chunk_requires_keyword_args() -> None:
             "Hello world.", "doc1", "/tmp/doc1.md",
             "md", "2026-05-21T00:00:00+00:00", "cli",
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 6.1 — language kwarg propagation
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_language_propagated() -> None:
+    """language='fr' is set on every returned ChunkRecord."""
+    chunker = DocumentChunker()
+    records = chunker.chunk("Bonjour le monde.", "doc1", "/tmp/doc1.md", language="fr", **_DEFAULT_KW)
+    assert records
+    assert all(r.language == "fr" for r in records)
+
+
+def test_chunk_language_defaults_to_empty() -> None:
+    """Omitting language kwarg results in language='' on every ChunkRecord."""
+    chunker = DocumentChunker()
+    records = chunker.chunk("Hello world.", "doc1", "/tmp/doc1.md", **_DEFAULT_KW)
+    assert records
+    assert all(r.language == "" for r in records)
+
+
+def test_chunk_language_unknown() -> None:
+    """language='unknown' is set on every returned ChunkRecord."""
+    chunker = DocumentChunker()
+    records = chunker.chunk("Some ambiguous text.", "doc1", "/tmp/doc1.md", language="unknown", **_DEFAULT_KW)
+    assert records
+    assert all(r.language == "unknown" for r in records)

@@ -312,7 +312,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 > **Releasable**: after Task 6.2; ingested documents receive language tags on all chunks.
 
 #### Task 6.1 — Add `language` parameter to `DocumentChunker.chunk()`
-- [ ] **File**: `archon_search/chunker.py`
+- [x] **File**: `archon_search/chunker.py`
 - **Depends on**: Task 2.3 (ChunkRecord.language is `str = ""`)
 - **Description**:
   - Add keyword-only parameter `language: str = ""` to `chunk()` signature: `def chunk(self, text, doc_id, source_path, *, file_type, updated_at, ingested_by, language: str = "") -> list[ChunkRecord]:`

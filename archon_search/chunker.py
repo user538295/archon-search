@@ -23,6 +23,7 @@ class DocumentChunker:
         file_type: str,
         updated_at: str,
         ingested_by: IngestedBy,
+        language: str = "",
     ) -> list[ChunkRecord]:
         """Split text into ChunkRecords.
 
@@ -31,6 +32,10 @@ class DocumentChunker:
 
         ``file_type``, ``updated_at``, ``ingested_by`` are keyword-only and required;
         every call site must supply them deliberately (Task 3.3 wires the callers).
+
+        ``language`` is keyword-only with default ``""`` (untagged/legacy).  Pass the
+        ISO 639-1 / ISO 639-3 code (or ``"unknown"``) from language detection; all
+        produced ChunkRecords will carry that tag.
         """
         if not text or not text.strip():
             return []
@@ -48,6 +53,7 @@ class DocumentChunker:
                 file_type=file_type,
                 updated_at=updated_at,
                 ingested_by=ingested_by,
+                language=language,
             )
             for chunk in chunks
         ]
