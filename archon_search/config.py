@@ -64,6 +64,8 @@ class SearchConfig:
     # [database] — C0 tiered install profiles
     profile: str = ""
     multilingual: bool = False
+    # [database] — C2 multilingual language detection
+    language_detection_confidence_threshold: float = 0.7
     # [database] — C1 per-collection embedding model
     embedder_cache_size: int = 3
     eager_load_embedders: bool = False
@@ -207,6 +209,17 @@ def load_config(path: Path | None = None) -> SearchConfig:
         config.profile = str(database["profile"])
     if "multilingual" in database:
         config.multilingual = _coerce_bool(database["multilingual"], "multilingual")
+    if "language_detection_confidence_threshold" in database:
+        ldc_threshold = _coerce_float(
+            database["language_detection_confidence_threshold"],
+            "language_detection_confidence_threshold",
+        )
+        # 0.0 is excluded: a zero threshold would accept all detections, making it meaningless.
+        if not (0.0 < ldc_threshold <= 1.0):
+            raise ConfigError(
+                f"language_detection_confidence_threshold must be in (0.0, 1.0], got {ldc_threshold}"
+            )
+        config.language_detection_confidence_threshold = ldc_threshold
     if "embedder_cache_size" in database:
         embedder_cache_size = _coerce_int(database["embedder_cache_size"], "embedder_cache_size")
         if embedder_cache_size < 1:

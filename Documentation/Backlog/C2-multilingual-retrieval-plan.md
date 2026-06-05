@@ -157,7 +157,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
   - Checkpoint: `uv run pytest tests/test_pyproject.py -x`
 
 #### Task 2.2 — Add `language_detection_confidence_threshold` to `SearchConfig`
-- [ ] **File**: `archon_search/config.py`
+- [x] **File**: `archon_search/config.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `language_detection_confidence_threshold: float = 0.7` to `SearchConfig` dataclass

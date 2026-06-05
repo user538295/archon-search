@@ -40,6 +40,9 @@ profile = ""
 # Use multilingual models (requires Jina CC-BY-NC-4.0 license acceptance for balanced/max).
 # Set to true by `archon-search install --multilingual`.
 multilingual = false
+# Minimum fasttext confidence score [0.0 exclusive, 1.0 inclusive] for language detection.
+# Results below this threshold are stored as "unknown" instead of a language code.
+# language_detection_confidence_threshold = 0.7
 
 # Maximum number of embedder model instances to cache in memory (LRU cache, minimum 1).
 # embedder_cache_size = 3

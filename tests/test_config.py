@@ -913,3 +913,55 @@ def test_embedder_cache_size_negative_raises(tmp_path: Path) -> None:
     toml_file.write_text("[database]\nembedder_cache_size = -1\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="embedder_cache_size must be"):
         load_config(path=toml_file)
+
+
+# ---------------------------------------------------------------------------
+# C2 Task 2.2 — language_detection_confidence_threshold config key
+# ---------------------------------------------------------------------------
+
+
+def test_default_confidence_threshold() -> None:
+    config = load_config(path=Path("/nonexistent/path.toml"))
+    assert config.language_detection_confidence_threshold == 0.7
+
+
+def test_custom_confidence_threshold(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\nlanguage_detection_confidence_threshold = 0.5\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.language_detection_confidence_threshold == 0.5
+
+
+def test_confidence_threshold_out_of_range(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\nlanguage_detection_confidence_threshold = 1.5\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="language_detection_confidence_threshold"):
+        load_config(path=toml_file)
+
+
+def test_confidence_threshold_zero(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\nlanguage_detection_confidence_threshold = 0.0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="language_detection_confidence_threshold"):
+        load_config(path=toml_file)
+
+
+def test_confidence_threshold_negative(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\nlanguage_detection_confidence_threshold = -0.1\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="language_detection_confidence_threshold"):
+        load_config(path=toml_file)
+
+
+def test_confidence_threshold_upper_bound(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\nlanguage_detection_confidence_threshold = 1.0\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.language_detection_confidence_threshold == 1.0
+
+
+def test_confidence_threshold_non_numeric_raises(tmp_path: Path) -> None:
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[database]\nlanguage_detection_confidence_threshold = "high"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="language_detection_confidence_threshold"):
+        load_config(path=toml_file)
