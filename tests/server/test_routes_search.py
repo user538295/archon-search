@@ -522,10 +522,10 @@ def test_post_search_invalid_filter_returns_422_with_validator_message(tmp_path:
     assert resp.status_code == 422
     assert resp.json().get("detail"), "422 must include detail for date-range inversion"
 
-    # non-empty language (reserved field)
-    resp = client.post("/search", json={"collection": "col", "query": "q", "filters": {"language": "en"}})
+    # invalid language code (too long — "english" is 7 chars, exceeds 2–3 letter constraint)
+    resp = client.post("/search", json={"collection": "col", "query": "q", "filters": {"language": "english"}})
     assert resp.status_code == 422
-    assert resp.json().get("detail"), "422 must include detail for reserved language field"
+    assert resp.json().get("detail"), "422 must include detail for invalid language code"
 
 
 def test_post_search_no_filter_unchanged_behavior(tmp_path: Path) -> None:

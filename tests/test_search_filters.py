@@ -67,10 +67,47 @@ def test_indexed_after_greater_than_indexed_before_rejected():
         )
 
 
-def test_language_non_empty_rejected_references_c2():
-    with pytest.raises(ValidationError) as exc_info:
-        SearchFilters(language="en")
-    assert "C2" in str(exc_info.value)
+def test_language_filter_none_passthrough():
+    f = SearchFilters(language=None)
+    assert f.language is None
+
+
+def test_language_filter_valid_iso2():
+    f = SearchFilters(language="fr")
+    assert f.language == "fr"
+
+
+def test_language_filter_valid_iso3():
+    f = SearchFilters(language="fra")
+    assert f.language == "fra"
+
+
+def test_language_filter_unknown():
+    f = SearchFilters(language="unknown")
+    assert f.language == "unknown"
+
+
+def test_language_filter_empty_string_coerces_to_none():
+    f = SearchFilters(language="")
+    assert f.language is None
+
+
+def test_language_filter_invalid_code_too_long():
+    with pytest.raises(ValidationError):
+        SearchFilters(language="english")
+
+
+def test_language_filter_uppercase_normalized():
+    f = SearchFilters(language="FR")
+    assert f.language == "fr"
+
+
+def test_language_filter_openapi_description_updated():
+    """language Field description must not contain 'reserved' or 'C2'."""
+    field_info = SearchFilters.model_fields["language"]
+    desc = field_info.description or ""
+    assert "reserved" not in desc, f"description still says 'reserved': {desc}"
+    assert "C2" not in desc, f"description still references 'C2': {desc}"
 
 
 def test_extra_field_rejected():

@@ -26,9 +26,8 @@ class SearchFilters(BaseModel):
     language: str | None = Field(
         default=None,
         description=(
-            "reserved — language extraction is not yet implemented. "
-            "This field is tracked as roadmap item C2. "
-            "Passing a non-empty value raises a validation error."
+            "ISO 639-1 / ISO 639-3 language code to filter by "
+            "(single-collection queries only; 'unknown' is a valid value)."
         ),
     )
     include_metadata: bool = False
@@ -74,11 +73,14 @@ class SearchFilters(BaseModel):
     @field_validator("language")
     @classmethod
     def _validate_language(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
         if v == "":
             return None
-        if v is not None:
-            raise ValueError("language filtering not yet supported (see C2)")
-        return v
+        v = v.lower()
+        if v == "unknown" or re.match(r"^[a-z]{2,3}$", v):
+            return v
+        raise ValueError("language must be a 2–3 letter ISO code or 'unknown'")
 
     @model_validator(mode="after")
     def _coerce_and_validate_dates(self) -> "SearchFilters":

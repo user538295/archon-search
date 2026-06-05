@@ -353,7 +353,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 > **Releasable**: after Task 7.2; `language=fr` queries return filtered results from single-collection search.
 
 #### Task 7.1 — Unlock `SearchFilters.language` in `filters.py`
-- [ ] **File**: `archon_search/filters.py`
+- [x] **File**: `archon_search/filters.py`
 - **Depends on**: Task 2.3 (three-state read path is fixed)
 - **Description**:
   - Replace `_validate_language` validator that raises `ValueError("language filtering not yet supported (see C2)")` with a passthrough validator that:
