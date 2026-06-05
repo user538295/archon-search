@@ -236,7 +236,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 > **Releasable**: after Task 4.3; `archon-search install --multilingual` downloads the fasttext model with license gate.
 
 #### Task 4.1 — `_prompt_fasttext_license()` in `install.py`
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: nothing
 - **Description**:
   - `def _prompt_fasttext_license(non_interactive: bool, accept_fasttext_license: bool = False) -> None`

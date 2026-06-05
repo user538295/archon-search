@@ -483,6 +483,37 @@ def _prompt_jina_license(non_interactive: bool, accept_jina_license: bool = Fals
     raise SystemExit(1)
 
 
+# ---------------------------------------------------------------------------
+# fasttext license gate (Task 4.1)
+# ---------------------------------------------------------------------------
+
+
+def _prompt_fasttext_license(non_interactive: bool, accept_fasttext_license: bool = False) -> None:
+    """Print the fasttext CC-BY-SA 3.0 warning and gate on user / flag acceptance.
+
+    Raises SystemExit(1) if the license is not accepted.
+    Pattern mirrors _prompt_jina_license exactly.
+    """
+    print(
+        "WARNING: lid.176.ftz (fasttext language identification model) is licensed CC-BY-SA 3.0.\n"
+        "This model was created by Facebook Research and redistributed under CC-BY-SA 3.0.\n"
+        "You must comply with its terms for any use."
+    )
+
+    if accept_fasttext_license:
+        return
+
+    if non_interactive:
+        print("Non-interactive mode: fasttext license automatically declined.")
+        raise SystemExit(1)
+
+    response = input("Type 'accept' to confirm license acceptance and continue, or anything else to abort: ")
+    if response.strip().lower() == "accept":
+        return
+    print("License not accepted. Aborting.")
+    raise SystemExit(1)
+
+
 _CHOICE_MAP = {"1": "minimal", "2": "balanced", "3": "max", "": "minimal"}
 
 
