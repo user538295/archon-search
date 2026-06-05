@@ -55,3 +55,8 @@
 {"doc_id": "faq-005", "collection": "faq", "relative_path": "faq/common_error_messages.md"}
 {"doc_id": "alt-001", "collection": "alt-model", "relative_path": "alt-model/vector_quantization.txt"}
 {"doc_id": "alt-002", "collection": "alt-model", "relative_path": "alt-model/attention_mechanisms.txt"}
+{"doc_id": "fr-001", "collection": "fr-docs", "relative_path": "fr-docs/guide_installation.md"}
+{"doc_id": "fr-002", "collection": "fr-docs", "relative_path": "fr-docs/reference_api.md"}
+{"doc_id": "fr-003", "collection": "fr-docs", "relative_path": "fr-docs/architecture_systeme.md"}
+{"doc_id": "fr-004", "collection": "fr-docs", "relative_path": "fr-docs/guide_configuration.md"}
+{"doc_id": "fr-005", "collection": "fr-docs", "relative_path": "fr-docs/guide_depannage.md"}

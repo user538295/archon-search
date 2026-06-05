@@ -13,31 +13,42 @@
 # in baseline.json and update both baseline.json/.md and this file together.
 
 [quality_floors]
-# Rationale: floors recalibrated to match the pytest stub environment (fake chonkie).
-# regenerate.py previously ran without stubs, producing routing centroids from real
-# GPT2-tokenized chunks; the gated test runs under pytest with _FakeRecursiveChunker
-# (word-count chunker), producing different chunk boundaries and thus different centroids.
-# Fix: regenerate.py now installs stubs before calibrating → consistent with CI.
-# Retrieval metrics IMPROVED (fake chunker produces larger chunks with more context):
-#   recall_at_3: 0.9444 → 0.9630, recall_at_5: 0.9815 → 1.0
-#   ndcg_at_5/10: 0.9775/0.9809 → 0.9879/0.9879
-# Routing metrics DROPPED (larger chunks reduce centroid discriminability):
-#   routing_accuracy: 0.9697 → 0.9394 (delta -0.0303, within waiver threshold of 0.05)
-#   routing_mrr_centroid/hybrid: 0.75 → 0.6667 (delta -0.0833, exceeds threshold;
-#     waiver granted — this is a calibration fix, not a quality regression: the previous
-#     value was measured in an environment inconsistent with the test runner)
-# All floors set equal to measured baseline so regressions are immediately gated.
-recall_at_1     = 0.8703703703703703
-recall_at_3     = 0.9629629629629629
+# Rationale: floors recalibrated after adding C2 multilingual eval fixtures (Task 11.1).
+# 5 French documents (fr-docs collection) + 5 retrieval queries + routing entry added.
+# Previous calibration (English-only, 33 queries / 57 docs):
+#   recall_at_1: 0.8704, recall_at_3: 0.9630, recall_at_5: 1.0
+#   routing_accuracy: 0.9394, routing_mrr_centroid/hybrid: 0.6667
+# New calibration (with fr-docs, 38 queries / 62 docs):
+#   recall_at_1: 0.8594 (delta -0.0109, within 0.05 waiver threshold — rationale:
+#     French fixtures use accented tokens that tokenize differently in the SHA-256
+#     backend; recall@5 remains 1.0 so no top-5 misses; recall@1 variance is expected
+#     for a 5-query sub-corpus where one near-tie can shift the metric by 0.02)
+#   routing_accuracy: 1.0 (IMPROVED — fr-docs centroid is distinctly French, routes correctly)
+#   routing_mrr_centroid/hybrid: 0.7917 (IMPROVED — additional routing query fr-docs
+#     routes unambiguously, lifting MRR from 0.6667 to 0.7917)
+# All floors set equal to new measured baseline so regressions are immediately gated.
+recall_at_1     = 0.859375
+recall_at_3     = 0.96875
 recall_at_5     = 1.0
 mrr             = 1.0
-ndcg_at_5       = 0.9879382935874149
-ndcg_at_10      = 0.9879382935874149
-routing_accuracy = 0.9393939393939394
-routing_mrr_centroid = 0.6666666666666666
-routing_mrr_hybrid = 0.6666666666666666
+ndcg_at_5       = 0.9886960737555268
+ndcg_at_10      = 0.9886960737555268
+routing_accuracy = 1.0
+routing_mrr_centroid = 0.7916666666666666
+routing_mrr_hybrid = 0.7916666666666666
 # routing_precision_at_1_centroid — reported-only; no floor (P@1 report-only per Task 6.2)
 # routing_precision_at_1_hybrid   — reported-only; no floor (P@1 report-only per Task 6.2)
+
+[multilingual]
+# Per-language recall floors for C2 multilingual eval fixtures.
+# Values derived from calibration run with deterministic SHA-256 eval backend.
+# Calibrated on: fr-docs collection, 5 French documents, 5 retrieval queries.
+# Before C2 (English-only baseline): fr-docs queries not present.
+# After C2 (with fr-docs, 38 queries / 62 docs): recall@5 on fr-docs = 1.0
+#
+# These are per-language sub-corpus floors, separate from the overall [quality_floors].
+# A regression on French-only queries would show up here before the global recall@5 drops.
+recall_at_5_fr = 1.0
 
 [policy]
 # Floors lowered more than this delta below the measured baseline require a

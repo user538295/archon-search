@@ -31,3 +31,8 @@
 {"query_id": "q-route-06", "text": "deployment environment variables production server configuration", "collection": null, "metric_scope": "routing"}
 {"query_id": "q-alt-01", "text": "product quantization codebook subspace vector compression approximate nearest neighbor", "collection": "alt-model", "metric_scope": "retrieval"}
 {"query_id": "q-alt-02", "text": "multi-head self-attention transformer query key value softmax", "collection": "alt-model", "metric_scope": "retrieval"}
+{"query_id": "q-fr-01", "text": "installation configuration serveur prérequis Python pip", "collection": "fr-docs", "metric_scope": "retrieval"}
+{"query_id": "q-fr-02", "text": "API REST authentification jeton Bearer endpoint recherche", "collection": "fr-docs", "metric_scope": "retrieval"}
+{"query_id": "q-fr-03", "text": "architecture pipeline ingestion vectorisation indexation LanceDB", "collection": "fr-docs", "metric_scope": "retrieval"}
+{"query_id": "q-fr-04", "text": "configuration multilingue seuil détection langue FastText", "collection": "fr-docs", "metric_scope": "retrieval"}
+{"query_id": "q-fr-05", "text": "dépannage erreur authentification résultats recherche qualité", "collection": "fr-docs", "metric_scope": "retrieval"}

@@ -1,23 +1,23 @@
 {
   "command": "pytest -m eval tests/eval/test_eval_suite.py::test_eval_suite_report_only_smoke",
-  "eval_hash": "c492b0fd2e2137246b55fdc776d031c9d45d13db13c1b64fffd2c5dfdf92e88e",
+  "eval_hash": "216b7d9f73f7d754ed439ff42a3eb9ab1130169ede5c1da113e78c02d46a5432",
   "metrics": {
     "latency_p50_ms": null,
     "latency_p95_ms": null,
     "mrr": 1.0,
-    "ndcg_at_10": 0.9879382935874149,
-    "ndcg_at_5": 0.9879382935874149,
-    "recall_at_1": 0.8703703703703703,
-    "recall_at_3": 0.9629629629629629,
+    "ndcg_at_10": 0.9886960737555268,
+    "ndcg_at_5": 0.9886960737555268,
+    "recall_at_1": 0.859375,
+    "recall_at_3": 0.96875,
     "recall_at_5": 1.0,
-    "reranker_lift": 0.025314335662317333,
-    "routing_accuracy": 0.9393939393939394,
-    "routing_mrr_centroid": 0.6666666666666666,
-    "routing_mrr_hybrid": 0.6666666666666666,
+    "reranker_lift": 0.02195561061373874,
+    "routing_accuracy": 1.0,
+    "routing_mrr_centroid": 0.7916666666666666,
+    "routing_mrr_hybrid": 0.7916666666666666,
     "routing_precision_at_1_centroid": 0.6666666666666666,
     "routing_precision_at_1_hybrid": 0.6666666666666666
   },
   "runtime_config_hash": "71d933f9eeed1406f18cb6026d4c0d72e7a4287654100dd20a9d4385a1226589",
-  "thresholds_hash": "e2a51cfae59ead8761980c2228be073aa7b80c5e484de84b302ed584b200d103",
+  "thresholds_hash": "505718acbcd11625397b281916d8a54b48557f5e0dd8b7d8e90e162448f2f0ff",
   "waiver_ids": {}
 }

@@ -3,3 +3,4 @@
 {"name": "mixed", "description": "Mixed content: architectural decision records (ADRs) with code samples, design documents with examples"}
 {"name": "faq", "description": "Frequently asked questions covering password troubleshooting, billing and subscription management, software installation, license activation, and common error message resolutions"}
 {"name": "alt-model", "description": "Machine learning research documents covering vector quantization and transformer attention mechanisms for alternative embedding model evaluation"}
+{"name": "fr-docs", "description": "Documentation en français : guide d'installation, référence API REST, architecture système, configuration et dépannage"}

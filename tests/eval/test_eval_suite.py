@@ -249,6 +249,109 @@ async def test_eval_suite_gated_smoke_rejects_stale_eval_hash(
 
 
 # ---------------------------------------------------------------------------
+# C2 multilingual fixtures test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.eval
+async def test_recall_at_5_multilingual_fr(thresholds_path: Path) -> None:
+    """Eval harness asserts recall@5 on French (fr-docs) fixtures >= threshold.
+
+    Runs the full eval suite, filters traces to the fr-docs collection, computes
+    recall@5 on that sub-corpus, and asserts it meets the floor from
+    thresholds.toml [multilingual].recall_at_5_fr.
+
+    Uses the deterministic eval backend (SHA-256 token hashing) — no real
+    model weights needed.  The backend is corpus-aware and label-blind, so
+    French tokens produce distinct vectors from English tokens.
+    """
+    try:
+        import tomllib  # Python 3.11+
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
+
+    from archon_search.eval.fixtures import load_eval_corpus
+    from archon_search.eval.metrics import compute_recall_at_k
+
+    # Load the recall_at_5_fr floor from thresholds.toml [multilingual] table
+    thresholds_data = tomllib.loads(thresholds_path.read_text())
+    multilingual = thresholds_data.get("multilingual", {})
+    floor = multilingual.get("recall_at_5_fr")
+    assert floor is not None, (
+        "thresholds.toml missing [multilingual].recall_at_5_fr — "
+        "add it after calibrating fr-docs recall@5"
+    )
+
+    corpus = load_eval_corpus(CORPUS_ROOT)
+
+    # Verify fr-docs collection exists with at least 5 documents
+    fr_docs = [d for d in corpus.documents if d.collection == "fr-docs"]
+    assert len(fr_docs) >= 5, (
+        f"Expected at least 5 French documents, got {len(fr_docs)}"
+    )
+
+    # Verify 5 retrieval-scope queries targeting fr-docs
+    fr_queries = [
+        q for q in corpus.queries
+        if q.collection == "fr-docs" and q.metric_scope == "retrieval"
+    ]
+    assert len(fr_queries) >= 5, (
+        f"Expected at least 5 French retrieval queries, got {len(fr_queries)}"
+    )
+
+    # Run the eval suite and compute per-collection recall@5 for fr-docs
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=BASELINE_JSON,
+    )
+
+    # Filter retrieval traces to fr-docs collection only
+    fr_traces = [
+        t for t in report.traces
+        if t.collection == "fr-docs" and t.metric_scope == "retrieval"
+    ]
+    assert fr_traces, "No retrieval traces found for fr-docs collection"
+
+    # Filter labels to fr-docs queries
+    fr_query_ids = {t.query_id for t in fr_traces}
+    fr_labels = [
+        lbl for lbl in corpus.labels
+        if lbl.query_id in fr_query_ids
+    ]
+
+    # Compute recall@5 on the fr-docs sub-corpus
+    recall_at_5_fr = compute_recall_at_k(fr_traces, fr_labels, k=5)
+
+    assert recall_at_5_fr >= floor, (
+        f"recall@5 on fr-docs ({recall_at_5_fr:.4f}) is below the floor "
+        f"({floor}) from thresholds.toml [multilingual].recall_at_5_fr"
+    )
+
+
+@pytest.mark.eval
+async def test_multilingual_fr_fixtures_load_cleanly(thresholds_path: Path) -> None:
+    """Full eval suite runs end-to-end with multilingual fr-docs fixtures.
+
+    Verifies the fixtures are consistent and the eval harness produces a
+    non-empty report that includes fr-docs metrics.
+    """
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=BASELINE_JSON,
+    )
+    rendered = render_report(report)
+    assert rendered and rendered.strip(), "render_report returned empty output"
+
+    # The report must include all queries (now including fr-docs queries)
+    assert report.metrics.recall_at_5 is not None, "recall_at_5 not computed"
+    assert report.metrics.recall_at_1 is not None, "recall_at_1 not computed"
+
+
+# ---------------------------------------------------------------------------
 # C1 per-collection dispatch test
 # ---------------------------------------------------------------------------
 

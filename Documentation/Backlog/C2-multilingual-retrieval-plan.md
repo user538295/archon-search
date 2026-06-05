@@ -466,7 +466,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 > **Releasable**: after Task 11.1; the eval harness can run against non-English content and report before/after recall@5.
 
 #### Task 11.1 — Add multilingual eval fixtures and update `thresholds.toml`
-- [ ] **File**: `tests/eval/documents.jsonl`, `tests/eval/queries.jsonl`, `tests/eval/labels.jsonl`, `tests/eval/corpus/` (new entries), `tests/eval/thresholds.toml`
+- [x] **File**: `tests/eval/documents.jsonl`, `tests/eval/queries.jsonl`, `tests/eval/labels.jsonl`, `tests/eval/corpus/` (new entries), `tests/eval/thresholds.toml`
 - **Depends on**: Task 6.2 (language tags are populated during ingest)
 - **Description**:
   - Add at minimum 5 French (or German) documents to `corpus/` and corresponding entries in `documents.jsonl`
