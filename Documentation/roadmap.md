@@ -1,7 +1,7 @@
 **Purpose**: Capture the priority-ordered forward plan for `archon-search` so contributors can see what is next and why.
 **Audience**: Maintainers and contributors planning, prioritising, or scoping work.
 **Status**: Draft
-**Last reviewed**: 2026-05-31
+**Last reviewed**: 2026-06-05
 **Next review**: 2026-08-31
 
 # Roadmap
@@ -43,7 +43,7 @@ Most of the original product-separation backlog is shipped. Remaining items:
 
 ## Priority 1 — Retrieval Quality
 
-Ordered as in the backlog. None are documented as complete in the current code; treat them as the next inbound work.
+Ordered as in the backlog. Items 1 and 8 are shipped (A2 + C2). Remaining items are the next inbound work.
 
 1. **Metadata filters at search time.** ✓ **A2 + C2 shipped**: `file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`/`before`, and `language` filters are all active via `SearchFilters`. Language filter (C2) requires `multilingual=True` for populated tags; the filter itself is active for all installs.
 2. **Server-side multi-collection search primitive.** Embed the query once, fan out on the server, share merge/rerank.
