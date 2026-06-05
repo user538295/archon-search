@@ -296,6 +296,42 @@ def test_from_search_multi_result_no_query_param() -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Task 8.1 — language_filter_used in FilterFlags
+# ---------------------------------------------------------------------------
+
+
+def test_filter_flags_language_filter_used_true() -> None:
+    from archon_search.filters import SearchFilters
+
+    filters = SearchFilters(language="fr")
+    flags = FilterFlags.from_search_filters(filters)
+    assert flags.language_filter_used is True
+
+
+def test_filter_flags_language_filter_used_false() -> None:
+    from archon_search.filters import SearchFilters
+
+    filters = SearchFilters(language=None)
+    flags = FilterFlags.from_search_filters(filters)
+    assert flags.language_filter_used is False
+
+
+def test_filter_flags_no_raw_language_value() -> None:
+    """FilterFlags must store only a boolean — no field carrying the actual language code."""
+    import inspect
+
+    fields = FilterFlags.model_fields
+    for field_name in fields:
+        assert "language" not in field_name or field_name == "language_filter_used", (
+            f"Unexpected field {field_name!r} — only language_filter_used boolean is allowed"
+        )
+    # Confirm there is no attribute holding the raw string
+    flags = FilterFlags(language_filter_used=True)
+    assert not hasattr(flags, "language_code"), "Raw language code must not be stored"
+    assert not hasattr(flags, "language_value"), "Raw language code must not be stored"
+
+
 def test_from_search_multi_result_records_fanout_count() -> None:
     entry = TelemetryEntry.from_search_multi_result(
         collections=["a", "b"],

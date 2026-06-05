@@ -32,8 +32,7 @@ class FilterFlags(BaseModel):
     """Privacy-safe boolean flags indicating which filters were active.
 
     Only records whether each filter was used — never the raw filter values.
-    ``language`` is deliberately omitted: it is rejected at validation and never
-    reaches telemetry.
+    ``language_filter_used``: True when a language filter was applied.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -44,6 +43,7 @@ class FilterFlags(BaseModel):
     indexed_after: StrictBool = False
     indexed_before: StrictBool = False
     include_metadata: StrictBool = False
+    language_filter_used: StrictBool = False
 
     @classmethod
     def from_search_filters(cls, filters: "SearchFilters") -> "FilterFlags":
@@ -55,6 +55,7 @@ class FilterFlags(BaseModel):
             indexed_after=filters.indexed_after is not None,
             indexed_before=filters.indexed_before is not None,
             include_metadata=filters.include_metadata,  # mirrors value directly: already a bool
+            language_filter_used=filters.language is not None,
         )
 
 

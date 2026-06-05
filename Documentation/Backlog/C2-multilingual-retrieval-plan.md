@@ -405,7 +405,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 > **Releasable**: after Task 8.1; telemetry entries record whether the language filter was used.
 
 #### Task 8.1 — Add `language_filter_used` to `FilterFlags`
-- [ ] **File**: `archon_search/telemetry/entry.py`
+- [x] **File**: `archon_search/telemetry/entry.py`
 - **Depends on**: Task 7.1
 - **Description**:
   - Add `language_filter_used: StrictBool = False` to `FilterFlags` model after `include_metadata`
