@@ -27,6 +27,7 @@ from archon_search.store import SearchStore, StoreBusyError, elementwise_sum
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
+    from archon_search.language_detector import LanguageDetector
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,8 @@ class SearchPipeline:
         max_fanout: int = 8,
         fanout_leg_trim: int = 40,
         fanout_timeout_seconds: float = 30.0,
+        language_detector: LanguageDetector | None = None,
+        language_detection_confidence_threshold: float = 0.7,
     ) -> None:
         self.store = store
         self._global_embedder = embedder
@@ -179,6 +182,8 @@ class SearchPipeline:
         self._max_fanout = max_fanout
         self._fanout_leg_trim = fanout_leg_trim
         self._fanout_timeout_seconds = fanout_timeout_seconds
+        self._language_detector = language_detector
+        self._language_detection_confidence_threshold = language_detection_confidence_threshold
 
     # ------------------------------------------------------------------
     # Warm-status accessors (used by health/readiness route handlers)
@@ -249,6 +254,24 @@ class SearchPipeline:
             logger.debug("stat() failed for %s; updated_at will be empty", path)
             updated_at = ""
 
+        # C2: language detection — runs after parse, before chunk
+        if self._language_detector is not None:
+            try:
+                with record_stage("language_detect"):
+                    lang = await self._language_detector.detect(
+                        markdown,
+                        confidence_threshold=self._language_detection_confidence_threshold,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "language detection failed for %s — tagging chunks as untagged: %s",
+                    path,
+                    e,
+                )
+                lang = ""
+        else:
+            lang = ""
+
         records = self._chunker.chunk(
             markdown,
             doc_id,
@@ -256,6 +279,7 @@ class SearchPipeline:
             file_type=file_type,
             updated_at=updated_at,
             ingested_by=ingested_by,
+            language=lang,
         )
         if not records:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="ok")
@@ -934,6 +958,12 @@ def create_pipeline(
 
     Does NOT call store.connect() — caller is responsible for connecting.
     """
+    from archon_search.language_detector import (  # noqa: PLC0415
+        LanguageDetector,
+        FASTTEXT_MODEL_FILENAME,
+        FASTTEXT_MODELS_DIR,
+    )
+
     store = SearchStore(cfg.db_path)
     _embedder_backend: EmbedderBackend = embedder_backend or ModelEmbedder(
         cfg.embedding_model,
@@ -951,6 +981,11 @@ def create_pipeline(
     chunker = DocumentChunker(cfg.chunk_size)
     parser = DocumentParser()
 
+    language_detector: LanguageDetector | None = None
+    if cfg.multilingual:
+        model_path = FASTTEXT_MODELS_DIR / FASTTEXT_MODEL_FILENAME
+        language_detector = LanguageDetector(model_path)
+
     return SearchPipeline(
         store=store,
         embedder=embedder,
@@ -962,4 +997,6 @@ def create_pipeline(
         max_fanout=cfg.max_fanout,
         fanout_leg_trim=cfg.fanout_leg_trim,
         fanout_timeout_seconds=cfg.fanout_timeout_seconds,
+        language_detector=language_detector,
+        language_detection_confidence_threshold=cfg.language_detection_confidence_threshold,
     )

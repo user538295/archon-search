@@ -204,6 +204,15 @@ def create_app(
     app.state.search_store = SearchStore(config.db_path)
     app.state.watcher_manager = None
     app.state.embedder = Embedder(ModelEmbedder(config.embedding_model, providers=config.providers or None))
+
+    # C2: instantiate LanguageDetector for production path when multilingual=True.
+    # _check_multilingual_deps() has already passed at this point, so imports are safe.
+    if config.multilingual:
+        from archon_search.language_detector import LanguageDetector  # noqa: PLC0415
+        _lang_detector = LanguageDetector(_MULTILINGUAL_MODEL_PATH)
+    else:
+        _lang_detector = None
+
     app.state.pipeline = SearchPipeline(
         store=app.state.search_store,
         embedder=app.state.embedder,
@@ -216,6 +225,8 @@ def create_app(
         parser=DocumentParser(),
         top_k_retrieve=config.top_k_retrieve,
         top_k_return=config.top_k_return,
+        language_detector=_lang_detector,
+        language_detection_confidence_threshold=config.language_detection_confidence_threshold,
     )
     app.include_router(collections_router)
     app.include_router(health_router)

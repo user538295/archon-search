@@ -327,7 +327,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
   - Checkpoint: `uv run pytest tests/test_chunker.py -x`
 
 #### Task 6.2 — Wire `LanguageDetector` into `pipeline.py:ingest_file`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 3.1, Task 5.1, Task 6.1
 - **Description**:
   - Import `LanguageDetector` lazily (inside `ingest_file` or as a `TYPE_CHECKING` import to avoid circular import)

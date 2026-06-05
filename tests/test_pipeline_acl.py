@@ -54,6 +54,7 @@ def _make_pipeline(tmp_path: Path):
             file_type: str = "",
             updated_at: str = "",
             ingested_by: str = "cli",
+            language: str = "",
         ) -> list[ChunkRecord]:
             now = datetime.now(timezone.utc).isoformat()
             # One chunk per 200 chars (or one chunk if text is shorter)
@@ -69,6 +70,7 @@ def _make_pipeline(tmp_path: Path):
                     file_type=file_type,
                     updated_at=updated_at,
                     ingested_by=ingested_by,  # type: ignore[arg-type]
+                    language=language,
                 )
                 for part in parts
             ]

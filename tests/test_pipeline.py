@@ -1039,6 +1039,7 @@ async def test_create_pipeline_wires_all_components():
 
     cfg = MagicMock()
     cfg.db_path = "/tmp/test_rag_db"
+    cfg.multilingual = False  # Prevent LanguageDetector instantiation
 
     with (
         patch("archon_search.pipeline.ModelEmbedder") as MockME,
@@ -1142,6 +1143,7 @@ async def test_create_pipeline_does_not_auto_connect():
 
     cfg = MagicMock()
     cfg.db_path = "/tmp/test_no_connect_rag"
+    cfg.multilingual = False  # Prevent LanguageDetector instantiation
 
     with (
         patch("archon_search.pipeline.ModelEmbedder") as MockME,
@@ -1271,6 +1273,7 @@ def test_create_pipeline_uses_expanded_db_path() -> None:
 
     cfg = MagicMock()
     cfg.db_path = "~/.archon/search"
+    cfg.multilingual = False  # Prevent LanguageDetector instantiation
     with (
         patch("archon_search.pipeline.DocumentChunker"),
         patch("archon_search.pipeline.DocumentParser"),
@@ -4613,3 +4616,283 @@ def test_job_status_enum_values_unchanged() -> None:
     expected = {"PENDING", "RUNNING", "DONE", "FAILED", "CANCELLED", "CANCELLING"}
     actual = {m.name for m in JobStatus}
     assert actual == expected, f"JobStatus members changed: {actual}"
+
+
+# ---------------------------------------------------------------------------
+# C2 Task 6.2 — LanguageDetector wired into pipeline.py:ingest_file
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_store_for_c2() -> MagicMock:
+    """Build a MagicMock store suitable for C2 language detection tests."""
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.delete_document = AsyncMock(return_value=0)
+    store.ingest_chunks = AsyncMock(
+        return_value=ChunkIngestResult(chunks_ingested=2, needs_recompute=False)
+    )
+    store.rebuild_fts_index = AsyncMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+    from archon_search.config import SearchConfig
+    store._config = SearchConfig(centroid_incremental_enabled=False)
+    return store
+
+
+def _make_pipeline_with_detector(store, language_detector=None, threshold: float = 0.7):
+    """Build a SearchPipeline with optional LanguageDetector."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    return SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+        language_detector=language_detector,
+        language_detection_confidence_threshold=threshold,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_with_language_detection(tmp_path) -> None:
+    """When a LanguageDetector is present, all chunks receive the detected language tag."""
+    from archon_search.language_detector import LanguageDetector
+
+    store = _make_mock_store_for_c2()
+
+    detector = MagicMock(spec=LanguageDetector)
+    detector.detect = AsyncMock(return_value="fr")
+
+    pipeline = _make_pipeline_with_detector(store, language_detector=detector)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("Bonjour le monde. " * 20)
+
+    # Capture the records passed to ingest_chunks
+    ingested_records: list = []
+
+    async def _capture_ingest(collection, records, **kwargs):
+        ingested_records.extend(records)
+        return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
+
+    store.ingest_chunks = _capture_ingest
+
+    await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert len(ingested_records) > 0, "Expected at least one chunk to be ingested"
+    assert all(r.language == "fr" for r in ingested_records), (
+        f"All chunks should have language='fr', got: {[r.language for r in ingested_records]}"
+    )
+    detector.detect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_language_detection_disabled(tmp_path) -> None:
+    """When language_detector is None (multilingual off), all chunks have language=''."""
+    store = _make_mock_store_for_c2()
+    pipeline = _make_pipeline_with_detector(store, language_detector=None)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("Some content to ingest. " * 10)
+
+    ingested_records: list = []
+
+    async def _capture_ingest(collection, records, **kwargs):
+        ingested_records.extend(records)
+        return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
+
+    store.ingest_chunks = _capture_ingest
+
+    await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert len(ingested_records) > 0
+    assert all(r.language == "" for r in ingested_records), (
+        f"All chunks should have language='', got: {[r.language for r in ingested_records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_language_unknown(tmp_path) -> None:
+    """When detect returns 'unknown' (low confidence), all chunks have language='unknown'."""
+    from archon_search.language_detector import LanguageDetector
+
+    store = _make_mock_store_for_c2()
+
+    detector = MagicMock(spec=LanguageDetector)
+    detector.detect = AsyncMock(return_value="unknown")
+
+    pipeline = _make_pipeline_with_detector(store, language_detector=detector)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("Some ambiguous content. " * 10)
+
+    ingested_records: list = []
+
+    async def _capture_ingest(collection, records, **kwargs):
+        ingested_records.extend(records)
+        return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
+
+    store.ingest_chunks = _capture_ingest
+
+    await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert len(ingested_records) > 0
+    assert all(r.language == "unknown" for r in ingested_records), (
+        f"All chunks should have language='unknown', got: {[r.language for r in ingested_records]}"
+    )
+
+
+def test_search_pipeline_constructor_accepts_language_detector() -> None:
+    """SearchPipeline constructor must accept language_detector and language_detection_confidence_threshold."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.language_detector import LanguageDetector
+    from unittest.mock import MagicMock
+
+    store = MagicMock()
+    detector = MagicMock(spec=LanguageDetector)
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=5,
+        top_k_return=3,
+        language_detector=detector,
+        language_detection_confidence_threshold=0.8,
+    )
+
+    assert pipeline._language_detector is detector
+    assert pipeline._language_detection_confidence_threshold == 0.8
+
+
+def test_search_pipeline_constructor_defaults_no_detector() -> None:
+    """SearchPipeline without language_detector defaults to None detector and 0.7 threshold."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from unittest.mock import MagicMock
+
+    store = MagicMock()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=5,
+        top_k_return=3,
+    )
+
+    assert pipeline._language_detector is None
+    assert pipeline._language_detection_confidence_threshold == 0.7
+
+
+def test_create_pipeline_passes_language_detector_when_multilingual() -> None:
+    """create_pipeline() instantiates LanguageDetector when config.multilingual=True (mocked)."""
+    from archon_search.pipeline import create_pipeline
+    from archon_search.config import SearchConfig
+    from archon_search.language_detector import LanguageDetector
+
+    cfg = SearchConfig(multilingual=True)
+
+    # LanguageDetector is imported inside create_pipeline; patch __init__ and load_model
+    # so construction doesn't require the real model file or fasttext package.
+    with (
+        patch.object(LanguageDetector, "__init__", return_value=None),
+        patch("archon_search.language_detector.fasttext", MagicMock()),
+    ):
+        pipeline = create_pipeline(cfg)
+
+    assert pipeline._language_detector is not None
+    assert isinstance(pipeline._language_detector, LanguageDetector)
+    assert pipeline._language_detection_confidence_threshold == cfg.language_detection_confidence_threshold
+
+
+def test_create_pipeline_no_language_detector_when_not_multilingual() -> None:
+    """create_pipeline() does not instantiate LanguageDetector when config.multilingual=False."""
+    from archon_search.pipeline import create_pipeline
+    from archon_search.config import SearchConfig
+    from archon_search.language_detector import LanguageDetector
+
+    cfg = SearchConfig(multilingual=False)
+
+    # Patch LanguageDetector.__init__ — if called, it will raise (file missing).
+    # The test asserts it is NOT called.
+    with patch.object(LanguageDetector, "__init__", side_effect=AssertionError("should not be called")):
+        pipeline = create_pipeline(cfg)
+
+    assert pipeline._language_detector is None
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_language_detection_error_falls_back_to_empty(tmp_path) -> None:
+    """When detect() raises an exception, chunks fall back to language='' (untagged)."""
+    from archon_search.language_detector import LanguageDetector
+
+    store = _make_mock_store_for_c2()
+
+    detector = MagicMock(spec=LanguageDetector)
+    detector.detect = AsyncMock(side_effect=RuntimeError("model crashed"))
+
+    pipeline = _make_pipeline_with_detector(store, language_detector=detector)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("Some content. " * 10)
+
+    ingested_records: list = []
+
+    async def _capture_ingest(collection, records, **kwargs):
+        ingested_records.extend(records)
+        return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
+
+    store.ingest_chunks = _capture_ingest
+
+    # Should NOT raise — error is caught and logged
+    result = await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert result.status == "ok"
+    assert len(ingested_records) > 0
+    assert all(r.language == "" for r in ingested_records), (
+        f"On detection failure, chunks should fall back to language='', got: {[r.language for r in ingested_records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_language_detect_uses_configured_threshold(tmp_path) -> None:
+    """detect() is called with the pipeline's configured confidence_threshold."""
+    from archon_search.language_detector import LanguageDetector
+
+    store = _make_mock_store_for_c2()
+
+    detector = MagicMock(spec=LanguageDetector)
+    detector.detect = AsyncMock(return_value="de")
+
+    pipeline = _make_pipeline_with_detector(store, language_detector=detector, threshold=0.9)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("Guten Tag. " * 10)
+
+    ingested_records: list = []
+
+    async def _capture_ingest(collection, records, **kwargs):
+        ingested_records.extend(records)
+        return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
+
+    store.ingest_chunks = _capture_ingest
+
+    await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
+
+    # Verify detect() was called with the correct threshold
+    detector.detect.assert_awaited_once()
+    _, kwargs = detector.detect.call_args
+    assert kwargs.get("confidence_threshold") == 0.9

@@ -65,3 +65,61 @@ class TestCheckMultilingualDeps:
         with patch("archon_search.server.app._import_fasttext", return_value=mock_fasttext):
             with patch("archon_search.server.app._MULTILINGUAL_MODEL_PATH", model_path):
                 _check_multilingual_deps(cfg)  # no exception
+
+
+# ---------------------------------------------------------------------------
+# create_app production path — LanguageDetector wired when multilingual=True
+# ---------------------------------------------------------------------------
+
+
+class TestCreateAppLanguageDetectorWiring:
+    def test_create_app_wires_language_detector_when_multilingual(self, tmp_path):
+        """create_app() passes a LanguageDetector to SearchPipeline when multilingual=True."""
+        from archon_search.jobs import JobStore
+        from archon_search.server.app import create_app
+        from archon_search.language_detector import LanguageDetector
+
+        cfg = SearchConfig()
+        cfg.multilingual = True
+        cfg.db_path = str(tmp_path / "test.db")
+
+        job_store = JobStore()
+
+        with (
+            patch("archon_search.server.app._check_multilingual_deps"),
+            patch("archon_search.server.app._import_fasttext"),
+            patch.object(LanguageDetector, "__init__", return_value=None),
+            patch("archon_search.server.app.ModelEmbedder"),
+            patch("archon_search.server.app.SearchStore"),
+            patch("archon_search.server.app.IndexingStateStore"),
+        ):
+            app = create_app(cfg, job_store)
+
+        pipeline = app.state.pipeline
+        assert pipeline._language_detector is not None
+        assert isinstance(pipeline._language_detector, LanguageDetector)
+        assert pipeline._language_detection_confidence_threshold == cfg.language_detection_confidence_threshold
+
+    def test_create_app_no_language_detector_when_not_multilingual(self, tmp_path):
+        """create_app() does NOT pass a LanguageDetector to SearchPipeline when multilingual=False."""
+        from archon_search.jobs import JobStore
+        from archon_search.server.app import create_app
+        from archon_search.language_detector import LanguageDetector
+
+        cfg = SearchConfig()
+        cfg.multilingual = False
+        cfg.db_path = str(tmp_path / "test.db")
+
+        job_store = JobStore()
+
+        with (
+            patch("archon_search.server.app._check_multilingual_deps"),
+            patch.object(LanguageDetector, "__init__", side_effect=AssertionError("should not be called")),
+            patch("archon_search.server.app.ModelEmbedder"),
+            patch("archon_search.server.app.SearchStore"),
+            patch("archon_search.server.app.IndexingStateStore"),
+        ):
+            app = create_app(cfg, job_store)
+
+        pipeline = app.state.pipeline
+        assert pipeline._language_detector is None
