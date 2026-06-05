@@ -377,7 +377,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
   - Checkpoint: `uv run pytest tests/test_filters.py -x -k "language"`
 
 #### Task 7.2 — Add `language` SQL clause to `store_filters.py:build_where`
-- [ ] **File**: `archon_search/store_filters.py`
+- [x] **File**: `archon_search/store_filters.py`
 - **Depends on**: Task 7.1
 - **Description**:
   - Remove the `if filters.language is not None: raise ValueError(...)` hard-block assertion

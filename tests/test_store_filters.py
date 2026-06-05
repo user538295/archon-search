@@ -167,18 +167,22 @@ def test_build_where_handles_every_search_filters_field():
     """Every filterable field (excluding post-RRF/response-only fields) produces output when set."""
     from archon_search.store_filters import build_where
 
-    # Fields that should produce SQL output
+    # Fields that should produce SQL output (language is now SQL-expressible)
     sql_fields = {
         f for f in SearchFilters.model_fields
-        if f not in {"include_metadata", "source_path_glob", "language"}
+        if f not in {"include_metadata", "source_path_glob"}
     }
 
     dt = datetime(2024, 6, 1, tzinfo=timezone.utc)
     for field_name in sql_fields:
         if field_name in ("indexed_after", "indexed_before"):
             filters = SearchFilters(**{field_name: dt})
+        elif field_name == "source_path_prefix":
+            filters = SearchFilters(**{field_name: "/tmp/test"})
+        elif field_name == "language":
+            filters = SearchFilters(**{field_name: "fr"})
         else:
-            filters = SearchFilters(**{field_name: "/tmp/test" if field_name == "source_path_prefix" else "md"})
+            filters = SearchFilters(**{field_name: "md"})
         predicate = build_where(filters)
         assert predicate != "", f"Field {field_name!r} produced empty predicate"
 
@@ -229,22 +233,47 @@ def test_build_where_include_metadata_not_in_sql():
     assert predicate == ""
 
 
-def test_build_where_language_guard_raises():
+# ---------------------------------------------------------------------------
+# Tests for language filter in build_where (Task 7.2)
+# ---------------------------------------------------------------------------
+
+def test_build_where_language_fr():
+    """language='fr' produces `language = 'fr'` SQL clause."""
     from archon_search.store_filters import build_where
-    # SearchFilters rejects non-empty language at validation, but we bypass it
-    # to test the defense-in-depth guard in build_where itself.
-    import types
-    fake = types.SimpleNamespace(
-        language="en",
-        file_type=None,
-        source_path_prefix=None,
-        indexed_after=None,
-        indexed_before=None,
-        source_path_glob=None,
-        include_metadata=False,
-    )
-    with pytest.raises(ValueError, match="language filter reached build_where"):
-        build_where(fake)  # type: ignore[arg-type]
+    predicate = build_where(SearchFilters(language="fr"))
+    assert "language = 'fr'" in predicate
+
+
+def test_build_where_language_unknown():
+    """language='unknown' produces `language = 'unknown'` SQL clause."""
+    from archon_search.store_filters import build_where
+    predicate = build_where(SearchFilters(language="unknown"))
+    assert "language = 'unknown'" in predicate
+
+
+def test_build_where_language_none_omitted():
+    """language=None does not add a language clause to the predicate."""
+    from archon_search.store_filters import build_where
+    predicate = build_where(SearchFilters(language=None))
+    assert "language" not in predicate
+
+
+def test_build_where_language_with_other_filters():
+    """language combined with file_type produces both clauses joined with AND."""
+    from archon_search.store_filters import build_where
+    predicate = build_where(SearchFilters(language="de", file_type="pdf"))
+    assert "language = 'de'" in predicate
+    assert "file_type = 'pdf'" in predicate
+    assert " AND " in predicate
+
+
+def test_build_where_language_sql_safe():
+    """language clause uses _sql_quote_str (not f-string) — result is properly quoted."""
+    from archon_search.store_filters import build_where
+    # A language code should not raise and must produce a properly single-quoted value
+    predicate = build_where(SearchFilters(language="fr"))
+    # Must be single-quoted (not bare identifier)
+    assert "'fr'" in predicate
 
 
 def test_build_where_all_sql_filters():

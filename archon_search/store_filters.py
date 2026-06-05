@@ -47,18 +47,13 @@ def build_where(filters: "SearchFilters") -> str:
     - ``source_path_prefix``  → ``source_path LIKE '<escaped>%' ESCAPE '\\'``
     - ``indexed_after``       → ``indexed_at >= '<fixed-width UTC>'``
     - ``indexed_before``      → ``indexed_at <= '<fixed-width UTC>'``
+    - ``language``            → ``language = '<code>'``
 
     Fields deliberately NOT emitted as SQL:
     - ``source_path_glob``  — post-RRF Python-side filter
     - ``include_metadata``  — response-shaping flag
-    - ``language``          — asserted None (rejected at validation)
     """
     from archon_search._types import normalize_iso_utc  # lazy import
-
-    if filters.language is not None:
-        raise ValueError(
-            "language filter reached build_where; it must be rejected at validation (C2)"
-        )
 
     clauses: list[str] = []
 
@@ -75,6 +70,9 @@ def build_where(filters: "SearchFilters") -> str:
 
     if filters.indexed_before is not None:
         clauses.append("indexed_at <= " + _sql_quote_str(normalize_iso_utc(filters.indexed_before)))
+
+    if filters.language is not None:
+        clauses.append("language = " + _sql_quote_str(filters.language))
 
     return " AND ".join(clauses)
 
