@@ -206,7 +206,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 > **Releasable**: after Task 3.1; language detection is callable from anywhere in the codebase.
 
 #### Task 3.1 — `LanguageDetector` class in `archon_search/language_detector.py`
-- [ ] **File**: `archon_search/language_detector.py`
+- [x] **File**: `archon_search/language_detector.py`
 - **Depends on**: Task 2.2 (confidence threshold config key is defined)
 - **Description**:
   - `_FASTTEXT_ISO_MAP: dict[str, str]` — mapping from fasttext 3-letter codes to ISO 639-1 2-letter codes for languages that have one (e.g. `"deu" → "de"`, `"fra" → "fr"`); fasttext codes are already mostly ISO 639-1, this map handles the exceptions
