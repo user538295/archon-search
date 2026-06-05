@@ -96,8 +96,10 @@ flowchart LR
     R[reranker.py<br/>Reranker / ModelReranker]
     PL[pipeline.py<br/>SearchPipeline]
 
+    LD[language_detector.py<br/>LanguageDetector]
+
     subgraph ingest[Ingest path]
-      P --> C --> E --> S
+      P --> LD --> C --> E --> S
     end
 
     subgraph query[Query path]
@@ -112,7 +114,7 @@ flowchart LR
     PL -.orchestrates.-> query
 ```
 
-`SearchPipeline.ingest_file` runs `parser -> chunker -> embedder -> store`, assigning sequential chunk IDs and propagating ACLs. `SearchPipeline.search` runs `embedder -> store.hybrid_search -> acl filter -> reranker`. `SearchPipeline.explain` (A4) runs `embedder -> store.hybrid_search_with_trace (amplified pool) -> acl filter -> reranker._rerank_with_trace -> sort -> split top-k / near-misses`, and returns `ExplainPipelineResult`. `ingest_directory` additionally computes a centroid over all batch vectors and updates `CollectionMeta`, optionally regenerating the auto description (see [110_component_catalog_and_layer_breakdown.md](110_component_catalog_and_layer_breakdown.md) for module roles).
+`SearchPipeline.ingest_file` runs `parser -> language_detector -> chunker -> embedder -> store`, assigning sequential chunk IDs, detecting document language (C2, when `config.multilingual=True`), and propagating ACLs and language tags to all chunks. `SearchPipeline.search` runs `embedder -> store.hybrid_search -> acl filter -> reranker`. `SearchPipeline.explain` (A4) runs `embedder -> store.hybrid_search_with_trace (amplified pool) -> acl filter -> reranker._rerank_with_trace -> sort -> split top-k / near-misses`, and returns `ExplainPipelineResult`. `ingest_directory` additionally computes a centroid over all batch vectors and updates `CollectionMeta`, optionally regenerating the auto description (see [110_component_catalog_and_layer_breakdown.md](110_component_catalog_and_layer_breakdown.md) for module roles).
 
 ## Architecture Patterns
 
@@ -162,11 +164,12 @@ The install flow (`archon_search/install.py`):
 
 1. Prompts for or validates the profile and multilingual flag.
 2. Applies a Jina CC-BY-NC-4.0 license gate for multilingual `balanced`/`max` (those profiles use `jinaai/jina-reranker-v2-base-multilingual`).
-3. Detects reinstall with a mismatched profile; raises `NeedsForceDeleteError` when embedder or chunk_size differs; the caller requires `--force --delete-db` to proceed.
-4. Writes profile config (`[database].profile`, `embedding_model`, `reranker_model`, `multilingual`, `chunk_size`) to `archon-search.toml`.
-5. Checks available disk space against the profile's `download_mb` estimate.
-6. Pre-warms model weights (before service registration).
-7. Registers and starts the OS service.
+3. **C2**: When `multilingual=True`, prompts for CC-BY-SA 3.0 fasttext license acceptance (or checks `--accept-fasttext-license`) and downloads `lid.176.ftz` to `~/.archon-search/models/`.
+4. Detects reinstall with a mismatched profile; raises `NeedsForceDeleteError` when embedder or chunk_size differs; the caller requires `--force --delete-db` to proceed.
+5. Writes profile config (`[database].profile`, `embedding_model`, `reranker_model`, `multilingual`, `chunk_size`) to `archon-search.toml`.
+6. Checks available disk space against the profile's `download_mb` estimate.
+7. Pre-warms model weights (before service registration).
+8. Registers and starts the OS service.
 
 The multilingual minimal profile sets `reranker_model = ""` (no reranker), which causes `create_pipeline()` in `pipeline.py` to pass `reranker=None` to `SearchPipeline`. `SearchPipeline` guards every reranker call with `if self.reranker is None`.
 

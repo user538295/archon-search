@@ -511,7 +511,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 ### Final Phase — Verification & Documentation
 
 #### Task F.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (Architecture docs, ADRs, UserManual, OperatorGuide, CHANGELOG, `archon-search.toml.example`, `BREAKING.md`) and update every file whose content is affected by C2:

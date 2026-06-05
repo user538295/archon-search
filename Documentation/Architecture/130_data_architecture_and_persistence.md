@@ -101,7 +101,7 @@ LanceDB lives in `~/.archon-search/search/` (configurable via `[database].db_pat
 | `source_path` | `utf8` | absolute resolved path at ingest time |
 | `indexed_at` | `utf8` | ISO 8601 |
 | `file_type` | `utf8` | e.g. `md`, `py`, … |
-| `language` | `utf8` | empty string when unknown |
+| `language` | `utf8` | **C2 three-state contract**: `""` = never processed (pre-C2 / legacy chunk); `"unknown"` = processed by `LanguageDetector` but confidence below threshold; `"<code>"` = ISO 639-1 or ISO 639-3 code (e.g. `"fr"`, `"de"`). The `language=<code>` search filter returns only chunks matching that exact state; `language=unknown` returns `"unknown"`-tagged chunks only; no filter returns all three states. Only populated when `config.multilingual=True` at ingest time. |
 | `metadata` | `utf8` | JSON-encoded `dict[str,str]`; size-bounded (see `validate_metadata`) |
 | `custom_score` | `float32` | nullable |
 | `ingested_by` | `utf8` | call-site identity: one of `cli` / `http` / `watcher` / `reindex` (defined by `_types.IngestedBy`; legacy `archon-search-cli` is normalized at boundaries) |

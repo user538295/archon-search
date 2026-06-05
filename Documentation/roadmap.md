@@ -32,6 +32,7 @@ Done (visible in the current repo):
 - Concurrency hardening of the indexing-state store and router cache (A6): `IndexingStateStore` is thread-safe via an internal `RLock` (closes `CON-3` — no lost updates to `.indexing_state.json` under concurrent multi-collection writes), and `MultiCollectionRouter` gained `invalidate()` / `initial_metadata` with the FastAPI per-request router lifecycle pinned by a regression test (addresses `CON-2`). See `Architecture/530_technical_debt_refactoring_roadmap.md`.
 - **Tiered install profiles (C0):** `archon-search install` now presents three profiles (`minimal`, `balanced`, `max`) for both English and multilingual stacks. The profile is written into `[database].profile` / `[database].multilingual` in `archon-search.toml`. The installer includes disk-space checks, a Jina CC-BY-NC-4.0 license gate for multilingual `balanced`/`max`, model pre-warming, reinstall guard with rollback, and a `--force --delete-db` escape hatch. Implemented in `archon_search/profiles.py`, `archon_search/install.py`, and `archon_search/cli/install_cmd.py`.
 - **GitHub Releases with git-cliff changelog (C1):** `release.sh` now requires `git-cliff >= 2.4`, generates release notes via `git-cliff --unreleased`, prepends the section to `CHANGELOG.md` (committed and pushed to `main` before tagging), and verifies the commit count matches the provisional tag. A new `github-release` job in `archon-search-release.yml` (runs after `publish`, tag pushes only) extracts the first section from `CHANGELOG.md` and creates a GitHub Release via the REST API. `cliff.toml` at the repo root controls commit grouping and rendering.
+- **Multilingual retrieval (C2):** Per-document language detection using fasttext `lid.176.ftz`; ISO 639-1/639-3 language tags on all chunks; `language=<code>` single-collection filter; three-state language contract (`""`/`"unknown"`/`"<code>"`); CC-BY-SA 3.0 fasttext license gate; `--accept-fasttext-license` CLI flag; startup guard for missing package/model; `FilterFlags.language_filter_used` telemetry; `/status` warning for untagged collections; language-aware FTS tokenizer (LanceDB `FTS(language="French")` API). Implemented in `archon_search/language_detector.py`, `archon_search/filters.py`, `archon_search/store_filters.py`, `archon_search/store.py`, `archon_search/pipeline.py`, `archon_search/chunker.py`, `archon_search/install.py`, `archon_search/cli/install_cmd.py`, `archon_search/server/app.py`, `archon_search/server/routes_status.py`, `archon_search/telemetry/entry.py`.
 
 ## Priority 0 — Product Boundary (largely landed; remaining hardening)
 
@@ -44,14 +45,14 @@ Most of the original product-separation backlog is shipped. Remaining items:
 
 Ordered as in the backlog. None are documented as complete in the current code; treat them as the next inbound work.
 
-1. **Metadata filters at search time.** Expose source-path / date / file-type / language / tag filters through the search API and the underlying store.
+1. **Metadata filters at search time.** ✓ **A2 + C2 shipped**: `file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`/`before`, and `language` filters are all active via `SearchFilters`. Language filter (C2) requires `multilingual=True` for populated tags; the filter itself is active for all installs.
 2. **Server-side multi-collection search primitive.** Embed the query once, fan out on the server, share merge/rerank.
 3. **Stronger collection routing.** Keep centroids as baseline; add summary embeddings, multi-centroid / clustered representations, and description-aware routing.
 4. **HyDE / query expansion.** Optional, off by default until the eval harness shows gains.
 5. **RAG Fusion / multi-query decomposition.** Parallel sub-query search with benchmarked fusion.
 6. **Explain / debug endpoint.** Surface vector rank, FTS rank, fused score, reranker score, applied filters, and routing decision.
 7. **Per-collection embedding model selection.** `CollectionMeta.embedding_model` already exists; the search and ingest paths still operate against a global model. Validate query-time compatibility and define cross-model routing.
-8. **Multilingual retrieval.** Multilingual embedding option, language metadata, language-aware FTS where the backend allows.
+8. **Multilingual retrieval.** ✓ **C2 shipped**: fasttext `lid.176.ftz` language detection at ingest; `language=<code>` filter (single-collection); three-state contract (`""` / `"unknown"` / `"<code>"`); language-aware FTS tokenization; `FilterFlags.language_filter_used` telemetry; per-collection `GET /status` warning for untagged collections. See `Documentation/Backlog/C2-multilingual-retrieval-plan.md`.
 
 ## Priority 2 — Ingestion and Storage Correctness
 

@@ -130,6 +130,8 @@ While a reindex holds a collection's per-collection ingest lock, `POST /jobs/ing
 
 This is reinforced by `CLAUDE.md`'s "Structural invariant" note and is the privacy contract for v1.
 
+**C2 — language filter telemetry**: `FilterFlags.language_filter_used: bool` records only whether a language filter was set, never the actual language code value. This preserves the no-raw-value invariant: a boolean `true`/`false` reveals that a language filter was applied, not which language. The actual code (`"fr"`, `"de"`, etc.) is never stored in telemetry.
+
 ### `/explain` endpoint — no query echo, same privacy posture as `/search` (A4)
 
 `POST /explain` and the `explain` MCP tool preserve all existing privacy guarantees:

@@ -145,6 +145,9 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
 
+        async def get_dominant_language(self, *a: Any, **kw: Any) -> str:
+            return ""
+
     pipeline = SearchPipeline(
         store=CapturingStore(),  # type: ignore[arg-type]
         embedder=make_embedder(),
@@ -191,6 +194,9 @@ async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_na
 
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
+
+        async def get_dominant_language(self, *a: Any, **kw: Any) -> str:
+            return ""
 
     pipeline = SearchPipeline(
         store=CapturingStore(),  # type: ignore[arg-type]
@@ -383,10 +389,10 @@ async def test_pipeline_ingest_directory_rebuilds_fts_once(connected_store, col_
     rebuild_calls = 0
     original_rebuild = connected_store.rebuild_fts_index
 
-    async def counting_rebuild(collection: str) -> None:
+    async def counting_rebuild(collection: str, **kw: Any) -> None:
         nonlocal rebuild_calls
         rebuild_calls += 1
-        await original_rebuild(collection)
+        await original_rebuild(collection, **kw)
 
     connected_store.rebuild_fts_index = counting_rebuild  # type: ignore[method-assign]
 
@@ -540,6 +546,9 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             nonlocal rebuild_called
             rebuild_called = True
+
+        async def get_dominant_language(self, *a: Any, **kw: Any) -> str:
+            return ""
 
     pipeline = SearchPipeline(
         store=TrackingStore(),  # type: ignore[arg-type]
@@ -904,6 +913,9 @@ async def test_ingest_file_records_parse_embed_persist(tmp_path):
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
 
+        async def get_dominant_language(self, *a: Any, **kw: Any) -> str:
+            return ""
+
     pipeline = SearchPipeline(
         store=StubStore(),  # type: ignore[arg-type]
         embedder=make_embedder(),
@@ -958,6 +970,9 @@ async def test_pipeline_noop_when_unbound(tmp_path):
 
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
+
+        async def get_dominant_language(self, *a: Any, **kw: Any) -> str:
+            return ""
 
     pipeline = SearchPipeline(
         store=StubStore(),  # type: ignore[arg-type]
@@ -1979,6 +1994,7 @@ async def test_ingest_directory_namespace_param(tmp_path) -> None:
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
     store.rebuild_fts_index = AsyncMock()
+    store.get_dominant_language = AsyncMock(return_value="")
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
     store._config = SearchConfig(centroid_incremental_enabled=False)
@@ -2024,6 +2040,7 @@ async def test_ingest_directory_default_namespace(tmp_path) -> None:
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
     store.rebuild_fts_index = AsyncMock()
+    store.get_dominant_language = AsyncMock(return_value="")
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
     store._config = SearchConfig(centroid_incremental_enabled=False)
@@ -3308,6 +3325,7 @@ def _make_stub_store_for_embedding_tests(existing_meta=None):  # type: ignore[no
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
     store.rebuild_fts_index = AsyncMock()
+    store.get_dominant_language = AsyncMock(return_value="")
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.update_collection_meta = AsyncMock()
     store._config = SearchConfig(centroid_incremental_enabled=False)
@@ -3577,6 +3595,7 @@ def _make_mock_store_for_b5() -> MagicMock:
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=2, needs_recompute=False))
     store.rebuild_fts_index = AsyncMock()
+    store.get_dominant_language = AsyncMock(return_value="")
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
     store.update_description = AsyncMock()
@@ -4176,6 +4195,7 @@ def _make_mock_store_c1(existing_meta=None):  # type: ignore[no-untyped-def]
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=1, needs_recompute=False))
     store.rebuild_fts_index = AsyncMock()
+    store.get_dominant_language = AsyncMock(return_value="")
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.update_collection_meta = AsyncMock()
     store.update_description = AsyncMock()

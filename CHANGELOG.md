@@ -1,6 +1,33 @@
 # Changelog
 
 
+## [next] — C2 Multilingual Retrieval
+
+**Language Detection + Filter**
+- Per-document language tagging via fasttext `lid.176.ftz` model: ingested documents receive an ISO 639-1/639-3 language code (e.g. `"fr"`, `"de"`) or `"unknown"` on all chunks when `config.multilingual=True`
+- `language=<code>` filter on `POST /search` and MCP `search`/`search_with_context` tools: returns only chunks matching the specified language state; `language=unknown` returns below-threshold chunks; legacy chunks tagged `""` are excluded by explicit language filters
+- Three-state language contract: `""` (pre-C2 legacy), `"unknown"` (processed, below threshold), `"<code>"` (detected); language filter is single-collection only (multi-collection fan-out rejects with 422)
+
+**Install**
+- `pip install archon-search[multilingual]` installs `fasttext-wheel` for language detection
+- `archon-search install --multilingual` downloads `lid.176.ftz` (CC-BY-SA 3.0) to `~/.archon-search/models/`; `--accept-fasttext-license` for non-interactive installs
+- Server startup with `multilingual=true` and missing package or model file raises a clear `RuntimeError` before accepting requests
+
+**Configuration**
+- New `language_detection_confidence_threshold: float = 0.7` config key (range `(0.0, 1.0]`) under `[database]` section
+- See `archon-search.toml.example` for the commented example
+
+**Telemetry**
+- `FilterFlags.language_filter_used: bool` added to telemetry entries (no raw language value is stored — telemetry no-raw-query invariant preserved)
+
+**Status**
+- `GET /status` emits a per-collection warning when `multilingual=true` and the collection contains untagged (`language=""`) chunks; indicates re-ingest is required
+
+**Breaking change**: `SearchResult.language`, `ScoredSearchCandidate.language`, `ExplainResult.language`, and `ExplainNearMiss.language` now return `""` instead of `None` for legacy/untagged chunks. See `BREAKING.md`.
+
+**FTS tokenization (C2 Phase 12)**: language-aware FTS tokenizer support confirmed via spike. LanceDB `FTS(language="French")` API used when collection dominant language is a recognized code. `GROUP BY` SQL is not supported in LanceDB 0.30.2 — dominant language computed via Python-side `Counter` over fetched `language` column values.
+
+
 ## [26.6.710] - 2026-06-02
 
 **fastembed 0.8.0 compatibility + wizard command**

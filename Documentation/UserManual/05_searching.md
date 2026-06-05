@@ -140,6 +140,46 @@ for hit in response["results"]:
 
 The MCP endpoint is `POST /mcp` (streamable HTTP transport, mounted by `mcp.create_mcp_http_app`). `/health` remains exempt from auth.
 
+## Filtering results (A2 + C2)
+
+`POST /search` and the `search`/`search_with_context` MCP tools accept an optional `filters` object:
+
+```json
+{
+  "collection": "docs",
+  "query": "how does the router work?",
+  "filters": {
+    "language": "fr",
+    "file_type": "md"
+  }
+}
+```
+
+| Filter field | Type | Description |
+| --- | --- | --- |
+| `file_type` | `string \| null` | Exact match on file extension (e.g. `"md"`, `"pdf"`). |
+| `source_path_prefix` | `string \| null` | SQL prefix match on the document's source path. |
+| `source_path_glob` | `string \| null` | Python `fnmatch` glob on the source path (Python-side post-filter). |
+| `indexed_after` | `datetime \| null` | Include only chunks indexed after this timestamp. |
+| `indexed_before` | `datetime \| null` | Include only chunks indexed before this timestamp. |
+| `language` | `string \| null` | ISO 639-1 or ISO 639-3 language code, or `"unknown"`. **Single-collection only** — rejected with 422 on multi-collection fan-out. |
+| `include_metadata` | `bool` | When `true`, return the stored metadata dict; default `false`. |
+
+### Language filter (C2)
+
+When `config.multilingual=True`, ingested documents are tagged with an ISO language code (e.g. `"fr"`, `"de"`) by the fasttext `LanguageDetector`. The `language` filter then lets you retrieve only documents in that language:
+
+- `language=fr` — returns only `fr`-tagged chunks; excludes `""` (pre-C2 legacy) and `"unknown"` (below confidence threshold).
+- `language=unknown` — returns only chunks whose language could not be detected above the confidence threshold.
+- No `language` filter — returns all chunks regardless of language state.
+
+**Three-state language contract**: every chunk has one of three language values:
+- `""` — legacy chunk ingested before C2 / without `multilingual=True`.
+- `"unknown"` — processed but confidence below `language_detection_confidence_threshold` (default `0.7`).
+- `"<code>"` — detected language code (ISO 639-1 2-letter or ISO 639-3 3-letter).
+
+The `language` filter is a strict equality match — `language=fr` does not match `""` or `"unknown"`.
+
 ## Related documents
 
 - [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) — full REST/MCP reference.

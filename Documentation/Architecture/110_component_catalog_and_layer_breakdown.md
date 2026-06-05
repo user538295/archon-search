@@ -41,6 +41,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/chunker.py` | Split parsed Markdown into chunk records of a target size. | `DocumentChunker` |
 | `archon_search/_path_safety.py` | Validate caller-supplied ingest paths at the request boundary (HTTP `POST /collections`, `POST /ingest`; MCP `ingest_file`, `ingest_directory`). Rejects empty/whitespace-only/NUL/non-absolute/`..`-traversal inputs. Symlink resolution and absolute-path scope are intentionally **not** validated (deferred to a future `allowed_dirs` feature). | `validate_ingest_path`, `PathUnsafeError` |
 | `archon_search/acl.py` | Parse `_acl` front matter and `.acl` sidecars; resolve effective ACL per document; filter search results by request namespace. | `resolve_acl`, `apply_acl_filter`, `is_acl_allowed`, `read_acl_sidecar`, `parse_acl_value`, `is_acl_namespace_valid` |
+| `archon_search/language_detector.py` | **C2** — Per-document language detection using the fasttext `lid.176.ftz` model. Lazy-loads the model; detects language on the first 2000 chars of Markdown output; strips `__label__` prefix; normalizes to ISO 639-1 (2-letter) or ISO 639-3 (3-letter) via `_FASTTEXT_ISO_MAP`; returns `"unknown"` when confidence is below `SearchConfig.language_detection_confidence_threshold` or text is empty. Runs in a thread pool to avoid blocking the event loop. Only active when `config.multilingual=True`. | `LanguageDetector`, `FASTTEXT_MODEL_FILENAME`, `FASTTEXT_MODELS_DIR` |
 
 ## Index
 

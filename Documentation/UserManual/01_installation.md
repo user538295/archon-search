@@ -78,6 +78,8 @@ The installer ships three tiered profiles. Choose based on your hardware and qua
 
 **Multilingual `balanced` and `max` profiles use the Jina reranker (`jinaai/jina-reranker-v2-base-multilingual`)**, which is licensed CC-BY-NC-4.0 (non-commercial). The installer requires explicit license acceptance before downloading it.
 
+**C2 — Language detection**: when `--multilingual` is set, the installer also downloads `lid.176.ftz` (Facebook Research fasttext language identification model, licensed CC-BY-SA 3.0) to `~/.archon-search/models/`. You must accept this license interactively, or pass `--accept-fasttext-license` for non-interactive installs. The model enables the `language=<code>` filter on searches.
+
 The chosen profile is recorded in `[database].profile` and `[database].multilingual` in `~/.archon-search/archon-search.toml`. Reinstalling with a different profile requires `--force --delete-db` (the installer will tell you if this is needed).
 
 ## Install as a background service (optional)
@@ -108,6 +110,7 @@ All flags (verified against `archon_search/cli/install_cmd.py`):
 | `--force` | Overwrite an existing install. Required when changing profiles. |
 | `--delete-db` | Also delete the database when reinstalling (`--force` required). Use with caution — this removes all indexed data. |
 | `--accept-jina-license` | Accept the Jina CC-BY-NC-4.0 license non-interactively (required for multilingual `balanced`/`max`). |
+| `--accept-fasttext-license` | **C2** — Accept the fasttext `lid.176.ftz` CC-BY-SA 3.0 license non-interactively (required when `--multilingual`). |
 | `--dry-run` | Print actions without executing. |
 | `--non-interactive` | Skip all confirmation prompts. |
 | `--config PATH` | Use a non-default config file when computing data/log paths. |
@@ -117,11 +120,12 @@ The installer:
 1. Detects and removes any legacy service file (`~/Library/LaunchAgents/com.archon.search.plist` on macOS, `~/.config/systemd/user/archon-search.service` on Linux).
 2. Prompts for (or validates) the install profile and multilingual flag.
 3. Prompts for Jina license acceptance if the profile requires it (or checks `--accept-jina-license`).
-4. Creates `~/.archon-search/archon-search.toml` from the profile defaults if missing.
-5. Checks available disk space for the selected profile.
-6. Pre-warms model weights (unless `--skip-preload`).
-7. Registers and starts the service via the platform adapter (`archon_search/platform/macos.py`, `linux.py`).
-8. Polls `GET http://<host>:<port>/health` for up to 60 seconds; exits non-zero if the service does not become ready.
+4. **C2**: When `--multilingual`, prompts for fasttext `lid.176.ftz` CC-BY-SA 3.0 license acceptance (or checks `--accept-fasttext-license`) and downloads the model to `~/.archon-search/models/`.
+5. Creates `~/.archon-search/archon-search.toml` from the profile defaults if missing.
+6. Checks available disk space for the selected profile.
+7. Pre-warms model weights (unless `--skip-preload`).
+8. Registers and starts the service via the platform adapter (`archon_search/platform/macos.py`, `linux.py`).
+9. Polls `GET http://<host>:<port>/health` for up to 60 seconds; exits non-zero if the service does not become ready.
 
 To remove:
 
@@ -139,6 +143,7 @@ archon-search uninstall --delete-db  # also remove the configured db_path (defau
 | `~/.archon-search/search/` | LanceDB vector store and FTS index. |
 | `~/.archon-search/logs/archon-search.log` | Server log. |
 | `~/.archon-search/search-logs/` | Telemetry JSONL (only when telemetry is enabled). |
+| `~/.archon-search/models/lid.176.ftz` | **C2** — fasttext language identification model (only when installed with `--multilingual`). |
 
 ## Related documents
 

@@ -119,6 +119,17 @@ The `[next release]` entry in `BREAKING.md` changes the MCP `search` tool from a
 
 Same release: the `top_k` field in `POST /search` is ignored at the route. Set `[database].top_k_return` in `archon-search.toml` to the desired value before upgrading. (Note: `BREAKING.md` currently refers to this key as `[search] top_k_return`, but the live key read by `archon_search/config.py` is `[database].top_k_return`; follow the code. Tracked as a `BREAKING.md` fix-up.)
 
+### C2 — Multilingual retrieval upgrade notes
+
+Upgrading to the C2 release activates language tagging at ingest time (when `multilingual=True`). Key considerations:
+
+1. **`language` field type change**: `SearchResult.language`, `ScoredSearchCandidate.language`, `ExplainResult.language`, and `ExplainNearMiss.language` now return `""` instead of `None` for untagged chunks. Update any `if result.language is None` guards to `if result.language == ""`. See `BREAKING.md`.
+2. **REST/JSON**: The `language` field serializes as `""` (empty string) instead of `null`. Update OpenAPI client type stubs.
+3. **`language` filter previously rejected**: before C2, any non-empty `language` value raised 422. After C2, valid ISO codes and `"unknown"` are accepted. Clients that sent `language` values expecting 422 will now receive results.
+4. **Re-ingest for language tags**: existing collections ingested before C2 will have `language=""` on all chunks. Use `GET /status` to see a per-collection warning when `multilingual=True` and untagged chunks are present. Re-ingest to populate language tags.
+5. **Enabling multilingual**: if upgrading from an English-only install to multilingual, run `archon-search install --multilingual [--accept-fasttext-license]` to download `lid.176.ftz`, then set `multilingual = true` in `archon-search.toml` and restart.
+6. **Profile switch with language detection**: switching from an English profile to a multilingual profile still requires `--force --delete-db` (unchanged pre-C2 behavior). All data must be re-ingested.
+
 ### Future schema migrations
 
 When/if `D3` ships, schema changes will move from "stop, backup, restore on failure" to a managed migration job kind with documented rollback. Until then, treat any `BREAKING.md` entry mentioning `db_path`, LanceDB tables, or `.indexing_state.json` as requiring a backup + re-ingest plan.

@@ -93,7 +93,7 @@ Optional sub-model on `SearchRequest.filters`. All fields are optional; omitting
 | `source_path_glob` | `str \| null` | Non-empty; must compile via `fnmatch.translate` | Python-side post-filter via `fnmatch.fnmatchcase`. **No path semantics**: `*` matches `/`; `**` is identical to `*`. |
 | `indexed_after` | `datetime \| date \| null` | Date-only strings `YYYY-MM-DD` coerced to midnight UTC | SQL `WHERE indexed_at >= '<fixed-width UTC>'` |
 | `indexed_before` | `datetime \| date \| null` | Date-only strings `YYYY-MM-DD` coerced to end-of-day UTC (23:59:59.999999Z). Must be ≥ `indexed_after`. | SQL `WHERE indexed_at <= '<fixed-width UTC>'` |
-| `language` | `str \| null` | **Reserved — always rejected with 422 when non-empty.** Roadmap item C2. | Not implemented in v1. |
+| `language` | `str \| null` | ISO 639-1 (2-letter) or ISO 639-3 (3-letter) code, or `"unknown"`. Empty string coerced to `null`. Uppercase normalized to lowercase. **Single-collection queries only** — rejected with `422` when used with `collections` fan-out. Values not matching `[a-z]{2,3}` or `"unknown"` rejected with `422`. | SQL-side `language = '<code>'` predicate (C2). Excludes chunks in other language states: `language=fr` excludes `""` (untagged) and `"unknown"` chunks; `language=unknown` returns only fasttext-processed-but-below-threshold chunks. |
 | `include_metadata` | `bool` | Default `false` | When `false`, `metadata` is returned as `{}` in results; when `true`, the stored `dict[str,str]` is returned. |
 
 **Date-range correctness note**: date-range filters compare against the `indexed_at` column, which is stored as a fixed-width UTC string (`YYYY-MM-DDTHH:MM:SS.ffffffZ`). Legacy rows with variable-precision timestamps may not sort correctly until `archon-search collection reindex-metadata <name> --normalize-timestamps` runs (see BREAKING.md A2 entry).
@@ -183,7 +183,7 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
       "indexed_at": "2026-05-20T12:00:00Z",
       "updated_at": "2026-05-20T11:00:00Z",
       "ingested_by": "cli",
-      "language": null,
+      "language": "",
       "metadata": {},
       "acl": null,
       "collection": "docs"
@@ -200,7 +200,7 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
       "indexed_at": "...",
       "updated_at": "...",
       "ingested_by": "cli",
-      "language": null,
+      "language": "",
       "metadata": {},
       "acl": null,
       "collection": "docs"
@@ -259,8 +259,8 @@ Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mount
 
 | Tool name | Purpose | Arguments | Returns |
 | --- | --- | --- | --- |
-| `search` | Hybrid vector + FTS search (single-collection or multi-collection fan-out), rerank, ACL filter. | `query: str`, `collection: str \| None`, `collections: list[str] \| None` (B3 — fan-out; exactly one of `collection` / `collections`, else falls back to `default_collection`; 1–8 entries, stripped + deduped), `include_metadata: bool = false`, `file_type: str \| None`, `source_path_prefix: str \| None`, `source_path_glob: str \| None`, `indexed_after: str \| None`, `indexed_before: str \| None`, `language: str \| None` (reserved — non-empty raises validation error) | `{"results": [SearchResult...], "acl_filtered": bool, "excluded_collections": [{name, reason}]}` — new shape per `BREAKING.md`. Each `SearchResult` carries a `collection` key (B3). On validation error: `{error, code: "validation_error"}`. On internal error: `{error, code: "internal_error"}`; collection not found: `{error, code: "not_found"}`. |
-| `search_with_context` | Search plus surrounding chunks for each hit. | `query`, `collection?`, `context_window: int = 1`, `include_metadata: bool = false`, `file_type: str \| None`, `source_path_prefix: str \| None`, `source_path_glob: str \| None`, `indexed_after: str \| None`, `indexed_before: str \| None`, `language: str \| None` (reserved) | `list[{result, context_before, context_after}]`. On error: `{error, code}`. |
+| `search` | Hybrid vector + FTS search (single-collection or multi-collection fan-out), rerank, ACL filter. | `query: str`, `collection: str \| None`, `collections: list[str] \| None` (B3 — fan-out; exactly one of `collection` / `collections`, else falls back to `default_collection`; 1–8 entries, stripped + deduped), `include_metadata: bool = false`, `file_type: str \| None`, `source_path_prefix: str \| None`, `source_path_glob: str \| None`, `indexed_after: str \| None`, `indexed_before: str \| None`, `language: str \| None` (**C2** — ISO 639-1 or ISO 639-3 code, e.g. `"fr"`, `"de"`, or `"unknown"`; single-collection only) | `{"results": [SearchResult...], "acl_filtered": bool, "excluded_collections": [{name, reason}]}` — new shape per `BREAKING.md`. Each `SearchResult` carries a `collection` key (B3). On validation error: `{error, code: "validation_error"}`. On internal error: `{error, code: "internal_error"}`; collection not found: `{error, code: "not_found"}`. |
+| `search_with_context` | Search plus surrounding chunks for each hit. | `query`, `collection?`, `context_window: int = 1`, `include_metadata: bool = false`, `file_type: str \| None`, `source_path_prefix: str \| None`, `source_path_glob: str \| None`, `indexed_after: str \| None`, `indexed_before: str \| None`, `language: str \| None` (**C2** — ISO 639-1 or ISO 639-3 code or `"unknown"`; single-collection only) | `list[{result, context_before, context_after}]`. On error: `{error, code}`. |
 | `explain` | Return the per-stage retrieval/reranking trace for a query, plus the routing decision when no collection is pinned. Operates in the default namespace only. The query is never echoed in the response or telemetry. | `query: str`, `collection: str \| None`, `collections: list[str] \| None` (B3 — multi-collection fan-out; routing bypassed; `rerank=false` with > 1 collection → `{error, code: "validation_error"}`), `top_k: int = 5`, `rerank: bool = True` | `ExplainResponse` dict (same structure as REST `POST /explain`; serialised via `model_dump(mode="json", exclude_none=False)`). `results`/`near_misses` entries carry a `collection` key and the response carries `excluded_collections` (B3). Includes `stage_timings_ms` when `[observability].stage_timings_enabled = true`. On error: `{error, code}`. When `config` is absent from `create_app`, collectionless calls fall back to `default_collection` (no routing). |
 | `ingest_file` | Ingest one file. | `path: str`, `collection?` | Ingest result dict. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`. |
 | `ingest_directory` | Ingest a directory tree (reports progress via `ctx`). | `path`, `glob_pattern = "**/*"`, `collection?` | `list[ingest result]`. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`. |
