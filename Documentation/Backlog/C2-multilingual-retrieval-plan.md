@@ -489,13 +489,16 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 - [ ] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.1 (spike confirmed support), Task 6.2
 - **Description**:
-  - **Prerequisite**: Task 1.1 must have confirmed the exact `FTS(language=...)` API call and the language code mapping (e.g., ISO code `"fr"` → LanceDB tokenizer string `"french"`)
+  - **Prerequisite**: Task 1.1 confirmed the exact `FTS(language=...)` API call. Key findings from the spike:
+    - Parameter is `language`, value must be a **capitalized full English name** (e.g., `"French"`, `"German"` — NOT `"french"`/`"german"`). LanceDB raises `ValueError` for unrecognized values.
+    - LanceDB's internal keys use non-standard codes for Dutch (`"du"` not `"nl"`) and Greek (`"gr"` not `"el"`). The map must bridge from fasttext/ISO 639-1 output to LanceDB's keys.
+    - `GROUP BY` SQL is **not supported** in LanceDB 0.30.2 — `get_dominant_language` must use Python-side aggregation (see below).
   - `rebuild_fts_index(collection: str)` gains optional `language: str = ""` parameter
-  - When `language` is a non-empty, recognized ISO code: pass language tokenizer config to `FTS()` constructor using the confirmed API from Task 1.1
-  - Add `_LANCEDB_TOKENIZER_MAP: dict[str, str]` — mapping from ISO 639-1 codes to LanceDB tokenizer names (e.g., `{"fr": "french", "de": "german", "en": "english"}`)
-  - Languages not in the map fall back to the default tokenizer (no regression for unsupported languages)
-  - The collection-level language is determined from the majority tag across all chunks in the collection (a new store query: `SELECT language, count(*) GROUP BY language ORDER BY count(*) DESC LIMIT 1` — returns the dominant language code)
-  - New store method: `async def get_dominant_language(collection: str) -> str` — returns dominant non-empty code or `""` if no language tags
+  - When `language` is a non-empty, recognized code: pass language tokenizer config to `FTS()` constructor
+  - Add `_LANCEDB_TOKENIZER_MAP: dict[str, str]` — mapping from fasttext/ISO output codes to LanceDB tokenizer names (capitalized). Must include bridge entries: `{"fr": "French", "de": "German", "en": "English", "nl": "Dutch", "el": "Greek", "nb": "Norwegian", "nn": "Norwegian", ...}` — see spike for full list
+  - Languages not in the map fall back to `FTS()` default (no regression for unsupported languages)
+  - The collection-level language is determined from the majority tag across all chunks using a **Python-side scan** (LanceDB does not support `GROUP BY` SQL): `await tbl.query().select(["language"]).to_arrow()` then `Counter` on non-empty values
+  - New store method: `async def get_dominant_language(collection: str) -> str` — fetches the `language` column, counts non-empty values with `Counter`, returns the most common code or `""` if all chunks are untagged
 - **Releasable**: after this task, FTS tokenization uses the correct Tantivy stemmer for the collection's dominant language.
 - **Tests (TDD)** — `tests/test_store.py` (add):
   - Unit: `test_rebuild_fts_index_with_language` — mock LanceDB; assert `FTS` constructed with language param when supported
