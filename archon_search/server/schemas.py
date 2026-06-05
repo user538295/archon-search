@@ -74,6 +74,7 @@ class StatusCollectionEntry(BaseModel):
     error: str | None = None
     error_count: int = 0
     needs_reindex: bool = False
+    warning: str | None = None
 
 
 class StatusResponse(BaseModel):

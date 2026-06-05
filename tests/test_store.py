@@ -6434,3 +6434,55 @@ def test_read_unknown_language_preserved() -> None:
         language=lang,
     )
     assert result.language == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# C2 Task 9.1 — count_untagged_language_chunks store method
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_count_untagged_language_chunks_store_method(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """count_untagged_language_chunks returns count of chunks where language=''."""
+    doc_id = _doc_id()
+    await connected_store.ensure_collection(col_name, _DIM)
+
+    # Ingest 2 untagged chunks (language="") and 1 tagged (language="fr")
+    untagged_chunks = [
+        dataclasses.replace(_chunk(doc_id, i), language="")
+        for i in range(2)
+    ]
+    tagged_chunk = dataclasses.replace(_chunk(doc_id, 2), language="fr")
+    await connected_store.ingest_chunks(col_name, untagged_chunks + [tagged_chunk])
+
+    count = await connected_store.count_untagged_language_chunks(col_name)
+    assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_count_untagged_language_chunks_all_tagged(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """count_untagged_language_chunks returns 0 when all chunks have language tags."""
+    doc_id = _doc_id()
+    await connected_store.ensure_collection(col_name, _DIM)
+
+    tagged_chunks = [
+        dataclasses.replace(_chunk(doc_id, i), language="fr")
+        for i in range(3)
+    ]
+    await connected_store.ingest_chunks(col_name, tagged_chunks)
+
+    count = await connected_store.count_untagged_language_chunks(col_name)
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_count_untagged_language_chunks_nonexistent_collection(
+    connected_store: SearchStore,
+) -> None:
+    """count_untagged_language_chunks returns 0 for a nonexistent collection."""
+    count = await connected_store.count_untagged_language_chunks("nonexistent-xyz-789")
+    assert count == 0

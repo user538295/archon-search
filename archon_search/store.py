@@ -1720,6 +1720,24 @@ class SearchStore:
             return 0
         return await table.count_rows()
 
+    async def count_untagged_language_chunks(self, collection: str) -> int:
+        """Return the number of chunks in *collection* where ``language = ''``.
+
+        These are legacy chunks that were ingested before C2 (language detection)
+        was active.  Returns ``0`` if the collection does not exist.
+
+        Uses ``_sql_quote_str`` (not an f-string) for the SQL predicate — consistent
+        with the CI guard in ``tests/test_no_fstring_sql.py``.
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return 0
+        predicate = "language = " + _sql_quote_str("")
+        return await table.count_rows(predicate)
+
     async def get_acl_stats(self, collection: str) -> tuple[int, int]:
         """Return (acl_protected_count, acl_open_count) for all chunks in a collection.
 

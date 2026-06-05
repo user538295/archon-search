@@ -60,6 +60,14 @@ async def status(request: Request) -> StatusResponse:
         progress = collections_progress.get(name)
         watching = config.watch
         col_meta = meta_by_name.get(name)
+
+        # C2: warn when multilingual mode is on but untagged legacy chunks exist
+        warning: str | None = None
+        if config.multilingual:
+            untagged = await search_store.count_untagged_language_chunks(name)
+            if untagged > 0:
+                warning = "multilingual=true but collection contains untagged chunks; re-ingest required"
+
         collection_entries.append(
             StatusCollectionEntry(
                 name=name,
@@ -74,6 +82,7 @@ async def status(request: Request) -> StatusResponse:
                 error=progress.get("error") if progress else None,
                 error_count=progress["error_count"] if progress else 0,
                 needs_reindex=col_meta.needs_reindex if col_meta else False,
+                warning=warning,
             )
         )
 

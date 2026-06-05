@@ -425,7 +425,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 > **Releasable**: after Task 9.1; operators get a warning when multilingual mode is on but data has not been re-ingested.
 
 #### Task 9.1 — `/status` warning for legacy untagged chunks
-- [ ] **File**: `archon_search/server/routes_status.py`
+- [x] **File**: `archon_search/server/routes_status.py`
 - **Depends on**: Task 2.3 (read path returns `""` for legacy)
 - **Description**:
   - In the `status()` handler, after building per-collection info: if `config.multilingual is True` and a collection's `chunk_count > 0`, query the store for whether any chunks have `language = ""` (count query: `SELECT count(*) WHERE language = ''` via LanceDB)

@@ -1717,6 +1717,17 @@
             "title": "Total Files",
             "type": "integer"
           },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
+          },
           "watching": {
             "title": "Watching",
             "type": "boolean"

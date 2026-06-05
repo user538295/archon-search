@@ -567,3 +567,80 @@ def test_status_health_not_degraded_by_needs_reindex(tmp_db: Path) -> None:
 
     # storage_connected is based on ping, not needs_reindex
     assert data["readiness"]["storage_connected"] is True
+
+
+# ---------------------------------------------------------------------------
+# Task 9.1 — /status warning for legacy untagged chunks (multilingual)
+# ---------------------------------------------------------------------------
+
+
+def _make_client_multilingual(
+    tmp_db: Path,
+    meta_rows: list[CollectionMeta],
+    untagged_counts: dict[str, int] | None = None,
+    multilingual: bool = True,
+) -> TestClient:
+    """Build a TestClient with multilingual config and per-collection untagged counts."""
+    from unittest.mock import patch
+
+    config = SearchConfig()
+    config.db_path = str(tmp_db)
+    config.multilingual = multilingual
+
+    job_store = JobStore(path=tmp_db / "jobs.json")
+    # Bypass the startup dep check and LanguageDetector init (fasttext not installed in tests)
+    with (
+        patch("archon_search.server.app._check_multilingual_deps"),
+        patch("archon_search.language_detector.LanguageDetector", MagicMock(return_value=None)),
+    ):
+        app = create_app(config, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=meta_rows)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
+
+    async def _count_untagged(collection: str) -> int:
+        if untagged_counts is None:
+            return 0
+        return untagged_counts.get(collection, 0)
+
+    mock_store.count_untagged_language_chunks = _count_untagged
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+
+def test_status_warning_when_multilingual_and_untagged(tmp_db: Path) -> None:
+    """When multilingual=True and a collection has untagged chunks, warn in response."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta_rows = [CollectionMeta(name="col-a", namespace=DEFAULT_NAMESPACE)]
+    c = _make_client_multilingual(tmp_db, meta_rows, untagged_counts={"col-a": 5})
+    data = c.get("/status").json()
+    assert data["collections"][0]["warning"] == (
+        "multilingual=true but collection contains untagged chunks; re-ingest required"
+    )
+
+
+def test_status_no_warning_when_multilingual_false(tmp_db: Path) -> None:
+    """When multilingual=False, no warning is emitted even if untagged chunks exist."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta_rows = [CollectionMeta(name="col-a", namespace=DEFAULT_NAMESPACE)]
+    c = _make_client_multilingual(tmp_db, meta_rows, untagged_counts={"col-a": 5}, multilingual=False)
+    data = c.get("/status").json()
+    assert "warning" not in data["collections"][0] or data["collections"][0]["warning"] is None
+
+
+def test_status_no_warning_when_all_tagged(tmp_db: Path) -> None:
+    """When multilingual=True but no untagged chunks, no warning is emitted."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta_rows = [CollectionMeta(name="col-a", namespace=DEFAULT_NAMESPACE)]
+    c = _make_client_multilingual(tmp_db, meta_rows, untagged_counts={"col-a": 0})
+    data = c.get("/status").json()
+    assert "warning" not in data["collections"][0] or data["collections"][0]["warning"] is None
