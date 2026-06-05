@@ -254,7 +254,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
   - Checkpoint: `uv run pytest tests/test_install.py -x -k "fasttext_license"`
 
 #### Task 4.2 — `_download_fasttext_model()` in `install.py`
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 4.1
 - **Description**:
   - `FASTTEXT_MODEL_URL = "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.ftz"` — module-level constant
