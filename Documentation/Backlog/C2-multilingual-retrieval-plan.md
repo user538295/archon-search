@@ -145,7 +145,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 > **Releasable**: after Task 2.3; legacy read path is fixed and the three-state invariant is enforced.
 
 #### Task 2.1 — Add `[multilingual]` optional extra to `pyproject.toml`
-- [ ] **File**: `pyproject.toml`
+- [x] **File**: `pyproject.toml`
 - **Depends on**: nothing
 - **Description**:
   - Add under `[project.optional-dependencies]`: `multilingual = ["fasttext-wheel"]`
