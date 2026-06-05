@@ -1461,7 +1461,7 @@ class SearchStore:
                     score=score,
                     source_path=row["source_path"],
                     file_type=row.get("file_type") or "",
-                    language=row.get("language") or None,
+                    language=row.get("language") or "",
                     indexed_at=indexed_at,
                     updated_at=row.get("updated_at") or indexed_at,
                     ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
@@ -1636,7 +1636,7 @@ class SearchStore:
                 source_path=r["source_path"],
                 indexed_at=r["indexed_at"],
                 file_type=r.get("file_type") or "",
-                language=r.get("language") or None,
+                language=r.get("language") or "",
                 metadata=parse_metadata(r.get("metadata") or "{}"),
                 custom_score=r.get("custom_score"),
                 ingested_by=_normalize_ingested_by(r.get("ingested_by")),
@@ -1886,7 +1886,7 @@ async def _hybrid_search_with_trace(
                     indexed_at=indexed_at,
                     updated_at=row.get("updated_at") or indexed_at,
                     ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
-                    language=row.get("language") or None,
+                    language=row.get("language") or "",
                     metadata=parse_metadata(row.get("metadata") or "{}"),
                 )
             )

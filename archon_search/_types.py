@@ -67,8 +67,8 @@ class ChunkRecord:
     # Extended metadata fields
     file_type: str = ""
     """filterable: source file extension (lowercased, no leading dot)."""
-    language: str | None = None
-    """filterable: detected language (reserved; populated by C2)."""
+    language: str = ""
+    """filterable: detected language code; "" = untagged (pre-C2 legacy), "unknown" = below threshold."""
     metadata: dict[str, str] = field(default_factory=dict)
     """filterable: free-form key/value pairs from front matter (bounded)."""
     custom_score: float | None = None
@@ -90,7 +90,7 @@ class SearchResult:
     score: float
     source_path: str
     file_type: str = ""
-    language: str | None = None  # A2 addition (extractor lands in C2)
+    language: str = ""  # A2 addition (extractor lands in C2)
     indexed_at: str = ""
     updated_at: str = ""
     ingested_by: IngestedBy = "cli"

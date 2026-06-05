@@ -37,7 +37,7 @@ def _candidate(
     reranker: float | None = None,
     text: str = "body",
     acl: list[str] | None = None,
-    language: str | None = None,
+    language: str = "",
 ) -> ScoredSearchCandidate:
     return ScoredSearchCandidate(
         doc_id=doc_id,

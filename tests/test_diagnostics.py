@@ -58,5 +58,5 @@ def test_scored_search_candidate_metadata_fields_default() -> None:
     assert cand.indexed_at == ""
     assert cand.updated_at == ""
     assert cand.ingested_by == "cli"
-    assert cand.language is None
+    assert cand.language == ""
     assert cand.metadata == {}

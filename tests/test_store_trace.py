@@ -161,20 +161,20 @@ def test_hybrid_search_with_trace_normalizes_legacy_ingested_by(tmp_path: Path) 
 
 
 def test_hybrid_search_with_trace_populates_language(tmp_path: Path) -> None:
-    """language is copied when present; normalizes empty/absent to None."""
+    """language is copied when present; normalizes empty/absent to ''."""
     store = _trace_store_with_row(tmp_path, "db9a", _row("lang_en", language="en"))
     candidates = _run_trace(store)
     assert candidates[0].language == "en"
 
-    # Absent key → None
+    # Absent key → ""
     store2 = _trace_store_with_row(tmp_path, "db9b", _row("lang_absent"))
     candidates2 = _run_trace(store2)
-    assert candidates2[0].language is None
+    assert candidates2[0].language == ""
 
-    # Empty string → None
+    # Empty string → ""
     store3 = _trace_store_with_row(tmp_path, "db9c", _row("lang_empty", language=""))
     candidates3 = _run_trace(store3)
-    assert candidates3[0].language is None
+    assert candidates3[0].language == ""
 
 
 def test_hybrid_search_with_trace_metadata_is_parsed_dict(tmp_path: Path) -> None:

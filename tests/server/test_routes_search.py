@@ -601,22 +601,6 @@ def test_post_search_unknown_collection_returns_404_not_422(tmp_path: Path) -> N
     assert response.json()["detail"] == "collection not found"
 
 
-def test_openapi_schema_language_description_says_reserved_c2(tmp_path: Path) -> None:
-    """OpenAPI schema for SearchFilters.language must mention 'reserved' and 'C2'."""
-    app, _ = _make_app(tmp_path)
-    sync_client = TestClient(app)
-
-    resp = sync_client.get("/openapi.json")
-    assert resp.status_code == 200
-    schema = resp.json()
-
-    search_filters = schema.get("components", {}).get("schemas", {}).get("SearchFilters", {})
-    assert search_filters, "SearchFilters not found in OpenAPI components"
-    language_prop = search_filters.get("properties", {}).get("language", {})
-    description = language_prop.get("description", "")
-    assert "reserved" in description, f"'reserved' not in language description: {description!r}"
-    assert "C2" in description, f"'C2' not in language description: {description!r}"
-
 
 @pytest.mark.integration
 async def test_search_filter_excludes_everything_returns_200_empty(tmp_path: Path) -> None:
@@ -983,3 +967,19 @@ def test_search_handler_multi_collection_emits_search_multi_telemetry(tmp_path: 
     assert entry.excluded_count == 1
     assert entry.result_count == 1
     assert entry.collections == ["a", "b", "c"]
+
+
+def test_openapi_language_field_not_nullable(tmp_path):
+    """SearchResultSchema.language must not be nullable in OpenAPI schema."""
+    app, _ = _make_app(tmp_path)
+    sync_client = TestClient(app)
+    resp = sync_client.get("/openapi.json")
+    schema = resp.json()
+    search_result = schema.get("components", {}).get("schemas", {}).get("SearchResultSchema", {})
+    lang_prop = search_result.get("properties", {}).get("language", {})
+    # After C2 Task 2.3: language is str = "" (not nullable), so anyOf with null must not appear
+    if "anyOf" in lang_prop:
+        types_in_anyof = [t.get("type") for t in lang_prop["anyOf"]]
+        assert "null" not in types_in_anyof, f"language field must not be nullable, got: {lang_prop}"
+    else:
+        assert lang_prop.get("type") == "string", f"language field must be string type, got: {lang_prop}"

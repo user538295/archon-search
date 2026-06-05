@@ -89,7 +89,7 @@ class ExplainResult(BaseModel):
     indexed_at: str = ""
     updated_at: str = ""
     ingested_by: IngestedBy = "cli"
-    language: str | None = None
+    language: str = ""
     metadata: dict[str, str] = Field(default_factory=dict)
     acl: list[str] | None = None
     collection: str = ""
@@ -126,7 +126,7 @@ class ExplainNearMiss(BaseModel):
     indexed_at: str = ""
     updated_at: str = ""
     ingested_by: IngestedBy = "cli"
-    language: str | None = None
+    language: str = ""
     metadata: dict[str, str] = Field(default_factory=dict)
     acl: list[str] | None = None
     collection: str = ""

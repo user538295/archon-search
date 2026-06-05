@@ -26,7 +26,7 @@ def _make_chunk(
     source_path: str = "/tmp/test.txt",
     indexed_at: str = "",
     file_type: str = "",
-    language: str | None = None,
+    language: str = "",
     metadata: dict[str, str] | None = None,
     custom_score: float | None = None,
     ingested_by: str = "archon-search-cli",
@@ -253,7 +253,7 @@ async def test_language_en_stored(tmp_path):
     store, col = await _store_with_chunk(chunk, str(tmp_path))
     try:
         row = await _read_first_row(store, col)
-        # language="en" stored as "en", fetch_adjacent_chunks maps "" → None but "en" stays "en"
+        # language="en" stored as "en", fetch_adjacent_chunks preserves it as "en"
         assert row["language"] == "en"
     finally:
         await store.disconnect()
@@ -273,12 +273,12 @@ async def test_updated_at_stored(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Schema evolution: old-schema chunk read → new field defaults to None
+# Schema evolution: old-schema chunk (no 'language' field) read → new field defaults to ""
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_existing_chunk_missing_new_field_defaults_null(tmp_path):
-    """Old-schema chunk (no 'language' field) read via fetch_adjacent_chunks must have language=None."""
+    """Old-schema chunk (no 'language' field) read via fetch_adjacent_chunks must have language=''."""
     import pyarrow as pa
 
     store = SearchStore(str(tmp_path))
@@ -313,6 +313,6 @@ async def test_existing_chunk_missing_new_field_defaults_null(tmp_path):
         # This fetches chunk indices 0 and 2 (excluding center=1). Chunk 0 exists.
         results = await store.fetch_adjacent_chunks(collection, doc_id, center_idx=1, window=1)
         assert len(results) == 1, f"Expected 1 chunk, got {len(results)}"
-        assert results[0].language is None
+        assert results[0].language == ""
     finally:
         await store.disconnect()

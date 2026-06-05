@@ -120,7 +120,7 @@ def test_chunk_metadata_default_empty_dict():
         collection="docs",
         indexed_at="2026-01-01T00:00:00Z",
         file_type="text",
-        language=None,
+        language="",
     )
     assert chunk.metadata == {}
     assert chunk.custom_score is None
@@ -130,9 +130,9 @@ def test_chunk_metadata_default_empty_dict():
 
 def test_chunk_metadata_default_not_shared():
     a = Chunk(chunk_id="c1", doc_id="d1", text="t", source_path="/f", collection="col",
-              indexed_at="t", file_type="md", language=None)
+              indexed_at="t", file_type="md", language="")
     b = Chunk(chunk_id="c2", doc_id="d2", text="t", source_path="/f", collection="col",
-              indexed_at="t", file_type="md", language=None)
+              indexed_at="t", file_type="md", language="")
     a.metadata["key"] = "val"
     assert b.metadata == {}
 
@@ -186,11 +186,11 @@ def test_ingest_job_splat_pre_5c_dict():
     assert job.namespace == DEFAULT_NAMESPACE
 
 
-def test_search_result_language_defaults_to_none():
+def test_search_result_language_defaults_to_empty_string():
     result = SearchResult(
         doc_id="abc", chunk_id="abc-000000", text="hello", score=0.9, source_path="/tmp/file.txt"
     )
-    assert result.language is None
+    assert result.language == ""
 
 
 def test_search_result_language_carried_when_set():
@@ -246,7 +246,7 @@ def test_all_types_json_serializable():
         CollectionDetail(name="n", path="/p", description="d", doc_count=0, chunk_count=0,
                          status="ready", embedding_model="m", centroid_present=False),
         Chunk(chunk_id="c", doc_id="d", text="t", source_path="/f", collection="col",
-              indexed_at="t", file_type="md", language=None),
+              indexed_at="t", file_type="md", language=""),
     ]
     for obj in instances:
         d = dataclasses.asdict(obj)

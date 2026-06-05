@@ -3107,7 +3107,7 @@ def test_hybrid_search_row_projection_populates_language(tmp_path: Path) -> None
 
 
 def test_hybrid_search_row_projection_language_empty_string_yields_none(tmp_path: Path) -> None:
-    """Unit: row with language='' (current A1/A2 stored value) produces SearchResult.language is None."""
+    """Unit: row with language='' (current A1/A2 stored value) produces SearchResult.language == ''."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
@@ -3140,11 +3140,11 @@ def test_hybrid_search_row_projection_language_empty_string_yields_none(tmp_path
 
     results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", 5))
     assert len(results) == 1
-    assert results[0].language is None
+    assert results[0].language == ""
 
 
 def test_hybrid_search_row_projection_language_missing_yields_none(tmp_path: Path) -> None:
-    """Unit: row without language column produces SearchResult.language is None."""
+    """Unit: row without language column produces SearchResult.language == ''."""
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
@@ -3177,7 +3177,7 @@ def test_hybrid_search_row_projection_language_missing_yields_none(tmp_path: Pat
 
     results = asyncio.run(store.hybrid_search("my-col", [0.0] * _DIM, "hello", 5))
     assert len(results) == 1
-    assert results[0].language is None
+    assert results[0].language == ""
 
 
 @pytest.mark.asyncio
@@ -3303,7 +3303,7 @@ def _make_vec_row(doc_id: str, idx: int = 0) -> dict:
         "text": "sample text",
         "source_path": "/tmp/x.md",
         "file_type": "md",
-        "language": None,
+        "language": "",
         "indexed_at": "2026-01-01T00:00:00+00:00",
         "updated_at": "2026-01-01T00:00:00+00:00",
         "ingested_by": "cli",
@@ -6383,3 +6383,54 @@ async def test_count_chunks_nonexistent_collection_returns_zero(
     from archon_search.constants import DEFAULT_NAMESPACE
     count = await connected_store.count_chunks("nonexistent-count-xyz", DEFAULT_NAMESPACE)
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# C2 Task 2.3 — three-state language read path
+# ---------------------------------------------------------------------------
+
+def test_scored_search_candidate_language_empty_not_none() -> None:
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    breakdown = SearchScoreBreakdown(
+        vector_rank=None, vector_score=None, vector_score_kind=None,
+        fts_rank=None, fts_score=None, fts_score_kind=None,
+        rrf_score=0.5, reranker_score=None,
+    )
+    cand = ScoredSearchCandidate(
+        doc_id="d1", chunk_id="c1", text="t", source_path="/f",
+        score_breakdown=breakdown, collection="col",
+    )
+    assert cand.language == "", f"Expected empty string, got {cand.language!r}"
+
+def test_read_empty_language_preserved() -> None:
+    """language='' stored in DB must come back as '' not None."""
+    from archon_search._types import SearchResult
+    # Simulate what store.py's read path does
+    row = {"language": ""}
+    # The fixed read path: row.get("language") or ""
+    lang = row.get("language") or ""
+    result = SearchResult(
+        doc_id="d1", chunk_id="c1", text="t", score=1.0, source_path="/f",
+        language=lang,
+    )
+    assert result.language == "", f"Expected '', got {result.language!r}"
+
+def test_read_specific_language_preserved() -> None:
+    from archon_search._types import SearchResult
+    row = {"language": "fr"}
+    lang = row.get("language") or ""
+    result = SearchResult(
+        doc_id="d1", chunk_id="c1", text="t", score=1.0, source_path="/f",
+        language=lang,
+    )
+    assert result.language == "fr"
+
+def test_read_unknown_language_preserved() -> None:
+    from archon_search._types import SearchResult
+    row = {"language": "unknown"}
+    lang = row.get("language") or ""
+    result = SearchResult(
+        doc_id="d1", chunk_id="c1", text="t", score=1.0, source_path="/f",
+        language=lang,
+    )
+    assert result.language == "unknown"

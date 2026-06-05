@@ -62,7 +62,7 @@ class ScoredSearchCandidate:
         indexed_at: ISO 8601 UTC ingest timestamp (empty when absent).
         updated_at: File mtime ISO 8601 UTC; falls back to indexed_at when absent.
         ingested_by: Call-site identity for the ingest write (cli/http/watcher/reindex).
-        language: Detected language code; None when absent or empty.
+        language: Detected language code; '' when untagged.
         metadata: Parsed key/value metadata dict (empty when absent).
     """
 
@@ -77,5 +77,5 @@ class ScoredSearchCandidate:
     indexed_at: str = ""
     updated_at: str = ""
     ingested_by: IngestedBy = "cli"
-    language: str | None = None
+    language: str = ""
     metadata: dict[str, str] = field(default_factory=dict)

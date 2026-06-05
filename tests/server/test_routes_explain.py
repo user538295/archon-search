@@ -2066,3 +2066,110 @@ def test_post_explain_rerank_false_multi_collections_http_422(tmp_path: Path) ->
         "/explain", json={"query": "hello", "collections": ["A", "B"], "rerank": False}
     )
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# C2 Task 2.3 — three-state language field in explain responses
+# ---------------------------------------------------------------------------
+
+
+def test_explain_result_language_field_three_state(tmp_path: Path) -> None:
+    """ExplainResult.language carries 'fr' for tagged, '' for untagged (not None)."""
+    from archon_search.server.routes_explain import ExplainResult, ExplainNearMiss
+
+    # Tagged candidate → language is "fr"
+    tagged_cand = ScoredSearchCandidate(
+        doc_id=_make_doc_id(0),
+        chunk_id=f"{_make_doc_id(0)}-000000",
+        text="bonjour",
+        source_path="/tmp/fr.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=1, vector_score=0.5, vector_score_kind="distance",
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.9, reranker_score=None,
+        ),
+        collection="docs",
+        language="fr",
+    )
+    result = ExplainResult.from_candidate(tagged_cand)
+    assert result.language == "fr"
+
+    near_miss = ExplainNearMiss.from_candidate(tagged_cand)
+    assert near_miss.language == "fr"
+
+    # Untagged candidate → language is "" (not None)
+    untagged_cand = ScoredSearchCandidate(
+        doc_id=_make_doc_id(1),
+        chunk_id=f"{_make_doc_id(1)}-000000",
+        text="hello",
+        source_path="/tmp/en.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=1, vector_score=0.5, vector_score_kind="distance",
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.8, reranker_score=None,
+        ),
+        collection="docs",
+    )
+    result2 = ExplainResult.from_candidate(untagged_cand)
+    assert result2.language == "", f"Expected '' for untagged, got {result2.language!r}"
+
+    near_miss2 = ExplainNearMiss.from_candidate(untagged_cand)
+    assert near_miss2.language == "", f"Expected '' for untagged near miss, got {near_miss2.language!r}"
+
+
+def test_explain_http_language_empty_not_null(tmp_path: Path) -> None:
+    """POST /explain with a legacy untagged chunk must return language='' (not null) in JSON."""
+    app, client = _make_app(tmp_path)
+
+    # Build pipeline mock that returns an untagged candidate (language="")
+    untagged_cand = ScoredSearchCandidate(
+        doc_id=_make_doc_id(0),
+        chunk_id=f"{_make_doc_id(0)}-000000",
+        text="hello world",
+        source_path="/tmp/legacy.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=1, vector_score=0.5, vector_score_kind="distance",
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.9, reranker_score=None,
+        ),
+        collection="col",
+        language="",
+    )
+    near_miss_cand = ScoredSearchCandidate(
+        doc_id=_make_doc_id(1),
+        chunk_id=f"{_make_doc_id(1)}-000000",
+        text="near miss text",
+        source_path="/tmp/legacy2.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=2, vector_score=0.6, vector_score_kind="distance",
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.7, reranker_score=None,
+        ),
+        collection="col",
+        language="",
+    )
+
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(
+        return_value=CollectionMeta(name="col", namespace="default")
+    )
+    pipeline.explain = AsyncMock(
+        return_value=ExplainPipelineResult(
+            top_results=[untagged_cand],
+            near_misses=[near_miss_cand],
+            acl_filtered=False,
+        )
+    )
+    app.state.pipeline = pipeline
+
+    response = client.post("/explain", json={"query": "hello", "collection": "col"})
+
+    assert response.status_code == 200
+    data = response.json()
+    # language must serialize as "" (empty string), not null
+    assert data["results"][0]["language"] == "", (
+        f"Expected '' for untagged result, got {data['results'][0]['language']!r}"
+    )
+    assert data["near_misses"][0]["language"] == "", (
+        f"Expected '' for untagged near_miss, got {data['near_misses'][0]['language']!r}"
+    )

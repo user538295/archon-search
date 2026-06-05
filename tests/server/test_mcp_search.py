@@ -58,7 +58,7 @@ class _FakeFastMCP:
         return _FakeApp(name)
 
 
-def _make_result(metadata: dict[str, str] | None = None, language: str | None = None) -> SearchResult:
+def _make_result(metadata: dict[str, str] | None = None, language: str = "") -> SearchResult:
     return SearchResult(
         doc_id="d" * 64,
         chunk_id="d" * 64 + "-000001",

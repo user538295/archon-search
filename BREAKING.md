@@ -8,6 +8,16 @@
 
 ## Changelog
 
+### [next release] — C2 language field type change (SearchResult, ScoredSearchCandidate, ExplainResult, ExplainNearMiss)
+
+**Python**: `SearchResult.language`, `ScoredSearchCandidate.language`, `ExplainResult.language`, and `ExplainNearMiss.language` now return `""` (empty string) for legacy/untagged chunks instead of `None`. Update `if result.language is None` guards to `if result.language == ""`.
+
+**REST/JSON**: The `language` field in search and explain responses now serializes as `""` (empty string) instead of `null`. OpenAPI clients must update their type stubs (`nullable: false`, `type: string`).
+
+**Migration**: Replace `if result.language is None` with `if result.language == ""` in any code that checks for an untagged language. REST consumers should expect `""` instead of `null` for the `language` field in `SearchResultSchema`, `ExplainResult`, and `ExplainNearMiss`.
+
+**Announced in**: this release.
+
 ### [next release] — C1 per-collection embedding model (schema changes)
 
 **Surface**: REST `GET /collections/{name}` response (breaking rename); `GET /collections/` response (additive); `POST /collections/` request (additive); `PATCH /collections/{name}` (new endpoint); `POST /search` response (additive); MCP (new `update_collection` tool).

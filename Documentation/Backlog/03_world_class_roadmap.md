@@ -216,11 +216,11 @@ If only one ordering is used for planning, use this — each phase is a coherent
 10. ✅ B3. Server-side multi-collection search primitive (item 8).
 11. ✅ B4. Stronger collection routing (item 9) — description-embedding hybrid blend; centroid default preserved; multi-centroid deferred.
 12. ✅ B5. Incremental centroid update (item 17, `CON-4`) — three defects fixed; see Phase B entry above.
-13. ⬜ B6. Production-model eval lane (`EVL-1`).
-14. ⬜ B7. Structured logs + log rotation (item 25).
+13. ✅ B6. Production-model eval lane (`EVL-1`).
+14. ✅ B7. Structured logs + log rotation (item 25).
 
 **Phase C — Quality features**
-15. ⬜ C1. Per-collection embedding model (item 13).
+15. ✅ C1. Per-collection embedding model (item 13).
 16. ⬜ C2. Multilingual retrieval (item 14).
 17. ⬜ C3. Chunk-level enrichment (item 19).
 18. ⬜ C4. HyDE / query expansion (item 10).
@@ -259,8 +259,8 @@ If only one ordering is used for planning, use this — each phase is a coherent
 If the goal is **a full-featured world-class search system that is also safe to run in production**, the balanced sequence is:
 
 1. ✅ Product boundary (done).
-2. ⬜ **Phase A** — ship metadata + filters + explain (user wins), and close the most painful safety debt (path, SQL, locks, fsync) in the same release. Cheap, broad impact, unlocks every later phase. (Search-failure semantics is already closed via A3; see `BREAKING.md`.)
-3. ⬜ **Phase B** — observability + production-model eval lane first; then the server-side multi-collection refactor and stronger routing. Without B1/B6 the later ranking work has no story.
+2. ✅ **Phase A** — ship metadata + filters + explain (user wins), and close the most painful safety debt (path, SQL, locks, fsync) in the same release. Cheap, broad impact, unlocks every later phase. (Search-failure semantics is already closed via A3; see `BREAKING.md`.)
+3. ✅ **Phase B** — observability + production-model eval lane first; then the server-side multi-collection refactor and stronger routing. Without B1/B6 the later ranking work has no story.
 4. ⬜ **Phase C** — the ranking-leap features (per-collection model, multilingual, enrichment, HyDE, RAG Fusion). Each gated by the eval harness.
 5. ⬜ **Phase D** — finish the job contract, export/import, key rotation; the system becomes operable end-to-end.
 6. ⬜ **Phase E and F** — surface (SDKs, UI, connectors) and differentiators (salience, GraphRAG, multimodal, scale). Only after A–D close.

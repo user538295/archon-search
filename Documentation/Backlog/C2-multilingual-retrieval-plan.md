@@ -174,7 +174,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
   - Checkpoint: `uv run pytest tests/test_config.py -x -k "threshold"`
 
 #### Task 2.3 — Fix `store.py` read path: preserve three-state language value
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: nothing
 - **Description**:
   - Three sites to update (lines 1464, 1639, 1889 approx): `language=row.get("language") or None` → `language=row.get("language") or ""`

@@ -93,7 +93,7 @@ class SearchResultSchema(BaseModel):
     score: float
     source_path: str
     file_type: str = ""
-    language: str | None = None
+    language: str = ""
     indexed_at: str = ""
     updated_at: str = ""
     ingested_by: str = "cli"

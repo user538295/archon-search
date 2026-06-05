@@ -71,7 +71,7 @@ def _neighbor(idx: int) -> ChunkRecord:
     )
 
 
-def _result(idx: int, language: str | None = None) -> SearchResult:
+def _result(idx: int, language: str = "") -> SearchResult:
     doc_id = "d" * 64
     return SearchResult(
         doc_id=doc_id,
