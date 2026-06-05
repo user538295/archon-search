@@ -468,3 +468,93 @@ async def test_mcp_search_multi_emits_search_multi_telemetry() -> None:
     assert entry.fanout_count == 2
     assert entry.excluded_count == 1
     assert entry.collections == ["a", "b", "c"]
+
+
+# ---------------------------------------------------------------------------
+# Task 10.1 — MCP tool description updates for language parameter (C2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_tool_language_param_described() -> None:
+    """MCP search tool must advertise a description for the language parameter
+    that contains 'ISO 639' so callers know it is a language-code filter."""
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+
+    real_app = mcp_module.create_app(pipeline, "default", writer=None)
+    tools_list = await real_app.list_tools()
+    schema_by_name = {t.name: t.inputSchema for t in tools_list}
+
+    assert "search" in schema_by_name
+    lang_prop = schema_by_name["search"].get("properties", {}).get("language", {})
+    description = lang_prop.get("description", "")
+    assert "ISO 639" in description, (
+        f"search tool language param description {description!r} does not contain 'ISO 639'"
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_tool_language_param_described() -> None:
+    """MCP search_with_context tool must advertise a description for the language
+    parameter that contains 'ISO 639'."""
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.search_with_context = AsyncMock(return_value=[])
+
+    real_app = mcp_module.create_app(pipeline, "default", writer=None)
+    tools_list = await real_app.list_tools()
+    schema_by_name = {t.name: t.inputSchema for t in tools_list}
+
+    assert "search_with_context" in schema_by_name
+    lang_prop = schema_by_name["search_with_context"].get("properties", {}).get("language", {})
+    description = lang_prop.get("description", "")
+    assert "ISO 639" in description, (
+        f"search_with_context tool language param description {description!r} does not contain 'ISO 639'"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_invalid_language_returns_error() -> None:
+    """MCP search tool must return a validation_error for language codes that are
+    too long (> 3 chars) rather than an unhandled exception."""
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search"]
+        # "english" is 7 chars — fails ^[a-z]{2,3}$ validator
+        result = await fn(query="hello", collection=None, language="english")
+
+    assert isinstance(result, dict)
+    assert result.get("code") == "validation_error", (
+        f"Expected validation_error, got {result!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_language_with_collections_returns_validation_error() -> None:
+    """MCP search tool must reject language filter when multi-collection fan-out
+    (collections) is used — matches REST API behavior."""
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.search_many = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search"]
+        result = await fn(query="hello", collections=["col1", "col2"], language="fr")
+
+    assert isinstance(result, dict)
+    assert result.get("code") == "validation_error", (
+        f"Expected validation_error for language+collections, got {result!r}"
+    )
+    # Must not have called search_many — rejected before fanout
+    pipeline.search_many.assert_not_awaited()

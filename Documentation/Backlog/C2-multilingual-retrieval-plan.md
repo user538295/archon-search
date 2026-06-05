@@ -446,7 +446,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 > **Releasable**: after Task 10.1; MCP clients see accurate `language` parameter docs.
 
 #### Task 10.1 — Update MCP tool descriptions for `search` and `search_with_context`
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 7.1
 - **Description**:
   - For the `search` MCP tool: find the `language` parameter description and update from "reserved — not yet implemented (C2)" to `"ISO 639-1 or ISO 639-3 language code to filter results (e.g. 'fr', 'de', 'unknown'). Single-collection queries only — multi-collection fan-out rejects this filter with a validation error."`

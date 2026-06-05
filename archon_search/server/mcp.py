@@ -7,10 +7,10 @@ from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Annotated, Any, TypedDict
 
 from fastmcp import Context, FastMCP
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -51,6 +51,33 @@ if TYPE_CHECKING:
     from archon_search.jobs.store import JobStore
 
 logger = logging.getLogger(__name__)
+
+# Language filter parameter for the ``search`` tool (single-collection path).
+# Defined at module level so FastMCP can resolve the Annotated type inside closures.
+_LanguageParamSearch = Annotated[
+    str | None,
+    Field(
+        description=(
+            "ISO 639-1 or ISO 639-3 language code to filter results (e.g. 'fr', 'de', 'unknown'). "
+            "Single-collection queries only — multi-collection fan-out (collections parameter) "
+            "rejects this filter with a validation error."
+        ),
+        default=None,
+    ),
+]
+
+# Language filter parameter for the ``search_with_context`` tool.
+# Defined at module level so FastMCP can resolve the Annotated type inside closures.
+_LanguageParamSearchWithContext = Annotated[
+    str | None,
+    Field(
+        description=(
+            "ISO 639-1 or ISO 639-3 language code to filter results (e.g. 'fr', 'de', 'unknown'). "
+            "Single-collection only."
+        ),
+        default=None,
+    ),
+]
 
 
 class McpErrorResponse(TypedDict):
@@ -147,7 +174,7 @@ def create_app(
         source_path_glob: str | None = None,
         indexed_after: str | None = None,
         indexed_before: str | None = None,
-        language: str | None = None,
+        language: _LanguageParamSearch = None,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search."""
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
@@ -163,6 +190,11 @@ def create_app(
         if collections is not None:
             if len(collections) == 0:
                 return McpErrorResponse(error="collections must not be empty", code="validation_error")
+            if language is not None:
+                return McpErrorResponse(
+                    error="language filter is not supported for multi-collection search in v1",
+                    code="validation_error",
+                )
             deduped: list[str] = []
             for name in collections:
                 stripped = name.strip()
@@ -308,7 +340,7 @@ def create_app(
         source_path_glob: str | None = None,
         indexed_after: str | None = None,
         indexed_before: str | None = None,
-        language: str | None = None,
+        language: _LanguageParamSearchWithContext = None,
     ) -> list[dict[str, Any]]:
         """Search and return surrounding chunks for richer context."""
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
