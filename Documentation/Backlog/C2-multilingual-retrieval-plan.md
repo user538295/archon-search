@@ -271,7 +271,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
   - Checkpoint: `uv run pytest tests/test_install.py -x -k "download_fasttext"`
 
 #### Task 4.3 — `--accept-fasttext-license` CLI flag
-- [ ] **File**: `archon_search/cli/install_cmd.py`
+- [x] **File**: `archon_search/cli/install_cmd.py`
 - **Depends on**: Task 4.1, Task 4.2
 - **Description**:
   - Add to `_install_options` decorator: `click.option("--accept-fasttext-license", is_flag=True, default=False, help="Accept fasttext lid.176.ftz CC-BY-SA 3.0 license")`

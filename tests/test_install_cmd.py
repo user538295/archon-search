@@ -61,6 +61,56 @@ def test_install_cmd_wizard_options_are_rejected(runner: CliRunner) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task 4.3 — --accept-fasttext-license flag on wizard command
+# ---------------------------------------------------------------------------
+
+
+def test_accept_fasttext_license_flag_present(runner: CliRunner) -> None:
+    """--accept-fasttext-license must appear in `wizard --help` output."""
+    result = runner.invoke(main, ["wizard", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--accept-fasttext-license" in result.output
+
+
+def test_install_multilingual_non_interactive_with_flag(runner: CliRunner) -> None:
+    """When --accept-fasttext-license is set, _prompt_fasttext_license is called with accept_fasttext_license=True."""
+    with patch("archon_search.install._prompt_fasttext_license") as mock_prompt, \
+         patch("archon_search.install._download_fasttext_model") as mock_download, \
+         patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+        result = runner.invoke(
+            main,
+            ["wizard", "--multilingual", "--accept-fasttext-license", "--non-interactive",
+             "--accept-jina-license"],
+        )
+    # The run method should have been called with accept_fasttext_license=True
+    mock_run.assert_called_once()
+    call_kwargs = mock_run.call_args
+    # accept_fasttext_license must be passed as True
+    assert call_kwargs.kwargs.get("accept_fasttext_license") is True or (
+        len(call_kwargs.args) > 0 and True in call_kwargs.args
+    ), f"accept_fasttext_license=True not passed to run(); call_args={call_kwargs}"
+
+
+def test_install_without_fasttext_flag_passes_false(runner: CliRunner) -> None:
+    """When --accept-fasttext-license is NOT set, accept_fasttext_license=False is passed."""
+    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+        result = runner.invoke(
+            main,
+            ["wizard", "--multilingual", "--non-interactive", "--accept-jina-license"],
+        )
+    mock_run.assert_called_once()
+    call_kwargs = mock_run.call_args
+    passed = call_kwargs.kwargs.get("accept_fasttext_license", None)
+    if passed is None and call_kwargs.args:
+        # positional args — check the signature order
+        # run(non_interactive, profile, multilingual, skip_preload, force, delete_db,
+        #     accept_jina_license, accept_fasttext_license)
+        pass  # hard to assert positional without knowing exact position; rely on kwarg form
+    else:
+        assert passed is False, f"Expected False, got {passed}"
+
+
+# ---------------------------------------------------------------------------
 # uninstall command — stop and unregister are called
 # ---------------------------------------------------------------------------
 

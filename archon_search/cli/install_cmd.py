@@ -28,6 +28,7 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
         click.option("--dry-run", is_flag=True, default=False, help="Print actions without executing"),
         click.option("--non-interactive", is_flag=True, default=False, help="Skip interactive prompts"),
         click.option("--accept-jina-license", is_flag=True, default=False, help="Accept Jina CC-BY-NC-4.0 license"),
+        click.option("--accept-fasttext-license", is_flag=True, default=False, help="Accept fasttext lid.176.ftz CC-BY-SA 3.0 license"),
         click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml"),
     ]):
         f = decorator(f)
@@ -43,6 +44,7 @@ def _run_installer(
     dry_run: bool,
     non_interactive: bool,
     accept_jina_license: bool,
+    accept_fasttext_license: bool,
     config_path: Path | None,
 ) -> None:
     sys.exit(
@@ -57,6 +59,7 @@ def _run_installer(
             force=force,
             delete_db=delete_db,
             accept_jina_license=accept_jina_license,
+            accept_fasttext_license=accept_fasttext_license,
         )
     )
 
@@ -72,10 +75,11 @@ def wizard(
     dry_run: bool,
     non_interactive: bool,
     accept_jina_license: bool,
+    accept_fasttext_license: bool,
     config_path: Path | None,
 ) -> None:
     """Interactive setup wizard: choose a profile, download models, start service."""
-    _run_installer(profile, multilingual, skip_preload, force, delete_db, dry_run, non_interactive, accept_jina_license, config_path)
+    _run_installer(profile, multilingual, skip_preload, force, delete_db, dry_run, non_interactive, accept_jina_license, accept_fasttext_license, config_path)
 
 
 @click.command()

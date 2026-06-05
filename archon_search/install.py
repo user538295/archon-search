@@ -890,6 +890,7 @@ class SearchInstaller:
         force: bool = False,
         delete_db: bool = False,
         accept_jina_license: bool = False,
+        accept_fasttext_license: bool = False,
     ) -> int:
         """Execute the full install flow. Returns 0 on success."""
         # Validate --force requires --delete-db
@@ -923,6 +924,18 @@ class SearchInstaller:
                     _prompt_jina_license(non_interactive, accept_jina_license=accept_jina_license)
                 except SystemExit as e:
                     return int(e.code) if e.code is not None else 1
+
+            # Step 3b: fasttext license gate + model download
+            if is_multilingual and not skip_preload:
+                try:
+                    _prompt_fasttext_license(non_interactive, accept_fasttext_license=accept_fasttext_license)
+                except SystemExit as e:
+                    return int(e.code) if e.code is not None else 1
+                try:
+                    _download_fasttext_model(Path.home() / ".archon-search" / "models")
+                except InstallError as exc:
+                    print(f"fasttext model download failed: {exc}", file=sys.stderr)
+                    return 1
 
             # Step 4: config path
             config_path = Path(self.config_file) if self.config_file else get_default_config_path()
