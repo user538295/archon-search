@@ -317,7 +317,8 @@ class SearchPipeline:
                 await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
 
             if rebuild_fts:
-                await self.store.rebuild_fts_index(collection)
+                dominant_lang = await self.store.get_dominant_language(collection)
+                await self.store.rebuild_fts_index(collection, language=dominant_lang)
 
         return IngestResult(
             doc_id=doc_id,
@@ -393,7 +394,8 @@ class SearchPipeline:
 
         # Rebuild FTS once if at least one successful ingest
         if any(r.status == "ok" for r in results):
-            await self.store.rebuild_fts_index(collection)
+            dominant_lang = await self.store.get_dominant_language(collection)
+            await self.store.rebuild_fts_index(collection, language=dominant_lang)
 
         # Compute centroid and (conditionally) regenerate description
         if all_vectors:

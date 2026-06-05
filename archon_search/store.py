@@ -77,6 +77,35 @@ _META_TABLE = "_archon_collection_meta"
 
 _RRF_K = 60  # RRF constant
 
+# Mapping from ISO 639-1 codes (as produced by fasttext / stored in the language column)
+# to the capitalized full English names accepted by LanceDB's FTS(language=...) parameter.
+# LanceDB uses non-standard internal keys for a few languages (e.g. "du" for Dutch instead
+# of ISO "nl", "gr" for Greek instead of ISO "el"). This map bridges those mismatches so
+# that archon-search's stored ISO codes translate to valid LanceDB tokenizer names.
+# Languages not present in this map fall back to the LanceDB default ("English" stemming).
+_LANCEDB_TOKENIZER_MAP: dict[str, str] = {
+    "ar": "Arabic",
+    "da": "Danish",
+    "nl": "Dutch",       # ISO 639-1; LanceDB internal key is "du"
+    "en": "English",
+    "fi": "Finnish",
+    "fr": "French",
+    "de": "German",
+    "el": "Greek",       # ISO 639-1; LanceDB internal key is "gr"
+    "hu": "Hungarian",
+    "it": "Italian",
+    "no": "Norwegian",
+    "nb": "Norwegian",   # fasttext Bokmål → same LanceDB tokenizer
+    "nn": "Norwegian",   # fasttext Nynorsk → same LanceDB tokenizer
+    "pt": "Portuguese",
+    "ro": "Romanian",
+    "ru": "Russian",
+    "es": "Spanish",
+    "sv": "Swedish",
+    "ta": "Tamil",
+    "tr": "Turkish",
+}
+
 # Matches the fixed-width UTC format produced by normalize_iso_utc (_types.py).
 # Must stay in sync with: dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 _FIXED_WIDTH_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
@@ -1223,13 +1252,32 @@ class SearchStore:
     # FTS index
     # ------------------------------------------------------------------
 
-    async def rebuild_fts_index(self, collection: str) -> None:
+    async def rebuild_fts_index(self, collection: str, *, language: str = "") -> None:
+        """Rebuild the FTS index for *collection*.
+
+        Parameters
+        ----------
+        collection:
+            Name of the collection to rebuild the index for.
+        language:
+            ISO 639-1 code (e.g. ``"fr"``, ``"de"``) of the dominant language in the
+            collection.  When a matching entry is found in ``_LANCEDB_TOKENIZER_MAP``,
+            the corresponding LanceDB tokenizer name is passed to ``FTS(language=...)``,
+            enabling language-appropriate stemming and stop-word removal.  Unknown or
+            empty codes fall back to the LanceDB default (``"English"``).
+        """
         self._validate_collection(collection)
         db = self._require_connected()
         from lancedb.index import FTS  # noqa: PLC0415
 
+        tokenizer_name = _LANCEDB_TOKENIZER_MAP.get(language, "English")
+        if language and language not in _LANCEDB_TOKENIZER_MAP:
+            logger.warning(
+                "rebuild_fts_index: unrecognized language code %r; falling back to English tokenizer",
+                language,
+            )
         table = await db.open_table(collection)
-        await table.create_index("text", config=FTS(), replace=True)
+        await table.create_index("text", config=FTS(language=tokenizer_name), replace=True)
 
     # ------------------------------------------------------------------
     # Reindex (metadata backfill for pre-A1 collections)
@@ -1737,6 +1785,34 @@ class SearchStore:
             return 0
         predicate = "language = " + _sql_quote_str("")
         return await table.count_rows(predicate)
+
+    async def get_dominant_language(self, collection: str) -> str:
+        """Return the most common non-empty language tag across all chunks in *collection*.
+
+        Uses a Python-side ``Counter`` over a full column scan because LanceDB 0.30.2
+        does not support ``GROUP BY`` SQL.  Empty-string tags (``""``) are excluded from
+        the tally — they represent untagged (legacy) chunks.
+
+        Returns ``""`` if the collection does not exist, is empty, or all chunks have
+        ``language=""``.
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return ""
+        from collections import Counter  # noqa: PLC0415
+
+        arrow_table = await table.query().select(["language"]).to_arrow()
+        lang_col = arrow_table.column("language")
+        # Filter out "" (untagged/legacy) and "unknown" (below-threshold detection) —
+        # neither is a valid ISO language code for FTS tokenizer selection.
+        detected = [code for code in lang_col.to_pylist() if code and code != "unknown"]
+        if not detected:
+            return ""
+        counts: Counter[str] = Counter(detected)
+        return counts.most_common(1)[0][0]
 
     async def get_acl_stats(self, collection: str) -> tuple[int, int]:
         """Return (acl_protected_count, acl_open_count) for all chunks in a collection.

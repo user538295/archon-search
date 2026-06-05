@@ -6486,3 +6486,213 @@ async def test_count_untagged_language_chunks_nonexistent_collection(
     """count_untagged_language_chunks returns 0 for a nonexistent collection."""
     count = await connected_store.count_untagged_language_chunks("nonexistent-xyz-789")
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# C2 Task 12.1 — language-aware FTS tokenization + get_dominant_language
+# ---------------------------------------------------------------------------
+
+
+def test_lancedb_tokenizer_map_known_codes() -> None:
+    """_LANCEDB_TOKENIZER_MAP must map standard ISO codes to capitalized LanceDB names."""
+    from archon_search.store import _LANCEDB_TOKENIZER_MAP
+
+    # 1:1 standard codes
+    assert _LANCEDB_TOKENIZER_MAP["fr"] == "French"
+    assert _LANCEDB_TOKENIZER_MAP["de"] == "German"
+    assert _LANCEDB_TOKENIZER_MAP["en"] == "English"
+    assert _LANCEDB_TOKENIZER_MAP["es"] == "Spanish"
+
+    # Bridge entries for LanceDB non-standard codes
+    assert _LANCEDB_TOKENIZER_MAP["nl"] == "Dutch"   # ISO nl → LanceDB "du"
+    assert _LANCEDB_TOKENIZER_MAP["el"] == "Greek"   # ISO el → LanceDB "gr"
+    assert _LANCEDB_TOKENIZER_MAP["nb"] == "Norwegian"  # fasttext Bokmål
+    assert _LANCEDB_TOKENIZER_MAP["nn"] == "Norwegian"  # fasttext Nynorsk
+
+
+def test_lancedb_tokenizer_map_values_are_capitalized() -> None:
+    """All values in _LANCEDB_TOKENIZER_MAP must be capitalized (LanceDB requires it)."""
+    from archon_search.store import _LANCEDB_TOKENIZER_MAP
+
+    for code, name in _LANCEDB_TOKENIZER_MAP.items():
+        assert name[0].isupper(), f"Language name for code {code!r} must be capitalized, got {name!r}"
+        assert " " not in name or all(w[0].isupper() for w in name.split()), (
+            f"All words in {name!r} must be capitalized"
+        )
+
+
+@pytest.mark.asyncio
+async def test_rebuild_fts_index_with_language(tmp_path: Path) -> None:
+    """rebuild_fts_index with a recognized language code passes FTS(language=...) to LanceDB."""
+    from lancedb.index import FTS
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    col = f"test-fts-lang-{uuid.uuid4().hex[:8]}"
+    await store.ensure_collection(col, _DIM)
+    doc_id = _doc_id()
+    await store.ingest_chunks(col, [_chunk(doc_id, 0)])
+
+    captured_fts: list[FTS] = []
+
+    db = store._require_connected()  # type: ignore[attr-defined]
+    table = await db.open_table(col)
+
+    async def fake_create_index(col_arg: str, config: FTS, replace: bool = False) -> None:  # noqa: ARG001
+        captured_fts.append(config)
+
+    async def fake_open_table(name: str):  # noqa: ANN202
+        return table
+
+    table.create_index = fake_create_index  # type: ignore[method-assign]
+    db.open_table = fake_open_table  # type: ignore[method-assign]
+
+    await store.rebuild_fts_index(col, language="fr")
+    await store.disconnect()
+
+    assert len(captured_fts) == 1
+    assert captured_fts[0].language == "French"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_rebuild_fts_index_unknown_language_uses_default(tmp_path: Path) -> None:
+    """rebuild_fts_index with an unrecognized language code falls back to default FTS()."""
+    from lancedb.index import FTS
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    col = f"test-fts-unk-{uuid.uuid4().hex[:8]}"
+    await store.ensure_collection(col, _DIM)
+    doc_id = _doc_id()
+    await store.ingest_chunks(col, [_chunk(doc_id, 0)])
+
+    captured_fts: list[FTS] = []
+
+    db = store._require_connected()  # type: ignore[attr-defined]
+    table = await db.open_table(col)
+
+    async def fake_create_index(col_arg: str, config: FTS, replace: bool = False) -> None:  # noqa: ARG001
+        captured_fts.append(config)
+
+    async def fake_open_table(name: str):  # noqa: ANN202
+        return table
+
+    table.create_index = fake_create_index  # type: ignore[method-assign]
+    db.open_table = fake_open_table  # type: ignore[method-assign]
+
+    # "xxx" is not a known language code → must fall back to English
+    await store.rebuild_fts_index(col, language="xxx")
+    await store.disconnect()
+
+    assert len(captured_fts) == 1
+    assert captured_fts[0].language == "English"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_rebuild_fts_index_empty_language_uses_default(tmp_path: Path) -> None:
+    """rebuild_fts_index with language='' (default) uses default FTS()."""
+    from lancedb.index import FTS
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    col = f"test-fts-empty-{uuid.uuid4().hex[:8]}"
+    await store.ensure_collection(col, _DIM)
+    doc_id = _doc_id()
+    await store.ingest_chunks(col, [_chunk(doc_id, 0)])
+
+    captured_fts: list[FTS] = []
+
+    db = store._require_connected()  # type: ignore[attr-defined]
+    table = await db.open_table(col)
+
+    async def fake_create_index(col_arg: str, config: FTS, replace: bool = False) -> None:  # noqa: ARG001
+        captured_fts.append(config)
+
+    async def fake_open_table(name: str):  # noqa: ANN202
+        return table
+
+    table.create_index = fake_create_index  # type: ignore[method-assign]
+    db.open_table = fake_open_table  # type: ignore[method-assign]
+
+    await store.rebuild_fts_index(col)  # language="" by default
+    await store.disconnect()
+
+    assert len(captured_fts) == 1
+    assert captured_fts[0].language == "English"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_get_dominant_language_returns_most_common(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """get_dominant_language returns the most frequent non-empty language code."""
+    doc_id = _doc_id()
+    await connected_store.ensure_collection(col_name, _DIM)
+
+    chunks = (
+        [dataclasses.replace(_chunk(doc_id, i), language="fr") for i in range(3)]
+        + [dataclasses.replace(_chunk(doc_id, i + 3), language="de") for i in range(1)]
+        + [dataclasses.replace(_chunk(doc_id, i + 4), language="") for i in range(2)]
+    )
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    dominant = await connected_store.get_dominant_language(col_name)
+    assert dominant == "fr"
+
+
+@pytest.mark.asyncio
+async def test_get_dominant_language_all_untagged_returns_empty(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """get_dominant_language returns '' when all chunks have language=''."""
+    doc_id = _doc_id()
+    await connected_store.ensure_collection(col_name, _DIM)
+
+    chunks = [dataclasses.replace(_chunk(doc_id, i), language="") for i in range(3)]
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    dominant = await connected_store.get_dominant_language(col_name)
+    assert dominant == ""
+
+
+@pytest.mark.asyncio
+async def test_get_dominant_language_nonexistent_collection(
+    connected_store: SearchStore,
+) -> None:
+    """get_dominant_language returns '' for a nonexistent collection."""
+    dominant = await connected_store.get_dominant_language("nonexistent-xyz-999")
+    assert dominant == ""
+
+
+@pytest.mark.asyncio
+async def test_get_dominant_language_excludes_unknown_tag(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """get_dominant_language excludes 'unknown' tags — returns actual ISO code as dominant."""
+    doc_id = _doc_id()
+    await connected_store.ensure_collection(col_name, _DIM)
+
+    # 5 "unknown" chunks + 3 "fr" chunks → dominant should be "fr", not "unknown"
+    chunks = (
+        [dataclasses.replace(_chunk(doc_id, i), language="unknown") for i in range(5)]
+        + [dataclasses.replace(_chunk(doc_id, i + 5), language="fr") for i in range(3)]
+    )
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    dominant = await connected_store.get_dominant_language(col_name)
+    assert dominant == "fr"
+
+
+@pytest.mark.asyncio
+async def test_get_dominant_language_all_unknown_returns_empty(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """get_dominant_language returns '' when all chunks have language='unknown'."""
+    doc_id = _doc_id()
+    await connected_store.ensure_collection(col_name, _DIM)
+
+    chunks = [dataclasses.replace(_chunk(doc_id, i), language="unknown") for i in range(3)]
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    dominant = await connected_store.get_dominant_language(col_name)
+    assert dominant == ""

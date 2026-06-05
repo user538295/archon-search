@@ -4632,6 +4632,7 @@ def _make_mock_store_for_c2() -> MagicMock:
         return_value=ChunkIngestResult(chunks_ingested=2, needs_recompute=False)
     )
     store.rebuild_fts_index = AsyncMock()
+    store.get_dominant_language = AsyncMock(return_value="")
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
     from archon_search.config import SearchConfig
@@ -4896,3 +4897,41 @@ async def test_ingest_file_language_detect_uses_configured_threshold(tmp_path) -
     detector.detect.assert_awaited_once()
     _, kwargs = detector.detect.call_args
     assert kwargs.get("confidence_threshold") == 0.9
+
+
+# ---------------------------------------------------------------------------
+# C2 Task 12.1 — pipeline wiring: get_dominant_language → rebuild_fts_index
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_passes_dominant_language_to_rebuild_fts_index(tmp_path) -> None:
+    """ingest_file calls get_dominant_language and passes result to rebuild_fts_index."""
+    store = _make_mock_store_for_c2()
+    store.get_dominant_language = AsyncMock(return_value="fr")
+
+    pipeline = _make_pipeline_with_detector(store)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("Some content. " * 10)
+
+    await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
+
+    store.get_dominant_language.assert_awaited_once_with("test-col")
+    store.rebuild_fts_index.assert_awaited_once_with("test-col", language="fr")
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_passes_empty_dominant_language_when_untagged(tmp_path) -> None:
+    """ingest_file passes language='' to rebuild_fts_index when all chunks are untagged."""
+    store = _make_mock_store_for_c2()
+    store.get_dominant_language = AsyncMock(return_value="")
+
+    pipeline = _make_pipeline_with_detector(store)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("Some content. " * 10)
+
+    await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
+
+    store.rebuild_fts_index.assert_awaited_once_with("test-col", language="")

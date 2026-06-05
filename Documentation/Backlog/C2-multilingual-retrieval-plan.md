@@ -486,7 +486,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 > **Releasable**: after Task 12.1 **only if** Task 1.1 spike confirmed LanceDB Python API supports language tokenizer config. If the spike found no support, skip this phase entirely and document in `BREAKING.md`.
 
 #### Task 12.1 — Wire language-aware FTS tokenization in `store.py`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.1 (spike confirmed support), Task 6.2
 - **Description**:
   - **Prerequisite**: Task 1.1 confirmed the exact `FTS(language=...)` API call. Key findings from the spike:
