@@ -5,7 +5,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 import uvicorn
 from fastapi import FastAPI
@@ -14,6 +14,7 @@ from fastapi.openapi.utils import get_openapi
 
 from archon_search.chunker import DocumentChunker
 from archon_search.config import SearchConfig
+from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, FASTTEXT_MODELS_DIR
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.jobs.store import JobStore
@@ -47,6 +48,47 @@ from archon_search.telemetry.pruner import Pruner
 from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger(__name__)
+
+# Patchable seam: resolved model path for the fasttext lid.176.ftz model.
+_MULTILINGUAL_MODEL_PATH: Path = FASTTEXT_MODELS_DIR / FASTTEXT_MODEL_FILENAME
+
+
+def _import_fasttext() -> Any:
+    """Import fasttext; raises ImportError if the package is not installed."""
+    import fasttext  # type: ignore[import-untyped]  # noqa: PLC0415
+    return fasttext
+
+
+def _check_multilingual_deps(config: SearchConfig) -> None:
+    """Check that multilingual dependencies are present when multilingual=True.
+
+    Called synchronously in ``create_app()`` before ``SearchPipeline`` is
+    constructed.  Raises ``RuntimeError`` with an actionable message when:
+
+    - ``fasttext-wheel`` is not installed, or
+    - ``lid.176.ftz`` model file is absent.
+
+    No-ops when ``config.multilingual`` is ``False``.
+    """
+    if not config.multilingual:
+        return
+
+    # Check 1 — package availability
+    try:
+        _import_fasttext()
+    except ImportError:
+        raise RuntimeError(
+            "multilingual=true but fasttext-wheel is not installed; "
+            "run: pip install archon-search[multilingual]"
+        )
+
+    # Check 2 — model file presence
+    if not _MULTILINGUAL_MODEL_PATH.exists():
+        raise RuntimeError(
+            "multilingual=true but lid.176.ftz model is missing; "
+            "run: archon-search install --multilingual"
+        )
+
 
 def _configure_openapi(app: FastAPI) -> None:
     """Override app.openapi with a closure that adds BearerAuth security scheme
@@ -87,6 +129,7 @@ def create_app(
     config_path: Path | str | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application instance."""
+    _check_multilingual_deps(config)
     api_key, key_source = load_or_generate_key()
 
     @asynccontextmanager

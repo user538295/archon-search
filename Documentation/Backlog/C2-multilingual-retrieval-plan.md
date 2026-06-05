@@ -289,7 +289,7 @@ After C2 ships: operators ingesting non-English corpora get per-document languag
 > **Releasable**: after Task 5.1; server fails clearly at startup when multilingual deps are absent.
 
 #### Task 5.1 — `_check_multilingual_deps()` startup check in `app.py`
-- [ ] **File**: `archon_search/server/app.py`
+- [x] **File**: `archon_search/server/app.py`
 - **Depends on**: Task 3.1 (LanguageDetector module, provides model path constant)
 - **Description**:
   - `def _check_multilingual_deps(config: SearchConfig) -> None` — called in the synchronous `create_app()` body, BEFORE `SearchPipeline` is constructed (line ~164 in `app.py`). Note: `SearchPipeline` is constructed outside the lifespan function, so the check cannot be deferred to lifespan startup.
