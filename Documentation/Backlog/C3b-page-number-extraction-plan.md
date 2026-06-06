@@ -198,7 +198,7 @@ None.
 > **Releasable**: when Task 1.2 is complete AND Phase 4 has shipped in the same PR (see Atomic-landing constraint above). On its own, Task 1.2 leaks markers into chunk text.
 
 #### Task 1.1 — Define the page-break marker constant
-- [ ] **File**: `archon_search/enricher.py`
+- [x] **File**: `archon_search/enricher.py`
 - **Depends on**: nothing (C3a's `enricher.py` is assumed to exist; if not, this task creates it as a stub for C3a to extend).
 - **Description**:
   - Add module-level constant `PAGE_BREAK_MARKER: str = "<!-- archon-search:pagebreak:v1 -->"`.

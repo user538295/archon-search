@@ -1,6 +1,32 @@
 """Tests for MarkdownEnricher — Task 2.1 (prepare) and Task 2.2 (enrich_chunk)."""
-from archon_search.enricher import HeadingEntry, HeadingTable, MarkdownEnricher
+from archon_search.enricher import (
+    HeadingEntry,
+    HeadingTable,
+    MarkdownEnricher,
+    PAGE_BREAK_MARKER,
+    PAGE_BREAK_MARKER_LEN,
+)
 from archon_search._types import ChunkRecord
+
+
+# ===========================================================================
+# Task 1.1 — PAGE_BREAK_MARKER constant
+# ===========================================================================
+
+class TestPageBreakMarkerConstant:
+    def test_page_break_marker_literal(self):
+        """Marker must be exactly the canonical namespaced string, 35 chars."""
+        assert PAGE_BREAK_MARKER == "<!-- archon-search:pagebreak:v1 -->"
+        assert len(PAGE_BREAK_MARKER) == 35
+
+    def test_page_break_marker_len_matches(self):
+        """PAGE_BREAK_MARKER_LEN must equal len(PAGE_BREAK_MARKER)."""
+        assert PAGE_BREAK_MARKER_LEN == len(PAGE_BREAK_MARKER)
+
+    def test_page_break_marker_namespaced(self):
+        """Marker contains 'archon-search:' and ':v1' for collision-resistance."""
+        assert "archon-search:" in PAGE_BREAK_MARKER
+        assert ":v1" in PAGE_BREAK_MARKER
 
 
 # ---------------------------------------------------------------------------

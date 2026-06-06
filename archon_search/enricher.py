@@ -19,6 +19,31 @@ if TYPE_CHECKING:
     from archon_search._types import ChunkRecord
 
 # ---------------------------------------------------------------------------
+# Page-break marker — single source of truth for parser and enricher
+# ---------------------------------------------------------------------------
+
+PAGE_BREAK_MARKER: str = "<!-- archon-search:pagebreak:v1 -->"
+"""Namespaced, versioned HTML-comment marker injected by docling's
+``export_to_markdown(page_break_placeholder=PAGE_BREAK_MARKER)`` call.
+The marker travels inside the raw markdown string and is excised before
+any :class:`ChunkRecord` is constructed — it never reaches stored text,
+API responses, or the FTS index.
+"""
+
+PAGE_BREAK_MARKER_LEN: int = len(PAGE_BREAK_MARKER)
+"""Convenience constant: ``len(PAGE_BREAK_MARKER)`` — used by the
+coordinate-transform code to avoid repeated ``len()`` calls.
+"""
+
+__all__ = [
+    "PAGE_BREAK_MARKER",
+    "PAGE_BREAK_MARKER_LEN",
+    "HeadingEntry",
+    "HeadingTable",
+    "MarkdownEnricher",
+]
+
+# ---------------------------------------------------------------------------
 # Public types
 # ---------------------------------------------------------------------------
 
