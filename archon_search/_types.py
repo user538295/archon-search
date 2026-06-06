@@ -80,6 +80,10 @@ class ChunkRecord:
     """filterable: file mtime (ISO 8601 UTC); falls back to indexed_at."""
     acl: list[str] | None = None
     """system: namespace tokens that must intersect a caller's tokens."""
+    start_offset: int = -1
+    """transient: character offset of chunk start in the post-front-matter text. Not persisted to LanceDB."""
+    end_offset: int = -1
+    """transient: character offset of chunk end (exclusive) in the post-front-matter text. Not persisted to LanceDB."""
 
 
 @dataclass

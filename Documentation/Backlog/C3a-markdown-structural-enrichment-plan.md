@@ -103,7 +103,7 @@ parse() → _extract_front_matter() → [if text type] enricher.prepare(text) �
 > **Releasable**: after Task 1.2 — `DocumentChunker.chunk()` propagates character offsets to every `ChunkRecord`; the enricher can use them in Phase 2.
 
 #### Task 1.1 — Add transient `start_offset`/`end_offset` to `ChunkRecord`
-- [ ] **File**: `archon_search/_types.py`
+- [x] **File**: `archon_search/_types.py`
 - **Depends on**: nothing
 - **Description**:
   - Add two new fields after the `ingested_by` field in `ChunkRecord`:

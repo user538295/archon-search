@@ -323,6 +323,32 @@ def test_normalize_iso_utc_invalid_string_raises():
         normalize_iso_utc("not-a-date")
 
 
+# --- Task 1.1: transient offset fields on ChunkRecord ---
+
+def test_chunk_record_default_offsets():
+    """ChunkRecord constructed without offsets has start_offset == -1 and end_offset == -1."""
+    from archon_search._types import ChunkRecord
+    record = ChunkRecord(
+        doc_id="abc",
+        chunk_id="abc-000000",
+        text="hello",
+        vector=[0.0, 0.0, 0.0, 0.0],
+        source_path="/tmp/test.md",
+        indexed_at="2026-01-01T00:00:00.000000Z",
+    )
+    assert record.start_offset == -1
+    assert record.end_offset == -1
+
+
+def test_chunk_record_offset_fields_not_in_schema():
+    """start_offset and end_offset must NOT appear in SearchStore._schema() column names."""
+    from archon_search.store import SearchStore
+    schema = SearchStore._schema(4)
+    field_names = [f.name for f in schema]
+    assert "start_offset" not in field_names
+    assert "end_offset" not in field_names
+
+
 def test_fixed_width_pattern_matches_normalize_iso_utc_output():
     """_FIXED_WIDTH_PATTERN in store.py must always match normalize_iso_utc output.
 
