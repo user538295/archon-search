@@ -87,23 +87,34 @@ def install_stubs() -> None:
         _chonkie = types.ModuleType("chonkie")
 
         class _FakeChunk:  # noqa: D101
-            def __init__(self, text: str, token_count: int) -> None:
+            def __init__(self, text: str, token_count: int, start_index: int, end_index: int) -> None:
                 self.text = text
                 self.token_count = token_count
+                self.start_index = start_index
+                self.end_index = end_index
 
         class _FakeRecursiveChunker:  # noqa: D101
             def __init__(self, tokenizer: str = "gpt2", chunk_size: int = 512, **kwargs: object) -> None:
                 self._chunk_size = max(1, chunk_size)
 
             def chunk(self, text: str):  # type: ignore[return]
-                words = text.split()
-                if not words:
+                import re as _re
+                # Split on whitespace, but track the actual byte offsets in `text`
+                # so that start_index/end_index point into the original string.
+                tokens = list(_re.finditer(r"\S+", text))
+                if not tokens:
                     return []
                 size = self._chunk_size
-                return [
-                    _FakeChunk(" ".join(words[i : i + size]), token_count=len(words[i : i + size]))
-                    for i in range(0, len(words), size)
-                ]
+                chunks = []
+                for i in range(0, len(tokens), size):
+                    group = tokens[i : i + size]
+                    start = group[0].start()
+                    end = group[-1].end()
+                    chunk_text = text[start:end]
+                    chunks.append(
+                        _FakeChunk(chunk_text, token_count=len(group), start_index=start, end_index=end)
+                    )
+                return chunks
 
         _chonkie.RecursiveChunker = _FakeRecursiveChunker  # type: ignore[attr-defined]
         sys.modules["chonkie"] = _chonkie

@@ -199,3 +199,36 @@ def test_chunk_language_unknown() -> None:
     records = chunker.chunk("Some ambiguous text.", "doc1", "/tmp/doc1.md", language="unknown", **_DEFAULT_KW)
     assert records
     assert all(r.language == "unknown" for r in records)
+
+
+# ---------------------------------------------------------------------------
+# Task 1.2 — character offsets propagated from chonkie to ChunkRecord
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_offsets_populated() -> None:
+    """Every returned record has start_offset >= 0 and end_offset > start_offset."""
+    chunker = DocumentChunker()
+    text = "Hello world. This is a test sentence for offset verification."
+    records = chunker.chunk(text, "doc1", "/tmp/doc1.md", **_DEFAULT_KW)
+    assert records, "expected at least one chunk"
+    for r in records:
+        assert r.start_offset >= 0, f"start_offset should be >= 0, got {r.start_offset}"
+        assert r.end_offset > r.start_offset, (
+            f"end_offset ({r.end_offset}) should be > start_offset ({r.start_offset})"
+        )
+
+
+def test_chunk_offset_text_slice_matches() -> None:
+    """text[record.start_offset:record.end_offset] == record.text for all non-empty chunks."""
+    chunker = DocumentChunker(chunk_size=64)
+    text = _LONG_TEXT
+    records = chunker.chunk(text, "doc1", "/tmp/doc1.md", **_DEFAULT_KW)
+    assert records, "expected at least one chunk"
+    for r in records:
+        if r.text:
+            sliced = text[r.start_offset : r.end_offset]
+            assert sliced == r.text, (
+                f"text slice [{r.start_offset}:{r.end_offset}] = {sliced!r} "
+                f"does not match chunk.text = {r.text!r}"
+            )

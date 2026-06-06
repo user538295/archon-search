@@ -54,6 +54,8 @@ class DocumentChunker:
                 updated_at=updated_at,
                 ingested_by=ingested_by,
                 language=language,
+                start_offset=chunk.start_index,
+                end_offset=chunk.end_index,
             )
             for chunk in chunks
         ]

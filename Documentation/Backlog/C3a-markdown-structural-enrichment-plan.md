@@ -122,7 +122,7 @@ parse() → _extract_front_matter() → [if text type] enricher.prepare(text) �
   - Checkpoint: `uv run pytest tests/test_types.py -x`
 
 #### Task 1.2 — Propagate chonkie offsets in `DocumentChunker.chunk()`
-- [ ] **File**: `archon_search/chunker.py`
+- [x] **File**: `archon_search/chunker.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - In the list comprehension / loop that constructs `ChunkRecord` instances from chonkie `chunks`, assign:

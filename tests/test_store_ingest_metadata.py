@@ -111,3 +111,18 @@ async def test_updated_at_is_utc_iso8601_with_offset(
     row = await _read_row(connected_store, col_name, chunk.chunk_id)
     assert row["updated_at"].endswith("+00:00")
     datetime.fromisoformat(row["updated_at"])  # parses cleanly
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_chunk_offsets_absent_from_lancedb_row(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Transient start_offset/end_offset on ChunkRecord must NOT appear in LanceDB rows."""
+    chunk = _chunk(start_offset=5, end_offset=10)
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, [chunk])
+
+    row = await _read_row(connected_store, col_name, chunk.chunk_id)
+    assert "start_offset" not in row, "start_offset must not be persisted to LanceDB"
+    assert "end_offset" not in row, "end_offset must not be persisted to LanceDB"
