@@ -60,7 +60,10 @@ Ordered as in the backlog. Items 1 and 8 are shipped (A2 + C2). Remaining items 
 - Replace full-collection FTS rebuild as the default update path with incremental / additive FTS maintenance.
 - Remove full metadata rescans from incremental sync.
 - Streaming / incremental chunking for very large files.
-- Chunk-level enrichment (heading ancestry, section path, page numbers, code-symbol context).
+- Chunk-level enrichment (heading ancestry, section path, page numbers, code-symbol context):
+  - **C3a — Markdown structural enrichment** (`_heading`, `_section_path`): brief `Backlog/C3a-markdown-structural-enrichment-brief.md`, plan `Backlog/C3a-markdown-structural-enrichment-plan.md`.
+  - **C3b — Page number extraction** (`_page_start`, `_page_end`): brief `Backlog/C3b-page-number-extraction-brief.md`, plan `Backlog/C3b-page-number-extraction-plan.md`. Blocked on C3a.
+  - **C3c — Code symbol context** (`_symbol_subtype`, `_containing_function`, `_containing_class`, `_module_path`): brief `Backlog/C3c-code-symbol-context-brief.md`. Plan not yet drafted. Blocked on C3a.
 - Export / import / backup / restore APIs.
 - Schema migration strategy that does not require full re-ingest.
 
