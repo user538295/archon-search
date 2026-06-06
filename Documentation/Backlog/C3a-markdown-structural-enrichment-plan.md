@@ -146,7 +146,7 @@ parse() → _extract_front_matter() → [if text type] enricher.prepare(text) �
 > **Releasable**: after Task 2.2 — `MarkdownEnricher` is fully functional and unit-tested; wiring in Phase 3 activates it end-to-end.
 
 #### Task 2.1 — `MarkdownEnricher.prepare()` — heading scanner
-- [ ] **File**: `archon_search/enricher.py` (new file)
+- [x] **File**: `archon_search/enricher.py` (new file)
 - **Depends on**: nothing
 - **Description**:
   - Define `HeadingEntry = namedtuple("HeadingEntry", ["offset", "text", "level"])`.
@@ -178,7 +178,7 @@ parse() → _extract_front_matter() → [if text type] enricher.prepare(text) �
   - Checkpoint: `uv run pytest tests/test_enricher.py -x`
 
 #### Task 2.2 — `MarkdownEnricher.enrich_chunk()` — per-chunk resolver
-- [ ] **File**: `archon_search/enricher.py`
+- [x] **File**: `archon_search/enricher.py`
 - **Depends on**: Task 2.1, Task 1.1
 - **Description**:
   - Add `enrich_chunk(self, chunk: ChunkRecord, table: HeadingTable) -> dict[str, str]` to `MarkdownEnricher`:
