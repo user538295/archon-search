@@ -2,9 +2,11 @@
 call site and propagates ``ingested_by`` to every emitted chunk.
 
 Implements Task 3.3 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
+Task 3.1 (C3a): heading enrichment wiring in pipeline.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -140,3 +142,144 @@ async def test_pipeline_ingest_propagates_ingested_by_kwarg(
     assert result.status == "ok"
     row = await _read_first_row(connected_store, col_name, result.doc_id)
     assert row["ingested_by"] == "watcher"
+
+
+# ---------------------------------------------------------------------------
+# Task 3.1 — C3a heading enrichment wiring
+# ---------------------------------------------------------------------------
+
+
+async def _collect_metadata_from_store(store, col: str, doc_id: str) -> list[dict]:
+    """Return the parsed metadata dict for every chunk of *doc_id*."""
+    db = store._require_connected()
+    table = await db.open_table(col)
+    rows = await table.query().where(f"doc_id = '{doc_id}'").to_list()
+    assert rows, f"no rows for doc_id={doc_id!r}"
+    results = []
+    for row in rows:
+        raw = row.get("metadata", "{}")
+        results.append(json.loads(raw) if isinstance(raw, str) else raw)
+    return results
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_heading_metadata_populated(
+    connected_store, col_name, tmp_path: Path
+) -> None:
+    """Ingesting a .md file with headings produces chunks with non-empty _heading / _section_path."""
+    pipeline = _make_pipeline(connected_store)
+    md_file = tmp_path / "doc.md"
+    md_file.write_text(
+        "# Installation\n\nInstall the package.\n\n"
+        "## macOS\n\nUse Homebrew.\n\n"
+        "## Linux\n\nUse apt.\n\n" * 2
+    )
+
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
+    assert result.status == "ok"
+
+    all_meta = await _collect_metadata_from_store(connected_store, col_name, result.doc_id)
+    # At least some chunks must have a non-empty _heading
+    headings = [m.get("_heading", "") for m in all_meta]
+    assert any(h != "" for h in headings), f"no heading metadata found; all_meta={all_meta}"
+    # Every chunk must have both keys present
+    for m in all_meta:
+        assert "_heading" in m, f"_heading missing from metadata: {m}"
+        assert "_section_path" in m, f"_section_path missing from metadata: {m}"
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_no_heading_empty_strings(
+    connected_store, col_name, tmp_path: Path
+) -> None:
+    """Ingesting a .md file with no headings produces _heading=='' and _section_path==''."""
+    pipeline = _make_pipeline(connected_store)
+    md_file = tmp_path / "plain.md"
+    # Enough text to produce at least one chunk but no headings
+    md_file.write_text("This is plain prose with no headings at all.\n" * 10)
+
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
+    assert result.status == "ok"
+
+    all_meta = await _collect_metadata_from_store(connected_store, col_name, result.doc_id)
+    for m in all_meta:
+        assert m.get("_heading") == "", f"expected empty _heading, got {m.get('_heading')!r}"
+        assert m.get("_section_path") == "", f"expected empty _section_path, got {m.get('_section_path')!r}"
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_binary_no_enrichment(
+    connected_store, col_name, tmp_path: Path
+) -> None:
+    """Ingesting a non-front-matter file produces _heading=='' and _section_path=='' in metadata."""
+    pipeline = _make_pipeline(connected_store)
+    # .json is NOT in _FRONT_MATTER_EXTENSIONS, so heading_table will be []
+    json_file = tmp_path / "data.json"
+    # Write enough text to produce at least one chunk
+    json_file.write_text('{"key": "value", "description": "' + ("text " * 50) + '"}\n')
+
+    result = await pipeline.ingest_file(json_file, col_name, embedder=pipeline._global_embedder)
+    assert result.status == "ok"
+
+    all_meta = await _collect_metadata_from_store(connected_store, col_name, result.doc_id)
+    for m in all_meta:
+        assert m.get("_heading") == "", f"expected empty _heading for non-text file, got {m.get('_heading')!r}"
+        assert m.get("_section_path") == "", f"expected empty _section_path for non-text file, got {m.get('_section_path')!r}"
+
+
+@pytest.mark.asyncio
+async def test_enrichment_survives_lancedb_roundtrip(
+    connected_store, col_name, tmp_path: Path
+) -> None:
+    """_heading and _section_path survive json.dumps → LanceDB → parse_metadata round-trip."""
+    pipeline = _make_pipeline(connected_store)
+    md_file = tmp_path / "structured.md"
+    md_file.write_text(
+        "# Alpha\n\nIntro text.\n\n"
+        "## Beta\n\nSection text.\n\n"
+        "### Gamma\n\nDeep text.\n"
+    )
+
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
+    assert result.status == "ok"
+
+    all_meta = await _collect_metadata_from_store(connected_store, col_name, result.doc_id)
+
+    # Collect non-empty headings and section paths
+    headings_found = {m["_heading"] for m in all_meta if m.get("_heading")}
+    paths_found = {m["_section_path"] for m in all_meta if m.get("_section_path")}
+
+    assert headings_found, f"no non-empty _heading after roundtrip; all_meta={all_meta}"
+
+    # Expected headings from the document
+    expected_headings = {"Alpha", "Beta", "Gamma"}
+    assert headings_found <= expected_headings, (
+        f"unexpected heading values: {headings_found - expected_headings}"
+    )
+
+    # Section paths must be present and non-empty for all non-empty heading chunks
+    assert paths_found, f"no non-empty _section_path after roundtrip; all_meta={all_meta}"
+
+    # Verify correct section path nesting — acceptance criterion from C3a spec:
+    # chunks under H1/H2/H3 must carry the expected path string.
+    # Build a lookup from heading → section_path for chunks that have a heading.
+    heading_to_path = {m["_heading"]: m["_section_path"] for m in all_meta if m.get("_heading")}
+    if "Alpha" in heading_to_path:
+        assert heading_to_path["Alpha"] == "Alpha", (
+            f"expected _section_path='Alpha' for H1 chunk, got {heading_to_path['Alpha']!r}"
+        )
+    if "Beta" in heading_to_path:
+        assert heading_to_path["Beta"] == "Alpha > Beta", (
+            f"expected _section_path='Alpha > Beta' for H2 chunk, got {heading_to_path['Beta']!r}"
+        )
+    if "Gamma" in heading_to_path:
+        assert heading_to_path["Gamma"] == "Alpha > Beta > Gamma", (
+            f"expected _section_path='Alpha > Beta > Gamma' for H3 chunk, got {heading_to_path['Gamma']!r}"
+        )
+
+    # Verify json round-trip consistency: re-serialize and re-parse metadata
+    for m in all_meta:
+        serialized = json.dumps(m)
+        reparsed = json.loads(serialized)
+        assert reparsed.get("_heading") == m.get("_heading"), "json roundtrip mutated _heading"
+        assert reparsed.get("_section_path") == m.get("_section_path"), "json roundtrip mutated _section_path"

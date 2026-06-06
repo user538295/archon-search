@@ -214,7 +214,7 @@ parse() → _extract_front_matter() → [if text type] enricher.prepare(text) �
 > **Releasable**: after Task 3.1 — every text-format file ingested through any entry point produces chunks with `_heading` and `_section_path` in `metadata`.
 
 #### Task 3.1 — Wire `MarkdownEnricher` into `pipeline.py:ingest_file()`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 1.2, Task 2.2
 - **Description**:
   - Import `MarkdownEnricher` from `archon_search.enricher`.

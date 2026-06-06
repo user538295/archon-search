@@ -21,6 +21,7 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.description_generator import _should_regenerate, generate_description
 from archon_search.chunker import DocumentChunker
 from archon_search.embedder import Embedder, EmbedderBackend, ModelEmbedder
+from archon_search.enricher import MarkdownEnricher
 from archon_search.parser import DocumentParser, ParseError
 from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
 from archon_search.store import SearchStore, StoreBusyError, elementwise_sum
@@ -254,6 +255,14 @@ class SearchPipeline:
             logger.debug("stat() failed for %s; updated_at will be empty", path)
             updated_at = ""
 
+        # C3a: heading enrichment — prepare heading table after front-matter stripping,
+        # before chunking. Non-text files get an empty table; enrich_chunk handles that.
+        enricher = MarkdownEnricher()
+        if is_text_type:
+            heading_table = enricher.prepare(markdown)
+        else:
+            heading_table = []
+
         # C2: language detection — runs after parse, before chunk
         if self._language_detector is not None:
             try:
@@ -283,6 +292,11 @@ class SearchPipeline:
         )
         if not records:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="ok")
+
+        # C3a: enrich every chunk with heading metadata
+        for record in records:
+            enrichment = enricher.enrich_chunk(record, heading_table)
+            record.metadata.update(enrichment)
 
         # Assign sequential chunk IDs and propagate ACL
         for idx, record in enumerate(records):
