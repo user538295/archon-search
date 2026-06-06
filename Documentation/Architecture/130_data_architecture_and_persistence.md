@@ -102,7 +102,7 @@ LanceDB lives in `~/.archon-search/search/` (configurable via `[database].db_pat
 | `indexed_at` | `utf8` | ISO 8601 |
 | `file_type` | `utf8` | e.g. `md`, `py`, … |
 | `language` | `utf8` | **C2 three-state contract**: `""` = never processed (pre-C2 / legacy chunk); `"unknown"` = processed by `LanguageDetector` but confidence below threshold; `"<code>"` = ISO 639-1 or ISO 639-3 code (e.g. `"fr"`, `"de"`). The `language=<code>` search filter returns only chunks matching that exact state; `language=unknown` returns `"unknown"`-tagged chunks only; no filter returns all three states. Only populated when `config.multilingual=True` at ingest time. |
-| `metadata` | `utf8` | JSON-encoded `dict[str,str]`; size-bounded (see `validate_metadata`) |
+| `metadata` | `utf8` | JSON-encoded `dict[str,str]`; size-bounded (see `validate_metadata`). **C3a**: text-format files carry `_heading` (nearest preceding heading text, capped at 512 chars) and `_section_path` (e.g. `"Installation > macOS > Homebrew"`, capped at 512 chars, left-truncated) after ingest. Non-text or heading-free chunks carry empty strings for both keys. |
 | `custom_score` | `float32` | nullable |
 | `ingested_by` | `utf8` | call-site identity: one of `cli` / `http` / `watcher` / `reindex` (defined by `_types.IngestedBy`; legacy `archon-search-cli` is normalized at boundaries) |
 | `updated_at` | `utf8` | ISO 8601 |
@@ -210,8 +210,10 @@ Notes:
 flowchart LR
     A[Source file on disk] --> B[parser.py: read raw text/HTML/PDF/office/image]
     B --> B2[pipeline.py::_extract_front_matter<br/>text extensions only: .md, .txt, .rst, .html]
-    B2 --> C[chunker.py: split into chunks of chunk_size]
-    C --> D[embedder.py: fastembed dense vectors]
+    B2 --> B3[enricher.py::prepare<br/>C3a: build heading offset table<br/>text types only; empty table for binary]
+    B3 --> C[chunker.py: split into chunks of chunk_size<br/>assigns start_offset/end_offset per record]
+    C --> C2[enricher.py::enrich_chunk per record<br/>C3a: merge _heading/_section_path into metadata]
+    C2 --> D[embedder.py: fastembed dense vectors]
     D --> E[ACL resolution<br/>acl.py: front-matter _acl > sidecar]
     E --> F[store.py: ingest_chunks<br/>append to LanceDB chunk table]
     F --> G[FTS index<br/>rebuild_fts_index on text column]

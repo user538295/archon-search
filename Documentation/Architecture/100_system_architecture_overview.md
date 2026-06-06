@@ -120,7 +120,7 @@ flowchart LR
 
 ### Layered pipeline
 
-Stages are independent classes wired by the orchestrator. The ordering `parser -> chunker -> embedder -> store -> reranker` is enforced by `SearchPipeline`; no other module should bypass it. Backends (`EmbedderBackend`, `RerankerBackend`) are Protocols, so a deterministic backend can be swapped in for evaluation (`archon_search/eval/backends.py`).
+Stages are independent classes wired by the orchestrator. The ordering `parser -> front-matter strip -> enricher.prepare -> chunker -> enricher.enrich_chunk -> embedder -> store -> reranker` is enforced by `SearchPipeline`; no other module should bypass it. **C3a**: `MarkdownEnricher` sits between front-matter extraction and the chunker; `prepare()` builds a heading-offset table from the stripped text, then `enrich_chunk()` is called per chunk to merge `_heading` and `_section_path` into each `ChunkRecord.metadata`. Backends (`EmbedderBackend`, `RerankerBackend`) are Protocols, so a deterministic backend can be swapped in for evaluation (`archon_search/eval/backends.py`).
 
 ### Two-stage hybrid retrieval
 

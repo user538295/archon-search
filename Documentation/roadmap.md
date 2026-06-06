@@ -1,7 +1,7 @@
 **Purpose**: Capture the priority-ordered forward plan for `archon-search` so contributors can see what is next and why.
 **Audience**: Maintainers and contributors planning, prioritising, or scoping work.
 **Status**: Draft
-**Last reviewed**: 2026-06-05
+**Last reviewed**: 2026-06-06
 **Next review**: 2026-08-31
 
 # Roadmap
@@ -33,6 +33,7 @@ Done (visible in the current repo):
 - **Tiered install profiles (C0):** `archon-search install` now presents three profiles (`minimal`, `balanced`, `max`) for both English and multilingual stacks. The profile is written into `[database].profile` / `[database].multilingual` in `archon-search.toml`. The installer includes disk-space checks, a Jina CC-BY-NC-4.0 license gate for multilingual `balanced`/`max`, model pre-warming, reinstall guard with rollback, and a `--force --delete-db` escape hatch. Implemented in `archon_search/profiles.py`, `archon_search/install.py`, and `archon_search/cli/install_cmd.py`.
 - **GitHub Releases with git-cliff changelog (C1):** `release.sh` now requires `git-cliff >= 2.4`, generates release notes via `git-cliff --unreleased`, prepends the section to `CHANGELOG.md` (committed and pushed to `main` before tagging), and verifies the commit count matches the provisional tag. A new `github-release` job in `archon-search-release.yml` (runs after `publish`, tag pushes only) extracts the first section from `CHANGELOG.md` and creates a GitHub Release via the REST API. `cliff.toml` at the repo root controls commit grouping and rendering.
 - **Multilingual retrieval (C2):** Per-document language detection using fasttext `lid.176.ftz`; ISO 639-1/639-3 language tags on all chunks; `language=<code>` single-collection filter; three-state language contract (`""`/`"unknown"`/`"<code>"`); CC-BY-SA 3.0 fasttext license gate; `--accept-fasttext-license` CLI flag; startup guard for missing package/model; `FilterFlags.language_filter_used` telemetry; `/status` warning for untagged collections; language-aware FTS tokenizer (LanceDB `FTS(language="French")` API). Implemented in `archon_search/language_detector.py`, `archon_search/filters.py`, `archon_search/store_filters.py`, `archon_search/store.py`, `archon_search/pipeline.py`, `archon_search/chunker.py`, `archon_search/install.py`, `archon_search/cli/install_cmd.py`, `archon_search/server/app.py`, `archon_search/server/routes_status.py`, `archon_search/telemetry/entry.py`.
+- **Markdown structural enrichment (C3a):** Every text-format chunk ingested into LanceDB now carries `_heading` (nearest preceding heading text, ≤ 512 chars) and `_section_path` (e.g. `"Installation > macOS > Homebrew"`, ≤ 512 chars, left-truncated) in its `metadata` dict. Headings are detected from ATX (`#`–`######`), setext (`===`/`---`), and RST underline styles; headings inside fenced code blocks are excluded. Binary/non-text formats silently receive empty strings. `ChunkRecord` gained transient `start_offset`/`end_offset` fields (not persisted to LanceDB). Implemented in `archon_search/enricher.py` (new), `archon_search/_types.py`, `archon_search/chunker.py`, `archon_search/pipeline.py`.
 
 ## Priority 0 — Product Boundary (largely landed; remaining hardening)
 
@@ -61,9 +62,9 @@ Ordered as in the backlog. Items 1 and 8 are shipped (A2 + C2). Remaining items 
 - Remove full metadata rescans from incremental sync.
 - Streaming / incremental chunking for very large files.
 - Chunk-level enrichment (heading ancestry, section path, page numbers, code-symbol context):
-  - **C3a — Markdown structural enrichment** (`_heading`, `_section_path`): brief `Backlog/C3a-markdown-structural-enrichment-brief.md`, plan `Backlog/C3a-markdown-structural-enrichment-plan.md`.
-  - **C3b — Page number extraction** (`_page_start`, `_page_end`): brief `Backlog/C3b-page-number-extraction-brief.md`, plan `Backlog/C3b-page-number-extraction-plan.md`. Blocked on C3a.
-  - **C3c — Code symbol context** (`_symbol_subtype`, `_containing_function`, `_containing_class`, `_module_path`): brief `Backlog/C3c-code-symbol-context-brief.md`. Plan not yet drafted. Blocked on C3a.
+  - **C3a — Markdown structural enrichment** (`_heading`, `_section_path`): ✓ **shipped**. See Status Snapshot above.
+  - **C3b — Page number extraction** (`_page_start`, `_page_end`): brief `Backlog/C3b-page-number-extraction-brief.md`, plan `Backlog/C3b-page-number-extraction-plan.md`. C3a blocker resolved.
+  - **C3c — Code symbol context** (`_symbol_subtype`, `_containing_function`, `_containing_class`, `_module_path`): brief `Backlog/C3c-code-symbol-context-brief.md`. Plan not yet drafted. C3a blocker resolved.
 - Export / import / backup / restore APIs.
 - Schema migration strategy that does not require full re-ingest.
 

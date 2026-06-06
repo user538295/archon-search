@@ -1,7 +1,7 @@
 # C3a — Markdown Structural Enrichment
 **Purpose**: Enrich every text-format chunk at ingest time with `_heading` and `_section_path` metadata fields derived from the document's heading structure, so operators can locate chunks by section.
 **Audience**: archon-search contributors implementing C3a; reviewers of the resulting PRs.
-**Status**: To Do
+**Status**: Shipped
 
 ---
 
@@ -249,7 +249,7 @@ parse() → _extract_front_matter() → [if text type] enricher.prepare(text) �
 ### Phase 4 — Verification & Documentation
 
 #### Task 4.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (Architecture docs, ADRs, API docs, user guides, CLAUDE.md, BREAKING.md) and update every file whose content is affected by the changes delivered in this plan. Files to check: `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md`, `Documentation/Architecture/130_data_architecture_and_persistence.md`, `Documentation/Architecture/100_system_architecture_overview.md`, `Documentation/roadmap.md`. The agent must not update docs that are unrelated.
