@@ -1,7 +1,7 @@
 # C3b — Page Number Extraction
 **Purpose**: Surface PDF and image page provenance on every chunk so operators can map search results back to the source page, and lay the groundwork for a future typed page-range filter.
 **Audience**: archon-search contributors implementing C3b; reviewers of the resulting PRs.
-**Status**: To Do
+**Status**: Done
 
 ---
 
@@ -460,7 +460,7 @@ None.
 ### Final Phase — Verification & Documentation
 
 #### Task F.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: Task 1.2, Task 2.5, Task 3.1, Task 4.2, Task 5.2
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, `Documentation/Architecture/*`, `Documentation/UserManual/*`, `BREAKING.md`, `CHANGELOG.md` if present, `CLAUDE.md`) and update every file whose content is affected by the changes delivered in this plan. The agent must not update docs that are unrelated.

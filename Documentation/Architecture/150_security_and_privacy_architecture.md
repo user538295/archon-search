@@ -142,6 +142,10 @@ This is reinforced by `CLAUDE.md`'s "Structural invariant" note and is the priva
 - **`routing.candidates` scoped to caller's namespace**: when `collection` is omitted, the routing block lists every collection in the caller's namespace (the same ACL boundary that gates results). Collections outside the caller's namespace cannot appear in `routing.candidates`. The confidence-threshold gate is bypassed by `rank_with_scores`, but the namespace gate is not.
 - **Error message sanitisation**: pipeline-stage failures (`ExplainStageError`) surface as `{"detail": "<stage> error: <ExceptionType>"}` — the original exception message (which may contain the query, e.g. from an FTS error) is logged server-side only and never forwarded to the client.
 
+### Page-break marker collision risk — accepted
+
+**C3b** introduces the internal marker string `<!-- archon-search:pagebreak:v1 -->` to identify page boundaries during PDF/image ingest. If a PDF's text body contains this exact literal string, it will be misinterpreted as a page break and the surrounding content will carry incorrect `_page_start` metadata. The marker is namespaced (`archon-search:`) and versioned (`:v1`) to make accidental collisions highly improbable in practice. This risk is accepted: the marker never leaves the ingest pipeline (it is excised before chunking, never stored in `ChunkRecord.text`, never returned by the API, and never indexed by FTS), so the blast radius of a collision is limited to a metadata field on the affected chunk.
+
 ### `doc_id` leakage risk — accepted
 
 `doc_id` is `sha256(resolved_source_path)`. The hash is one-way, but `result_doc_ids` is logged in telemetry. The hash itself doesn't reveal the path; however:

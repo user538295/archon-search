@@ -102,7 +102,7 @@ LanceDB lives in `~/.archon-search/search/` (configurable via `[database].db_pat
 | `indexed_at` | `utf8` | ISO 8601 |
 | `file_type` | `utf8` | e.g. `md`, `py`, … |
 | `language` | `utf8` | **C2 three-state contract**: `""` = never processed (pre-C2 / legacy chunk); `"unknown"` = processed by `LanguageDetector` but confidence below threshold; `"<code>"` = ISO 639-1 or ISO 639-3 code (e.g. `"fr"`, `"de"`). The `language=<code>` search filter returns only chunks matching that exact state; `language=unknown` returns `"unknown"`-tagged chunks only; no filter returns all three states. Only populated when `config.multilingual=True` at ingest time. |
-| `metadata` | `utf8` | JSON-encoded `dict[str,str]`; size-bounded (see `validate_metadata`). **C3a**: text-format files carry `_heading` (nearest preceding heading text, capped at 512 chars) and `_section_path` (e.g. `"Installation > macOS > Homebrew"`, capped at 512 chars, left-truncated) after ingest. Non-text or heading-free chunks carry empty strings for both keys. |
+| `metadata` | `utf8` | JSON-encoded `dict[str,str]`; size-bounded (see `validate_metadata`). **C3a**: text-format files carry `_heading` (nearest preceding heading text, capped at 512 chars) and `_section_path` (e.g. `"Installation > macOS > Homebrew"`, capped at 512 chars, left-truncated) after ingest. Non-text or heading-free chunks carry empty strings for both keys. **C3b**: PDF and image files (docling-parsed sources) carry `_page_start` (1-indexed page number as `str`; always present) and, when a chunk spans a page boundary, `_page_end` (last page as `str`; absent when equal to `_page_start`). The internal page-break marker `<!-- archon-search:pagebreak:v1 -->` is an implementation detail that is excised before chunking and never reaches `ChunkRecord.text`, API responses, or the FTS index. |
 | `custom_score` | `float32` | nullable |
 | `ingested_by` | `utf8` | call-site identity: one of `cli` / `http` / `watcher` / `reindex` (defined by `_types.IngestedBy`; legacy `archon-search-cli` is normalized at boundaries) |
 | `updated_at` | `utf8` | ISO 8601 |
@@ -210,9 +210,12 @@ Notes:
 flowchart LR
     A[Source file on disk] --> B[parser.py: read raw text/HTML/PDF/office/image]
     B --> B2[pipeline.py::_extract_front_matter<br/>text extensions only: .md, .txt, .rst, .html]
-    B2 --> B3[enricher.py::prepare<br/>C3a: build heading offset table<br/>text types only; empty table for binary]
-    B3 --> C[chunker.py: split into chunks of chunk_size<br/>assigns start_offset/end_offset per record]
-    C --> C2[enricher.py::enrich_chunk per record<br/>C3a: merge _heading/_section_path into metadata]
+    B2 --> B3{is_docling_source?}
+    B3 -- yes PDF/image --> B4[enricher.py::preprocess<br/>C3b: excise page-break markers<br/>build post-removal page table]
+    B3 -- no text types --> B5[enricher.py::prepare<br/>C3a: build heading offset table]
+    B4 --> C[chunker.py: split into chunks of chunk_size<br/>assigns start_offset/end_offset per record]
+    B5 --> C
+    C --> C2[enricher.py::enrich_chunk per record<br/>C3a: merge _heading/_section_path into metadata<br/>C3b: merge _page_start/_page_end for docling sources]
     C2 --> D[embedder.py: fastembed dense vectors]
     D --> E[ACL resolution<br/>acl.py: front-matter _acl > sidecar]
     E --> F[store.py: ingest_chunks<br/>append to LanceDB chunk table]

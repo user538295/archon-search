@@ -1,7 +1,7 @@
 **Purpose**: Priority-ordered, checkable roadmap for evolving `archon-search` into a standalone world-class retrieval product.
 **Audience**: Maintainers planning architecture and feature work.
 **Status**: Draft
-**Last reviewed**: 2026-05-20 / **Next review**: 2026-08-20
+**Last reviewed**: 2026-06-07 / **Next review**: 2026-09-07
 
 > Source of truth: current code under `archon_search/` verified against comparison docs `01_competitive_analysis_field.md` and `02_competitive_analysis_marveen.md`.
 
@@ -76,6 +76,8 @@ Goal: ship the features users actually came for. Each item must show a measurabl
 - [x] **C1. Per-collection embedding model (item 13)** — honour `CollectionMeta.embedding_model` at ingest and query; reject or downgrade cross-model routing explicitly; collection-level reindex workflow.
 - [ ] **C2. Multilingual retrieval (item 14)** — multilingual embedding option, language metadata on chunks, language-aware FTS/tokenisation where the backend supports it.
 - [ ] **C3. Chunk-level enrichment at ingest (item 19)** — local title / section path / heading ancestry / page / source-subtype / code-symbol context. Drives both ranking and filter quality.
+  - [x] **C3a** — Heading enrichment (`_heading`, `_section_path`) for text-format sources (`.md`, `.txt`, `.rst`, `.html`). Shipped.
+  - [x] **C3b** — Page-number extraction (`_page_start`, `_page_end`) for PDF and image sources via docling page-break markers. Shipped 2026-06-07.
 - [ ] **C4. HyDE / query expansion (item 10)** — optional, opt-in; must clear the eval-harness bar before becoming default.
 - [ ] **C5. RAG Fusion / multi-query decomposition (item 11)** — parallel sub-queries with fused ranking; benchmarked, not assumed.
 - [ ] **C6. Hardening: incremental FTS maintenance (item 16)** — per-document add/update/delete against the existing FTS index instead of `replace=True` on every change set.
@@ -222,7 +224,7 @@ If only one ordering is used for planning, use this — each phase is a coherent
 **Phase C — Quality features**
 15. ✅ C1. Per-collection embedding model (item 13).
 16. ⬜ C2. Multilingual retrieval (item 14).
-17. ⬜ C3. Chunk-level enrichment (item 19).
+17. ⬜ C3. Chunk-level enrichment (item 19). [C3a heading enrichment ✅ shipped; C3b page-number extraction ✅ shipped 2026-06-07; C3c code-symbol context ⬜]
 18. ⬜ C4. HyDE / query expansion (item 10).
 19. ⬜ C5. RAG Fusion / multi-query (item 11).
 20. ⬜ C6. Incremental FTS maintenance (item 16).
