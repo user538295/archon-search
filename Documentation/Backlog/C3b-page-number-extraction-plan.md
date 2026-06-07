@@ -230,7 +230,7 @@ None.
 > **Releasable**: after each task — every function is unit-testable in isolation against canned strings. Nothing is wired to the pipeline yet.
 
 #### Task 2.1 — Pre-removal page table builder
-- [ ] **File**: `archon_search/enricher.py`
+- [x] **File**: `archon_search/enricher.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Add `MarkdownEnricher._extract_page_breaks(self, text: str) -> list[tuple[int, int]]`.

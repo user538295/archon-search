@@ -249,6 +249,30 @@ class MarkdownEnricher:
         return {"_heading": heading_text, "_section_path": section_path}
 
     # ------------------------------------------------------------------
+    # Page-break helpers (C3b)
+    # ------------------------------------------------------------------
+
+    def _extract_page_breaks(self, text: str) -> list[tuple[int, int]]:
+        """Build pre-removal (offset, page) table from marker positions.
+
+        Returns a sorted list seeded with (0, 1) for first-page provenance.
+        If text begins with the marker at offset 0, the seed is omitted and
+        the first emitted entry is (0, 2).
+        """
+        leading = text.startswith(PAGE_BREAK_MARKER)
+        result: list[tuple[int, int]] = [] if leading else [(0, 1)]
+        page = 2 if leading else 2
+        pos = 0
+        while True:
+            idx = text.find(PAGE_BREAK_MARKER, pos)
+            if idx == -1:
+                break
+            result.append((idx, page))
+            page += 1
+            pos = idx + PAGE_BREAK_MARKER_LEN
+        return result
+
+    # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 

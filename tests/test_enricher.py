@@ -1,4 +1,4 @@
-"""Tests for MarkdownEnricher — Task 2.1 (prepare) and Task 2.2 (enrich_chunk)."""
+"""Tests for MarkdownEnricher — heading scanner, page-break extraction, and chunk enrichment."""
 from archon_search.enricher import (
     HeadingEntry,
     HeadingTable,
@@ -380,3 +380,52 @@ class TestEnrichChunk:
         r_deep = enricher.enrich_chunk(make_chunk(start_offset=deep_offset), table)
         assert r_deep["_heading"] == "Gamma"
         assert r_deep["_section_path"] == "Alpha > Beta > Gamma"
+
+
+# ===========================================================================
+# Task 2.1 — _extract_page_breaks
+# ===========================================================================
+
+M = PAGE_BREAK_MARKER
+ML = PAGE_BREAK_MARKER_LEN
+
+
+class TestExtractPageBreaks:
+    def _enrich(self) -> MarkdownEnricher:
+        return MarkdownEnricher()
+
+    def test_extract_page_breaks_no_markers(self):
+        """No markers in text → seed-only table [(0, 1)]."""
+        result = self._enrich()._extract_page_breaks("plain text no markers")
+        assert result == [(0, 1)]
+
+    def test_extract_page_breaks_empty_text(self):
+        """Empty string → seed-only table [(0, 1)]."""
+        result = self._enrich()._extract_page_breaks("")
+        assert result == [(0, 1)]
+
+    def test_extract_page_breaks_three_pages(self):
+        """Three pages: seed + two marker entries."""
+        text = "A" + M + "B" + M + "C"
+        result = self._enrich()._extract_page_breaks(text)
+        # "A" is 1 char, first marker at offset 1
+        # "B" is 1 char, second marker at offset 1 + ML + 1 = 2 + ML
+        assert result == [(0, 1), (1, 2), (2 + ML, 3)]
+
+    def test_extract_page_breaks_leading_marker(self):
+        """Text starts with marker → no seed, first entry is (0, 2)."""
+        text = M + "B"
+        result = self._enrich()._extract_page_breaks(text)
+        assert result == [(0, 2)]
+
+    def test_extract_page_breaks_consecutive_markers(self):
+        """Two consecutive markers (empty middle page)."""
+        text = "A" + M + M + "C"
+        result = self._enrich()._extract_page_breaks(text)
+        assert result == [(0, 1), (1, 2), (1 + ML, 3)]
+
+    def test_extract_page_breaks_trailing_marker(self):
+        """Trailing marker after content — empty page recorded."""
+        text = "A" + M
+        result = self._enrich()._extract_page_breaks(text)
+        assert result == [(0, 1), (1, 2)]
