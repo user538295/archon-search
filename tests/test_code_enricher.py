@@ -11,6 +11,8 @@ Tests are organized by task/phase matching the C3c plan:
 
 from __future__ import annotations
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Task 1.2 — ScopeEntry, ScopeTable, CODE_EXTENSIONS
 # ---------------------------------------------------------------------------
@@ -151,3 +153,81 @@ class TestModulePath:
 
         result = _module_path(Path("/repo/__init__.py"), Path("/repo"))
         assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# Task 3.1 — Grammar registry with lazy loading and graceful degradation
+# ---------------------------------------------------------------------------
+
+
+class TestGrammarRegistry:
+    """Tests for _get_grammar(ext) -> Language | None."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_grammar_state(self, monkeypatch):
+        """Isolate each test by clearing the module-level grammar cache and logged set."""
+        import archon_search.code_enricher as ce
+
+        # Patch both singletons with fresh dicts/sets for the duration of the test
+        monkeypatch.setattr(ce, "_GRAMMAR_CACHE", {})
+        monkeypatch.setattr(ce, "_GRAMMAR_LOGGED", set())
+
+    def test_grammar_returns_none_for_unknown_ext(self):
+        """_get_grammar('.xyz') must return None without raising."""
+        from archon_search.code_enricher import _get_grammar
+
+        result = _get_grammar(".xyz")
+        assert result is None
+
+    def test_grammar_returns_none_when_import_fails(self, monkeypatch, caplog):
+        """When tree_sitter_python is absent, _get_grammar('.py') returns None and logs INFO."""
+        import logging
+        import sys
+
+        import archon_search.code_enricher as ce
+
+        # Make tree_sitter_python appear missing
+        monkeypatch.setitem(sys.modules, "tree_sitter_python", None)
+
+        with caplog.at_level(logging.INFO, logger="archon_search.code_enricher"):
+            result = ce._get_grammar(".py")
+
+        assert result is None
+        assert any(
+            "tree-sitter grammar not available for .py" in r.message
+            for r in caplog.records
+        )
+
+    def test_grammar_info_logged_once(self, monkeypatch, caplog):
+        """INFO is emitted exactly once for a missing grammar, even on repeated calls."""
+        import logging
+        import sys
+
+        import archon_search.code_enricher as ce
+
+        monkeypatch.setitem(sys.modules, "tree_sitter_python", None)
+
+        with caplog.at_level(logging.INFO, logger="archon_search.code_enricher"):
+            ce._get_grammar(".py")
+            ce._get_grammar(".py")  # second call should hit cache, no new log
+
+        info_msgs = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.INFO
+            and "tree-sitter grammar not available for .py" in r.message
+        ]
+        assert len(info_msgs) == 1
+
+    def test_grammar_result_cached(self, monkeypatch):
+        """Calling _get_grammar twice returns the same object from cache (no re-import)."""
+        import archon_search.code_enricher as ce
+
+        first = ce._get_grammar(".py")
+        # Verify the result is in the cache
+        assert ".py" in ce._GRAMMAR_CACHE
+        assert ce._GRAMMAR_CACHE[".py"] is first
+
+        second = ce._get_grammar(".py")
+        # Should return cached value without re-computing
+        assert second is first

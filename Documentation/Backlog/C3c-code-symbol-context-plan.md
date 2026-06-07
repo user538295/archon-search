@@ -240,7 +240,7 @@ code = [
 > **Releasable**: after Task 3.1; degradation paths are exercised before any real grammar code.
 
 #### Task 3.1 — Grammar registry with lazy loading and graceful degradation
-- [ ] **File**: `archon_search/code_enricher.py`
+- [x] **File**: `archon_search/code_enricher.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Module-level: `_GRAMMAR_CACHE: dict[str, Any | None] = {}` and `_GRAMMAR_LOGGED: set[str] = set()`
