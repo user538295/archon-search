@@ -180,6 +180,78 @@ When `config.multilingual=True`, ingested documents are tagged with an ISO langu
 
 The `language` filter is a strict equality match — `language=fr` does not match `""` or `"unknown"`.
 
+## HyDE query expansion (C4)
+
+HyDE (Hypothetical Document Embeddings) improves recall for vocabulary-mismatch queries — cases where the query phrasing is far from the document phrasing in embedding space. When enabled, the server asks Claude to write a short hypothetical answer passage, embeds that passage, and uses the resulting vector for ANN lookup instead of the original query embedding.
+
+> **Privacy notice**: `hyde=true` sends the user's raw query to Anthropic's API servers. Do not enable HyDE in air-gapped deployments or where data residency requirements apply. See `Documentation/ADRs/C4-hyde-external-llm-dependency.md` for the full privacy trade-off.
+
+### Installation
+
+HyDE requires the optional `anthropic` package. Install it alongside `archon-search`:
+
+```bash
+pip install archon-search[hyde]
+```
+
+### Configuration
+
+Add or edit the `[hyde]` section in `~/.archon-search/archon-search.toml`:
+
+```toml
+[hyde]
+# WARNING: enabled = true sends query text to Anthropic's API.
+enabled = true
+model = "claude-haiku-4-5-20251001"
+timeout_seconds = 5.0
+max_requests_per_minute = 60
+```
+
+Set `ANTHROPIC_API_KEY` in the server's environment before starting:
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+archon-search start
+```
+
+When `enabled = true`, the server logs an INFO message at startup:
+
+```
+HyDE is enabled — search query text will be sent to Anthropic's API (model: claude-haiku-4-5-20251001)
+```
+
+### Usage
+
+Pass `hyde: true` on any `/search` or `/explain` request:
+
+```bash
+source ~/.archon-search/.search.env
+
+curl -s -X POST http://127.0.0.1:8765/search \
+  -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"docs","query":"how do I remove the CLI?","hyde":true}'
+```
+
+The response includes `hyde_applied: true` when HyDE was used, or `hyde_applied: false` when the fallback (original query embedding) was used instead.
+
+### Fallback behaviour
+
+HyDE is designed to **never degrade availability**. It falls back silently (returning `hyde_applied: false`) when:
+
+- `[hyde] enabled = false` in config (the kill-switch).
+- `hyde=true` in the request but the `anthropic` package is not installed — in this case a `422` is returned (configuration error, not a runtime fallback).
+- `ANTHROPIC_API_KEY` is absent from the environment (WARNING logged once).
+- The Anthropic API call times out (after `timeout_seconds`).
+- The Anthropic API returns an error.
+- The per-process rate limit (`max_requests_per_minute`) is exhausted.
+
+### Operator notes
+
+- **Multi-worker deployments**: the rate limit is per-process. With N workers the effective call rate can be up to `N * max_requests_per_minute`.
+- **API key rotation**: the key is read from the environment at startup; restart the server after changing it.
+- **Model choice**: `claude-haiku-4-5-20251001` (the default) is fast and cheap. Larger models may produce better hypotheses at higher latency and cost.
+
 ## Related documents
 
 - [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) — full REST/MCP reference.

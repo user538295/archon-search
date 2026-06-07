@@ -2,7 +2,7 @@
 
 **Purpose**: Improve dense retrieval recall on vocabulary-mismatch queries by generating a short hypothetical answer passage via Claude Haiku and using its embedding as the ANN lookup vector in place of the original query embedding — while preserving full availability under LLM API failure.
 **Audience**: archon-search contributors implementing C4; reviewers; operators who will opt in via `hyde=true`.
-**Status**: To Do
+**Status**: Done
 
 ---
 
@@ -534,7 +534,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
 ### Phase 7 — Verification & Documentation
 
 #### Task 7.1 — Final verification & documentation update + C4-ADR
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Write `Documentation/ADRs/C4-hyde-external-llm-dependency.md` — ADR documenting: (a) why HyDE requires an external LLM API rather than a local model; (b) the privacy trade-off (query text leaves the machine); (c) the evaluated alternatives (local model, skip HyDE); (d) the decision and rationale. ADRs are append-only; this is a new ADR.

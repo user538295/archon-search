@@ -15,7 +15,7 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
 1. **Local trust boundary.** The threat model assumes anything running as the same OS user is trusted; the server binds to `127.0.0.1` by default.
 2. **Bearer auth on every endpoint except `/health` and `/ready`.** No anonymous access to data planes.
 3. **Privacy is structural, not procedural.** The telemetry schema cannot represent a raw query — there is no field for it and no factory that accepts one.
-4. **No outbound network calls for telemetry.** `export_enabled` is silently coerced to `false`; nothing leaves the host.
+4. **No outbound network calls for telemetry.** `export_enabled` is silently coerced to `false`; nothing leaves the host. **Exception (C4)**: when `[hyde] enabled = true` and a caller sends `hyde=true`, the raw query is sent to Anthropic's API — this is an explicit operator opt-in; see the HyDE section under Privacy.
 5. **ACL is best-effort, default-open.** Documents without an explicit `_acl` are visible to all namespaces. Misconfigured ACLs fail-open with a warning, never crash.
 
 ## Threat model — scope and non-scope
@@ -155,7 +155,28 @@ This is reinforced by `CLAUDE.md`'s "Structural invariant" note and is the priva
 
 This is documented as accepted risk: telemetry is local-only and the operator already has filesystem access. Note: archon-search does **not** explicitly set mode `0700` on `~/.archon-search/`; the directory is created via `os.makedirs(..., exist_ok=True)` (`key_manager.py:83`), so its mode is governed by the process umask. Only the key file itself is enforced to mode `0600`. The effective protection of the parent directory depends on the user's home-directory permissions, which vary by platform. #Unverified
 
-### No external transmission
+### HyDE external LLM transmission (C4) — explicit opt-in exception
+
+**C4 introduces the only point in archon-search v1 where user data can leave the host by design.**
+
+When `[hyde] enabled = true` in config *and* a request includes `hyde=true`, the user's raw query (up to 2000 characters) is sent to Anthropic's API servers over HTTPS to generate a hypothetical answer passage. This is a deliberate operator opt-in, not a default behaviour.
+
+**Gating requirements** — HyDE transmission occurs only when all three conditions are true simultaneously:
+1. The operator has installed `archon-search[hyde]` (optional dependency).
+2. The operator has set `[hyde] enabled = true` in `~/.archon-search/archon-search.toml`.
+3. The caller includes `hyde=true` in the request body.
+
+**Invariants preserved despite the external call:**
+- The hypothesis text returned by the API is consumed only by the local embedder. It is **never logged, stored in LanceDB, or returned to the caller**.
+- Log messages in `archon_search/hyde.py` use `_query_fingerprint(query)` (SHA-256 truncated to 16 hex chars) — the raw query is never passed to any logging call. A CI guard (`tests/test_no_query_log_in_hyde.py`) enforces this structurally.
+- `TelemetryEntry` factories receive no query text — the HyDE path does not weaken the telemetry structural invariant.
+- Fallback is silent and transparent: a timeout, API error, missing key, or rate limit causes `hyde_applied: false` in the response, not an error. Availability is never degraded by the external dependency.
+
+**Operator visibility:** when `enabled = true`, the server logs an INFO message at startup naming the model. This makes the data-transmission fact visible in server logs without the operator needing to read config.
+
+See `Documentation/ADRs/C4-hyde-external-llm-dependency.md` for the full decision record.
+
+### No external transmission (baseline — non-HyDE traffic)
 
 `config.py:209–217`: `[telemetry].export_enabled = true` is logged as a warning and forced to `false`. There is no corresponding code path in `telemetry/` to send entries anywhere — the writer's only sink is `~/.archon-search/search-logs/<date>.jsonl`. Removing this guarantee requires both a config-loader change *and* a new transport implementation; neither is shipped in v1.
 

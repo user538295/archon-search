@@ -121,6 +121,31 @@ stage_timings_enabled = true
 # and 401 responses. Must be a non-empty string.
 request_id_header = "X-Request-ID"
 
+[hyde]
+# HyDE (Hypothetical Document Embeddings) — optional dense-retrieval recall booster.
+# Disabled by default.
+#
+# WARNING: setting enabled = true causes the raw query text to be sent to Anthropic's
+# API servers on every request that includes hyde=true. Do not enable in air-gapped
+# deployments or where data residency requirements apply.
+#
+# Prerequisites:
+#   1. Install the optional dependency: pip install archon-search[hyde]
+#   2. Set ANTHROPIC_API_KEY in the server's environment.
+#
+# When enabled = false (the default), hyde=true in a request is silently ignored and
+# the standard query embedding is used (hyde_applied: false in the response).
+enabled = false
+# Claude model used to generate the hypothetical answer passage.
+model = "claude-haiku-4-5-20251001"
+# Per-request timeout (seconds) for the Anthropic API call. On timeout, the server
+# falls back silently to the original query embedding (hyde_applied: false).
+timeout_seconds = 5.0
+# Per-process rate limit (requests per minute) for the Anthropic API. Requests that
+# exceed this limit are answered with the fallback embedding (hyde_applied: false).
+# In multi-worker deployments the effective rate is multiplied by worker count.
+max_requests_per_minute = 60
+
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #
