@@ -21,6 +21,7 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.description_generator import _should_regenerate, generate_description
 from archon_search.chunker import DocumentChunker
 from archon_search.embedder import Embedder, EmbedderBackend, ModelEmbedder
+from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher
 from archon_search.enricher import MarkdownEnricher, is_docling_source, source_subtype_for
 from archon_search.parser import DocumentParser, ParseError
 from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
@@ -221,6 +222,7 @@ class SearchPipeline:
         embedder: Embedder,
         namespace: str = DEFAULT_NAMESPACE,
         ingested_by: IngestedBy = "cli",
+        collection_root: Path | None = None,
     ) -> IngestResult:
         doc_id = hashlib.sha256(str(path.resolve()).encode()).hexdigest()
 
@@ -255,20 +257,29 @@ class SearchPipeline:
             logger.debug("stat() failed for %s; updated_at will be empty", path)
             updated_at = ""
 
-        # C3a / C3b: enrichment routing — choose the correct pre-chunking method based
-        # on source type. Docling-parsed sources (pdf, image) go through preprocess()
-        # to excise page-break markers and build the page table. Text-format sources
-        # go through prepare() to build the heading table.
-        enricher = MarkdownEnricher()
-        subtype = source_subtype_for(path.suffix)
-        if is_docling_source(subtype):
-            # C3b path: strip markers, build page table; heading enrichment skipped for v1.
-            markdown, page_table = enricher.preprocess(markdown)
+        # C3a / C3b / C3c: enrichment routing — choose the correct enricher based on
+        # source type. Code files go through CodeEnricher (C3c). Docling-parsed sources
+        # (pdf, image) go through MarkdownEnricher.preprocess() (C3b). Text-format
+        # sources go through MarkdownEnricher.prepare() (C3a).
+        suffix = path.suffix.lower()
+        if suffix in CODE_EXTENSIONS:
+            # C3c path: code file → AST-based symbol enrichment.
+            enricher: MarkdownEnricher | CodeEnricher = CodeEnricher()
+            scope_table = enricher.prepare(markdown, suffix, path, collection_root)
             heading_table = None
-        else:
-            # C3a path: text-format sources get heading enrichment.
-            heading_table = enricher.prepare(markdown) if is_text_type else []
             page_table = None
+        else:
+            enricher = MarkdownEnricher()
+            subtype = source_subtype_for(path.suffix)
+            if is_docling_source(subtype):
+                # C3b path: strip markers, build page table; heading enrichment skipped for v1.
+                markdown, page_table = enricher.preprocess(markdown)
+                heading_table = None
+            else:
+                # C3a path: text-format sources get heading enrichment.
+                heading_table = enricher.prepare(markdown) if is_text_type else []
+                page_table = None
+            scope_table = None
 
         # C2: language detection — runs after parse, before chunk
         if self._language_detector is not None:
@@ -300,12 +311,14 @@ class SearchPipeline:
         if not records:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="ok")
 
-        # C3a / C3b: enrich every chunk with heading and/or page metadata.
-        # heading_table and page_table are mutually exclusive per source type in v1.
+        # C3a / C3b / C3c: enrich every chunk with symbol or heading/page metadata.
         for record in records:
-            enrichment = enricher.enrich_chunk(
-                record, heading_table=heading_table, page_table=page_table
-            )
+            if isinstance(enricher, CodeEnricher):
+                enrichment = enricher.enrich_chunk(record, scope_table)
+            else:
+                enrichment = enricher.enrich_chunk(
+                    record, heading_table=heading_table, page_table=page_table
+                )
             record.metadata.update(enrichment)
 
         # Assign sequential chunk IDs and propagate ACL
@@ -364,6 +377,7 @@ class SearchPipeline:
         *,
         embedder: Embedder,
         ingested_by: IngestedBy = "cli",
+        collection_root: Path | None = None,
     ) -> list[IngestResult]:
         # Collect and filter files
         files: list[Path] = []
@@ -406,6 +420,7 @@ class SearchPipeline:
                 _chunk_collector=all_chunks,
                 embedder=embedder,
                 namespace=namespace,
+                collection_root=collection_root,
                 ingested_by=ingested_by,
             )
             results.append(result)

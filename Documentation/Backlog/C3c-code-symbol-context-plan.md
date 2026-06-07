@@ -447,7 +447,7 @@ code = [
 > **Releasable**: after Task 7.1; code files ingested via the normal pipeline carry symbol metadata.
 
 #### Task 7.1 — Dispatch `CodeEnricher` in `pipeline.py`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 6.2; `ingest_file()` and `ingest_directory()` signature changes require updating all direct and transitive callers
 - **Description**:
   - Import `CodeEnricher`, `CODE_EXTENSIONS` from `archon_search.code_enricher` at the top of `pipeline.py`

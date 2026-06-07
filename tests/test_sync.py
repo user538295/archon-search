@@ -4252,7 +4252,7 @@ class TestTask46:
 
         # ingest_file must have been called with the changed file, collection name, and rebuild_fts=False
         from unittest.mock import ANY
-        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher")
+        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher", collection_root=ANY)
 
         # The collection should be in errors (FAILED), not updated
         assert len(result.errors) == 1
@@ -4410,7 +4410,7 @@ class TestTask46:
 
         # ingest_file must have been called with the changed file, collection name, and rebuild_fts=False
         from unittest.mock import ANY
-        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher")
+        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher", collection_root=ANY)
         assert "myproject" in result.updated
         assert result.errors == []
 

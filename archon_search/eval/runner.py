@@ -540,9 +540,10 @@ async def _ingest_corpus(pipeline, corpus_root: Path, corpus: EvalCorpus) -> Non
         by_collection.setdefault(d.collection, []).append(
             (corpus_root / "corpus" / d.relative_path).resolve()
         )
+    corpus_dir = (corpus_root / "corpus").resolve()
     for collection, paths in by_collection.items():
         for p in paths:
-            result = await pipeline.ingest_file(p, collection, rebuild_fts=False, embedder=pipeline._global_embedder)
+            result = await pipeline.ingest_file(p, collection, rebuild_fts=False, embedder=pipeline._global_embedder, collection_root=corpus_dir)
             if result.status != "ok":
                 raise RuntimeError(
                     f"failed to ingest {p}: {result.error}"

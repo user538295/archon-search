@@ -262,6 +262,7 @@ async def _reindex_task(
             embedder=embedder,
             namespace=namespace,
             ingested_by="reindex",
+            collection_root=collection_path,
         )
     except asyncio.CancelledError:
         cancelled = True
