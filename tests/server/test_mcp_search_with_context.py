@@ -108,8 +108,11 @@ async def test_search_with_context_strips_vector_from_neighbors() -> None:
         }
     ]
     payload = await _call_search_with_context(pipeline_result, include_metadata=True)
-    assert payload, "expected at least one result"
-    entry = payload[0]
+    # search_with_context now returns {"results": [...], "hyde_applied": bool}
+    assert "results" in payload, "expected results key in payload"
+    results = payload["results"]
+    assert results, "expected at least one result"
+    entry = results[0]
     for neighbor in entry["context_before"] + entry["context_after"]:
         assert "vector" not in neighbor, f"vector leaked in neighbor: {neighbor!r}"
 
@@ -124,7 +127,7 @@ async def test_search_with_context_preserves_other_chunk_fields_in_neighbors() -
         }
     ]
     payload = await _call_search_with_context(pipeline_result, include_metadata=True)
-    entry = payload[0]
+    entry = payload["results"][0]
     expected_keys = {
         "text",
         "chunk_id",
@@ -155,8 +158,9 @@ async def test_search_with_context_strips_metadata_from_context_chunks_when_incl
         }
     ]
     payload = await _call_search_with_context(pipeline_result, include_metadata=False)
-    assert payload, "expected at least one result"
-    entry = payload[0]
+    results = payload["results"]
+    assert results, "expected at least one result"
+    entry = results[0]
     for neighbor in entry["context_before"] + entry["context_after"]:
         assert neighbor["metadata"] == {}, f"metadata not suppressed in neighbor: {neighbor!r}"
 
@@ -172,8 +176,9 @@ async def test_search_with_context_preserves_metadata_in_context_chunks_when_inc
         }
     ]
     payload = await _call_search_with_context(pipeline_result, include_metadata=True)
-    assert payload, "expected at least one result"
-    entry = payload[0]
+    results = payload["results"]
+    assert results, "expected at least one result"
+    entry = results[0]
     for neighbor in entry["context_before"] + entry["context_after"]:
         assert neighbor["metadata"] == {"k": "v"}, f"metadata unexpectedly absent/modified in neighbor: {neighbor!r}"
 
@@ -189,8 +194,9 @@ async def test_search_with_context_propagates_language_in_result() -> None:
         }
     ]
     payload = await _call_search_with_context(pipeline_result, include_metadata=False)
-    assert payload, "expected at least one result"
-    entry = payload[0]
+    results = payload["results"]
+    assert results, "expected at least one result"
+    entry = results[0]
     assert entry["result"]["language"] == "en", (
         f"language not propagated in result: {entry['result']!r}"
     )
@@ -209,12 +215,21 @@ async def test_search_with_context_result_metadata_suppressed_and_preserved() ->
     ]
     # include_metadata=False → metadata must be empty dict
     payload_false = await _call_search_with_context(pipeline_result, include_metadata=False)
-    assert payload_false[0]["result"]["metadata"] == {}, (
-        f"metadata not suppressed: {payload_false[0]['result']['metadata']!r}"
+    assert payload_false["results"][0]["result"]["metadata"] == {}, (
+        f"metadata not suppressed: {payload_false['results'][0]['result']['metadata']!r}"
     )
 
     # include_metadata=True → metadata must be preserved
     payload_true = await _call_search_with_context(pipeline_result, include_metadata=True)
-    assert payload_true[0]["result"]["metadata"] == {"res": "val"}, (
-        f"metadata not preserved: {payload_true[0]['result']['metadata']!r}"
+    assert payload_true["results"][0]["result"]["metadata"] == {"res": "val"}, (
+        f"metadata not preserved: {payload_true['results'][0]['result']['metadata']!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_returns_hyde_applied_false_by_default() -> None:
+    """search_with_context returns hyde_applied=False when hyde is not requested."""
+    pipeline_result = []
+    payload = await _call_search_with_context(pipeline_result)
+    assert "hyde_applied" in payload
+    assert payload["hyde_applied"] is False

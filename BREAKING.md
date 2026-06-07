@@ -22,6 +22,16 @@
 
 **Announced in**: this release.
 
+### [next release] — C4 HyDE query expansion: MCP `search_with_context` return type change
+
+**Surface**: MCP `search_with_context` tool.
+
+**Breaking change**: The `search_with_context` tool previously returned a bare `list[dict]` (a list of `{result, context_before, context_after}` dicts). It now returns a wrapper object `{"results": list[dict], "hyde_applied": bool}` where `results` carries the same list. This is a **true breaking change** for any MCP client that iterates the return value directly or accesses items by index.
+
+**Migration**: Update consumers to access `response["results"]` instead of iterating the response directly. `response["hyde_applied"]` is the new HyDE status field.
+
+**Announced in**: this release.
+
 ### [next release] — C2 language field type change (SearchResult, ScoredSearchCandidate, ExplainResult, ExplainNearMiss)
 
 **Python**: `SearchResult.language`, `ScoredSearchCandidate.language`, `ExplainResult.language`, and `ExplainNearMiss.language` now return `""` (empty string) for legacy/untagged chunks instead of `None`. Update `if result.language is None` guards to `if result.language == ""`.

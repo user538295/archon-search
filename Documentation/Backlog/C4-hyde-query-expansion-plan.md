@@ -469,7 +469,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
 > **Releasable**: after Task 5.1 — MCP `search`, `search_with_context`, and `explain` tools support `hyde: bool`.
 
 #### Task 5.1 — Wire MCP tools: `search`, `search_with_context`, `explain`
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Tasks 2.1, 2.2, 2.3, 4.1
 - **Description**:
   - `create_mcp_app()` signature gains `hyde_generator: "HyDEGenerator | None" = None`.
@@ -479,13 +479,14 @@ hyde = ["anthropic>=0.40"]                     # NEW
   - MCP `search_with_context` tool (line 333): add `hyde: bool = False`. Same pattern. Pass `query_vector` to `pipeline.search_with_context()`. **Breaking change**: the return type changes from `list[dict[str, Any]]` to `{"results": list[dict[str, Any]], "hyde_applied": bool}`. Add a `BREAKING.md` entry documenting this MCP tool contract change.
   - MCP `explain` tool (line ~428): add `hyde: bool = False`. Same pattern. Pass `query_vector` to `pipeline.explain()`. Include `hyde_applied` in return dict `{"results": ..., "hyde_applied": bool}`.
   - Catch `RuntimeError` (package not installed): return error dict with clear message.
+  - When `_explain_embedder != pipeline._global_embedder` the HyDE vector is discarded; `hyde_applied` is set to `False` to accurately reflect that the vector was not used.
 - **Releasable**: MCP `search`, `search_with_context`, and `explain` tools accept `hyde: bool` and propagate the vector correctly.
 - **Tests (TDD)** — `tests/test_mcp.py` (extend):
-  - Unit: `test_mcp_search_tool_hyde_parameter_accepted` — `search(query="q", collection="c", hyde=True)` dispatches without error (generator mocked).
-  - Unit: `test_mcp_search_tool_hyde_applied_in_result` — mock `resolve_hyde_vector` returns `(vector, True)`; result dict has `hyde_applied=True`.
-  - Unit: `test_mcp_search_with_context_hyde` — same pattern for `search_with_context`.
-  - Unit: `test_mcp_explain_hyde` — same pattern for `explain`.
-  - Checkpoint: `uv run pytest tests/test_mcp.py -k "hyde" -x`
+  - [x] Unit: `test_mcp_search_tool_hyde_parameter_accepted` — `search(query="q", collection="c", hyde=True)` dispatches without error (generator mocked).
+  - [x] Unit: `test_mcp_search_tool_hyde_applied_in_result` — mock `resolve_hyde_vector` returns `(vector, True)`; result dict has `hyde_applied=True`.
+  - [x] Unit: `test_mcp_search_with_context_hyde` — same pattern for `search_with_context`.
+  - [x] Unit: `test_mcp_explain_hyde` — same pattern for `explain`.
+  - [x] Checkpoint: `uv run pytest tests/test_mcp.py -k "hyde" -x`
 
 ---
 

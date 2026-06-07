@@ -359,9 +359,11 @@ async def test_search_with_context_tool_does_not_log_when_writer_none() -> None:
         swc_fn = app.tools["search_with_context"]  # type: ignore[attr-defined]
         output = await swc_fn(query="anything", collection=None)
 
-    assert isinstance(output, list)
-    assert len(output) == 1
-    assert "result" in output[0]
+    # search_with_context now returns {"results": [...], "hyde_applied": bool}
+    assert isinstance(output, dict)
+    assert "results" in output
+    assert len(output["results"]) == 1
+    assert "result" in output["results"][0]
 
 
 # ---------------------------------------------------------------------------

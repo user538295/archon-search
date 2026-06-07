@@ -288,4 +288,194 @@ def test_mcp_delete_document_forwards_namespace() -> None:
     assert _kwargs.get("namespace") == "tenant1" or (len(_args) >= 3 and _args[2] == "tenant1")
 
 
+# ---------------------------------------------------------------------------
+# Task 5.1 — MCP HyDE wiring: search, search_with_context, explain tools
+# ---------------------------------------------------------------------------
+
+
+def _make_hyde_pipeline_mock(search_result=None, search_many_result=None, swc_result=None, explain_result=None):
+    """Return a pipeline mock configured for HyDE wiring tests."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.pipeline import ExplainPipelineResult
+
+    if search_result is None:
+        from archon_search.pipeline import SearchPipelineResult
+        search_result = SearchPipelineResult(results=[], acl_filtered=False, excluded_collections=[])
+    if search_many_result is None:
+        from archon_search.pipeline import SearchPipelineResult
+        search_many_result = SearchPipelineResult(results=[], acl_filtered=False, excluded_collections=[])
+    if swc_result is None:
+        swc_result = []
+    if explain_result is None:
+        explain_result = ExplainPipelineResult(
+            top_results=[], near_misses=[], acl_filtered=False,
+            excluded_collections=[],
+        )
+
+    pipeline = MagicMock()
+    pipeline._global_embedder = MagicMock()
+    pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
+    pipeline.search = AsyncMock(return_value=search_result)
+    pipeline.search_many = AsyncMock(return_value=search_many_result)
+    pipeline.search_with_context = AsyncMock(return_value=swc_result)
+    pipeline.explain = AsyncMock(return_value=explain_result)
+    pipeline.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col1"))
+    pipeline.get_all_collections_meta = AsyncMock(return_value=[CollectionMeta(name="col1")])
+    return pipeline
+
+
+def _make_config_with_hyde(enabled: bool = True):
+    """Return a SearchConfig-like MagicMock with hyde.enabled set."""
+    config = MagicMock()
+    config.hyde.enabled = enabled
+    config.embedding_model = "test-model"
+    config.observability.stage_timings_enabled = False
+    config.routing_shortlist_size = 5
+    config.routing_confidence_threshold = 0.5
+    return config
+
+
+def _make_hyde_generator_mock(vector=None):
+    """Return a mock HyDEGenerator whose generate() returns vector (or [0.5] * 5)."""
+    gen = MagicMock()
+    gen.generate = AsyncMock(return_value=vector if vector is not None else [0.5] * 5)
+    return gen
+
+
+def _get_hyde_tool_fn(tool_name: str, pipeline, config=None, hyde_generator=None):
+    """Build a stub-backed MCP app and return the named tool function."""
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+    importlib.reload(mcp_mod)
+    app = mcp_mod.create_app(
+        pipeline, "col1", config=config, hyde_generator=hyde_generator
+    )
+    return app._tools[tool_name]
+
+
+def test_mcp_search_tool_hyde_parameter_accepted() -> None:
+    """search tool accepts hyde=True without error when generator is mocked."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=True)
+    gen = _make_hyde_generator_mock()
+    tool_fn = _get_hyde_tool_fn("search", pipeline, config=config, hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="what is archon?", collection="col1", hyde=True))
+
+    assert isinstance(result, dict)
+    assert "error" not in result or result.get("code") != "internal_error"
+
+
+def test_mcp_search_tool_hyde_applied_in_result() -> None:
+    """search tool returns hyde_applied=True when generator returns a vector."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=True)
+    gen = _make_hyde_generator_mock(vector=[0.5] * 5)
+    tool_fn = _get_hyde_tool_fn("search", pipeline, config=config, hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=True))
+
+    assert isinstance(result, dict)
+    assert result.get("hyde_applied") is True
+
+
+def test_mcp_search_tool_hyde_applied_false_when_hyde_false() -> None:
+    """search tool returns hyde_applied=False when hyde=False."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=True)
+    gen = _make_hyde_generator_mock()
+    tool_fn = _get_hyde_tool_fn("search", pipeline, config=config, hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=False))
+
+    assert isinstance(result, dict)
+    assert result.get("hyde_applied") is False
+
+
+def test_mcp_search_tool_hyde_package_not_installed_returns_error() -> None:
+    """search tool returns error dict when HyDE package not installed (RuntimeError)."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=True)
+    gen = _make_hyde_generator_mock()
+    gen.generate = AsyncMock(side_effect=RuntimeError("Install archon-search[hyde]"))
+
+    tool_fn = _get_hyde_tool_fn("search", pipeline, config=config, hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=True))
+
+    assert isinstance(result, dict)
+    assert "error" in result
+
+
+def test_mcp_search_with_context_hyde() -> None:
+    """search_with_context tool accepts hyde=True and returns hyde_applied in result dict."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=True)
+    gen = _make_hyde_generator_mock(vector=[0.5] * 5)
+    tool_fn = _get_hyde_tool_fn("search_with_context", pipeline, config=config, hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=True))
+
+    # Task 5.1: search_with_context now returns {"results": [...], "hyde_applied": bool}
+    assert isinstance(result, dict)
+    assert "hyde_applied" in result
+    assert result.get("hyde_applied") is True
+
+
+def test_mcp_search_with_context_hyde_false_returns_hyde_applied_false() -> None:
+    """search_with_context returns hyde_applied=False when hyde=False."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=True)
+    gen = _make_hyde_generator_mock()
+    tool_fn = _get_hyde_tool_fn("search_with_context", pipeline, config=config, hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=False))
+
+    assert isinstance(result, dict)
+    assert "hyde_applied" in result
+    assert result.get("hyde_applied") is False
+
+
+def test_mcp_explain_hyde() -> None:
+    """explain tool accepts hyde=True and returns hyde_applied=True in result dict."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=True)
+    gen = _make_hyde_generator_mock(vector=[0.5] * 5)
+    tool_fn = _get_hyde_tool_fn("explain", pipeline, config=config, hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=True))
+
+    assert isinstance(result, dict)
+    assert result.get("hyde_applied") is True
+
+
+def test_mcp_explain_hyde_false_returns_hyde_applied_false() -> None:
+    """explain tool returns hyde_applied=False when hyde=False."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=True)
+    gen = _make_hyde_generator_mock()
+    tool_fn = _get_hyde_tool_fn("explain", pipeline, config=config, hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=False))
+
+    assert isinstance(result, dict)
+    assert result.get("hyde_applied") is False
+
+
 

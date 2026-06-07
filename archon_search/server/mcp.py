@@ -18,6 +18,7 @@ from starlette.responses import JSONResponse
 from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.filters import SearchFilters
+from archon_search.hyde import resolve_hyde_vector
 from archon_search.key_manager import load_or_generate_key
 from archon_search.pipeline import (
     CollectionNotFoundError,
@@ -152,6 +153,7 @@ def create_app(
     config: SearchConfig | None = None,
     embedder_cache: EmbedderCache | None = None,
     job_store: JobStore | None = None,
+    hyde_generator: "HyDEGenerator | None" = None,
 ) -> FastMCP:
     """Create a FastMCP app with 11 RAG tools registered.
 
@@ -176,10 +178,21 @@ def create_app(
         indexed_after: str | None = None,
         indexed_before: str | None = None,
         language: _LanguageParamSearch = None,
+        hyde: bool = False,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search."""
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
+
+        # Resolve HyDE vector before branching into single- or multi-collection paths.
+        _hyde_config = getattr(config, "hyde", None)
+        if _hyde_config is None:
+            from archon_search.config import HyDEConfig  # noqa: PLC0415
+            _hyde_config = HyDEConfig()
+        try:
+            hyde_vector, hyde_applied = await resolve_hyde_vector(query, hyde, hyde_generator, _hyde_config)
+        except RuntimeError as exc:
+            return McpErrorResponse(error=str(exc), code="validation_error")
 
         # Multi-collection fan-out path (B3). The single-collection path below is
         # unchanged; when neither field is set it falls back to default_collection.
@@ -211,7 +224,7 @@ def create_app(
                     code="validation_error",
                 )
             try:
-                result_obj = await pipeline.search_many(query, deduped)
+                result_obj = await pipeline.search_many(query, deduped, query_vector=hyde_vector)
             except CollectionNotFoundError:
                 return McpErrorResponse(error="collection not found", code="not_found")
             except FanoutTimeoutError:
@@ -251,6 +264,7 @@ def create_app(
                 "excluded_collections": [
                     {"name": e.name, "reason": e.reason} for e in result_obj.excluded_collections
                 ],
+                "hyde_applied": hyde_applied,
             }
 
         try:
@@ -271,7 +285,9 @@ def create_app(
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
-                result_obj = await pipeline.search(query, _col, embedder=_search_embedder, filters=filters)
+                result_obj = await pipeline.search(
+                    query, _col, embedder=_search_embedder, filters=filters, query_vector=hyde_vector
+                )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
                     logger.info(
@@ -312,6 +328,7 @@ def create_app(
                 "excluded_collections": [
                     {"name": e.name, "reason": e.reason} for e in result_obj.excluded_collections
                 ],
+                "hyde_applied": hyde_applied,
             }
         except Exception as exc:
             if writer is not None:
@@ -342,10 +359,27 @@ def create_app(
         indexed_after: str | None = None,
         indexed_before: str | None = None,
         language: _LanguageParamSearchWithContext = None,
-    ) -> list[dict[str, Any]]:
-        """Search and return surrounding chunks for richer context."""
+        hyde: bool = False,
+    ) -> dict[str, Any]:
+        """Search and return surrounding chunks for richer context.
+
+        Returns ``{"results": [...], "hyde_applied": bool}``.
+        """
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
+
+        # Resolve HyDE vector before pipeline dispatch.
+        _swc_hyde_config = getattr(config, "hyde", None)
+        if _swc_hyde_config is None:
+            from archon_search.config import HyDEConfig  # noqa: PLC0415
+            _swc_hyde_config = HyDEConfig()
+        try:
+            swc_hyde_vector, swc_hyde_applied = await resolve_hyde_vector(
+                query, hyde, hyde_generator, _swc_hyde_config
+            )
+        except RuntimeError as exc:
+            return McpErrorResponse(error=str(exc), code="validation_error")
+
         try:
             try:
                 filters = SearchFilters(
@@ -365,7 +399,8 @@ def create_app(
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 results = await pipeline.search_with_context(
-                    query, _swc_col, context_window, embedder=_swc_embedder, filters=filters
+                    query, _swc_col, context_window, embedder=_swc_embedder, filters=filters,
+                    query_vector=swc_hyde_vector,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -407,7 +442,7 @@ def create_app(
                         "context_after": [_chunk_to_context_dict(c, include_metadata=include_metadata) for c in r["context_after"]],
                     }
                 )
-            return output
+            return {"results": output, "hyde_applied": swc_hyde_applied}
         except Exception as exc:
             if writer is not None:
                 try:
@@ -432,11 +467,24 @@ def create_app(
         collections: list[str] | None = None,
         top_k: int = 5,
         rerank: bool = True,
+        hyde: bool = False,
     ) -> dict[str, Any]:
         """Return the per-stage retrieval/reranking trace for a query, plus the
         routing decision when no collection is pinned. Operates in the default
         namespace only. The query is never echoed in the response or telemetry."""
         start = monotonic()
+
+        # Resolve HyDE vector once before branching.
+        _explain_hyde_config = getattr(config, "hyde", None)
+        if _explain_hyde_config is None:
+            from archon_search.config import HyDEConfig  # noqa: PLC0415
+            _explain_hyde_config = HyDEConfig()
+        try:
+            explain_hyde_vector, explain_hyde_applied = await resolve_hyde_vector(
+                query, hyde, hyde_generator, _explain_hyde_config
+            )
+        except RuntimeError as exc:
+            return McpErrorResponse(error=str(exc), code="validation_error")
 
         # Multi-collection fan-out path (B3). The single/routing path below is unchanged.
         if collection is not None and collections is not None:
@@ -468,7 +516,8 @@ def create_app(
                 )
             try:
                 result = await pipeline.explain(
-                    query, collections=deduped, top_k=top_k, rerank=rerank, namespace=DEFAULT_NAMESPACE
+                    query, collections=deduped, top_k=top_k, rerank=rerank, namespace=DEFAULT_NAMESPACE,
+                    query_vector=explain_hyde_vector,
                 )
             except CollectionNotFoundError:
                 return McpErrorResponse(error="collection not found", code="not_found")
@@ -487,7 +536,8 @@ def create_app(
                 logger.exception("multi-collection explain failed")
                 return McpErrorResponse(error="explain failed", code="internal_error")
             response = ExplainResponse.from_pipeline_result(
-                rerank=rerank, collection="", routing=None, result=result, stage_timings_ms=None
+                rerank=rerank, collection="", routing=None, result=result, stage_timings_ms=None,
+                hyde_applied=explain_hyde_applied,
             )
             result_dict = response.model_dump(mode="json", exclude_none=False)
             result_dict.pop("stage_timings_ms", None)
@@ -503,7 +553,7 @@ def create_app(
 
         ns = DEFAULT_NAMESPACE
         routing: RoutingExplain | None = None
-        query_vector: list[float] | None = None
+        query_vector: list[float] | None = explain_hyde_vector
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         try:
             with ExitStack() as stack:
@@ -524,7 +574,9 @@ def create_app(
                     all_meta = await pipeline.get_all_collections_meta(namespace=ns)
                     if not all_meta:
                         return McpErrorResponse(error="no collections available", code="not_found")
-                    query_vector = await pipeline._global_embedder.embed_one(req.query)
+                    # Use HyDE vector for routing if available, otherwise embed the query.
+                    if query_vector is None:
+                        query_vector = await pipeline._global_embedder.embed_one(req.query)
                     col_router = MultiCollectionRouter(
                         search_url="http://mcp",
                         embedder=pipeline._global_embedder,
@@ -551,8 +603,11 @@ def create_app(
                 # If the chosen collection uses a different model from the global
                 # embedder, the pre-computed query_vector is in the wrong space.
                 # Nullify it so the pipeline re-embeds with _explain_embedder.
+                # Also update explain_hyde_applied: if we discard the HyDE vector,
+                # it was not actually used for retrieval.
                 if _explain_embedder is not pipeline._global_embedder:
                     query_vector = None
+                    explain_hyde_applied = False
                 result = await pipeline.explain(
                     req.query, chosen, top_k=req.top_k, rerank=req.rerank, namespace=ns,
                     query_vector=query_vector, embedder=_explain_embedder,
@@ -573,7 +628,7 @@ def create_app(
             stage_timings = recorder.stage_timings_ms if recorder is not None else None
             response = ExplainResponse.from_pipeline_result(
                 rerank=req.rerank, collection=chosen, routing=routing, result=result,
-                stage_timings_ms=stage_timings,
+                stage_timings_ms=stage_timings, hyde_applied=explain_hyde_applied,
             )
             if writer is not None:
                 try:
@@ -925,7 +980,7 @@ def create_mcp_http_app(
     """
     from archon_search.server.middleware_context import RequestContextMiddleware
 
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store)
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator)
     starlette_app: Starlette = fastmcp_app.streamable_http_app()
     api_key, _ = load_or_generate_key()
     starlette_app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces={})
