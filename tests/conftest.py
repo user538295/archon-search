@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+from pathlib import Path
 
 _tests_dir = os.path.dirname(os.path.abspath(__file__))
 if _tests_dir not in sys.path:
@@ -69,3 +70,26 @@ def auth_headers() -> dict[str, str]:
 def col_name() -> str:
     """Unique LanceDB collection name per test (avoids cross-test pollution)."""
     return f"test-{uuid.uuid4().hex[:8]}"
+
+
+# ---------------------------------------------------------------------------
+# Three-page PDF fixture (Task 5.1 — C3b)
+# ---------------------------------------------------------------------------
+
+_PDF_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "pdfs" / "three_page.pdf"
+
+
+@pytest.fixture(scope="session")
+def three_page_pdf() -> Path:
+    """Session-scoped fixture returning the path to a deterministic three-page PDF.
+
+    Generates ``tests/fixtures/pdfs/three_page.pdf`` on first use via reportlab.
+    Page contents are pinned to "alpha content", "beta content", "gamma content".
+
+    The PDF is NOT byte-deterministic (reportlab embeds timestamps), but the
+    textual content is stable. Tests must use textual assertions only.
+    """
+    from _pdf_fixture import generate_three_page_pdf  # noqa: PLC0415
+
+    generate_three_page_pdf(_PDF_FIXTURE_PATH)
+    return _PDF_FIXTURE_PATH

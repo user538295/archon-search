@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from docling.document_converter import DocumentConverter
 
+from archon_search.enricher import PAGE_BREAK_MARKER
+
 
 class ParseError(Exception):
     """Raised when a document cannot be parsed."""
@@ -101,7 +103,9 @@ class DocumentParser:
             from docling.document_converter import DocumentConverter  # noqa: PLC0415
             if self._converter is None:
                 self._converter = DocumentConverter()
-            result = self._converter.convert(str(path)).document.export_to_markdown()
+            result = self._converter.convert(str(path)).document.export_to_markdown(
+                page_break_placeholder=PAGE_BREAK_MARKER
+            )
             return result.strip() if result else ""
         except Exception as exc:
             raise ParseError(path, exc) from exc

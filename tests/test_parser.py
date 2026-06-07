@@ -306,6 +306,77 @@ async def test_parser_pdf_whitespace_returns_empty_string(tmp_path: Path) -> Non
     assert result == ""
 
 
+# ---------------------------------------------------------------------------
+# Task 1.2 — page_break_placeholder kwarg tests
+# ---------------------------------------------------------------------------
+
+
+def test_parse_with_docling_kwarg_passes_page_break_marker(
+    tmp_path: Path,
+) -> None:
+    """Verify _parse_with_docling passes page_break_placeholder=PAGE_BREAK_MARKER to docling.
+
+    Uses monkeypatch-style sys.modules patching to capture kwargs without real docling.
+    Independent of fixture availability.
+    """
+    from archon_search.enricher import PAGE_BREAK_MARKER
+
+    f = tmp_path / "doc.pdf"
+    f.write_bytes(b"fake pdf")
+    parser = DocumentParser()
+
+    captured_kwargs: dict = {}
+
+    mock_document = MagicMock()
+
+    def capture_export(**kwargs: object) -> str:
+        captured_kwargs.update(kwargs)
+        return "page1 content"
+
+    mock_document.export_to_markdown.side_effect = capture_export
+    mock_converter = MagicMock()
+    mock_converter.return_value.convert.return_value.document = mock_document
+    mock_docling = MagicMock()
+    mock_docling.DocumentConverter = mock_converter
+
+    with patch.dict(
+        "sys.modules",
+        {"docling": mock_docling, "docling.document_converter": mock_docling},
+    ):
+        parser._parse_with_docling(f)
+
+    assert "page_break_placeholder" in captured_kwargs, (
+        f"Expected page_break_placeholder kwarg, got: {captured_kwargs}"
+    )
+    assert captured_kwargs["page_break_placeholder"] == PAGE_BREAK_MARKER, (
+        f"Expected PAGE_BREAK_MARKER, got: {captured_kwargs['page_break_placeholder']!r}"
+    )
+
+
+def test_parse_with_docling_emits_page_marker(three_page_pdf: Path) -> None:
+    """Integration: parser output from a real three-page PDF contains exactly two PAGE_BREAK_MARKERs.
+
+    Requires the three_page_pdf fixture from Task 5.1.
+    Skipped if docling is unavailable or non-functional in the test environment.
+    """
+    pytest.importorskip("docling")
+
+    from archon_search.enricher import PAGE_BREAK_MARKER
+    from archon_search.parser import ParseError
+
+    parser = DocumentParser()
+    try:
+        result = parser._parse_with_docling(three_page_pdf)
+    except ParseError as exc:
+        pytest.skip(f"docling not functional in this environment: {exc}")
+
+    marker_count = result.count(PAGE_BREAK_MARKER)
+    assert marker_count == 2, (
+        f"Expected exactly 2 occurrences of PAGE_BREAK_MARKER in parsed output "
+        f"from three-page PDF, got {marker_count}.\nParsed output:\n{result[:500]}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_parser_parse_error_has_path_and_cause(tmp_path: Path) -> None:
     f = tmp_path / "doc.pdf"

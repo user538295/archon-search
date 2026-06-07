@@ -212,7 +212,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_enricher.py -k page_break_marker -v`
 
 #### Task 1.2 — Pass `page_break_placeholder` to docling
-- [ ] **File**: `archon_search/parser.py`
+- [x] **File**: `archon_search/parser.py`
 - **Depends on**: Task 1.1, Task 5.1 (fixture must exist first — see Atomic-landing constraint)
 - **Description**:
   - At `parser.py:104`, change the `export_to_markdown()` call to pass `page_break_placeholder=PAGE_BREAK_MARKER`. Import the constant from `archon_search.enricher`.
@@ -411,7 +411,7 @@ None.
 > **Releasable**: when Task 5.1 ships, the deterministic PDF fixture is available to every test in Phases 1–4; when Task 5.2 ships, the eval harness includes a page-targeted regression query.
 
 #### Task 5.1 — `reportlab` dev dep + `three_page_pdf` conftest fixture
-- [ ] **File**: `pyproject.toml`, `tests/conftest.py`, `tests/fixtures/pdfs/.gitignore`
+- [x] **File**: `pyproject.toml`, `tests/conftest.py`, `tests/fixtures/pdfs/.gitignore`
 - **Depends on**: nothing
 - **Description**:
   - Add `reportlab` to `[dependency-groups].dev` in `pyproject.toml`. Use the most recent compatible version available.
