@@ -38,6 +38,7 @@ class SearchRequest(BaseModel):
     query: str
     top_k: int = Field(default=5, ge=1, le=100)
     filters: SearchFilters | None = None
+    hyde: bool = False
 
     @field_validator("collection")
     @classmethod
@@ -125,6 +126,7 @@ class SearchResponse(BaseModel):
     acl_filtered: bool
     excluded_collections: list[ExcludedCollectionSchema] = Field(default_factory=list)
     embedding_model: str = ""
+    hyde_applied: bool = False
 
 
 @router.post("/search", response_model=SearchResponse)

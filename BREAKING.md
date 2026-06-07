@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — C4 HyDE query expansion: additive fields on SearchResponse
+
+**Surface**: `POST /search` response (`SearchResponse`); `POST /search` request (`SearchRequest`).
+
+**Additive fields** (backward-compatible for tolerant consumers; breaking for strict schema validators):
+- `SearchRequest` gains `hyde: bool` (default `false`). Clients that validate the request schema strictly must allow this new optional field.
+- `SearchResponse` gains `hyde_applied: bool` (default `false`). Indicates whether the ANN lookup was driven by a HyDE-generated hypothesis embedding. Clients that validate the response schema strictly must accept this new field.
+
+**Migration**: no action required for consumers that ignore unknown fields. Strict schema validators should add `hyde_applied: bool` to their `SearchResponse` type stubs and `hyde: bool` to their `SearchRequest` type stubs.
+
+**Announced in**: this release.
+
 ### [next release] — C2 language field type change (SearchResult, ScoredSearchCandidate, ExplainResult, ExplainNearMiss)
 
 **Python**: `SearchResult.language`, `ScoredSearchCandidate.language`, `ExplainResult.language`, and `ExplainNearMiss.language` now return `""` (empty string) for legacy/untagged chunks instead of `None`. Update `if result.language is None` guards to `if result.language == ""`.

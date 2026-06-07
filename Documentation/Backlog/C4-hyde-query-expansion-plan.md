@@ -365,7 +365,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
 > **Releasable**: after Task 3.2 — request/response Pydantic models carry `hyde` and `hyde_applied` fields; OpenAPI snapshot updated.
 
 #### Task 3.1 — `SearchRequest` gains `hyde: bool`; `SearchResponse` gains `hyde_applied: bool`
-- [ ] **File**: `archon_search/server/routes_search.py`
+- [x] **File**: `archon_search/server/routes_search.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `hyde: bool = False` to `SearchRequest` (after `filters`).

@@ -983,3 +983,28 @@ def test_openapi_language_field_not_nullable(tmp_path):
         assert "null" not in types_in_anyof, f"language field must not be nullable, got: {lang_prop}"
     else:
         assert lang_prop.get("type") == "string", f"language field must be string type, got: {lang_prop}"
+
+
+# ---------------------------------------------------------------------------
+# C4 Task 3.1: SearchRequest.hyde + SearchResponse.hyde_applied
+# ---------------------------------------------------------------------------
+
+
+def test_search_request_hyde_default_false() -> None:
+    """SearchRequest without hyde field should default to False."""
+    req = SearchRequest(query="q", collection="c")
+    assert req.hyde is False
+
+
+def test_search_request_accepts_hyde_true() -> None:
+    """SearchRequest with hyde=True should validate without error."""
+    req = SearchRequest(query="q", collection="c", hyde=True)
+    assert req.hyde is True
+
+
+def test_search_response_has_hyde_applied() -> None:
+    """SearchResponse without hyde_applied should default to False."""
+    from archon_search.server.routes_search import SearchResponse
+
+    resp = SearchResponse(results=[], acl_filtered=False)
+    assert resp.hyde_applied is False
