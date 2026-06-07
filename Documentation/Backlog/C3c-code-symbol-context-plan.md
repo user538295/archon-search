@@ -316,7 +316,7 @@ code = [
 > **Releasable**: after Task 5.2; `_build_scope_table` is fully tested for Python and TypeScript.
 
 #### Task 5.1 — Implement `_build_scope_table(source, lang, ext) -> ScopeTable`
-- [ ] **File**: `archon_search/code_enricher.py`
+- [x] **File**: `archon_search/code_enricher.py`
 - **Depends on**: Task 3.1, Task 4.1, Task 4.2
 - **Description**:
   - Signature: `def _build_scope_table(source: str, lang: Any, ext: str) -> ScopeTable`

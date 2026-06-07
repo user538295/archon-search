@@ -298,3 +298,150 @@ class TestFixtureContracts:
         """TypeScript fixture must contain 'arrowFn'."""
         content = self._read_ts_fixture()
         assert "arrowFn" in content
+
+
+# ---------------------------------------------------------------------------
+# Task 5.1 — Scope table builder: Python
+# ---------------------------------------------------------------------------
+
+
+class TestBuildScopeTablePython:
+    """Tests for _build_scope_table with the Python fixture."""
+
+    @pytest.fixture(autouse=True)
+    def _load_grammar(self):
+        from archon_search.code_enricher import _get_grammar
+
+        self.lang = _get_grammar(".py")
+        if self.lang is None:
+            pytest.skip("tree-sitter-python grammar not installed")
+
+    @pytest.fixture(autouse=True)
+    def _load_source(self):
+        from pathlib import Path
+
+        self.source = Path("tests/fixtures/code/python/sample.py").read_text()
+
+    def _build(self):
+        from archon_search.code_enricher import _build_scope_table
+
+        return _build_scope_table(self.source, self.lang, ".py")
+
+    def test_top_fn_entry(self):
+        """A ScopeEntry with symbol_type='function' and fn_name='top_fn' must be present."""
+        scope_table = self._build()
+        assert any(
+            e.symbol_type == "function" and e.fn_name == "top_fn"
+            for e in scope_table
+        )
+
+    def test_outer_method_is_method(self):
+        """outer_method must be classified as 'method' with class_name='Outer'."""
+        scope_table = self._build()
+        assert any(
+            e.symbol_type == "method"
+            and e.fn_name == "outer_method"
+            and e.class_name == "Outer"
+            for e in scope_table
+        )
+
+    def test_inner_method_class_is_inner(self):
+        """inner_method must have class_name='Inner' (innermost class wins)."""
+        scope_table = self._build()
+        assert any(
+            e.fn_name == "inner_method" and e.class_name == "Inner"
+            for e in scope_table
+        )
+
+    def test_outer_class_entry(self):
+        """A ScopeEntry with symbol_type='class' and class_name='Outer' must be present."""
+        scope_table = self._build()
+        assert any(
+            e.symbol_type == "class" and e.class_name == "Outer"
+            for e in scope_table
+        )
+
+    def test_decorated_fn_start_includes_decorator(self):
+        """decorated_fn entry start offset must be <= offset of the @some_decorator line."""
+        scope_table = self._build()
+        expected_decorator_start = self.source.index("@some_decorator")
+        decorated_entry = next(
+            (e for e in scope_table if e.fn_name == "decorated_fn"), None
+        )
+        assert decorated_entry is not None, "decorated_fn entry not found in scope table"
+        assert decorated_entry.start <= expected_decorator_start
+
+    def test_non_ascii_offsets(self):
+        """Scope entry start must be the character offset, not the byte offset."""
+        from archon_search.code_enricher import _build_scope_table
+
+        source = "# café\ndef top_fn(): pass"
+        scope_table = _build_scope_table(source, self.lang, ".py")
+        assert len(scope_table) > 0
+        entry = next((e for e in scope_table if e.fn_name == "top_fn"), None)
+        assert entry is not None
+        # Character offset of 'def' is 7; byte offset would be 8 (é is 2 UTF-8 bytes)
+        expected_char_offset = source.index("def")
+        assert entry.start == expected_char_offset
+        assert entry.start == 7  # char offset
+        assert entry.start != 8  # not byte offset
+
+    def test_scope_table_sorted(self):
+        """Scope table entries must be in ascending start order."""
+        scope_table = self._build()
+        starts = [e.start for e in scope_table]
+        assert starts == sorted(starts)
+
+
+# ---------------------------------------------------------------------------
+# Task 5.1 — Scope table builder: TypeScript
+# ---------------------------------------------------------------------------
+
+
+class TestBuildScopeTableTypeScript:
+    """Tests for _build_scope_table with the TypeScript fixture."""
+
+    @pytest.fixture(autouse=True)
+    def _load_grammar(self):
+        from archon_search.code_enricher import _get_grammar
+
+        self.lang = _get_grammar(".ts")
+        if self.lang is None:
+            pytest.skip("tree-sitter-typescript grammar not installed")
+
+    @pytest.fixture(autouse=True)
+    def _load_source(self):
+        from pathlib import Path
+
+        self.source = Path("tests/fixtures/code/typescript/sample.ts").read_text()
+
+    def _build(self):
+        from archon_search.code_enricher import _build_scope_table
+
+        return _build_scope_table(self.source, self.lang, ".ts")
+
+    def test_ts_top_fn(self):
+        """topFn scope entry must be present with symbol_type='function'."""
+        scope_table = self._build()
+        assert any(
+            e.symbol_type == "function" and e.fn_name == "topFn"
+            for e in scope_table
+        )
+
+    def test_ts_class_method(self):
+        """myMethod entry must have symbol_type='method' and class_name='MyClass'."""
+        scope_table = self._build()
+        assert any(
+            e.symbol_type == "method"
+            and e.fn_name == "myMethod"
+            and e.class_name == "MyClass"
+            for e in scope_table
+        )
+
+    def test_ts_arrow_fn_not_captured_as_scope(self):
+        """Arrow functions must NOT appear as scope entries (no fn_name='arrowFn')."""
+        scope_table = self._build()
+        assert not any(
+            e.fn_name == "arrowFn"
+            for e in scope_table
+        )
