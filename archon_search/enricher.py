@@ -314,6 +314,15 @@ class MarkdownEnricher:
 
         return result
 
+    def _excise_markers(self, text: str) -> str:
+        """Remove every occurrence of PAGE_BREAK_MARKER from *text*.
+
+        One-line implementation; an explicit named method ensures the call site
+        is greppable and the brief's terminology ("marker excision") is
+        enforced in code.
+        """
+        return text.replace(PAGE_BREAK_MARKER, "")
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

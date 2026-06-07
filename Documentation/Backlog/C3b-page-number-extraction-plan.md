@@ -270,7 +270,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_enricher.py -k transform_page_table -v`
 
 #### Task 2.3 — Marker excision
-- [ ] **File**: `archon_search/enricher.py`
+- [x] **File**: `archon_search/enricher.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Add `MarkdownEnricher._excise_markers(self, text: str) -> str`.

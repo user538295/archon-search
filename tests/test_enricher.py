@@ -500,3 +500,35 @@ class TestTransformPageTable:
         original = list(pre)
         MarkdownEnricher._transform_page_table(pre, marker_len=35)
         assert pre == original
+
+
+# ===========================================================================
+# Task 2.3 — _excise_markers
+# ===========================================================================
+
+M = PAGE_BREAK_MARKER
+
+
+class TestExciseMarkers:
+    """Tests for MarkdownEnricher._excise_markers."""
+
+    def _enrich(self) -> MarkdownEnricher:
+        return MarkdownEnricher()
+
+    def test_excise_markers_removes_all(self):
+        """All occurrences of the marker are removed."""
+        text = "A" + M + "B" + M + "C"
+        result = self._enrich()._excise_markers(text)
+        assert result == "ABC"
+
+    def test_excise_markers_no_marker_unchanged(self):
+        """Text without a marker is returned byte-identical."""
+        text = "no markers here"
+        result = self._enrich()._excise_markers(text)
+        assert result == text
+
+    def test_excise_markers_leading_and_trailing(self):
+        """Leading and trailing markers are removed, inner content preserved."""
+        text = M + "B" + M
+        result = self._enrich()._excise_markers(text)
+        assert result == "B"
