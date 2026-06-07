@@ -259,3 +259,31 @@ Live latency numbers are measured on ephemeral GitHub Actions runners under shar
 ### Threshold hash refresh note
 
 Adding routing queries or corpus files changes `eval_hash` and `thresholds_hash`. After B4 fixture changes, run `baselines/regenerate.py` to update both `baseline.json` and `baseline.md` before pushing.
+
+## HyDE eval scenarios (C4)
+
+`tests/eval/test_eval_suite.py` includes two C4-specific eval scenarios:
+
+- **`test_eval_hyde_regression_scenario`** (`@pytest.mark.eval`) — verifies that
+  supplying a custom `query_vector` to `pipeline.search()` does not crash or
+  empty the result set.  Uses a deterministic (zero-vector or real-query-aligned)
+  vector rather than a live LLM call.  This scenario only guards against *breakage*
+  of the HyDE plumbing path — it does **not** measure recall *improvement*.
+
+- **`test_eval_hyde_false_fast_path_no_overhead`** (`@pytest.mark.eval`) — asserts
+  that `resolve_hyde_vector(hyde=False, ...)` returns `(None, False)` without
+  calling the generator, confirming the fast-path adds zero overhead.
+
+**Measuring recall *improvement* from HyDE** requires `@pytest.mark.live` with
+real fastembed + real Claude API (set `ANTHROPIC_API_KEY` and use the live eval
+lane). The default deterministic eval gate cannot measure semantic uplift because
+the SHA-256 hash embedder is agnostic to LLM-generated hypothesis text.
+
+### HyDE latency benchmark (`[search_hyde_false]`)
+
+`tests/test_search_filtered_benchmark.py::test_hyde_false_search_p95_under_threshold`
+(`@pytest.mark.benchmark`) measures the end-to-end latency of a `hyde=False`
+request (`resolve_hyde_vector` + `hybrid_search`) and asserts p95 ≤
+`[search_hyde_false].p95_ms` from `thresholds.toml` (currently **5 ms** — same
+ceiling as `[search_filtered].p95_ms_glob_filtered`).  This guards against the
+HyDE fast-path accidentally adding measurable overhead over an unfiltered search.

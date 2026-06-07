@@ -519,7 +519,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
   - Checkpoint: `uv run pytest tests/test_integration_hyde.py -m integration -x`
 
 #### Task 6.3 — Eval harness HyDE regression scenario + latency threshold
-- [ ] **Files**: `tests/eval/` (new scenario), `tests/eval/thresholds.toml`
+- [x] **Files**: `tests/eval/` (new scenario), `tests/eval/thresholds.toml`
 - **Depends on**: Tasks 2.1, 2.2, 4.2
 - **Description**:
   - Add a `[search_hyde_regression]` eval scenario: run `hyde=true` with a mocked `HyDEGenerator` (deterministic vector — e.g., zero vector or fixed float array). Assert `recall@K >= baseline - allowed_regression`. The deterministic embedder cannot measure semantic improvement; this scenario only verifies HyDE does not *break* recall.

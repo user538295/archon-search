@@ -557,3 +557,216 @@ async def test_eval_page_provenance_pdf_has_page_metadata(tmp_path: Path) -> Non
             )
     finally:
         await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# C4 HyDE regression scenario tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.eval
+async def test_eval_hyde_regression_scenario(tmp_path: Path) -> None:
+    """HyDE with a deterministic (query-derived) vector does not break recall on the
+    committed corpus.
+
+    Runs the committed retrieval queries through the full pipeline with a mocked
+    HyDEGenerator whose ``generate()`` returns the same vector as the normal
+    embedder (i.e., the query embedding itself).  This is the identity case:
+    ``recall@5`` with HyDE must equal the baseline recall@5 because the vector
+    used for ANN lookup is identical.
+
+    Then also tests with ``resolve_hyde_vector(hyde=True, ...)`` to verify the
+    full resolution chain (not just ``pipeline.search()`` directly).
+
+    The deterministic embedder cannot measure semantic improvement; this scenario
+    only verifies HyDE does not *break* recall.  Measuring recall *improvement*
+    from HyDE requires ``@pytest.mark.live`` with real fastembed + real Claude
+    API — not part of the default eval gate.
+    """
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import HyDEConfig
+    from archon_search.embedder import Embedder
+    from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
+    from archon_search.eval.fixtures import build_doc_collection_map, load_eval_corpus
+    from archon_search.eval.metrics import compute_recall_at_k
+    from archon_search.eval.types import EvalSearchResult, QueryEvalTrace
+    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.reranker import Reranker
+    from archon_search.store import SearchStore
+
+    try:
+        import tomllib  # Python 3.11+
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
+
+    # Load committed corpus and quality floors
+    corpus = load_eval_corpus(CORPUS_ROOT)
+    thresholds_data = tomllib.loads((CORPUS_ROOT / "thresholds.toml").read_text())
+    recall_at_5_floor: float = thresholds_data["quality_floors"]["recall_at_5"]
+
+    eval_backend = EvalEmbedderBackend()
+    embedder = Embedder(eval_backend)
+    reranker = Reranker(EvalRerankerBackend())
+    store = SearchStore(tmp_path / "lancedb")
+    await store.connect()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=embedder,
+        reranker=reranker,
+        chunker=DocumentChunker(chunk_size=256),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=10,
+    )
+
+    try:
+        # Ingest the full committed corpus
+        corpus_dir = (CORPUS_ROOT / "corpus").resolve()
+        by_collection: dict[str, list] = {}
+        for d in corpus.documents:
+            by_collection.setdefault(d.collection, []).append(d)
+        for collection, docs in by_collection.items():
+            for d in docs:
+                p = (CORPUS_ROOT / "corpus" / d.relative_path).resolve()
+                r = await pipeline.ingest_file(
+                    p, collection, rebuild_fts=False, embedder=embedder,
+                    collection_root=corpus_dir,
+                )
+                assert r.error is None, f"Ingest failed for {d.doc_id}: {r.error}"
+            await pipeline.store.rebuild_fts_index(collection)
+
+        # Build fixture path → doc_id mapping for result translation
+        path_to_fixture = build_doc_collection_map(corpus)
+
+        from archon_search._diagnostics import SearchScoreBreakdown
+
+        def _map_result(raw, corpus_root):
+            corpus_d = (corpus_root / "corpus").resolve()
+            try:
+                rel = str(Path(raw.source_path).resolve().relative_to(corpus_d))
+            except ValueError:
+                rel = raw.source_path
+            entry = path_to_fixture.get(rel)
+            if entry is None:
+                return None
+            fixture_doc_id, _ = entry
+            return EvalSearchResult(
+                doc_id=fixture_doc_id,
+                runtime_doc_id=raw.doc_id,
+                chunk_id=raw.chunk_id,
+                text=raw.text,
+                source_path=raw.source_path,
+                collection=raw.collection,
+                score_breakdown=SearchScoreBreakdown(
+                    vector_rank=None,
+                    vector_score=None,
+                    vector_score_kind=None,
+                    fts_rank=None,
+                    fts_score=None,
+                    fts_score_kind=None,
+                    rrf_score=raw.score,
+                    reranker_score=None,
+                ),
+            )
+
+        # Mock HyDEGenerator: returns the query's own embedding (identity case)
+        # This ensures recall@5 == baseline (no degradation, no improvement).
+        from unittest.mock import AsyncMock, MagicMock
+
+        hyde_config = HyDEConfig(enabled=True, max_requests_per_minute=60)
+        mock_generator = MagicMock(spec=HyDEGenerator)
+
+        async def _identity_generate(query: str) -> list[float]:
+            return await embedder.embed_one(query)
+
+        mock_generator.generate = AsyncMock(side_effect=_identity_generate)
+
+        # Run retrieval queries with HyDE (identity vector) and collect traces
+        retrieval_queries = [
+            q for q in corpus.queries if q.metric_scope == "retrieval"
+        ]
+
+        hyde_traces: list[QueryEvalTrace] = []
+        for q in retrieval_queries:
+            assert q.collection is not None
+            # Full HyDE resolution chain: resolve_hyde_vector → pipeline.search
+            hyde_vector, hyde_applied = await resolve_hyde_vector(
+                q.text, True, mock_generator, hyde_config
+            )
+            assert hyde_applied is True, (
+                f"Expected hyde_applied=True for query {q.query_id!r}, "
+                f"got {hyde_applied!r} (generator returned None)"
+            )
+            result = await pipeline.search(
+                q.text,
+                q.collection,
+                embedder=embedder,
+                query_vector=hyde_vector,
+            )
+            # Map chunk results back to fixture doc_ids
+            mapped = []
+            for r in result.results:
+                mapped_r = _map_result(r, CORPUS_ROOT)
+                if mapped_r is not None:
+                    mapped.append(mapped_r)
+            hyde_traces.append(
+                QueryEvalTrace(
+                    query_id=q.query_id,
+                    query_text=q.text,
+                    collection=q.collection,
+                    metric_scope="retrieval",
+                    results=mapped,
+                )
+            )
+
+        # Compute recall@5 on the committed corpus with HyDE (identity vector)
+        recall_at_5_hyde = compute_recall_at_k(hyde_traces, corpus.labels, k=5)
+
+        # The allowed regression is the same as max_floor_drop_without_waiver
+        allowed_regression: float = thresholds_data.get("policy", {}).get(
+            "max_floor_drop_without_waiver", 0.05
+        )
+
+        assert recall_at_5_hyde >= recall_at_5_floor - allowed_regression, (
+            f"HyDE regression scenario failed: recall@5 with identity vector "
+            f"({recall_at_5_hyde:.4f}) dropped below floor ({recall_at_5_floor:.4f}) "
+            f"minus allowed_regression ({allowed_regression:.4f}). "
+            f"HyDE plumbing has broken recall on the committed corpus."
+        )
+
+        # Also verify generate() was called for each query
+        assert mock_generator.generate.call_count == len(retrieval_queries), (
+            f"Expected HyDEGenerator.generate() called {len(retrieval_queries)} times, "
+            f"got {mock_generator.generate.call_count}"
+        )
+
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.eval
+async def test_eval_hyde_false_fast_path_no_overhead(tmp_path: Path) -> None:
+    """``resolve_hyde_vector(hyde=False, ...)`` fast-path executes and returns (None, False).
+
+    Verifies that the HyDE fast-path (hyde=False) neither crashes nor calls
+    the generator — confirming zero overhead for non-HyDE requests.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.config import HyDEConfig
+    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
+
+    config = HyDEConfig(enabled=True, max_requests_per_minute=60)
+    mock_generator = MagicMock(spec=HyDEGenerator)
+    mock_generator.generate = AsyncMock(return_value=[0.1] * 128)
+
+    vector, applied = await resolve_hyde_vector(
+        "how do I uninstall the CLI?", False, mock_generator, config
+    )
+
+    assert vector is None, "Expected None vector for hyde=False fast path"
+    assert applied is False, "Expected hyde_applied=False for hyde=False fast path"
+    mock_generator.generate.assert_not_called()

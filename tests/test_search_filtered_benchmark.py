@@ -5,7 +5,7 @@ Run manually:
 
 Auto-excluded from the default suite (``-m 'not benchmark'`` in addopts).
 
-Two benchmarks:
+Three benchmarks:
 - test_glob_filtered_search_p95_under_threshold:
     glob filter matching ~20 % of the corpus, 100 iterations, top_k=10.
     Asserts p95 ≤ p95_ms_glob_filtered from tests/eval/thresholds.toml.
@@ -14,6 +14,11 @@ Two benchmarks:
     source_path_prefix only (no glob), 100 iterations, top_k=10.
     Asserts p95 has not regressed by more than p95_regression_pct_prefix_vs_unfiltered %
     vs an unfiltered baseline measured in the same run.
+
+- test_hyde_false_search_p95_under_threshold:
+    hyde=False fast path (resolve_hyde_vector returns immediately), 100 iterations, top_k=10.
+    Asserts p95 ≤ [search_hyde_false].p95_ms from tests/eval/thresholds.toml.
+    Confirms the HyDE fast-path adds no measurable overhead over unfiltered search.
 """
 from __future__ import annotations
 
@@ -230,4 +235,66 @@ def test_prefix_filtered_search_p95_regression_under_threshold(bench_store) -> N
         f"prefix-filtered p95 {prefix_p95:.1f} ms regressed more than "
         f"{max_regression_pct}% vs unfiltered p95 {unfiltered_p95:.1f} ms "
         f"(ceiling = {allowed_ceiling:.1f} ms)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Benchmark 3: HyDE fast-path (hyde=False) p95 under absolute threshold
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.benchmark
+def test_hyde_false_search_p95_under_threshold(bench_store) -> None:  # type: ignore[no-untyped-def]
+    """HyDE fast-path (hyde=False) hybrid search p95 must stay under the configured ceiling.
+
+    ``resolve_hyde_vector(hyde=False, ...)`` returns immediately without calling
+    the LLM — this benchmark confirms that wiring HyDE through the route handler
+    adds no measurable overhead over an unfiltered search.
+
+    Threshold: [search_hyde_false].p95_ms in tests/eval/thresholds.toml.
+    """
+    from archon_search.config import HyDEConfig
+    from archon_search.hyde import resolve_hyde_vector
+
+    config = HyDEConfig(enabled=True, max_requests_per_minute=60)
+
+    async def _measure_with_hyde_false(store, n_iters: int, warmup: int) -> list[float]:
+        """Run hybrid_search with resolve_hyde_vector(hyde=False) and return latencies."""
+        query_text = "benchmark query for hyde fast path"
+
+        warmup_rng = np.random.default_rng(8888)
+        for _ in range(warmup):
+            qv = warmup_rng.random(_DIM, dtype=np.float32).tolist()
+            # Resolve HyDE vector — fast path, returns (None, False) immediately
+            await resolve_hyde_vector(query_text, False, None, config)
+            # Use query embedding (None vector → normal search)
+            await store.hybrid_search("bench", qv, query_text, _TOP_K, None)
+
+        latencies: list[float] = []
+        for i in range(n_iters):
+            qv = np.random.default_rng(i + 10000).random(_DIM, dtype=np.float32).tolist()
+            t0 = time.perf_counter()
+            # Full round-trip: resolve_hyde_vector + hybrid_search (as the route handler does)
+            hyde_vector, _ = await resolve_hyde_vector(query_text, False, None, config)
+            await store.hybrid_search("bench", qv, query_text, _TOP_K, None)
+            latencies.append((time.perf_counter() - t0) * 1000)
+
+        return latencies
+
+    latencies = asyncio.run(
+        _measure_with_hyde_false(bench_store, n_iters=_N_ITERS, warmup=_WARMUP)
+    )
+
+    p50 = _percentile(latencies, 50)
+    p95 = _percentile(latencies, 95)
+    print(
+        f"\nhyde=false fast-path: p50={p50:.1f} ms  p95={p95:.1f} ms  (n={len(latencies)})"
+    )
+
+    thresholds = _load_thresholds()
+    ceiling = thresholds["search_hyde_false"]["p95_ms"]
+    assert p95 <= ceiling, (
+        f"hyde=false fast-path p95 {p95:.1f} ms exceeds ceiling {ceiling} ms. "
+        "The HyDE fast-path (resolve_hyde_vector with hyde=False) should not add "
+        "measurable latency over unfiltered hybrid search."
     )

@@ -86,3 +86,16 @@ p95_ms_glob_filtered = 5
 # accounts for 10-18 % variance, causing spurious failures. 25 % still catches
 # any real algorithmic regression (SQL LIKE overhead is empirically ~15-18 %).
 p95_regression_pct_prefix_vs_unfiltered = 25
+
+# ---------------------------------------------------------------------------
+# [search_hyde_false] — latency regression guard for HyDE fast-path (hyde=False)
+# Purpose: confirm that resolve_hyde_vector(hyde=False) adds no measurable overhead
+# to unfiltered hybrid search. The ceiling is set equal to [search_filtered].p95_ms_glob_filtered
+# because if HyDE is disabled the hot path is identical to an unfiltered search.
+# ---------------------------------------------------------------------------
+
+[search_hyde_false]
+# Absolute p95 ceiling (ms) for hyde=false hybrid search (fast-path, no generator call).
+# Set equal to [search_filtered].p95_ms_glob_filtered = 5 ms:
+# resolve_hyde_vector(hyde=False) returns immediately and must not add overhead.
+p95_ms = 5
