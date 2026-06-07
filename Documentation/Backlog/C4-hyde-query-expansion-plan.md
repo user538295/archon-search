@@ -269,7 +269,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
   - Checkpoint: `uv run pytest tests/test_config.py -k "hyde" -x`
 
 #### Task 1.2 — `HyDEGenerator` class + optional import guard + rate limiter
-- [ ] **File**: `archon_search/hyde.py` (new)
+- [x] **File**: `archon_search/hyde.py` (new)
 - **Depends on**: Task 1.1
 - **Description**:
   - `_query_fingerprint(query: str) -> str`: returns `hashlib.sha256(query.encode()).hexdigest()[:16]`. Pure function, no logging.
