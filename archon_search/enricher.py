@@ -44,7 +44,62 @@ __all__ = [
     "HeadingEntry",
     "HeadingTable",
     "MarkdownEnricher",
+    "_SOURCE_SUBTYPE_MAP",
+    "source_subtype_for",
+    "is_docling_source",
 ]
+
+# ---------------------------------------------------------------------------
+# Source-subtype mapping — single source of truth for extension → subtype
+# ---------------------------------------------------------------------------
+
+_SOURCE_SUBTYPE_MAP: dict[str, str] = {
+    # Text-format sources (handled via prepare() heading path)
+    ".md": "markdown",
+    ".txt": "text",
+    ".rst": "rst",
+    ".html": "html",
+    # Docling-parsed sources (handled via preprocess() page-break path)
+    ".pdf": "pdf",
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".tiff": "image",
+    ".tif": "image",
+    ".bmp": "image",
+    ".webp": "image",
+}
+"""Extension-to-subtype mapping. C3b owns the docling entries (.pdf and image
+extensions); C3a owns the text-format entries. The pipeline uses
+:func:`source_subtype_for` rather than reading this dict directly.
+"""
+
+
+def source_subtype_for(suffix: str) -> str:
+    """Return the source subtype for a file extension suffix.
+
+    Lowercases *suffix* before lookup. Returns ``""`` for unmapped extensions.
+
+    Examples::
+
+        source_subtype_for(".pdf")   # "pdf"
+        source_subtype_for(".PNG")   # "image"
+        source_subtype_for(".xyz")   # ""
+    """
+    return _SOURCE_SUBTYPE_MAP.get(suffix.lower(), "")
+
+
+def is_docling_source(subtype: str) -> bool:
+    """Return ``True`` when *subtype* identifies a docling-parsed source.
+
+    Docling sources are ``"pdf"`` and ``"image"`` — file types converted by
+    docling before chunking, which may contain embedded page-break markers.
+    Text-format sources (``"markdown"``, ``"text"``, etc.) return ``False``.
+
+    The pipeline calls this helper rather than inlining the predicate set.
+    """
+    return subtype in {"pdf", "image"}
+
 
 # ---------------------------------------------------------------------------
 # Public types

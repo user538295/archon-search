@@ -744,3 +744,51 @@ class TestPreprocess:
         original = text
         self._enrich().preprocess(text)
         assert text == original
+
+
+# ===========================================================================
+# Task 3.1 — _source_subtype mapping and helpers
+# ===========================================================================
+
+import pytest
+from archon_search.enricher import (
+    source_subtype_for,
+    is_docling_source,
+)
+
+
+class TestSourceSubtypeFor:
+    def test_source_subtype_pdf(self):
+        """'.pdf' extension maps to 'pdf'."""
+        assert source_subtype_for(".pdf") == "pdf"
+
+    @pytest.mark.parametrize("ext", [".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"])
+    def test_source_subtype_image_extensions(self, ext):
+        """Each image extension maps to 'image'."""
+        assert source_subtype_for(ext) == "image"
+
+    def test_source_subtype_uppercase_extension(self):
+        """Helper lowercases the suffix before lookup."""
+        assert source_subtype_for(".PDF") == "pdf"
+        assert source_subtype_for(".PNG") == "image"
+        assert source_subtype_for(".JPG") == "image"
+
+    def test_source_subtype_unknown_returns_empty(self):
+        """Unmapped extensions return empty string."""
+        assert source_subtype_for(".xyz") == ""
+        assert source_subtype_for(".docx") == ""
+        assert source_subtype_for("") == ""
+
+
+class TestIsDoclingSource:
+    def test_is_docling_source_true_for_pdf_and_image(self):
+        """'pdf' and 'image' subtypes are docling sources."""
+        assert is_docling_source("pdf") is True
+        assert is_docling_source("image") is True
+
+    def test_is_docling_source_false_for_text_and_empty(self):
+        """Non-docling subtypes return False."""
+        assert is_docling_source("markdown") is False
+        assert is_docling_source("") is False
+        assert is_docling_source("html") is False
+        assert is_docling_source("text") is False

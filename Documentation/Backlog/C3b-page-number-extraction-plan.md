@@ -334,7 +334,7 @@ None.
 > **Releasable**: when Task 3.1 is complete — extension map is callable and tested; no pipeline use yet.
 
 #### Task 3.1 — Extend `_source_subtype` for docling sources
-- [ ] **File**: `archon_search/enricher.py`
+- [x] **File**: `archon_search/enricher.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Define `_SOURCE_SUBTYPE_MAP: dict[str, str]` (module-level constant) including the C3a text-format entries (if any) AND adding:
