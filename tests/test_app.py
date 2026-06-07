@@ -484,3 +484,73 @@ def test_inbound_id_echoed(tmp_path: Path, job_store: JobStore) -> None:
         with TestClient(app) as client:
             resp = client.get("/health", headers={"X-Request-ID": "myid-abc123"})
     assert resp.headers.get("x-request-id") == "myid-abc123"
+
+
+# ---------------------------------------------------------------------------
+# Task 4.1 — HyDEGenerator in app.state + pyproject.toml optional dep
+# ---------------------------------------------------------------------------
+
+
+def test_app_state_has_hyde_generator(config: SearchConfig, job_store: JobStore) -> None:
+    """create_app() must set app.state.hyde_generator to a HyDEGenerator instance."""
+    from archon_search.hyde import HyDEGenerator
+
+    app = create_app(config, job_store)
+    assert hasattr(app.state, "hyde_generator")
+    assert isinstance(app.state.hyde_generator, HyDEGenerator)
+
+
+def test_hyde_optional_dep_in_pyproject() -> None:
+    """pyproject.toml must declare anthropic under [project.optional-dependencies].hyde."""
+    import tomlkit
+
+    pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
+    doc = tomlkit.loads(pyproject_path.read_text())
+    optional_deps = doc["project"]["optional-dependencies"]  # type: ignore[index]
+    assert "hyde" in optional_deps, "hyde extra missing from [project.optional-dependencies]"
+    hyde_deps = list(optional_deps["hyde"])
+    assert any("anthropic" in dep for dep in hyde_deps), (
+        f"anthropic not found in hyde deps: {hyde_deps}"
+    )
+
+
+def test_app_startup_logs_info_when_hyde_enabled(
+    tmp_path: Path, job_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When config.hyde.enabled=True, create_app must log an INFO about HyDE and Anthropic's API."""
+    import logging
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.hyde.enabled = True
+
+    with caplog.at_level(logging.INFO, logger="archon_search.server.app"):
+        create_app(cfg, job_store)
+
+    messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    hyde_msgs = [m for m in messages if "HyDE" in m and "Anthropic" in m]
+    assert hyde_msgs, (
+        f"Expected INFO message about HyDE and Anthropic's API, got: {messages}"
+    )
+    # Must include the model name
+    assert any(cfg.hyde.model in m for m in hyde_msgs)
+
+
+def test_app_startup_no_log_when_hyde_disabled(
+    tmp_path: Path, job_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When config.hyde.enabled=False (default), no HyDE INFO message is logged."""
+    import logging
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.hyde.enabled = False
+
+    with caplog.at_level(logging.INFO, logger="archon_search.server.app"):
+        create_app(cfg, job_store)
+
+    hyde_msgs = [
+        r.message for r in caplog.records
+        if r.levelno == logging.INFO and "HyDE" in r.message and "Anthropic" in r.message
+    ]
+    assert not hyde_msgs, f"Unexpected HyDE INFO message when disabled: {hyde_msgs}"

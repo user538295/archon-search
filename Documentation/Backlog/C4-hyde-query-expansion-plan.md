@@ -402,7 +402,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
 > **Releasable**: after Task 4.3 — `POST /search` and `POST /explain` respect `hyde=true`; `hyde_applied` is correct in all responses.
 
 #### Task 4.1 — `HyDEGenerator` initialization in `app.py` + `pyproject.toml` optional dep
-- [ ] **Files**: `archon_search/server/app.py`, `pyproject.toml`
+- [x] **Files**: `archon_search/server/app.py`, `pyproject.toml`
 - **Depends on**: Task 1.2
 - **Description**:
   - Add `hyde = ["anthropic>=0.40"]` to `[project.optional-dependencies]` in `pyproject.toml`.

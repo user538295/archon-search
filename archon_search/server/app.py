@@ -228,6 +228,13 @@ def create_app(
         language_detector=_lang_detector,
         language_detection_confidence_threshold=config.language_detection_confidence_threshold,
     )
+    from archon_search.hyde import HyDEGenerator  # noqa: PLC0415
+    app.state.hyde_generator = HyDEGenerator(embedder=app.state.embedder, config=config.hyde)
+    if config.hyde.enabled:
+        logger.info(
+            "HyDE is enabled — search query text will be sent to Anthropic's API (model: %s)",
+            config.hyde.model,
+        )
     app.include_router(collections_router)
     app.include_router(health_router)
     app.include_router(ready_router)

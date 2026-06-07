@@ -48,6 +48,7 @@ from archon_search.types import JobStatus
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
+    from archon_search.hyde import HyDEGenerator
     from archon_search.jobs.store import JobStore
 
 logger = logging.getLogger(__name__)
@@ -914,6 +915,7 @@ def create_mcp_http_app(
     request_id_header: str = "X-Request-ID",
     embedder_cache: EmbedderCache | None = None,
     job_store: JobStore | None = None,
+    hyde_generator: "HyDEGenerator | None" = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
