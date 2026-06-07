@@ -822,8 +822,9 @@ class SearchPipeline:
         *,
         embedder: Embedder,
         filters: SearchFilters | None = None,
+        query_vector: list[float] | None = None,
     ) -> list[dict[str, Any]]:
-        result_obj = await self.search(query, collection, namespace=namespace, embedder=embedder, filters=filters)
+        result_obj = await self.search(query, collection, namespace=namespace, embedder=embedder, filters=filters, query_vector=query_vector)
         output: list[dict[str, Any]] = []
 
         with record_stage("context"):

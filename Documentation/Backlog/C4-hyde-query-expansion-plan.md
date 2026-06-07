@@ -348,7 +348,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
   - Checkpoint: `uv run pytest tests/test_pipeline.py -k "search_many" -x`
 
 #### Task 2.3 — `SearchPipeline.search_with_context()` gains `query_vector`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 2.1 (inner `search()` call must accept `query_vector`)
 - **Description**:
   - Add `query_vector: list[float] | None = None` parameter to `search_with_context()`.

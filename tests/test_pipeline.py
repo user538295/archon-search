@@ -3432,6 +3432,52 @@ async def test_search_many_embeds_when_no_query_vector() -> None:
 
 
 # ===========================================================================
+# C4 Task 2.3 — search_with_context() query_vector parameter
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_search_with_context_forwards_query_vector() -> None:
+    """search_with_context() forwards query_vector to the inner search(); embed_one must NOT be called."""
+    from unittest.mock import AsyncMock, patch
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    captured_vector: list[list[float]] = []
+
+    class StubStore:
+        async def hybrid_search(self, collection: str, vector: list[float], query: str, **kw: Any) -> list[Any]:
+            captured_vector.append(list(vector))
+            return []
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    provided_vector = [0.9, 0.8, 0.7, 0.6]
+
+    with patch.object(pipeline._global_embedder, "embed_one", new_callable=AsyncMock) as mock_embed:
+        await pipeline.search_with_context(
+            "some query",
+            "test-col",
+            embedder=pipeline._global_embedder,
+            query_vector=provided_vector,
+        )
+
+    mock_embed.assert_not_called()
+    assert len(captured_vector) == 1
+    assert captured_vector[0] == provided_vector
+
+
+# ===========================================================================
 # B4 Task 3.1 — description_embedding populated at ingest
 # ===========================================================================
 
