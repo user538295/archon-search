@@ -5144,3 +5144,267 @@ async def test_ingest_md_front_matter_unchanged(tmp_path) -> None:
     # _acl must propagate to every chunk as a list containing "public"
     for chunk in chunks_stored:
         assert "public" in (chunk.acl or []), f"Expected 'public' in acl, got {chunk.acl!r}"
+
+
+# ===========================================================================
+# Task 4.2 — Per-chunk metadata merge
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_ingest_pdf_assigns_page_start_to_chunks(tmp_path) -> None:
+    """Every chunk produced from a PDF has _page_start in its metadata (str, 1-indexed)."""
+    from archon_search.enricher import PAGE_BREAK_MARKER
+
+    store = _make_mock_store_for_c2()
+    pipeline = _make_pipeline_with_detector(store)
+
+    pdf_file = tmp_path / "doc.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 dummy")
+
+    # Simulate docling output: three pages separated by two markers.
+    marker_text = (
+        "alpha content " * 10
+        + PAGE_BREAK_MARKER
+        + "beta content " * 10
+        + PAGE_BREAK_MARKER
+        + "gamma content " * 10
+    )
+    pipeline._parser.parse = AsyncMock(return_value=marker_text)
+
+    ingested_records: list = []
+
+    async def _capture_ingest(collection, records, **kwargs):  # type: ignore[no-untyped-def]
+        ingested_records.extend(records)
+        return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
+
+    store.ingest_chunks = _capture_ingest
+
+    result = await pipeline.ingest_file(pdf_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert result.status == "ok"
+    assert len(ingested_records) > 0, "Expected at least one chunk"
+    for chunk in ingested_records:
+        assert "_page_start" in chunk.metadata, (
+            f"Every PDF chunk must have _page_start; got metadata={chunk.metadata!r}"
+        )
+        page_val = chunk.metadata["_page_start"]
+        assert isinstance(page_val, str), f"_page_start must be str, got {type(page_val)}"
+        assert page_val in {"1", "2", "3"}, (
+            f"_page_start must be in {{1,2,3}} for three-page fixture, got {page_val!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_ingest_pdf_cross_page_chunk_has_page_end(tmp_path) -> None:
+    """A chunk that straddles a page boundary has both _page_start and _page_end (and they differ)."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.enricher import PAGE_BREAK_MARKER
+
+    store = _make_mock_store_for_c2()
+
+    # Use small chunk_size so a chunk is likely to straddle the boundary
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=8),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    pdf_file = tmp_path / "doc.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 dummy")
+
+    # "alpha content" is 13 chars, "beta content" is 12 chars.
+    # With chunk_size=8 the chunker will split mid-content. A chunk ending in
+    # "alpha co" and continuing into "beta co" spans the marker boundary.
+    marker_text = "alpha content" + PAGE_BREAK_MARKER + "beta content" + PAGE_BREAK_MARKER + "gamma content"
+    pipeline._parser.parse = AsyncMock(return_value=marker_text)
+
+    ingested_records: list = []
+
+    async def _capture_ingest(collection, records, **kwargs):  # type: ignore[no-untyped-def]
+        ingested_records.extend(records)
+        return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
+
+    store.ingest_chunks = _capture_ingest
+
+    result = await pipeline.ingest_file(pdf_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert result.status == "ok"
+    assert len(ingested_records) > 0, "Expected at least one chunk"
+
+    # At least one chunk must have _page_start (all should)
+    for chunk in ingested_records:
+        assert "_page_start" in chunk.metadata, (
+            f"Every PDF chunk must have _page_start; metadata={chunk.metadata!r}"
+        )
+
+    # At least one chunk must straddle a boundary (have _page_end != _page_start)
+    cross_page = [
+        c for c in ingested_records
+        if "_page_end" in c.metadata and c.metadata["_page_end"] != c.metadata["_page_start"]
+    ]
+    assert cross_page, (
+        "Expected at least one chunk straddling a page boundary with _page_end != _page_start. "
+        f"Chunks: {[c.metadata for c in ingested_records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_text_md_has_no_page_fields(tmp_path) -> None:
+    """Markdown files produce no _page_start or _page_end in any chunk metadata."""
+    store = _make_mock_store_for_c2()
+    pipeline = _make_pipeline_with_detector(store)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Heading\n\nSome content here.\n" * 20)
+
+    ingested_records: list = []
+
+    async def _capture_ingest(collection, records, **kwargs):  # type: ignore[no-untyped-def]
+        ingested_records.extend(records)
+        return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
+
+    store.ingest_chunks = _capture_ingest
+
+    result = await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert result.status == "ok"
+    assert len(ingested_records) > 0, "Expected at least one chunk"
+    for chunk in ingested_records:
+        assert "_page_start" not in chunk.metadata, (
+            f"Text-format chunk must NOT have _page_start; metadata={chunk.metadata!r}"
+        )
+        assert "_page_end" not in chunk.metadata, (
+            f"Text-format chunk must NOT have _page_end; metadata={chunk.metadata!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_ingest_pdf_chunk_text_contains_no_marker(tmp_path) -> None:
+    """No ChunkRecord.text produced from a PDF contains the page-break marker."""
+    from archon_search.enricher import PAGE_BREAK_MARKER
+
+    store = _make_mock_store_for_c2()
+    pipeline = _make_pipeline_with_detector(store)
+
+    pdf_file = tmp_path / "doc.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 dummy")
+
+    marker_text = (
+        "alpha content " * 5
+        + PAGE_BREAK_MARKER
+        + "beta content " * 5
+        + PAGE_BREAK_MARKER
+        + "gamma content " * 5
+    )
+    pipeline._parser.parse = AsyncMock(return_value=marker_text)
+
+    ingested_records: list = []
+
+    async def _capture_ingest(collection, records, **kwargs):  # type: ignore[no-untyped-def]
+        ingested_records.extend(records)
+        return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
+
+    store.ingest_chunks = _capture_ingest
+
+    await pipeline.ingest_file(pdf_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert len(ingested_records) > 0, "Expected at least one chunk"
+    for chunk in ingested_records:
+        assert PAGE_BREAK_MARKER not in chunk.text, (
+            f"ChunkRecord.text must not contain the page-break marker; "
+            f"chunk text={chunk.text!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_ingest_pdf_with_language_detection_uses_cleaned_text(tmp_path) -> None:
+    """Language detector receives marker-free cleaned text (not the raw parser output)."""
+    from archon_search.enricher import PAGE_BREAK_MARKER
+    from archon_search.language_detector import LanguageDetector
+
+    store = _make_mock_store_for_c2()
+
+    detector = MagicMock(spec=LanguageDetector)
+    detector_inputs: list[str] = []
+
+    async def _spy_detect(text: str, *, confidence_threshold: float = 0.7) -> str:  # type: ignore[no-untyped-def]
+        detector_inputs.append(text)
+        return "en"
+
+    detector.detect = _spy_detect
+
+    pipeline = _make_pipeline_with_detector(store, language_detector=detector)
+
+    pdf_file = tmp_path / "doc.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 dummy")
+
+    marker_text = "alpha content " * 10 + PAGE_BREAK_MARKER + "beta content " * 10
+    pipeline._parser.parse = AsyncMock(return_value=marker_text)
+
+    await pipeline.ingest_file(pdf_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert detector_inputs, "Expected language detector to be called"
+    for detected_input in detector_inputs:
+        assert PAGE_BREAK_MARKER not in detected_input, (
+            "Language detector must receive marker-free cleaned text; "
+            f"got: {detected_input[:200]!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_ingest_pdf_metadata_survives_store_roundtrip(connected_store, col_name, tmp_path) -> None:
+    """Full ingest → hybrid_search round-trip: _page_start is present in search result metadata."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.enricher import PAGE_BREAK_MARKER
+
+    pipeline = SearchPipeline(
+        store=connected_store,
+        embedder=make_embedder(),
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    pdf_file = tmp_path / "doc.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 dummy")
+
+    # Three pages of content; marker between page 1 and page 2
+    marker_text = (
+        "alpha content " * 10
+        + PAGE_BREAK_MARKER
+        + "beta content " * 10
+        + PAGE_BREAK_MARKER
+        + "gamma content " * 10
+    )
+    pipeline._parser.parse = AsyncMock(return_value=marker_text)
+
+    ingest_result = await pipeline.ingest_file(
+        pdf_file, col_name, embedder=pipeline._global_embedder
+    )
+    assert ingest_result.status == "ok"
+    assert ingest_result.chunks_created > 0
+
+    # Retrieve via hybrid_search using a zero vector (mock embedder returns [0.1]*4)
+    query_vector = [0.1] * 4
+    results = await connected_store.hybrid_search(
+        col_name,
+        query_vector=query_vector,
+        query_text="beta content",
+        top_k=10,
+    )
+
+    assert results, "Expected at least one search result after ingest"
+    for result in results:
+        assert "_page_start" in result.metadata, (
+            f"_page_start must survive the LanceDB round-trip; metadata={result.metadata!r}"
+        )

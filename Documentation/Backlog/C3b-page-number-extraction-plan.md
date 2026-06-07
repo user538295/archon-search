@@ -379,7 +379,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_pipeline.py -k page_marker or page_table or front_matter -v`
 
 #### Task 4.2 — Per-chunk metadata merge
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 4.1, Task 2.5
 - **Description**:
   - After `records = self._chunker.chunk(...)` (around `pipeline.py:275`), loop:
