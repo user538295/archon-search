@@ -43,3 +43,111 @@ def test_code_extensions_does_not_contain_markdown():
     assert ".md" not in CODE_EXTENSIONS
     assert ".txt" not in CODE_EXTENSIONS
     assert ".json" not in CODE_EXTENSIONS
+
+
+# ---------------------------------------------------------------------------
+# Task 2.1 — _module_path helper
+# ---------------------------------------------------------------------------
+
+
+class TestModulePath:
+    """Tests for the _module_path(file_path, collection_root) -> str helper."""
+
+    def test_regular_python(self):
+        """/repo/archon_search/store.py with root /repo -> 'archon_search.store'."""
+        from pathlib import Path
+
+        from archon_search.code_enricher import _module_path
+
+        result = _module_path(Path("/repo/archon_search/store.py"), Path("/repo"))
+        assert result == "archon_search.store"
+
+    def test_init_py(self):
+        """/repo/archon_search/jobs/__init__.py with root /repo -> 'archon_search.jobs'."""
+        from pathlib import Path
+
+        from archon_search.code_enricher import _module_path
+
+        result = _module_path(Path("/repo/archon_search/jobs/__init__.py"), Path("/repo"))
+        assert result == "archon_search.jobs"
+
+    def test_dts(self):
+        """/repo/types/lib.d.ts with root /repo -> 'types.lib.d' (one extension stripped)."""
+        from pathlib import Path
+
+        from archon_search.code_enricher import _module_path
+
+        result = _module_path(Path("/repo/types/lib.d.ts"), Path("/repo"))
+        assert result == "types.lib.d"
+
+    def test_hyphenated_python(self):
+        """/repo/my-pkg/mod.py with root /repo -> 'my_pkg.mod' (hyphens to underscores for .py)."""
+        from pathlib import Path
+
+        from archon_search.code_enricher import _module_path
+
+        result = _module_path(Path("/repo/my-pkg/mod.py"), Path("/repo"))
+        assert result == "my_pkg.mod"
+
+    def test_hyphenated_non_python(self):
+        """/repo/my-pkg/mod.ts with root /repo -> 'my-pkg.mod' (no substitution for non-.py)."""
+        from pathlib import Path
+
+        from archon_search.code_enricher import _module_path
+
+        result = _module_path(Path("/repo/my-pkg/mod.ts"), Path("/repo"))
+        assert result == "my-pkg.mod"
+
+    def test_no_collection_root(self):
+        """Path('/tmp/foo.py') with None collection_root -> 'foo' (stem only)."""
+        from pathlib import Path
+
+        from archon_search.code_enricher import _module_path
+
+        result = _module_path(Path("/tmp/foo.py"), None)
+        assert result == "foo"
+
+    def test_index_ts(self):
+        """/repo/web/api/index.ts with root /repo -> 'web.api' (index dropped for .ts)."""
+        from pathlib import Path
+
+        from archon_search.code_enricher import _module_path
+
+        result = _module_path(Path("/repo/web/api/index.ts"), Path("/repo"))
+        assert result == "web.api"
+
+    def test_index_js(self):
+        """/repo/web/api/index.js with root /repo -> 'web.api' (index dropped for .js)."""
+        from pathlib import Path
+
+        from archon_search.code_enricher import _module_path
+
+        result = _module_path(Path("/repo/web/api/index.js"), Path("/repo"))
+        assert result == "web.api"
+
+    def test_index_dts(self):
+        """/repo/web/index.d.ts with root /repo -> 'web.index.d'.
+
+        Step 7 does NOT fire because after with_suffix(""), the last segment
+        is "index.d" not "index".
+        """
+        from pathlib import Path
+
+        from archon_search.code_enricher import _module_path
+
+        result = _module_path(Path("/repo/web/index.d.ts"), Path("/repo"))
+        assert result == "web.index.d"
+
+    def test_init_at_root(self):
+        """_module_path(Path('/repo/__init__.py'), Path('/repo')) -> ''.
+
+        The algorithm: rel = __init__.py -> with_suffix('') = __init__
+        -> parts = ('__init__',) -> joined = '__init__' -> step 5 drops -> ''.
+        This is the correct value for a root package init file.
+        """
+        from pathlib import Path
+
+        from archon_search.code_enricher import _module_path
+
+        result = _module_path(Path("/repo/__init__.py"), Path("/repo"))
+        assert result == ""

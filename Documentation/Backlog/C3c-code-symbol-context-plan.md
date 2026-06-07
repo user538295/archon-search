@@ -205,7 +205,7 @@ code = [
 > **Releasable**: after Task 2.1; the helper is fully tested independently.
 
 #### Task 2.1 — Implement `_module_path(file_path, collection_root) -> str`
-- [ ] **File**: `archon_search/code_enricher.py`
+- [x] **File**: `archon_search/code_enricher.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Signature: `def _module_path(file_path: Path, collection_root: Path | None) -> str`
