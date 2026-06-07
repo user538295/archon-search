@@ -494,7 +494,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
 > **Releasable**: after Task 6.3 — full test suite passes with HyDE, CI guard active, integration test green, eval harness updated.
 
 #### Task 6.1 — Telemetry invariant CI guard for `hyde.py`
-- [ ] **File**: `tests/test_no_query_log_in_hyde.py` (new)
+- [x] **File**: `tests/test_no_query_log_in_hyde.py` (new)
 - **Depends on**: Task 1.2
 - **Description**:
   - Analogous to `tests/test_no_fstring_sql.py`. Read `archon_search/hyde.py` as a string. Assert that no `logging.` or `logger.` call in the file passes the raw `query` variable directly (e.g., `logger.warning("...", query)` or `f"...{query}..."`). Use regex: if `query` appears as an argument to a logging call without going through `_query_fingerprint`, fail.
