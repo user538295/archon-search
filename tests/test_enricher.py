@@ -205,14 +205,14 @@ class TestEnrichChunk:
     def test_enrich_chunk_empty_table(self):
         enricher = MarkdownEnricher()
         chunk = make_chunk(start_offset=10)
-        result = enricher.enrich_chunk(chunk, [])
+        result = enricher.enrich_chunk(chunk, heading_table=[])
         assert result == {"_heading": "", "_section_path": ""}
 
     def test_enrich_chunk_negative_offset(self):
         enricher = MarkdownEnricher()
         chunk = make_chunk(start_offset=-1)
         table = self._make_table([(0, "H1", 1)])
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         assert result == {"_heading": "", "_section_path": ""}
 
     def test_enrich_chunk_before_first_heading(self):
@@ -220,14 +220,14 @@ class TestEnrichChunk:
         enricher = MarkdownEnricher()
         chunk = make_chunk(start_offset=2)
         table = self._make_table([(10, "H1", 1)])
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         assert result == {"_heading": "", "_section_path": ""}
 
     def test_enrich_chunk_under_single_heading(self):
         enricher = MarkdownEnricher()
         chunk = make_chunk(start_offset=20)
         table = self._make_table([(0, "H1 text", 1)])
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         assert result["_heading"] == "H1 text"
         assert result["_section_path"] == "H1 text"
 
@@ -239,7 +239,7 @@ class TestEnrichChunk:
             (30, "Beta", 2),
             (60, "Gamma", 3),
         ])
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         assert result["_heading"] == "Gamma"
         assert result["_section_path"] == "Alpha > Beta > Gamma"
 
@@ -251,7 +251,7 @@ class TestEnrichChunk:
             (0, "Top", 1),
             (50, "Deep", 3),
         ])
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         assert result["_heading"] == "Deep"
         assert result["_section_path"] == "Top > Deep"
 
@@ -261,7 +261,7 @@ class TestEnrichChunk:
         enricher = MarkdownEnricher()
         chunk = make_chunk(start_offset=100)
         table = self._make_table([(0, long_text, 1)])
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         assert result["_heading"].endswith("…")
         assert len(result["_heading"]) == 512
 
@@ -279,7 +279,7 @@ class TestEnrichChunk:
             (200, h3, 3),
             (300, h4, 4),
         ])
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         section_path = result["_section_path"]
         assert len(section_path) <= 512
         # deepest element (h4) must be present unchanged
@@ -294,7 +294,7 @@ class TestEnrichChunk:
         enricher = MarkdownEnricher()
         chunk = make_chunk(start_offset=10, metadata={"_heading": "pre-existing"})
         table = self._make_table([(0, "Real Heading", 1)])
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         chunk.metadata.update(result)
         assert chunk.metadata["_heading"] == "Real Heading"
 
@@ -303,7 +303,7 @@ class TestEnrichChunk:
         enricher = MarkdownEnricher()
         table = self._make_table([(0, "Direct", 1)])
         chunk = make_chunk(start_offset=5)
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         assert result["_heading"] == "Direct"
 
     def test_prepare_called_twice_uses_second_table(self):
@@ -314,7 +314,7 @@ class TestEnrichChunk:
         _table_a = enricher.prepare(doc_a)
         table_b = enricher.prepare(doc_b)
         chunk_b = make_chunk(start_offset=doc_b.index("Content B"))
-        result = enricher.enrich_chunk(chunk_b, table_b)
+        result = enricher.enrich_chunk(chunk_b, heading_table=table_b)
         assert result["_heading"] == "HeadingB"
 
     def test_enrich_chunk_at_exact_heading_offset(self):
@@ -322,7 +322,7 @@ class TestEnrichChunk:
         enricher = MarkdownEnricher()
         chunk = make_chunk(start_offset=50)
         table = self._make_table([(50, "Exact", 1)])
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         assert result["_heading"] == "Exact"
 
     def test_enrich_chunk_deepest_heading_over_512(self):
@@ -331,7 +331,7 @@ class TestEnrichChunk:
         enricher = MarkdownEnricher()
         chunk = make_chunk(start_offset=10)
         table = self._make_table([(0, long_text, 1)])
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         assert len(result["_heading"]) == 512
         assert result["_heading"].endswith("…")
         assert len(result["_section_path"]) == 512
@@ -342,7 +342,7 @@ class TestEnrichChunk:
         enricher = MarkdownEnricher()
         chunk = make_chunk(start_offset=50)
         table = self._make_table([(0, "Subsection", 2)])
-        result = enricher.enrich_chunk(chunk, table)
+        result = enricher.enrich_chunk(chunk, heading_table=table)
         assert result["_heading"] == "Subsection"
         assert result["_section_path"] == "Subsection"
 
@@ -369,17 +369,177 @@ class TestEnrichChunk:
         section_offset = text.index("Section text")
         deep_offset = text.index("Deep text")
 
-        r_intro = enricher.enrich_chunk(make_chunk(start_offset=intro_offset), table)
+        r_intro = enricher.enrich_chunk(make_chunk(start_offset=intro_offset), heading_table=table)
         assert r_intro["_heading"] == "Alpha"
         assert r_intro["_section_path"] == "Alpha"
 
-        r_section = enricher.enrich_chunk(make_chunk(start_offset=section_offset), table)
+        r_section = enricher.enrich_chunk(make_chunk(start_offset=section_offset), heading_table=table)
         assert r_section["_heading"] == "Beta"
         assert r_section["_section_path"] == "Alpha > Beta"
 
-        r_deep = enricher.enrich_chunk(make_chunk(start_offset=deep_offset), table)
+        r_deep = enricher.enrich_chunk(make_chunk(start_offset=deep_offset), heading_table=table)
         assert r_deep["_heading"] == "Gamma"
         assert r_deep["_section_path"] == "Alpha > Beta > Gamma"
+
+
+# ===========================================================================
+# Task 2.5 — enrich_chunk page-break branch
+# ===========================================================================
+
+import types  # noqa: E402  (inline import; only used in this section)
+
+
+class TestEnrichChunkPageBreak:
+    """Tests for the page-break branch of enrich_chunk (Task 2.5)."""
+
+    def _enrich(self) -> MarkdownEnricher:
+        return MarkdownEnricher()
+
+    def _chunk(self, start_offset: int, end_offset: int):
+        """Lightweight chunk stand-in using types.SimpleNamespace."""
+        return types.SimpleNamespace(start_offset=start_offset, end_offset=end_offset, metadata={})
+
+    # ------------------------------------------------------------------
+    # Basic page resolution
+    # ------------------------------------------------------------------
+
+    def test_enrich_chunk_single_page(self):
+        """Chunk entirely within page 1 → _page_start='1', no _page_end key."""
+        table = [(0, 1), (10, 2)]
+        chunk = self._chunk(start_offset=2, end_offset=4)
+        result = self._enrich().enrich_chunk(chunk, page_table=table)
+        assert result.get("_page_start") == "1"
+        assert "_page_end" not in result
+
+    def test_enrich_chunk_single_page_assert_no_page_end_key(self):
+        """Explicit assertion that _page_end is absent (catches empty-string writes)."""
+        table = [(0, 1), (10, 2)]
+        chunk = self._chunk(start_offset=2, end_offset=4)
+        result = self._enrich().enrich_chunk(chunk, page_table=table)
+        assert "_page_end" not in result
+
+    def test_enrich_chunk_cross_page(self):
+        """Chunk spanning a page boundary → both _page_start and _page_end."""
+        table = [(0, 1), (10, 2)]
+        chunk = self._chunk(start_offset=8, end_offset=15)
+        result = self._enrich().enrich_chunk(chunk, page_table=table)
+        assert result["_page_start"] == "1"
+        assert result["_page_end"] == "2"
+
+    def test_enrich_chunk_first_page_seed(self):
+        """Chunk at offset 0 → page 1 from the seed entry."""
+        table = [(0, 1), (50, 2)]
+        chunk = self._chunk(start_offset=0, end_offset=4)
+        result = self._enrich().enrich_chunk(chunk, page_table=table)
+        assert result["_page_start"] == "1"
+        assert "_page_end" not in result
+
+    def test_enrich_chunk_leading_marker_starts_at_page_2(self):
+        """Table starts at (0, 2) (leading-marker case) → chunk at 0 resolves to page 2."""
+        table = [(0, 2), (100, 3)]
+        chunk = self._chunk(start_offset=0, end_offset=5)
+        result = self._enrich().enrich_chunk(chunk, page_table=table)
+        assert result["_page_start"] == "2"
+
+    # ------------------------------------------------------------------
+    # Boundary pinning (bisect_right convention)
+    # ------------------------------------------------------------------
+
+    def test_enrich_chunk_end_offset_at_page_boundary(self):
+        """end_offset exactly at a page-table entry offset: bisect_right puts it on the new page."""
+        table = [(0, 1), (10, 2)]
+        chunk = self._chunk(start_offset=5, end_offset=10)
+        result = self._enrich().enrich_chunk(chunk, page_table=table)
+        # bisect_right(offsets=[0,10], 10) = 2 → index 1 → page 2
+        # bisect_right(offsets=[0,10], 5) = 1 → index 0 → page 1
+        assert result["_page_start"] == "1"
+        assert result["_page_end"] == "2"
+
+    def test_enrich_chunk_end_offset_one_before_boundary(self):
+        """end_offset one before a page-table entry → stays on the earlier page, no _page_end."""
+        table = [(0, 1), (10, 2)]
+        chunk = self._chunk(start_offset=5, end_offset=9)
+        result = self._enrich().enrich_chunk(chunk, page_table=table)
+        assert result["_page_start"] == "1"
+        assert "_page_end" not in result
+
+    # ------------------------------------------------------------------
+    # None / absent page_table (heading-only path)
+    # ------------------------------------------------------------------
+
+    def test_enrich_chunk_page_table_none_skips_page_branch(self):
+        """page_table=None → no _page_start, no _page_end; heading branch still fires."""
+        chunk = self._chunk(start_offset=5, end_offset=9)
+        result = self._enrich().enrich_chunk(chunk, page_table=None)
+        assert "_page_start" not in result
+        assert "_page_end" not in result
+
+    # ------------------------------------------------------------------
+    # Type invariants
+    # ------------------------------------------------------------------
+
+    def test_enrich_chunk_values_are_strings(self):
+        """Both _page_start and _page_end (when present) must be str, not int or float."""
+        table = [(0, 1), (5, 2)]
+        chunk = self._chunk(start_offset=3, end_offset=7)
+        result = self._enrich().enrich_chunk(chunk, page_table=table)
+        assert isinstance(result["_page_start"], str)
+        assert isinstance(result["_page_end"], str)
+        # Must be plain integer string — no leading zeros, no decimal points
+        assert result["_page_start"] == str(int(result["_page_start"]))
+        assert result["_page_end"] == str(int(result["_page_end"]))
+
+    # ------------------------------------------------------------------
+    # Interaction with heading_table (combined case)
+    # ------------------------------------------------------------------
+
+    def test_enrich_chunk_both_tables_combined(self):
+        """When both heading_table and page_table are provided, both branches fire."""
+        page_table = [(0, 1), (100, 2)]
+        heading_table = [HeadingEntry(offset=0, text="Intro", level=1)]
+        chunk = make_chunk(start_offset=10, end_offset=20)
+        result = MarkdownEnricher().enrich_chunk(
+            chunk, heading_table=heading_table, page_table=page_table
+        )
+        assert result["_heading"] == "Intro"
+        assert result["_section_path"] == "Intro"
+        assert result["_page_start"] == "1"
+
+    def test_enrich_chunk_heading_table_none_no_heading_keys(self):
+        """heading_table=None → no _heading or _section_path keys in result."""
+        page_table = [(0, 1)]
+        chunk = self._chunk(start_offset=0, end_offset=5)
+        result = self._enrich().enrich_chunk(chunk, heading_table=None, page_table=page_table)
+        assert "_heading" not in result
+        assert "_section_path" not in result
+        assert result.get("_page_start") == "1"
+
+    # ------------------------------------------------------------------
+    # Robustness guards
+    # ------------------------------------------------------------------
+
+    def test_enrich_chunk_empty_page_table_skips_page_branch(self):
+        """page_table=[] (empty) → page branch is skipped, no crash, no page keys."""
+        chunk = self._chunk(start_offset=5, end_offset=9)
+        result = self._enrich().enrich_chunk(chunk, page_table=[])
+        assert "_page_start" not in result
+        assert "_page_end" not in result
+
+    def test_enrich_chunk_negative_start_offset_skips_page_branch(self):
+        """chunk.start_offset=-1 sentinel + page_table → page branch skipped, no wrong -1 index."""
+        table = [(0, 1), (50, 2), (100, 3)]
+        chunk = self._chunk(start_offset=-1, end_offset=5)
+        result = self._enrich().enrich_chunk(chunk, page_table=table)
+        assert "_page_start" not in result
+        assert "_page_end" not in result
+
+    def test_enrich_chunk_does_not_mutate_chunk_metadata(self):
+        """enrich_chunk must not mutate chunk.metadata — only returns a dict fragment."""
+        table = [(0, 1), (10, 2)]
+        chunk = self._chunk(start_offset=5, end_offset=15)
+        original_metadata = dict(chunk.metadata)
+        self._enrich().enrich_chunk(chunk, page_table=table)
+        assert chunk.metadata == original_metadata
 
 
 # ===========================================================================

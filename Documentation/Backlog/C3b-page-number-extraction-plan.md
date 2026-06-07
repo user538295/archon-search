@@ -302,7 +302,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_enricher.py -k preprocess -v`
 
 #### Task 2.5 — `enrich_chunk` page resolution
-- [ ] **File**: `archon_search/enricher.py`
+- [x] **File**: `archon_search/enricher.py`
 - **Depends on**: Task 2.4
 - **Description**:
   - Extend `MarkdownEnricher.enrich_chunk(self, chunk, *, heading_table=None, page_table=None) -> dict[str, str]`. The signature uses **explicit keyword arguments** for the two tables (the C3a branch is gated on `heading_table is not None`; the C3b branch is gated on `page_table is not None`).

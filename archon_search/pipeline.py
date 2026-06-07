@@ -295,7 +295,7 @@ class SearchPipeline:
 
         # C3a: enrich every chunk with heading metadata
         for record in records:
-            enrichment = enricher.enrich_chunk(record, heading_table)
+            enrichment = enricher.enrich_chunk(record, heading_table=heading_table)
             record.metadata.update(enrichment)
 
         # Assign sequential chunk IDs and propagate ACL

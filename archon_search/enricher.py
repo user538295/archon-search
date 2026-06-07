@@ -3,9 +3,12 @@
 Provides :class:`MarkdownEnricher` with two public methods:
 
 * ``prepare(text)`` — scans post-front-matter text and returns a sorted
-  :data:`HeadingTable` of :class:`HeadingEntry` tuples.
-* ``enrich_chunk(chunk, table)`` — bisects the table on
-  ``chunk.start_offset`` and returns ``{"_heading": ..., "_section_path": ...}``.
+  :data:`HeadingTable` of :class:`HeadingEntry` tuples (text-format sources).
+* ``preprocess(text)`` — excises page-break markers and returns a
+  ``(cleaned_text, page_table)`` tuple (docling-parsed sources).
+* ``enrich_chunk(chunk, *, heading_table=None, page_table=None)`` — resolves
+  heading fields from *heading_table* and/or page fields from *page_table*,
+  returning a ``dict[str, str]`` fragment for the caller to merge.
 """
 
 from __future__ import annotations
@@ -147,6 +150,8 @@ class MarkdownEnricher:
 
     :meth:`prepare` and :meth:`enrich_chunk` are independent: ``enrich_chunk``
     can be called with any :data:`HeadingTable` constructed outside ``prepare``.
+    For docling-parsed sources, call :meth:`preprocess` instead of ``prepare``,
+    then pass the returned *page_table* to ``enrich_chunk``.
     """
 
     # ------------------------------------------------------------------
@@ -202,51 +207,72 @@ class MarkdownEnricher:
     def enrich_chunk(
         self,
         chunk: "ChunkRecord",
-        table: HeadingTable,
+        *,
+        heading_table: "HeadingTable | None" = None,
+        page_table: "list[tuple[int, int]] | None" = None,
     ) -> dict[str, str]:
-        """Return ``{"_heading": ..., "_section_path": ...}`` for *chunk*.
+        """Return a ``dict[str, str]`` metadata fragment for *chunk*.
 
-        Falls back to empty strings when *table* is empty, or
-        ``chunk.start_offset < 0`` (sentinel), or the chunk precedes all headings.
+        Both branches are gated on their respective arguments:
 
-        **Contract**: *table* must be sorted by ``offset`` ascending (as returned
-        by :meth:`prepare`). Passing an unsorted table produces undefined results
-        because this method uses :func:`bisect.bisect_right` for the lookup.
+        * **Heading branch** (C3a): fires when *heading_table* is not ``None``.
+          Uses :func:`bisect.bisect_right` on ``chunk.start_offset`` to resolve
+          ``_heading`` and ``_section_path``. Falls back to empty strings when
+          the table is empty or ``chunk.start_offset < 0``.
+
+        * **Page branch** (C3b): fires when *page_table* is not ``None``, is
+          non-empty, and ``chunk.start_offset >= 0``. Uses
+          :func:`bisect.bisect_right` on ``chunk.start_offset`` to resolve
+          ``_page_start`` and on ``chunk.end_offset`` to resolve ``_page_end``.
+          ``_page_end`` is written **only** when it differs from ``_page_start``.
+          Both values are string-typed (consistent with ``dict[str, str]``).
+
+          *end_offset* follows Chonkie's exclusive-end convention: an
+          ``end_offset`` exactly equal to a page-table boundary offset falls on
+          the *new* page (bisect_right semantics).
+
+        **Contract**: both tables must be sorted by ``offset`` ascending.
+        Passing an unsorted table produces undefined results.
         """
-        empty = {"_heading": "", "_section_path": ""}
+        result: dict[str, str] = {}
 
-        if not table or chunk.start_offset < 0:
-            return empty
+        # --- Heading branch (C3a) ---
+        if heading_table is not None:
+            if heading_table and chunk.start_offset >= 0:
+                h_offsets = [e.offset for e in heading_table]
+                idx = bisect.bisect_right(h_offsets, chunk.start_offset) - 1
+                if idx >= 0:
+                    matched = heading_table[idx]
+                    heading_text = _truncate(matched.text)
+                    # Build ancestor stack
+                    stack: list[str] = []
+                    for target_level in range(1, matched.level):
+                        for j in range(idx - 1, -1, -1):
+                            if heading_table[j].level == target_level:
+                                stack.append(heading_table[j].text)
+                                break
+                    stack.append(matched.text)
+                    result["_heading"] = heading_text
+                    result["_section_path"] = self._build_section_path(stack)
+                else:
+                    result["_heading"] = ""
+                    result["_section_path"] = ""
+            else:
+                result["_heading"] = ""
+                result["_section_path"] = ""
 
-        offsets = [e.offset for e in table]
-        idx = bisect.bisect_right(offsets, chunk.start_offset) - 1
+        # --- Page branch (C3b) ---
+        if page_table is not None and page_table and chunk.start_offset >= 0:
+            p_offsets = [entry[0] for entry in page_table]
+            start_idx = max(0, bisect.bisect_right(p_offsets, chunk.start_offset) - 1)
+            end_idx = max(0, bisect.bisect_right(p_offsets, chunk.end_offset) - 1)
+            page_start = page_table[start_idx][1]
+            page_end = page_table[end_idx][1]
+            result["_page_start"] = str(page_start)
+            if page_end != page_start:
+                result["_page_end"] = str(page_end)
 
-        if idx < 0:
-            return empty
-
-        matched = table[idx]
-        heading_text = _truncate(matched.text)
-
-        # Build ancestor stack: for each level l from 1 to matched.level-1,
-        # find the latest entry at that level with index ≤ idx.
-        stack: list[str] = []
-        matched_level = matched.level
-        for target_level in range(1, matched_level):
-            # Walk backward from idx to find closest ancestor at target_level
-            ancestor_text: str | None = None
-            for j in range(idx - 1, -1, -1):
-                if table[j].level == target_level:
-                    ancestor_text = table[j].text
-                    break
-            if ancestor_text is not None:
-                stack.append(ancestor_text)
-
-        stack.append(matched.text)
-
-        # Build _section_path with left-truncation if needed
-        section_path = self._build_section_path(stack)
-
-        return {"_heading": heading_text, "_section_path": section_path}
+        return result
 
     # ------------------------------------------------------------------
     # Page-break helpers (C3b)
