@@ -508,6 +508,11 @@
             ],
             "title": "Collections"
           },
+          "hyde": {
+            "default": false,
+            "title": "Hyde",
+            "type": "boolean"
+          },
           "query": {
             "title": "Query",
             "type": "string"
@@ -554,6 +559,11 @@
             },
             "title": "Excluded Collections",
             "type": "array"
+          },
+          "hyde_applied": {
+            "default": false,
+            "title": "Hyde Applied",
+            "type": "boolean"
           },
           "near_misses": {
             "items": {

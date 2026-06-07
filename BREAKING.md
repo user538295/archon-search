@@ -8,15 +8,17 @@
 
 ## Changelog
 
-### [next release] — C4 HyDE query expansion: additive fields on SearchResponse
+### [next release] — C4 HyDE query expansion: additive fields on SearchResponse and ExplainResponse
 
-**Surface**: `POST /search` response (`SearchResponse`); `POST /search` request (`SearchRequest`).
+**Surface**: `POST /search` response (`SearchResponse`); `POST /search` request (`SearchRequest`); `POST /explain` response (`ExplainResponse`); `POST /explain` request (`ExplainRequest`).
 
 **Additive fields** (backward-compatible for tolerant consumers; breaking for strict schema validators):
 - `SearchRequest` gains `hyde: bool` (default `false`). Clients that validate the request schema strictly must allow this new optional field.
 - `SearchResponse` gains `hyde_applied: bool` (default `false`). Indicates whether the ANN lookup was driven by a HyDE-generated hypothesis embedding. Clients that validate the response schema strictly must accept this new field.
+- `ExplainRequest` gains `hyde: bool` (default `false`). Clients that validate the request schema strictly must allow this new optional field.
+- `ExplainResponse` gains `hyde_applied: bool` (default `false`). Indicates whether the ANN lookup was driven by a HyDE-generated hypothesis embedding. Clients that validate the response schema strictly must accept this new field.
 
-**Migration**: no action required for consumers that ignore unknown fields. Strict schema validators should add `hyde_applied: bool` to their `SearchResponse` type stubs and `hyde: bool` to their `SearchRequest` type stubs.
+**Migration**: no action required for consumers that ignore unknown fields. Strict schema validators should add `hyde_applied: bool` to their `SearchResponse` and `ExplainResponse` type stubs, and `hyde: bool` to their `SearchRequest` and `ExplainRequest` type stubs.
 
 **Announced in**: this release.
 
