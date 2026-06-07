@@ -1008,3 +1008,83 @@ def test_search_response_has_hyde_applied() -> None:
 
     resp = SearchResponse(results=[], acl_filtered=False)
     assert resp.hyde_applied is False
+
+
+# ---------------------------------------------------------------------------
+# C4 Task 4.2: routes_search.py handler wiring for resolve_hyde_vector
+# ---------------------------------------------------------------------------
+
+
+def test_search_hyde_true_passes_vector_to_pipeline(tmp_path: Path) -> None:
+    """hyde=true: resolve_hyde_vector returns a vector → pipeline.search called with it; response hyde_applied=True."""
+    app, client = _make_app(tmp_path)
+    results = [_make_search_result(1)]
+    pipeline_mock = _make_pipeline_mock(results=results)
+    app.state.pipeline = pipeline_mock
+
+    hyde_vector = [0.1, 0.2, 0.3]
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=(hyde_vector, True)),
+    ):
+        response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["hyde_applied"] is True
+    call_kwargs = pipeline_mock.search.call_args.kwargs
+    assert call_kwargs["query_vector"] == hyde_vector
+
+
+def test_search_hyde_fallback_passes_none(tmp_path: Path) -> None:
+    """hyde=true but resolve_hyde_vector returns (None, False) → pipeline.search called with query_vector=None; hyde_applied=False."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock()
+
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=(None, False)),
+    ):
+        response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+
+    assert response.status_code == 200
+    assert response.json()["hyde_applied"] is False
+    call_kwargs = app.state.pipeline.search.call_args.kwargs
+    assert call_kwargs["query_vector"] is None
+
+
+def test_search_hyde_package_not_installed_returns_422(tmp_path: Path) -> None:
+    """resolve_hyde_vector raises RuntimeError (package missing) → 422 response."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock()
+
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(side_effect=RuntimeError("Install archon-search[hyde] to use HyDE")),
+    ):
+        response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+
+    assert response.status_code == 422
+    assert "hyde" in response.json()["detail"].lower() or "install" in response.json()["detail"].lower()
+
+
+def test_search_many_hyde_true(tmp_path: Path) -> None:
+    """Multi-collection path with hyde=true passes query_vector to search_many; response hyde_applied=True."""
+    app, client = _make_app(tmp_path)
+    pipeline_mock = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+    app.state.pipeline = pipeline_mock
+
+    hyde_vector = [0.5, 0.6, 0.7]
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=(hyde_vector, True)),
+    ):
+        response = client.post("/search", json={"collections": ["a", "b"], "query": "q", "hyde": True})
+
+    assert response.status_code == 200
+    assert response.json()["hyde_applied"] is True
+    call_kwargs = pipeline_mock.search_many.call_args
+    # query_vector should be passed as positional or keyword
+    assert hyde_vector in call_kwargs.args or call_kwargs.kwargs.get("query_vector") == hyde_vector

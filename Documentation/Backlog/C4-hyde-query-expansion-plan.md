@@ -420,7 +420,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
   - Checkpoint: `uv run pytest tests/test_app.py -k "hyde" -x`
 
 #### Task 4.2 — Wire `routes_search.py` REST handler
-- [ ] **File**: `archon_search/server/routes_search.py`
+- [x] **File**: `archon_search/server/routes_search.py`
 - **Depends on**: Tasks 2.1, 2.2, 3.1, 4.1
 - **Description**:
   - Import `resolve_hyde_vector` from `archon_search.hyde`.

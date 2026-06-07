@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from archon_search._types import SearchResult
 from archon_search.filters import SearchFilters
+from archon_search.hyde import resolve_hyde_vector
 from archon_search.pipeline import (
     CollectionNotFoundError,
     FanoutTimeoutError,
@@ -138,9 +139,16 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     start = monotonic()
     timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
 
+    # Resolve HyDE vector before dispatching to either search path
+    generator = getattr(request.app.state, "hyde_generator", None)
+    try:
+        hyde_vector, hyde_applied = await resolve_hyde_vector(body.query, body.hyde, generator, config.hyde)
+    except RuntimeError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+
     if body.collections is not None:
         try:
-            result = await pipeline.search_many(body.query, body.collections, namespace=ns)
+            result = await pipeline.search_many(body.query, body.collections, namespace=ns, query_vector=hyde_vector)
         except CollectionNotFoundError:
             return JSONResponse({"detail": "collection not found"}, status_code=404)
         except MetadataLookupError:
@@ -171,6 +179,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 for e in result.excluded_collections
             ],
             embedding_model=config.embedding_model,
+            hyde_applied=hyde_applied,
         )
 
     try:
@@ -210,7 +219,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 embedder = pipeline._global_embedder
                 active_model = config.embedding_model
             result = await asyncio.wait_for(
-                pipeline.search(body.query, body.collection, namespace=ns, embedder=embedder, filters=body.filters),
+                pipeline.search(body.query, body.collection, namespace=ns, embedder=embedder, filters=body.filters, query_vector=hyde_vector),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
             include_metadata = body.filters is not None and body.filters.include_metadata
@@ -242,6 +251,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                     for e in result.excluded_collections
                 ],
                 embedding_model=active_model,
+                hyde_applied=hyde_applied,
             )
         except asyncio.TimeoutError:
             _emit_timings()
