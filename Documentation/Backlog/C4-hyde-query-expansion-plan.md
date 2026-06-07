@@ -505,7 +505,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
   - Checkpoint: `uv run pytest tests/test_no_query_log_in_hyde.py -x`
 
 #### Task 6.2 — Integration test: full search path with `hyde=true`
-- [ ] **File**: `tests/test_integration_hyde.py` (new)
+- [x] **File**: `tests/test_integration_hyde.py` (new)
 - **Depends on**: Tasks 4.2, 5.1
 - **Description**:
   - Mark with `@pytest.mark.integration`.
