@@ -438,7 +438,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_fixtures.py -k three_page_pdf -v`
 
 #### Task 5.2 — Eval query + label
-- [ ] **File**: `tests/eval/queries.jsonl`, `tests/eval/labels.jsonl`, `tests/eval/corpus/` (one fixture PDF copy or reference)
+- [x] **File**: `tests/eval/queries.jsonl`, `tests/eval/labels.jsonl`, `tests/eval/corpus/` (one fixture PDF copy or reference)
 - **Depends on**: Task 5.1, Task 4.2
 - **Description**:
   - Add one query to `tests/eval/queries.jsonl` of the form `{"query_id": "page_provenance_001", "text": "find the beta content on page 2"}` (exact wording per `tests/eval/README.md` conventions).

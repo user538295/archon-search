@@ -75,9 +75,12 @@ def install_stubs() -> None:
     if "sentence_transformers" not in sys.modules:
         sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
 
-    # Block onnxruntime (64MB native library) — not needed for tests
-    if "onnxruntime" not in sys.modules:
-        sys.modules["onnxruntime"] = types.ModuleType("onnxruntime")
+    # NOTE: onnxruntime is intentionally NOT stubbed here.
+    # fastembed is fully stubbed above and never calls onnxruntime directly.
+    # docling (used for PDF parsing, e.g. C3b eval corpus) needs the real onnxruntime,
+    # which is a transitive dependency via docling and is always installed.
+    # Stubbing onnxruntime sets __spec__ = None, which breaks docling's
+    # importlib-based plugin discovery (RapidOCR backend registration).
 
     # Stub chonkie: real RecursiveChunker downloads a gpt2 tokenizer over the network, which
     # fails in offline test environments. The fake splits on whitespace into <= chunk_size word

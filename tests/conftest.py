@@ -86,8 +86,7 @@ def three_page_pdf() -> Path:
     Generates ``tests/fixtures/pdfs/three_page.pdf`` on first use via reportlab.
     Page contents are pinned to "alpha content", "beta content", "gamma content".
 
-    The PDF is NOT byte-deterministic (reportlab embeds timestamps), but the
-    textual content is stable. Tests must use textual assertions only.
+    The PDF is byte-deterministic (invariant=True suppresses reportlab timestamps).
     """
     from _pdf_fixture import generate_three_page_pdf  # noqa: PLC0415
 

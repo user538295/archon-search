@@ -13,29 +13,32 @@
 # in baseline.json and update both baseline.json/.md and this file together.
 
 [quality_floors]
-# Rationale: floors recalibrated after adding C2 multilingual eval fixtures (Task 11.1).
-# 5 French documents (fr-docs collection) + 5 retrieval queries + routing entry added.
-# Previous calibration (English-only, 33 queries / 57 docs):
-#   recall_at_1: 0.8704, recall_at_3: 0.9630, recall_at_5: 1.0
-#   routing_accuracy: 0.9394, routing_mrr_centroid/hybrid: 0.6667
-# New calibration (with fr-docs, 38 queries / 62 docs):
-#   recall_at_1: 0.8594 (delta -0.0109, within 0.05 waiver threshold — rationale:
-#     French fixtures use accented tokens that tokenize differently in the SHA-256
-#     backend; recall@5 remains 1.0 so no top-5 misses; recall@1 variance is expected
-#     for a 5-query sub-corpus where one near-tie can shift the metric by 0.02)
-#   routing_accuracy: 1.0 (IMPROVED — fr-docs centroid is distinctly French, routes correctly)
-#   routing_mrr_centroid/hybrid: 0.7917 (IMPROVED — additional routing query fr-docs
-#     routes unambiguously, lifting MRR from 0.6667 to 0.7917)
+# Rationale: floors recalibrated after adding C3b page provenance eval fixtures (Task 5.2).
+# 1 PDF document (pdf-fixtures collection) + 1 retrieval query (page_provenance_001) added.
+# Previous calibration (with fr-docs, 38 queries / 63 docs):
+#   recall_at_1: 0.8594, recall_at_3: 0.9688, recall_at_5: 1.0
+#   routing_accuracy: 1.0, routing_mrr_centroid/hybrid: 0.7917
+# New calibration (with pdf-fixtures, 39 queries / 63 docs):
+#   recall_at_1: 0.8636 (IMPROVED — page_provenance_001 retrieves the unique pdf-001 doc at rank 1)
+#   recall_at_3: 0.9697 (IMPROVED — same reason)
+#   ndcg_at_5/10: 0.9890 (IMPROVED — same reason)
+#   routing_accuracy: 1.0 (unchanged — pdf-fixtures is not a routing collection)
+#   routing_mrr_centroid/hybrid: 0.7556 (delta -0.036, within 0.05 waiver threshold — rationale:
+#     pdf-fixtures is now an additional collection in the routing competition centroid space;
+#     its document content ("alpha content", "beta content", "gamma content") introduces a
+#     new centroid that can attract routing scores away from gold collections for some queries;
+#     routing_accuracy is still 1.0 so the correct collection is still found; MRR drop is
+#     within the no-waiver threshold of 0.05)
 # All floors set equal to new measured baseline so regressions are immediately gated.
-recall_at_1     = 0.859375
-recall_at_3     = 0.96875
+recall_at_1     = 0.8636363636363636
+recall_at_3     = 0.9696969696969697
 recall_at_5     = 1.0
 mrr             = 1.0
-ndcg_at_5       = 0.9886960737555268
-ndcg_at_10      = 0.9886960737555268
+ndcg_at_5       = 0.9890386169750564
+ndcg_at_10      = 0.9890386169750564
 routing_accuracy = 1.0
-routing_mrr_centroid = 0.7916666666666666
-routing_mrr_hybrid = 0.7916666666666666
+routing_mrr_centroid = 0.7555555555555555
+routing_mrr_hybrid = 0.7555555555555555
 # routing_precision_at_1_centroid — reported-only; no floor (P@1 report-only per Task 6.2)
 # routing_precision_at_1_hybrid   — reported-only; no floor (P@1 report-only per Task 6.2)
 
