@@ -9,7 +9,7 @@ from pathlib import Path
 
 import tomlkit
 
-from archon_search.constants import DEFAULT_ROUTING_DESCRIPTION_WEIGHT
+from archon_search.constants import DEFAULT_FAST_MODEL, DEFAULT_ROUTING_DESCRIPTION_WEIGHT
 
 _logger = logging.getLogger(__name__)
 
@@ -18,6 +18,14 @@ _VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERRO
 
 class ConfigError(Exception):
     """Raised on invalid configuration values."""
+
+
+@dataclass
+class HyDEConfig:
+    enabled: bool = False
+    model: str = field(default_factory=lambda: DEFAULT_FAST_MODEL)
+    timeout_seconds: float = 5.0
+    max_requests_per_minute: int = 60
 
 
 @dataclass
@@ -84,6 +92,8 @@ class SearchConfig:
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     # [namespaces]
     namespaces: dict[str, str] = field(default_factory=dict)
+    # [hyde]
+    hyde: HyDEConfig = field(default_factory=HyDEConfig)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -140,6 +150,13 @@ def _coerce_bool(value: object, field_name: str) -> bool:
     if not isinstance(value, bool):
         raise ConfigError(f"Expected boolean for '{field_name}', got {type(value).__name__}")
     return value
+
+
+def _coerce_str(value: object, field_name: str) -> str:
+    try:
+        return str(value)
+    except Exception as exc:
+        raise ConfigError(f"Expected string for '{field_name}', got {type(value).__name__}") from exc
 
 
 def load_config(path: Path | None = None) -> SearchConfig:
@@ -354,5 +371,26 @@ def load_config(path: Path | None = None) -> SearchConfig:
             )
         namespaces[k] = v
     config.namespaces = namespaces
+
+    hyde_cfg = doc.get("hyde", {})
+    hyde = HyDEConfig()
+    if "enabled" in hyde_cfg:
+        hyde.enabled = _coerce_bool(hyde_cfg["enabled"], "[hyde].enabled")
+    if "model" in hyde_cfg:
+        model = _coerce_str(hyde_cfg["model"], "[hyde].model")
+        if not model:
+            raise ConfigError("[hyde].model must be a non-empty string")
+        hyde.model = model
+    if "timeout_seconds" in hyde_cfg:
+        timeout_seconds = _coerce_float(hyde_cfg["timeout_seconds"], "[hyde].timeout_seconds")
+        if timeout_seconds <= 0:
+            raise ConfigError(f"[hyde].timeout_seconds must be > 0, got {timeout_seconds}")
+        hyde.timeout_seconds = timeout_seconds
+    if "max_requests_per_minute" in hyde_cfg:
+        max_rpm = _coerce_int(hyde_cfg["max_requests_per_minute"], "[hyde].max_requests_per_minute")
+        if max_rpm < 1:
+            raise ConfigError(f"[hyde].max_requests_per_minute must be >= 1, got {max_rpm}")
+        hyde.max_requests_per_minute = max_rpm
+    config.hyde = hyde
 
     return config

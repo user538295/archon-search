@@ -965,3 +965,72 @@ def test_confidence_threshold_non_numeric_raises(tmp_path: Path) -> None:
     toml_file.write_text('[database]\nlanguage_detection_confidence_threshold = "high"\n', encoding="utf-8")
     with pytest.raises(ConfigError, match="language_detection_confidence_threshold"):
         load_config(path=toml_file)
+
+
+# ---------------------------------------------------------------------------
+# C4 Task 1.1 — HyDEConfig dataclass + [hyde] TOML loader
+# ---------------------------------------------------------------------------
+
+
+def test_hyde_config_defaults(tmp_path: Path) -> None:
+    """load_config with no TOML file returns HyDEConfig with enabled=False and all other defaults."""
+    from archon_search.config import HyDEConfig
+    from archon_search.constants import DEFAULT_FAST_MODEL
+
+    config = load_config(path=tmp_path / "nonexistent.toml")
+    assert isinstance(config.hyde, HyDEConfig)
+    assert config.hyde.enabled is False
+    assert config.hyde.model == DEFAULT_FAST_MODEL
+    assert config.hyde.timeout_seconds == 5.0
+    assert config.hyde.max_requests_per_minute == 60
+
+
+def test_hyde_toml_all_keys(tmp_path: Path) -> None:
+    """TOML with all [hyde] keys parses correctly."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text(
+        "[hyde]\nenabled = true\nmodel = \"gpt-test\"\ntimeout_seconds = 10.0\nmax_requests_per_minute = 30\n",
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.hyde.enabled is True
+    assert config.hyde.model == "gpt-test"
+    assert config.hyde.timeout_seconds == 10.0
+    assert config.hyde.max_requests_per_minute == 30
+
+
+def test_hyde_toml_partial_keys(tmp_path: Path) -> None:
+    """TOML with only [hyde] timeout_seconds applies that value; other fields remain default."""
+    from archon_search.constants import DEFAULT_FAST_MODEL
+
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[hyde]\ntimeout_seconds = 3.0\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.hyde.timeout_seconds == 3.0
+    assert config.hyde.enabled is False
+    assert config.hyde.model == DEFAULT_FAST_MODEL
+    assert config.hyde.max_requests_per_minute == 60
+
+
+def test_hyde_config_invalid_timeout(tmp_path: Path) -> None:
+    """timeout_seconds = 0 raises ConfigError."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[hyde]\ntimeout_seconds = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        load_config(path=toml_file)
+
+
+def test_hyde_config_invalid_rpm(tmp_path: Path) -> None:
+    """max_requests_per_minute = 0 raises ConfigError."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[hyde]\nmax_requests_per_minute = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="max_requests_per_minute"):
+        load_config(path=toml_file)
+
+
+def test_hyde_config_empty_model(tmp_path: Path) -> None:
+    """model = "" raises ConfigError."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[hyde]\nmodel = ""\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="model"):
+        load_config(path=toml_file)
