@@ -274,3 +274,27 @@ class TestFixtureContracts:
 
         content = self._read_python_fixture()
         ast.parse(content)  # raises SyntaxError if invalid
+
+    # --- TypeScript fixture contracts (Task 4.2) ---
+
+    TS_FIXTURE = "tests/fixtures/code/typescript/sample.ts"
+
+    def _read_ts_fixture(self):
+        from pathlib import Path
+
+        return Path(self.TS_FIXTURE).read_text()
+
+    def test_ts_fixture_has_top_fn(self):
+        """TypeScript fixture must contain 'topFn'."""
+        content = self._read_ts_fixture()
+        assert "topFn" in content
+
+    def test_ts_fixture_has_class(self):
+        """TypeScript fixture must contain 'class MyClass'."""
+        content = self._read_ts_fixture()
+        assert "class MyClass" in content
+
+    def test_ts_fixture_has_arrow_fn(self):
+        """TypeScript fixture must contain 'arrowFn'."""
+        content = self._read_ts_fixture()
+        assert "arrowFn" in content

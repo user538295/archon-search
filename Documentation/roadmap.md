@@ -64,7 +64,7 @@ Ordered as in the backlog. Items 1 and 8 are shipped (A2 + C2). Remaining items 
 - Chunk-level enrichment (heading ancestry, section path, page numbers, code-symbol context):
   - **C3a — Markdown structural enrichment** (`_heading`, `_section_path`): ✓ **shipped**. See Status Snapshot above.
   - **C3b — Page number extraction** (`_page_start`, `_page_end`): brief `Backlog/C3b-page-number-extraction-brief.md`, plan `Backlog/C3b-page-number-extraction-plan.md`. C3a blocker resolved.
-  - **C3c — Code symbol context** (`_symbol_subtype`, `_containing_function`, `_containing_class`, `_module_path`): brief `Backlog/C3c-code-symbol-context-brief.md`. Plan not yet drafted. C3a blocker resolved.
+  - **C3c — Code symbol context** (`_symbol_subtype`, `_containing_function`, `_containing_class`, `_module_path`): brief `Backlog/C3c-code-symbol-context-brief.md`, plan `Backlog/C3c-code-symbol-context-plan.md`. **In progress** (C3a blocker resolved).
 - Export / import / backup / restore APIs.
 - Schema migration strategy that does not require full re-ingest.
 
@@ -82,6 +82,7 @@ Ordered as in the backlog. Items 1 and 8 are shipped (A2 + C2). Remaining items 
 - Python and TypeScript SDKs.
 - Admin / debug UI (only after explain APIs stabilise).
 - Per-collection access-control policies (after namespaces + auth).
+- **C8 — Extended setup wizard with optional feature selection.** The current wizard asks only two questions (profile + confirm). Ten optional features — including `[code]` tree-sitter enrichment, `[multilingual]` language detection, reranker toggle, telemetry, filesystem watcher, routing strategy, and the planned HyDE extra — require manual config editing or knowing undocumented CLI flags. C8 adds an interactive feature-selection step to the wizard so users can enable any optional feature at install time, including automatic `pip install archon-search[<extra>]` invocation where needed. Investigation and gap analysis: `Backlog/C8-wizard-optional-features-investigation.md`.
 
 ## Priority 5 — Advanced
 

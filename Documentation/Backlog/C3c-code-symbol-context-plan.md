@@ -295,7 +295,7 @@ code = [
 - **Checkpoint**: `python -c "import ast; ast.parse(open('tests/fixtures/code/python/sample.py').read()); print('OK')"`
 
 #### Task 4.2 — Create `tests/fixtures/code/typescript/sample.ts`
-- [ ] **File**: `tests/fixtures/code/typescript/sample.ts`
+- [x] **File**: `tests/fixtures/code/typescript/sample.ts`
 - **Depends on**: nothing
 - **Description**:
   - Content:
