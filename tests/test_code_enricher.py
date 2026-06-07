@@ -231,3 +231,46 @@ class TestGrammarRegistry:
         second = ce._get_grammar(".py")
         # Should return cached value without re-computing
         assert second is first
+
+
+# ---------------------------------------------------------------------------
+# Task 4.1 — Python fixture contracts
+# ---------------------------------------------------------------------------
+
+
+class TestFixtureContracts:
+    """Contracts that the fixture files must satisfy."""
+
+    PYTHON_FIXTURE = "tests/fixtures/code/python/sample.py"
+
+    def _read_python_fixture(self):
+        from pathlib import Path
+
+        return Path(self.PYTHON_FIXTURE).read_text()
+
+    def test_python_fixture_has_outer_class(self):
+        """Python fixture must contain 'class Outer'."""
+        content = self._read_python_fixture()
+        assert "class Outer" in content
+
+    def test_python_fixture_has_nested_inner(self):
+        """Python fixture must contain 'class Inner'."""
+        content = self._read_python_fixture()
+        assert "class Inner" in content
+
+    def test_python_fixture_has_decorated_fn(self):
+        """Python fixture must contain '@some_decorator'."""
+        content = self._read_python_fixture()
+        assert "@some_decorator" in content
+
+    def test_python_fixture_has_top_fn(self):
+        """Python fixture must contain 'def top_fn'."""
+        content = self._read_python_fixture()
+        assert "def top_fn" in content
+
+    def test_python_fixture_is_valid_python(self):
+        """Python fixture must be valid Python (ast.parse must not raise)."""
+        import ast
+
+        content = self._read_python_fixture()
+        ast.parse(content)  # raises SyntaxError if invalid

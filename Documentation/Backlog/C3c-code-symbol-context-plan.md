@@ -271,7 +271,7 @@ code = [
 > **Releasable**: after Task 4.2; fixtures are available for all scope builder tests.
 
 #### Task 4.1 — Create `tests/fixtures/code/python/sample.py`
-- [ ] **File**: `tests/fixtures/code/python/sample.py`
+- [x] **File**: `tests/fixtures/code/python/sample.py`
 - **Depends on**: nothing
 - **Description**:
   - Content (exact layout required for deterministic offset-based tests):
