@@ -501,7 +501,7 @@ code = [
 - **Checkpoint**: `uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py -v`
 
 #### Task 8.2 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, Architecture docs, `CLAUDE.md`, `roadmap.md`, backlog briefs, `BREAKING.md`) and update every file whose content is affected by C3c. Mandatory updates:
