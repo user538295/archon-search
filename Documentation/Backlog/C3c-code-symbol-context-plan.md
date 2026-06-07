@@ -185,7 +185,7 @@ code = [
   - Checkpoint: `uv run pytest tests/test_code_enricher_deps.py -v`
 
 #### Task 1.2 — Define `ScopeEntry`, `ScopeTable`, `CODE_EXTENSIONS` in `code_enricher.py`
-- [ ] **File**: `archon_search/code_enricher.py` (new file)
+- [x] **File**: `archon_search/code_enricher.py` (new file)
 - **Depends on**: nothing
 - **Description**:
   - `ScopeEntry = namedtuple("ScopeEntry", ["start", "end", "symbol_type", "fn_name", "class_name"])` where `start`/`end` are `int`, `symbol_type` is one of `"function"`, `"method"`, `"class"`, `"module"`, and name fields are `str`
