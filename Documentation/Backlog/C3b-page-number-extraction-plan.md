@@ -283,7 +283,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_enricher.py -k excise_markers -v`
 
 #### Task 2.4 — `preprocess` entry point for docling sources
-- [ ] **File**: `archon_search/enricher.py`
+- [x] **File**: `archon_search/enricher.py`
 - **Depends on**: Task 2.1, Task 2.2, Task 2.3
 - **Description**:
   - Add `MarkdownEnricher.preprocess(self, text: str) -> tuple[str, list[tuple[int, int]]]` as a NEW method (distinct from C3a's `prepare(text) -> HeadingTable`; both methods coexist on the class — see "Enricher composition contract").

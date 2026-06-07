@@ -323,6 +323,29 @@ class MarkdownEnricher:
         """
         return text.replace(PAGE_BREAK_MARKER, "")
 
+    def preprocess(self, text: str) -> tuple[str, list[tuple[int, int]]]:
+        """Pre-chunking entry point for docling-parsed sources.
+
+        Distinct from :meth:`prepare` (which scans headings for text-format
+        sources). Both methods coexist on the class; the pipeline calls
+        ``preprocess`` for docling sources and ``prepare`` for text-format
+        sources.
+
+        Steps:
+
+        1. Build the pre-removal page table via :meth:`_extract_page_breaks`.
+        2. Transform to post-removal coordinates via :meth:`_transform_page_table`.
+        3. Excise markers via :meth:`_excise_markers`.
+        4. Return ``(cleaned_text, post_removal_table)``.
+
+        The page table is **returned**, not stored on ``self`` — the pipeline
+        carries it as a local variable through the chunk loop.
+        """
+        pre_table = self._extract_page_breaks(text)
+        post_table = self._transform_page_table(pre_table, PAGE_BREAK_MARKER_LEN)
+        cleaned = self._excise_markers(text)
+        return cleaned, post_table
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

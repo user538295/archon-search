@@ -532,3 +532,55 @@ class TestExciseMarkers:
         text = M + "B" + M
         result = self._enrich()._excise_markers(text)
         assert result == "B"
+
+
+# ===========================================================================
+# Task 2.4 — preprocess
+# ===========================================================================
+
+
+class TestPreprocess:
+    """Tests for MarkdownEnricher.preprocess — pre-chunking entry point for docling sources."""
+
+    def _enrich(self) -> MarkdownEnricher:
+        return MarkdownEnricher()
+
+    def test_preprocess_returns_cleaned_text_and_table(self):
+        """Standard case: three pages → cleaned text with correct post-removal table."""
+        text = "alpha" + M + "beta" + M + "gamma"
+        cleaned, table = self._enrich().preprocess(text)
+        assert cleaned == "alphabetagamma"
+        # post-removal offsets: page 1 at 0, page 2 at len("alpha")=5,
+        # page 3 at len("alpha") + len("beta")=5+4=9
+        assert table == [(0, 1), (5, 2), (9, 3)]
+
+    def test_preprocess_no_markers(self):
+        """No markers: text unchanged, table is seed-only [(0, 1)]."""
+        text = "plain text without markers"
+        cleaned, table = self._enrich().preprocess(text)
+        assert cleaned == text
+        assert table == [(0, 1)]
+
+    def test_preprocess_leading_marker(self):
+        """Text starts with marker: cleaned text has no leading marker, table starts at page 2."""
+        text = M + "beta"
+        cleaned, table = self._enrich().preprocess(text)
+        assert cleaned == "beta"
+        assert table == [(0, 2)]
+
+    def test_preprocess_table_returned_not_stored_on_self(self):
+        """The page table is returned, not stored as instance state."""
+        enricher = self._enrich()
+        text = "alpha" + M + "beta"
+        _, table = enricher.preprocess(text)
+        # Should not have a _page_table attribute on the enricher
+        assert not hasattr(enricher, "_page_table")
+        # The table should be in the return value, not on the instance
+        assert table == [(0, 1), (5, 2)]
+
+    def test_preprocess_does_not_mutate_input(self):
+        """preprocess must not mutate the input text string."""
+        text = "alpha" + M + "beta"
+        original = text
+        self._enrich().preprocess(text)
+        assert text == original
