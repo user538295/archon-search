@@ -381,7 +381,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
   - Checkpoint: `uv run pytest tests/test_routes_search.py -k "hyde" -x`
 
 #### Task 3.2 — `ExplainRequest` gains `hyde: bool`; `ExplainResponse` gains `hyde_applied: bool`
-- [ ] **File**: `archon_search/server/routes_explain.py`
+- [x] **File**: `archon_search/server/routes_explain.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `hyde: bool = False` to `ExplainRequest`.

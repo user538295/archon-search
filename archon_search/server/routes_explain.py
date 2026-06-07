@@ -176,6 +176,7 @@ class ExplainRequest(BaseModel):
     collections: list[str] | None = None
     top_k: int = Field(default=5, ge=1, le=100)
     rerank: bool = True
+    hyde: bool = False
 
     @field_validator("query")
     @classmethod
@@ -238,6 +239,7 @@ class ExplainResponse(BaseModel):
     near_misses: list[ExplainNearMiss]
     excluded_collections: list[ExcludedCollectionSchema] = Field(default_factory=list)
     embedding_model: str = ""
+    hyde_applied: bool = False
     stage_timings_ms: dict[str, float] | None = None
 
     @classmethod
@@ -249,6 +251,7 @@ class ExplainResponse(BaseModel):
         routing: RoutingExplain | None,
         result: ExplainPipelineResult,
         embedding_model: str = "",
+        hyde_applied: bool = False,
         stage_timings_ms: dict[str, float] | None = None,
     ) -> ExplainResponse:
         return cls(
@@ -263,6 +266,7 @@ class ExplainResponse(BaseModel):
                 for e in result.excluded_collections
             ],
             embedding_model=embedding_model,
+            hyde_applied=hyde_applied,
             stage_timings_ms=stage_timings_ms,
         )
 

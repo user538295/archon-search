@@ -1,4 +1,4 @@
-"""Tests for /explain endpoint per-collection embedder dispatch (Task 7.3)."""
+"""Tests for /explain endpoint per-collection embedder dispatch (Task 7.3) and HyDE schema fields (Task 3.2)."""
 from __future__ import annotations
 
 import os
@@ -12,6 +12,7 @@ from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.pipeline import ExplainPipelineResult
 from archon_search.server.app import create_app
+from archon_search.server.routes_explain import ExplainRequest, ExplainResponse
 
 
 def _make_app(tmp_path: Path) -> tuple:
@@ -133,3 +134,67 @@ def test_explain_routing_path_uses_chosen_collection_model(tmp_path: Path) -> No
     cache.get_or_load.assert_awaited_once_with("model-X")
     data = response.json()
     assert data["embedding_model"] == "model-X"
+
+
+# ---------------------------------------------------------------------------
+# Task 3.2 — HyDE schema fields on ExplainRequest / ExplainResponse
+# ---------------------------------------------------------------------------
+
+
+def test_explain_request_hyde_default_false() -> None:
+    """ExplainRequest without hyde defaults to False."""
+    req = ExplainRequest(query="test", collection="col")
+    assert req.hyde is False
+
+
+def test_explain_request_accepts_hyde_true() -> None:
+    """ExplainRequest with hyde=True validates without error."""
+    req = ExplainRequest(query="test", collection="col", hyde=True)
+    assert req.hyde is True
+
+
+def test_explain_response_has_hyde_applied() -> None:
+    """ExplainResponse defaults hyde_applied to False."""
+    from archon_search.pipeline import ExplainPipelineResult as EPR
+
+    result = EPR(top_results=[], near_misses=[], acl_filtered=False)
+    resp = ExplainResponse.from_pipeline_result(
+        rerank=True,
+        collection="col",
+        routing=None,
+        result=result,
+    )
+    assert resp.hyde_applied is False
+
+
+def test_explain_response_hyde_applied_true() -> None:
+    """ExplainResponse.from_pipeline_result accepts hyde_applied=True."""
+    from archon_search.pipeline import ExplainPipelineResult as EPR
+
+    result = EPR(top_results=[], near_misses=[], acl_filtered=False)
+    resp = ExplainResponse.from_pipeline_result(
+        rerank=True,
+        collection="col",
+        routing=None,
+        result=result,
+        hyde_applied=True,
+    )
+    assert resp.hyde_applied is True
+
+
+def test_explain_endpoint_response_includes_hyde_applied(tmp_path: Path) -> None:
+    """POST /explain response body includes hyde_applied field."""
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.explain = AsyncMock(return_value=_make_explain_result())
+    cache = _make_embedder_cache_mock()
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    response = client.post("/explain", json={"collection": "col", "query": "test"})
+    assert response.status_code == 200
+    data = response.json()
+    assert "hyde_applied" in data
+    assert data["hyde_applied"] is False
