@@ -378,7 +378,7 @@ code = [
   - Checkpoint: `uv run pytest tests/test_code_enricher.py::TestCodeEnricherPrepare -v`
 
 #### Task 6.2 — Implement `CodeEnricher.enrich_chunk()`
-- [ ] **File**: `archon_search/code_enricher.py`
+- [x] **File**: `archon_search/code_enricher.py`
 - **Depends on**: Task 6.1
 - **Description**:
   - `def enrich_chunk(self, chunk: "ChunkRecord", scope_table: ScopeTable) -> dict[str, str]`:

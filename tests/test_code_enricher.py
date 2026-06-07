@@ -638,3 +638,382 @@ class TestCodeEnricherPrepare:
             r for r in caplog.records if r.levelno == logging.WARNING
         ]
         assert warnings == [], f"Unexpected WARNINGs: {[r.message for r in warnings]}"
+
+
+# ---------------------------------------------------------------------------
+# Task 6.2 — _resolve_scope, _lang_label, enrich_chunk
+# ---------------------------------------------------------------------------
+
+
+class TestResolveScope:
+    """Tests for _resolve_scope(offset, scope_table) -> ScopeEntry | None.
+
+    All tests use synthetic scope tables — no fixture file dependency.
+    """
+
+    def _make_entry(self, start, end, symbol_type="function", fn_name="fn", class_name=""):
+        from archon_search.code_enricher import ScopeEntry
+
+        return ScopeEntry(
+            start=start,
+            end=end,
+            symbol_type=symbol_type,
+            fn_name=fn_name,
+            class_name=class_name,
+        )
+
+    def _resolve(self, offset, scope_table):
+        from archon_search.code_enricher import _resolve_scope
+
+        return _resolve_scope(offset, scope_table)
+
+    def test_offset_inside_scope(self):
+        """Offset 25 inside scope [10, 50) must return that entry."""
+        entry = self._make_entry(10, 50)
+        assert self._resolve(25, [entry]) is entry
+
+    def test_offset_exactly_at_start(self):
+        """Offset exactly at start (10) must return the entry (inclusive)."""
+        entry = self._make_entry(10, 50)
+        assert self._resolve(10, [entry]) is entry
+
+    def test_offset_at_end_exclusive_no_next_scope(self):
+        """Offset at end boundary (50) for a single scope [10, 50) must return None."""
+        entry = self._make_entry(10, 50)
+        assert self._resolve(50, [entry]) is None
+
+    def test_offset_at_end_exclusive_with_adjacent_scope(self):
+        """Offset 50 must match the second scope [50, 90), not the first [10, 50)."""
+        e1 = self._make_entry(10, 50, fn_name="first")
+        e2 = self._make_entry(50, 90, fn_name="second")
+        result = self._resolve(50, [e1, e2])
+        assert result is e2
+
+    def test_offset_before_all_scopes(self):
+        """Offset 0 before first scope starting at 10 must return None."""
+        entry = self._make_entry(10, 50)
+        assert self._resolve(0, [entry]) is None
+
+    def test_offset_after_all_scopes(self):
+        """Offset 100 after last scope ending at 80 must return None."""
+        entry = self._make_entry(10, 80)
+        assert self._resolve(100, [entry]) is None
+
+    def test_nested_scopes_innermost_wins(self):
+        """When outer [0,100) and inner [20,60) both contain offset 30, inner wins."""
+        from archon_search.code_enricher import ScopeEntry
+
+        outer = ScopeEntry(0, 100, "class", "", "MyClass")
+        inner = ScopeEntry(20, 60, "method", "myMethod", "MyClass")
+        # Sorted (start ASC, end DESC): outer at idx 0, inner at idx 1
+        scope_table = sorted([outer, inner], key=lambda e: (e.start, -e.end))
+        result = self._resolve(30, scope_table)
+        assert result is inner
+
+    def test_module_gap_between_scopes(self):
+        """Offset 30 in the gap between [0,20) and [40,60) must return None."""
+        e1 = self._make_entry(0, 20, fn_name="first")
+        e2 = self._make_entry(40, 60, fn_name="second")
+        assert self._resolve(30, [e1, e2]) is None
+
+    def test_single_entry_scope_table(self):
+        """Degenerate case: single entry; offset inside it returns it."""
+        entry = self._make_entry(5, 100)
+        assert self._resolve(50, [entry]) is entry
+
+    def test_same_start_tiebreaker(self):
+        """Two scopes with same start: inner (smallest end) must be returned.
+
+        ScopeEntry(start=10, end=100, class) and ScopeEntry(start=10, end=50, method).
+        For offset 25, the method (end=50) should be returned (innermost scope).
+        Sorted (start ASC, end DESC): class first, method second.
+        Backward walk hits method first.
+        """
+        from archon_search.code_enricher import ScopeEntry
+
+        outer = ScopeEntry(10, 100, "class", "", "MyClass")
+        inner = ScopeEntry(10, 50, "method", "myMethod", "MyClass")
+        # Correct sort order: (10, -100), (10, -50) → outer first, inner second
+        scope_table = sorted([outer, inner], key=lambda e: (e.start, -e.end))
+        assert scope_table[0] is outer
+        assert scope_table[1] is inner
+        result = self._resolve(25, scope_table)
+        assert result is inner
+
+
+class TestLangLabel:
+    """Tests for _lang_label(ext) -> str."""
+
+    def _label(self, ext):
+        from archon_search.code_enricher import _lang_label
+
+        return _lang_label(ext)
+
+    def test_lang_label_python(self):
+        assert self._label(".py") == "python"
+
+    def test_lang_label_typescript(self):
+        assert self._label(".ts") == "typescript"
+
+    def test_lang_label_javascript(self):
+        assert self._label(".js") == "javascript"
+
+    def test_lang_label_go(self):
+        assert self._label(".go") == "go"
+
+    def test_lang_label_rust(self):
+        assert self._label(".rs") == "rust"
+
+    def test_lang_label_java(self):
+        assert self._label(".java") == "java"
+
+    def test_lang_label_bash(self):
+        """sh extension must map to 'bash', not 'sh'."""
+        assert self._label(".sh") == "bash"
+
+    def test_lang_label_unknown_ext(self):
+        """Unknown extension must raise KeyError (documented behavior)."""
+        with pytest.raises(KeyError):
+            self._label(".xyz")
+
+
+class TestEnrichChunk:
+    """Tests for CodeEnricher.enrich_chunk().
+
+    Offsets are computed dynamically from fixture content to stay resilient
+    to fixture edits.
+    """
+
+    PYTHON_FIXTURE_PATH = "tests/fixtures/code/python/sample.py"
+    TS_FIXTURE_PATH = "tests/fixtures/code/typescript/sample.ts"
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        from pathlib import Path
+
+        import archon_search.code_enricher as ce
+
+        # Clear grammar state
+        monkeypatch.setattr(ce, "_GRAMMAR_CACHE", {})
+        monkeypatch.setattr(ce, "_GRAMMAR_LOGGED", set())
+        monkeypatch.setattr(ce, "_parse_failure_count", {})
+
+        self.py_source = Path(self.PYTHON_FIXTURE_PATH).read_text()
+        self.ts_source = Path(self.TS_FIXTURE_PATH).read_text()
+
+    def _make_chunk(self, start, end=-1):
+        """Create a minimal ChunkRecord with the given start/end offsets."""
+        from archon_search._types import ChunkRecord
+
+        c = ChunkRecord(
+            doc_id="test",
+            chunk_id="test-000000",
+            text="",
+            vector=[],
+            source_path="/repo/pkg/mod.py",
+            indexed_at="2024-01-01T00:00:00.000000Z",
+            start_offset=start,
+            end_offset=end if end >= 0 else start + 1,
+        )
+        return c
+
+    def _prepare_py_enricher(self):
+        from pathlib import Path
+
+        from archon_search.code_enricher import CodeEnricher, _get_grammar
+
+        if _get_grammar(".py") is None:
+            pytest.skip("tree-sitter-python grammar not installed")
+
+        enricher = CodeEnricher()
+        scope_table = enricher.prepare(
+            self.py_source, ".py", Path("/repo/pkg/mod.py"), Path("/repo")
+        )
+        return enricher, scope_table
+
+    def _prepare_ts_enricher(self):
+        from pathlib import Path
+
+        from archon_search.code_enricher import CodeEnricher, _get_grammar
+
+        if _get_grammar(".ts") is None:
+            pytest.skip("tree-sitter-typescript grammar not installed")
+
+        enricher = CodeEnricher()
+        scope_table = enricher.prepare(
+            self.ts_source, ".ts", Path("/repo/pkg/mod.ts"), Path("/repo")
+        )
+        return enricher, scope_table
+
+    def test_enrich_top_fn_chunk(self):
+        """Chunk inside top_fn body must have symbol_type='function', fn_name='top_fn'."""
+        enricher, scope_table = self._prepare_py_enricher()
+        body_offset = self.py_source.index("return 42")
+        chunk = self._make_chunk(body_offset)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert result["_symbol_type"] == "function"
+        assert result["_containing_function"] == "top_fn"
+        assert result["_containing_class"] == ""
+
+    def test_enrich_outer_method_chunk(self):
+        """Chunk inside outer_method must be method with class_name='Outer'."""
+        enricher, scope_table = self._prepare_py_enricher()
+        body_offset = self.py_source.index("return self.class_attr")
+        chunk = self._make_chunk(body_offset)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert result["_symbol_type"] == "method"
+        assert result["_containing_function"] == "outer_method"
+        assert result["_containing_class"] == "Outer"
+
+    def test_enrich_class_body_chunk(self):
+        """Chunk in Outer class body (before first method) must have symbol_type='class'."""
+        enricher, scope_table = self._prepare_py_enricher()
+        # class_attr is defined between 'class Outer:' and 'def outer_method'
+        body_offset = self.py_source.index('class_attr = "outer"')
+        chunk = self._make_chunk(body_offset)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert result["_symbol_type"] == "class"
+        assert result["_containing_class"] == "Outer"
+        assert result["_containing_function"] == ""
+
+    def test_enrich_module_level_chunk(self):
+        """Chunk in module-level gap (non-empty scope_table) must have symbol_type='module'."""
+        enricher, scope_table = self._prepare_py_enricher()
+        # MODULE_CONSTANT is defined after the Outer class — module-level code
+        body_offset = self.py_source.index("MODULE_CONSTANT")
+        chunk = self._make_chunk(body_offset)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert result["_symbol_type"] == "module"
+        assert result["_containing_function"] == ""
+        assert result["_containing_class"] == ""
+        # Must return all 5 keys (distinguishes from empty-scope-table path)
+        assert len(result) == 5
+
+    def test_enrich_inner_method_innermost_class_wins(self):
+        """Chunk in Inner.inner_method must have class_name='Inner'."""
+        enricher, scope_table = self._prepare_py_enricher()
+        body_offset = self.py_source.index('return "inner"')
+        chunk = self._make_chunk(body_offset)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert result["_containing_class"] == "Inner"
+        assert result["_containing_function"] == "inner_method"
+
+    def test_enrich_decorator_chunk(self):
+        """Chunk at decorator line must be attributed to decorated_fn."""
+        enricher, scope_table = self._prepare_py_enricher()
+        decorator_offset = self.py_source.index("@some_decorator\ndef decorated_fn")
+        chunk = self._make_chunk(decorator_offset)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert result["_containing_function"] == "decorated_fn"
+
+    def test_enrich_ts_arrow_fn(self):
+        """Chunk inside arrow function body must fall through to module-level scope."""
+        enricher, scope_table = self._prepare_ts_enricher()
+        # 'console.log' is inside the arrow function body — falls to module-level
+        body_offset = self.ts_source.index('console.log("arrow")')
+        chunk = self._make_chunk(body_offset)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        # Arrow functions are not captured; chunk resolves to module-level
+        assert result["_symbol_type"] == "module"
+
+    def test_enrich_module_path_present(self):
+        """Every chunk result must include a '_module_path' key."""
+        enricher, scope_table = self._prepare_py_enricher()
+        body_offset = self.py_source.index("return 42")
+        chunk = self._make_chunk(body_offset)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert "_module_path" in result
+        assert result["_module_path"] == "pkg.mod"
+
+    def test_enrich_symbol_subtype_python(self):
+        """Python chunk must have _symbol_subtype matching 'python-{symbol_type}'."""
+        enricher, scope_table = self._prepare_py_enricher()
+        body_offset = self.py_source.index("return 42")
+        chunk = self._make_chunk(body_offset)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert result["_symbol_subtype"] == f"python-{result['_symbol_type']}"
+
+    def test_enrich_symbol_subtype_typescript(self):
+        """TypeScript chunk must have _symbol_subtype starting with 'typescript-'."""
+        enricher, scope_table = self._prepare_ts_enricher()
+        body_offset = self.ts_source.index("return x * 2")
+        chunk = self._make_chunk(body_offset)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert result["_symbol_subtype"].startswith("typescript-")
+
+    def test_enrich_empty_scope_table_returns_module_path_only(self, monkeypatch):
+        """When scope_table is empty (e.g. missing grammar), only _module_path is returned."""
+        from pathlib import Path
+
+        import archon_search.code_enricher as ce
+        from archon_search.code_enricher import CodeEnricher
+
+        # Force grammar to return None so prepare() returns []
+        monkeypatch.setattr(ce, "_get_grammar", lambda ext: None)
+
+        enricher = CodeEnricher()
+        scope_table = enricher.prepare(
+            self.py_source, ".py", Path("/repo/pkg/mod.py"), Path("/repo")
+        )
+        assert scope_table == []
+        chunk = self._make_chunk(0)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert "_module_path" in result
+        assert "_symbol_type" not in result
+        assert result["_module_path"] == "pkg.mod"
+
+    def test_enrich_empty_scope_table_no_module_path_returns_empty_dict(self, monkeypatch):
+        """When both scope_table and _module_path_value are empty, {} is returned."""
+        from pathlib import Path
+
+        import archon_search.code_enricher as ce
+        from archon_search.code_enricher import CodeEnricher
+
+        # Force grammar to return None (prepare returns []) and module path is empty
+        # (root __init__.py with collection_root produces empty module path)
+        monkeypatch.setattr(ce, "_get_grammar", lambda ext: None)
+
+        enricher = CodeEnricher()
+        # Using root __init__.py gives empty _module_path_value (see test_init_at_root)
+        scope_table = enricher.prepare(
+            "# root init\n",
+            ".py",
+            Path("/repo/__init__.py"),
+            Path("/repo"),
+        )
+        assert scope_table == []
+        assert enricher._module_path_value == ""
+        chunk = self._make_chunk(0)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert result == {}
+
+    def test_enrich_chunk_negative_offset_treated_as_module_level(self):
+        """Chunk with start_offset=-1 must resolve to module-level (no exception)."""
+        enricher, scope_table = self._prepare_py_enricher()
+        assert len(scope_table) > 0  # ensure scope_table is non-empty
+        chunk = self._make_chunk(-1)
+        result = enricher.enrich_chunk(chunk, scope_table)
+        assert "_symbol_type" in result
+        assert result["_symbol_type"] == "module"
+
+    def test_enrich_chunk_unknown_ext_lang_label_fallback(self):
+        """When _ext is unknown, _lang_label raises KeyError and fallback ext.lstrip('.') is used."""
+        from pathlib import Path
+
+        import archon_search.code_enricher as ce
+        from archon_search.code_enricher import CodeEnricher, ScopeEntry
+
+        # Build an enricher with an unknown extension manually
+        enricher = CodeEnricher()
+        enricher._ext = ".xyz"
+        enricher._module_path_value = "pkg.mod"
+
+        # Provide a minimal non-empty scope table so enrich_chunk enters the resolve path
+        scope_table = [ScopeEntry(start=0, end=100, symbol_type="function", fn_name="foo", class_name="")]
+        chunk = self._make_chunk(10)
+        result = enricher.enrich_chunk(chunk, scope_table)
+
+        # Fallback: language = ".xyz".lstrip(".") = "xyz"
+        assert result["_symbol_subtype"] == "xyz-function"
+        assert result["_symbol_type"] == "function"
+        assert result["_containing_function"] == "foo"
