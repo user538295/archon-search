@@ -445,3 +445,196 @@ class TestBuildScopeTableTypeScript:
             e.fn_name == "arrowFn"
             for e in scope_table
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 6.1 — CodeEnricher.prepare()
+# ---------------------------------------------------------------------------
+
+
+class TestCodeEnricherPrepare:
+    """Tests for CodeEnricher.prepare()."""
+
+    PYTHON_SOURCE = None
+
+    @pytest.fixture(autouse=True)
+    def _load_python_source(self):
+        from pathlib import Path
+
+        TestCodeEnricherPrepare.PYTHON_SOURCE = Path(
+            "tests/fixtures/code/python/sample.py"
+        ).read_text()
+
+    @pytest.fixture(autouse=True)
+    def _clear_grammar_state(self, monkeypatch):
+        """Isolate grammar cache between tests."""
+        import archon_search.code_enricher as ce
+
+        monkeypatch.setattr(ce, "_GRAMMAR_CACHE", {})
+        monkeypatch.setattr(ce, "_GRAMMAR_LOGGED", set())
+        monkeypatch.setattr(ce, "_parse_failure_count", {})
+
+    def test_prepare_returns_scope_table_for_valid_python(self):
+        """Valid Python source with grammar available must return non-empty ScopeTable."""
+        from pathlib import Path
+
+        from archon_search.code_enricher import CodeEnricher, _get_grammar
+
+        if _get_grammar(".py") is None:
+            pytest.skip("tree-sitter-python grammar not installed")
+
+        enricher = CodeEnricher()
+        result = enricher.prepare(
+            self.PYTHON_SOURCE, ".py", Path("/repo/pkg/mod.py"), Path("/repo")
+        )
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+    def test_prepare_returns_empty_for_missing_grammar(self, monkeypatch):
+        """When grammar is unavailable, prepare() must return [] without raising."""
+        from pathlib import Path
+
+        import archon_search.code_enricher as ce
+        from archon_search.code_enricher import CodeEnricher
+
+        # Force _get_grammar to always return None
+        monkeypatch.setattr(ce, "_get_grammar", lambda ext: None)
+
+        enricher = CodeEnricher()
+        result = enricher.prepare(
+            self.PYTHON_SOURCE, ".py", Path("/repo/pkg/mod.py"), Path("/repo")
+        )
+        assert result == []
+
+    def test_prepare_returns_empty_on_parse_failure(self, monkeypatch):
+        """Catastrophic scope-builder failure must return [] (WARNING logged)."""
+        from pathlib import Path
+
+        import archon_search.code_enricher as ce
+        from archon_search.code_enricher import CodeEnricher, _get_grammar
+
+        if _get_grammar(".py") is None:
+            pytest.skip("tree-sitter-python grammar not installed")
+
+        monkeypatch.setattr(ce, "_build_scope_table", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("mock crash")))
+
+        enricher = CodeEnricher()
+        result = enricher.prepare(
+            self.PYTHON_SOURCE, ".py", Path("/repo/pkg/mod.py"), Path("/repo")
+        )
+        assert result == []
+
+    def test_prepare_sets_module_path(self):
+        """prepare() must store _module_path_value for consumption by enrich_chunk()."""
+        from pathlib import Path
+
+        from archon_search.code_enricher import CodeEnricher
+
+        enricher = CodeEnricher()
+        enricher.prepare(
+            self.PYTHON_SOURCE, ".py", Path("/repo/pkg/mod.py"), Path("/repo")
+        )
+        assert enricher._module_path_value == "pkg.mod"
+
+    def test_warning_logged_on_parse_failure(self, monkeypatch, caplog):
+        """A WARNING must be emitted when _build_scope_table raises."""
+        import logging
+        from pathlib import Path
+
+        import archon_search.code_enricher as ce
+        from archon_search.code_enricher import CodeEnricher, _get_grammar
+
+        if _get_grammar(".py") is None:
+            pytest.skip("tree-sitter-python grammar not installed")
+
+        monkeypatch.setattr(
+            ce, "_build_scope_table",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("crash")),
+        )
+
+        enricher = CodeEnricher()
+        with caplog.at_level(logging.WARNING, logger="archon_search.code_enricher"):
+            enricher.prepare(
+                self.PYTHON_SOURCE, ".py", Path("/repo/pkg/mod.py"), Path("/repo")
+            )
+
+        assert any(
+            r.levelno == logging.WARNING and "tree-sitter parse failed" in r.message
+            for r in caplog.records
+        )
+
+    def test_prepare_sets_ext(self, monkeypatch):
+        """prepare() must store _ext on the instance for use by enrich_chunk()."""
+        from pathlib import Path
+
+        import archon_search.code_enricher as ce
+        from archon_search.code_enricher import CodeEnricher
+
+        # Grammar not needed — _ext is set before the grammar check
+        monkeypatch.setattr(ce, "_get_grammar", lambda ext: None)
+
+        enricher = CodeEnricher()
+        enricher.prepare(
+            self.PYTHON_SOURCE, ".py", Path("/repo/pkg/mod.py"), Path("/repo")
+        )
+        assert enricher._ext == ".py"
+
+    def test_prepare_warning_cap_downgraded_to_debug_after_k10(self, monkeypatch, caplog):
+        """After K=10 parse failures for an extension, WARNINGs must be downgraded to DEBUG."""
+        import logging
+        from pathlib import Path
+
+        import archon_search.code_enricher as ce
+        from archon_search.code_enricher import CodeEnricher, _get_grammar
+
+        if _get_grammar(".py") is None:
+            pytest.skip("tree-sitter-python grammar not installed")
+
+        monkeypatch.setattr(
+            ce, "_build_scope_table",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("crash")),
+        )
+        # Pre-load the count to K=10 so the next call tips over the cap
+        monkeypatch.setattr(ce, "_parse_failure_count", {".py": 10})
+
+        enricher = CodeEnricher()
+        with caplog.at_level(logging.DEBUG, logger="archon_search.code_enricher"):
+            enricher.prepare(
+                self.PYTHON_SOURCE, ".py", Path("/repo/pkg/mod.py"), Path("/repo")
+            )
+
+        # At count=11 (one above cap), must be DEBUG not WARNING
+        assert not any(
+            r.levelno == logging.WARNING and "tree-sitter parse failed" in r.message
+            for r in caplog.records
+        ), "Expected WARNING to be downgraded to DEBUG after K=10"
+        assert any(
+            r.levelno == logging.DEBUG and "tree-sitter parse failed" in r.message
+            for r in caplog.records
+        ), "Expected DEBUG log for failure after K=10 cap"
+
+    def test_prepare_handles_tree_sitter_error_nodes(self, caplog):
+        """Broken syntax (ERROR nodes) must not abort scope-table construction or log WARNING."""
+        import logging
+        from pathlib import Path
+
+        from archon_search.code_enricher import CodeEnricher, _get_grammar
+
+        if _get_grammar(".py") is None:
+            pytest.skip("tree-sitter-python grammar not installed")
+
+        broken_source = "def foo(x,: pass\ndef bar(): return 1"
+        enricher = CodeEnricher()
+
+        with caplog.at_level(logging.DEBUG, logger="archon_search.code_enricher"):
+            result = enricher.prepare(
+                broken_source, ".py", Path("/repo/pkg/mod.py"), Path("/repo")
+            )
+
+        # Must not raise and must return a list
+        assert isinstance(result, list)
+        # No WARNING must be emitted — ERROR nodes are handled gracefully, not as a crash
+        warnings = [
+            r for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert warnings == [], f"Unexpected WARNINGs: {[r.message for r in warnings]}"

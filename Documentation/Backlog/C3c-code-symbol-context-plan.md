@@ -355,7 +355,7 @@ code = [
 > **Releasable**: after Task 6.2; the full enricher is callable end-to-end.
 
 #### Task 6.1 — Implement `CodeEnricher.prepare()`
-- [ ] **File**: `archon_search/code_enricher.py`
+- [x] **File**: `archon_search/code_enricher.py`
 - **Depends on**: Task 2.1, Task 3.1, Task 5.1
 - **Description**:
   - Class `CodeEnricher` with instance variable `_module_path_value: str = ""`
