@@ -525,8 +525,9 @@ class SearchPipeline:
         *,
         embedder: Embedder,
         filters: SearchFilters | None = None,
+        query_vector: list[float] | None = None,
     ) -> SearchPipelineResult:
-        vector = await embedder.embed_one(query)
+        vector = list(query_vector) if query_vector is not None else await embedder.embed_one(query)
         candidates = await self.store.hybrid_search(
             collection, vector, query, top_k=self._top_k_retrieve, filters=filters
         )

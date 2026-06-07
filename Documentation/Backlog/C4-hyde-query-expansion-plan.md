@@ -315,7 +315,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
 > **Releasable**: after Task 2.3 — all three pipeline methods accept `query_vector` with no behaviour change when `None`.
 
 #### Task 2.1 — `SearchPipeline.search()` gains `query_vector`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: nothing (pure signature extension; no callers change yet)
 - **Description**:
   - Add `query_vector: list[float] | None = None` as a keyword-only parameter to `search()` (after `filters`).

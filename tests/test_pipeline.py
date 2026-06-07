@@ -1101,6 +1101,88 @@ def test_pipeline_stores_fanout_params() -> None:
     assert pipeline._fanout_timeout_seconds == 2.5
 
 
+# ===========================================================================
+# Task 2.1 — search() query_vector parameter
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_search_uses_provided_query_vector() -> None:
+    """search() uses caller-provided query_vector; embed_one must NOT be called."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline, SearchPipelineResult
+    from archon_search._types import SearchResult
+
+    captured_vector: list[list[float]] = []
+
+    class StubStore:
+        async def hybrid_search(self, collection: str, vector: list[float], query: str, **kw: Any) -> list[SearchResult]:  # type: ignore[override]
+            captured_vector.append(list(vector))
+            return []
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    provided_vector = [0.9, 0.8, 0.7, 0.6]
+
+    with patch.object(pipeline._global_embedder, "embed_one", new_callable=AsyncMock) as mock_embed:
+        result = await pipeline.search(
+            "some query",
+            "test-col",
+            embedder=pipeline._global_embedder,
+            query_vector=provided_vector,
+        )
+
+    mock_embed.assert_not_called()
+    assert len(captured_vector) == 1
+    assert captured_vector[0] == provided_vector
+    assert isinstance(result, SearchPipelineResult)
+
+
+@pytest.mark.asyncio
+async def test_search_embeds_when_no_query_vector() -> None:
+    """search() calls embed_one when query_vector is None (pre-C4 behaviour)."""
+    from unittest.mock import AsyncMock, patch
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    class StubStore:
+        async def hybrid_search(self, *a: Any, **kw: Any) -> list[Any]:
+            return []
+
+    pipeline = SearchPipeline(
+        store=StubStore(),  # type: ignore[arg-type]
+        embedder=make_embedder(),
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    with patch.object(pipeline._global_embedder, "embed_one", new_callable=AsyncMock, return_value=[0.1, 0.2, 0.3, 0.4]) as mock_embed:
+        await pipeline.search(
+            "some query",
+            "test-col",
+            embedder=pipeline._global_embedder,
+            query_vector=None,
+        )
+
+    mock_embed.assert_called_once_with("some query")
+
+
 def test_pipeline_default_fanout_params_match_config() -> None:
     """Constructor fan-out defaults must stay in sync with SearchConfig defaults."""
     from unittest.mock import MagicMock
