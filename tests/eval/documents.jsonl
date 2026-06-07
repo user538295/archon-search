@@ -18,6 +18,9 @@
 {"doc_id": "code-018", "collection": "code", "relative_path": "code/middleware_chain.py"}
 {"doc_id": "code-019", "collection": "code", "relative_path": "code/rolling_window.py"}
 {"doc_id": "code-020", "collection": "code", "relative_path": "code/ttl_cache.py"}
+{"doc_id": "code-021", "collection": "code", "relative_path": "code/symbol_enricher.py"}
+{"doc_id": "code-022", "collection": "code", "relative_path": "code/ast_walker.py"}
+{"doc_id": "code-023", "collection": "code", "relative_path": "code/module_resolver.py"}
 {"doc_id": "docs-001", "collection": "docs", "relative_path": "docs/architecture_overview.md"}
 {"doc_id": "docs-002", "collection": "docs", "relative_path": "docs/getting_started.md"}
 {"doc_id": "docs-003", "collection": "docs", "relative_path": "docs/configuration_reference.md"}

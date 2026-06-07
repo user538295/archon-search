@@ -487,7 +487,7 @@ code = [
 ### Phase 8 — Eval queries & final verification
 
 #### Task 8.1 — Add code corpus eval queries + labels
-- [ ] **File**: `tests/eval/queries.jsonl`, `tests/eval/labels.jsonl`, `tests/eval/corpus/`
+- [x] **File**: `tests/eval/queries.jsonl`, `tests/eval/labels.jsonl`, `tests/eval/corpus/`
 - **Depends on**: Task 7.1
 - **Description**:
   - Add 2–3 code corpus documents to `tests/eval/corpus/` (small `.py` files with distinct symbols)
