@@ -272,6 +272,48 @@ class MarkdownEnricher:
             pos = idx + PAGE_BREAK_MARKER_LEN
         return result
 
+    @staticmethod
+    def _transform_page_table(
+        pre_table: list[tuple[int, int]], marker_len: int
+    ) -> list[tuple[int, int]]:
+        """Convert pre-removal offsets into post-removal coordinates.
+
+        Pure function. For each marker entry, subtract
+        ``n * marker_len`` from its pre-removal offset, where ``n`` is
+        the 0-based index of that marker in the ordered marker sequence
+        (i.e., the count of markers strictly before it).
+
+        In the no-leading-marker case the table starts with a synthetic
+        ``(0, 1)`` seed that is not a marker — it passes through unchanged
+        and the first real marker entry has ``n = 0``.
+
+        In the leading-marker case there is no seed; the first entry IS
+        marker 0 (so ``offset - 0 * marker_len = offset``).
+
+        Returns a new sorted list; does not mutate *pre_table*.
+        """
+        if not pre_table:
+            return []
+
+        result: list[tuple[int, int]] = []
+        # Detect whether the first entry is the synthetic (0, 1) seed or a real marker.
+        # Seed rule: page == 1 and offset == 0 AND the table has more than one entry
+        # OR there is exactly one entry (0, 1) with no markers at all.
+        has_seed = pre_table[0] == (0, 1)
+        marker_index = 0
+
+        for i, (offset, page) in enumerate(pre_table):
+            if i == 0 and has_seed:
+                # Synthetic seed — not a marker, pass through unchanged.
+                result.append((offset, page))
+            else:
+                # Real marker entry: subtract accumulated marker characters.
+                new_offset = offset - marker_index * marker_len
+                result.append((new_offset, page))
+                marker_index += 1
+
+        return result
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

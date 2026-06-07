@@ -429,3 +429,74 @@ class TestExtractPageBreaks:
         text = "A" + M
         result = self._enrich()._extract_page_breaks(text)
         assert result == [(0, 1), (1, 2)]
+
+
+# ===========================================================================
+# Task 2.2 — _transform_page_table
+# ===========================================================================
+
+class TestTransformPageTable:
+    """Tests for MarkdownEnricher._transform_page_table (pure static function)."""
+
+    def test_transform_page_table_no_leading_marker(self):
+        """Example A (no leading marker): corrects pre-removal offsets."""
+        pre = [(0, 1), (150, 2), (400, 3), (600, 4)]
+        result = MarkdownEnricher._transform_page_table(pre, marker_len=35)
+        assert result == [(0, 1), (150, 2), (365, 3), (530, 4)]
+
+    def test_transform_page_table_leading_marker(self):
+        """Example B (leading marker): no seed, all entries are markers."""
+        pre = [(0, 2), (150, 3), (400, 4)]
+        result = MarkdownEnricher._transform_page_table(pre, marker_len=35)
+        assert result == [(0, 2), (115, 3), (330, 4)]
+
+    def test_transform_page_table_empty(self):
+        """Empty pre-table → empty result."""
+        result = MarkdownEnricher._transform_page_table([], marker_len=35)
+        assert result == []
+
+    def test_transform_page_table_single_entry(self):
+        """Seed-only table: single entry (0, 1) is unchanged (no markers)."""
+        result = MarkdownEnricher._transform_page_table([(0, 1)], marker_len=35)
+        assert result == [(0, 1)]
+
+    def test_transform_page_table_uses_len_marker(self):
+        """Re-run Example A with PAGE_BREAK_MARKER_LEN to confirm production wiring."""
+        pre = [(0, 1), (150, 2), (400, 3), (600, 4)]
+        result = MarkdownEnricher._transform_page_table(pre, marker_len=PAGE_BREAK_MARKER_LEN)
+        assert result == [(0, 1), (150, 2), (365, 3), (530, 4)]
+
+    def test_transform_page_table_matches_cleaned_text_geometry(self):
+        """Ground-truth check: post-removal offsets must match actual positions in cleaned text."""
+        page1 = "a" * 150
+        page2 = "b" * 215
+        page3 = "c" * 165
+        page4 = "d" * 70
+        pre_text = page1 + M + page2 + M + page3 + M + page4
+
+        # Build pre-table by hand
+        m1 = len(page1)                             # 150
+        m2 = len(page1) + ML + len(page2)           # 150 + 35 + 215 = 400
+        m3 = len(page1) + ML + len(page2) + ML + len(page3)  # 400 + 35 + 165 = 600
+        pre = [(0, 1), (m1, 2), (m2, 3), (m3, 4)]
+
+        result = MarkdownEnricher._transform_page_table(pre, marker_len=ML)
+
+        # Independently compute cleaned text
+        cleaned = pre_text.replace(M, "")
+        # Find actual positions of each page's content in cleaned text
+        pos_b = cleaned.index("b")
+        pos_c = cleaned.index("c")
+        pos_d = cleaned.index("d")
+
+        assert result[0] == (0, 1)
+        assert result[1] == (pos_b, 2)
+        assert result[2] == (pos_c, 3)
+        assert result[3] == (pos_d, 4)
+
+    def test_transform_does_not_mutate_input(self):
+        """The function must return a new list and not mutate the input."""
+        pre = [(0, 1), (150, 2), (400, 3)]
+        original = list(pre)
+        MarkdownEnricher._transform_page_table(pre, marker_len=35)
+        assert pre == original

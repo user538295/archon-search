@@ -249,7 +249,7 @@ None.
   - Checkpoint: `uv run pytest tests/test_enricher.py -k extract_page_breaks -v`
 
 #### Task 2.2 — Coordinate-transform pure function
-- [ ] **File**: `archon_search/enricher.py`
+- [x] **File**: `archon_search/enricher.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - Add `MarkdownEnricher._transform_page_table(pre_table: list[tuple[int, int]], marker_len: int) -> list[tuple[int, int]]` as a `@staticmethod`.
