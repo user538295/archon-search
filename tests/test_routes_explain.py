@@ -198,3 +198,148 @@ def test_explain_endpoint_response_includes_hyde_applied(tmp_path: Path) -> None
     data = response.json()
     assert "hyde_applied" in data
     assert data["hyde_applied"] is False
+
+
+# ---------------------------------------------------------------------------
+# Task 4.3 — Wire resolve_hyde_vector into routes_explain.py handler
+# ---------------------------------------------------------------------------
+
+
+def test_explain_hyde_true_passes_vector(tmp_path: Path) -> None:
+    """hyde=true: resolve_hyde_vector returns a vector → pipeline.explain called with query_vector;
+    response has hyde_applied=True."""
+    from unittest.mock import patch, AsyncMock as AM
+
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.explain = AsyncMock(return_value=_make_explain_result())
+    cache = _make_embedder_cache_mock()
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    hyde_vector = [0.1, 0.2, 0.3, 0.4]
+
+    with patch(
+        "archon_search.server.routes_explain.resolve_hyde_vector",
+        new=AM(return_value=(hyde_vector, True)),
+    ):
+        response = client.post("/explain", json={"collection": "col", "query": "test", "hyde": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["hyde_applied"] is True
+
+    # Verify pipeline.explain was called with query_vector=hyde_vector
+    _, kwargs = pipeline.explain.call_args
+    assert kwargs.get("query_vector") == hyde_vector
+
+
+def test_explain_hyde_false_passes_none(tmp_path: Path) -> None:
+    """hyde=false: resolve_hyde_vector returns (None, False) → pipeline.explain called with
+    query_vector=None; response has hyde_applied=False."""
+    from unittest.mock import patch, AsyncMock as AM
+
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.explain = AsyncMock(return_value=_make_explain_result())
+    cache = _make_embedder_cache_mock()
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    with patch(
+        "archon_search.server.routes_explain.resolve_hyde_vector",
+        new=AM(return_value=(None, False)),
+    ):
+        response = client.post("/explain", json={"collection": "col", "query": "test", "hyde": False})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["hyde_applied"] is False
+
+    _, kwargs = pipeline.explain.call_args
+    assert kwargs.get("query_vector") is None
+
+
+def test_explain_hyde_package_not_installed_returns_422(tmp_path: Path) -> None:
+    """If resolve_hyde_vector raises RuntimeError (package not installed), respond with 422."""
+    from unittest.mock import patch, AsyncMock as AM
+
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    app.state.pipeline = pipeline
+
+    with patch(
+        "archon_search.server.routes_explain.resolve_hyde_vector",
+        side_effect=RuntimeError("Install archon-search[hyde] to use HyDE"),
+    ):
+        response = client.post("/explain", json={"collection": "col", "query": "test", "hyde": True})
+
+    assert response.status_code == 422
+    assert "archon-search[hyde]" in response.json()["detail"]
+
+
+def test_explain_multi_collection_hyde_true_passes_vector(tmp_path: Path) -> None:
+    """Multi-collection fanout: hyde=True passes query_vector=hyde_vector to pipeline.explain();
+    response has hyde_applied=True."""
+    from unittest.mock import patch, AsyncMock as AM
+
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    pipeline.explain = AsyncMock(return_value=_make_explain_result())
+    app.state.pipeline = pipeline
+
+    hyde_vector = [0.5, 0.6, 0.7, 0.8]
+
+    with patch(
+        "archon_search.server.routes_explain.resolve_hyde_vector",
+        new=AM(return_value=(hyde_vector, True)),
+    ):
+        response = client.post(
+            "/explain",
+            json={"collections": ["col1", "col2"], "query": "test", "hyde": True},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["hyde_applied"] is True
+
+    _, kwargs = pipeline.explain.call_args
+    assert kwargs.get("query_vector") == hyde_vector
+
+
+def test_explain_collectionless_routing_hyde_true_passes_vector(tmp_path: Path) -> None:
+    """Collectionless routing path: hyde=True passes query_vector=hyde_vector to pipeline.explain();
+    response has hyde_applied=True."""
+    from unittest.mock import patch, AsyncMock as AM
+
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="", centroid=[1.0, 0.0])
+    pipeline.get_all_collections_meta = AsyncMock(return_value=[meta])
+    pipeline._global_embedder = MagicMock()
+    pipeline._global_embedder.embed_one = AsyncMock(return_value=[1.0, 0.0])
+    pipeline.explain = AsyncMock(return_value=_make_explain_result())
+    cache = _make_embedder_cache_mock()
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    hyde_vector = [0.9, 0.1]
+
+    with patch(
+        "archon_search.server.routes_explain.resolve_hyde_vector",
+        new=AM(return_value=(hyde_vector, True)),
+    ):
+        response = client.post("/explain", json={"query": "test", "hyde": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["hyde_applied"] is True
+
+    _, kwargs = pipeline.explain.call_args
+    assert kwargs.get("query_vector") == hyde_vector

@@ -442,7 +442,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
   - Checkpoint: `uv run pytest tests/test_routes_search.py -x`
 
 #### Task 4.3 — Wire `routes_explain.py` REST handler
-- [ ] **File**: `archon_search/server/routes_explain.py`
+- [x] **File**: `archon_search/server/routes_explain.py`
 - **Depends on**: Tasks 2.1 (explain uses search internally), 3.2, 4.1
 - **Description**:
   - Import `resolve_hyde_vector` from `archon_search.hyde`.
@@ -456,8 +456,11 @@ hyde = ["anthropic>=0.40"]                     # NEW
   - `ExplainResponse.from_pipeline_result(result, hyde_applied=hyde_applied)` — thread through (update the classmethod signature in Task 3.2 to accept this kwarg).
 - **Releasable**: `POST /explain` respects `hyde=true`; `hyde_applied` is correct.
 - **Tests (TDD)** — `tests/test_routes_explain.py`:
-  - Unit: `test_explain_hyde_true_passes_vector` — mock `resolve_hyde_vector` returns a vector; verify `pipeline.explain` called with `query_vector=...`; response `hyde_applied=True`.
-  - Unit: `test_explain_hyde_false_passes_none` — `hyde=false`; `pipeline.explain` called with `query_vector=None`; response `hyde_applied=False`.
+  - [x] Unit: `test_explain_hyde_true_passes_vector` — mock `resolve_hyde_vector` returns a vector; verify `pipeline.explain` called with `query_vector=...`; response `hyde_applied=True`.
+  - [x] Unit: `test_explain_hyde_false_passes_none` — `hyde=false`; `pipeline.explain` called with `query_vector=None`; response `hyde_applied=False`.
+  - [x] Unit: `test_explain_hyde_package_not_installed_returns_422` — RuntimeError → 422.
+  - [x] Unit: `test_explain_multi_collection_hyde_true_passes_vector` — multi-collection fanout path passes `query_vector` to `pipeline.explain`.
+  - [x] Unit: `test_explain_collectionless_routing_hyde_true_passes_vector` — collectionless routing path passes `query_vector` to `pipeline.explain`.
   - Checkpoint: `uv run pytest tests/test_routes_explain.py -x`
 
 ---

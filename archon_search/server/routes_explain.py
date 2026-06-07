@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from archon_search._types import IngestedBy
+from archon_search.hyde import resolve_hyde_vector
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.pipeline import (
     CollectionNotFoundError,
@@ -319,7 +320,15 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
 
     routing: RoutingExplain | None = None
-    query_vector: list[float] | None = None
+
+    # Resolve HyDE vector before dispatching to any pipeline path.
+    generator = getattr(request.app.state, "hyde_generator", None)
+    try:
+        hyde_vector, hyde_applied = await resolve_hyde_vector(
+            body.query, body.hyde, generator, config.hyde
+        )
+    except RuntimeError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
 
     with ExitStack() as stack:
         recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
@@ -335,6 +344,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     top_k=body.top_k,
                     rerank=body.rerank,
                     namespace=ns,
+                    query_vector=hyde_vector,
                     embedder=None,
                 )
             except CollectionNotFoundError:
@@ -373,6 +383,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             response = ExplainResponse.from_pipeline_result(
                 rerank=body.rerank, collection="", routing=None, result=result,
                 embedding_model=config.embedding_model,
+                hyde_applied=hyde_applied,
                 stage_timings_ms=stage_timings,
             )
             _emit_ok("", len(response.results))
@@ -406,7 +417,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             # boundary in this codebase: a caller only ever sees collections in its own
             # namespace, so disallowed collections can never leak into routing.candidates.
             try:
-                query_vector = await pipeline._global_embedder.embed_one(body.query)
+                routing_vector = await pipeline._global_embedder.embed_one(body.query)
                 col_router = MultiCollectionRouter(
                     search_url=f"http://{config.host}:{config.port}",
                     embedder=pipeline._global_embedder,
@@ -414,7 +425,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     confidence_threshold=config.routing_confidence_threshold,
                     embedding_model=config.embedding_model,
                 )
-                ranked = col_router.rank_with_scores(query_vector, all_meta)
+                ranked = col_router.rank_with_scores(routing_vector, all_meta)
             except Exception as exc:
                 logger.error("explain: routing failed: %s", type(exc).__name__)
                 _emit_err()
@@ -446,7 +457,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 top_k=body.top_k,
                 rerank=body.rerank,
                 namespace=ns,
-                query_vector=query_vector,
+                query_vector=hyde_vector,
                 embedder=_embedder,
             )
         except ExplainStageError as exc:
@@ -480,6 +491,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
     response = ExplainResponse.from_pipeline_result(
         rerank=body.rerank, collection=chosen, routing=routing, result=result,
         embedding_model=active_model,
+        hyde_applied=hyde_applied,
         stage_timings_ms=stage_timings,
     )
     _emit_ok(chosen, len(response.results))
