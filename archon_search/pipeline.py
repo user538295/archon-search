@@ -21,7 +21,7 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.description_generator import _should_regenerate, generate_description
 from archon_search.chunker import DocumentChunker
 from archon_search.embedder import Embedder, EmbedderBackend, ModelEmbedder
-from archon_search.enricher import MarkdownEnricher
+from archon_search.enricher import MarkdownEnricher, is_docling_source, source_subtype_for
 from archon_search.parser import DocumentParser, ParseError
 from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
 from archon_search.store import SearchStore, StoreBusyError, elementwise_sum
@@ -255,13 +255,20 @@ class SearchPipeline:
             logger.debug("stat() failed for %s; updated_at will be empty", path)
             updated_at = ""
 
-        # C3a: heading enrichment — prepare heading table after front-matter stripping,
-        # before chunking. Non-text files get an empty table; enrich_chunk handles that.
+        # C3a / C3b: enrichment routing — choose the correct pre-chunking method based
+        # on source type. Docling-parsed sources (pdf, image) go through preprocess()
+        # to excise page-break markers and build the page table. Text-format sources
+        # go through prepare() to build the heading table.
         enricher = MarkdownEnricher()
-        if is_text_type:
-            heading_table = enricher.prepare(markdown)
+        subtype = source_subtype_for(path.suffix)
+        if is_docling_source(subtype):
+            # C3b path: strip markers, build page table; heading enrichment skipped for v1.
+            markdown, page_table = enricher.preprocess(markdown)
+            heading_table = None
         else:
-            heading_table = []
+            # C3a path: text-format sources get heading enrichment.
+            heading_table = enricher.prepare(markdown) if is_text_type else []
+            page_table = None
 
         # C2: language detection — runs after parse, before chunk
         if self._language_detector is not None:
@@ -293,9 +300,12 @@ class SearchPipeline:
         if not records:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="ok")
 
-        # C3a: enrich every chunk with heading metadata
+        # C3a / C3b: enrich every chunk with heading and/or page metadata.
+        # heading_table and page_table are mutually exclusive per source type in v1.
         for record in records:
-            enrichment = enricher.enrich_chunk(record, heading_table=heading_table)
+            enrichment = enricher.enrich_chunk(
+                record, heading_table=heading_table, page_table=page_table
+            )
             record.metadata.update(enrichment)
 
         # Assign sequential chunk IDs and propagate ACL

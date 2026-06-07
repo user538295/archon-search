@@ -4955,3 +4955,192 @@ async def test_ingest_file_passes_empty_dominant_language_when_untagged(tmp_path
     await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
 
     store.rebuild_fts_index.assert_awaited_once_with("test-col", language="")
+
+
+# ---------------------------------------------------------------------------
+# C3b Task 4.1 — preprocess wiring: markers excised before chunker,
+#                text-format and front-matter paths unchanged
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_pdf_excises_markers_before_chunker(tmp_path) -> None:
+    """For a PDF source, markers are removed from the text before it reaches the chunker."""
+    from unittest.mock import patch as _patch
+
+    from archon_search.enricher import PAGE_BREAK_MARKER
+
+    store = _make_mock_store_for_c2()
+    pipeline = _make_pipeline_with_detector(store)
+
+    pdf_file = tmp_path / "doc.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 dummy")
+
+    # Parser returns text with page-break markers (simulating docling output)
+    marker_bearing_text = (
+        "alpha content " * 10
+        + PAGE_BREAK_MARKER
+        + "beta content " * 10
+        + PAGE_BREAK_MARKER
+        + "gamma content " * 10
+    )
+    pipeline._parser.parse = AsyncMock(return_value=marker_bearing_text)
+
+    chunk_texts_seen: list[str] = []
+    original_chunk = pipeline._chunker.chunk
+
+    def spy_chunk(text, *args, **kwargs):  # type: ignore[no-untyped-def]
+        chunk_texts_seen.append(text)
+        return original_chunk(text, *args, **kwargs)
+
+    pipeline._chunker.chunk = spy_chunk  # type: ignore[method-assign]
+
+    await pipeline.ingest_file(pdf_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert chunk_texts_seen, "chunker.chunk was never called"
+    text_sent_to_chunker = chunk_texts_seen[0]
+    assert PAGE_BREAK_MARKER not in text_sent_to_chunker, (
+        "Marker must be excised before the text reaches the chunker"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_text_format_unchanged(tmp_path) -> None:
+    """For a .txt file, preprocess is NOT called; enrich_chunk gets page_table=None."""
+    from unittest.mock import patch as _patch
+
+    store = _make_mock_store_for_c2()
+    pipeline = _make_pipeline_with_detector(store)
+
+    txt_file = tmp_path / "doc.txt"
+    txt_file.write_text("Hello world. " * 20)
+
+    enrich_chunk_page_tables: list = []
+
+    with _patch("archon_search.pipeline.MarkdownEnricher.preprocess") as mock_preprocess, \
+         _patch("archon_search.pipeline.MarkdownEnricher.enrich_chunk") as mock_enrich:
+
+        # preprocess must NOT be called for text-format sources
+        mock_preprocess.side_effect = AssertionError(
+            "preprocess should not be called for text-format sources"
+        )
+
+        # spy on page_table kwarg passed to enrich_chunk
+        def spy_enrich(chunk, *, heading_table=None, page_table=None):  # type: ignore[no-untyped-def]
+            enrich_chunk_page_tables.append(page_table)
+            return {}
+
+        mock_enrich.side_effect = spy_enrich
+
+        result = await pipeline.ingest_file(txt_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert result.status == "ok"
+    # enrich_chunk must have been called at least once
+    assert enrich_chunk_page_tables, "enrich_chunk was never called"
+    # page_table must be None for all calls (text-format path)
+    assert all(pt is None for pt in enrich_chunk_page_tables), (
+        f"page_table must be None for text-format sources, got: {enrich_chunk_page_tables}"
+    )
+    # preprocess must NOT have been called
+    mock_preprocess.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ingest_pdf_enrich_chunk_receives_page_table(tmp_path) -> None:
+    """For a PDF source, enrich_chunk is called with a non-None page_table."""
+    from unittest.mock import patch as _patch
+
+    from archon_search.enricher import PAGE_BREAK_MARKER
+
+    store = _make_mock_store_for_c2()
+    pipeline = _make_pipeline_with_detector(store)
+
+    pdf_file = tmp_path / "doc.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 dummy")
+
+    marker_text = "alpha content " * 10 + PAGE_BREAK_MARKER + "beta content " * 10
+    pipeline._parser.parse = AsyncMock(return_value=marker_text)
+
+    enrich_chunk_page_tables: list = []
+
+    with _patch("archon_search.pipeline.MarkdownEnricher.enrich_chunk") as mock_enrich:
+        def spy_enrich(chunk, *, heading_table=None, page_table=None):  # type: ignore[no-untyped-def]
+            enrich_chunk_page_tables.append(page_table)
+            return {}
+
+        mock_enrich.side_effect = spy_enrich
+
+        await pipeline.ingest_file(pdf_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert enrich_chunk_page_tables, "enrich_chunk was never called"
+    assert all(pt is not None for pt in enrich_chunk_page_tables), (
+        "page_table must be non-None for docling sources (pdf)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_unknown_extension_uses_fallback_path(tmp_path) -> None:
+    """Unknown extensions (.xyz) fall through to the else-branch: heading_table=[], page_table=None."""
+    from unittest.mock import patch as _patch
+
+    store = _make_mock_store_for_c2()
+    pipeline = _make_pipeline_with_detector(store)
+
+    xyz_file = tmp_path / "doc.xyz"
+    xyz_file.write_text("some content here " * 20)
+
+    enrich_chunk_kwargs: list[dict] = []
+
+    with _patch("archon_search.pipeline.MarkdownEnricher.preprocess") as mock_preprocess, \
+         _patch("archon_search.pipeline.MarkdownEnricher.enrich_chunk") as mock_enrich:
+
+        mock_preprocess.side_effect = AssertionError(
+            "preprocess should not be called for unknown extensions"
+        )
+
+        def spy_enrich(chunk, *, heading_table=None, page_table=None):  # type: ignore[no-untyped-def]
+            enrich_chunk_kwargs.append({"heading_table": heading_table, "page_table": page_table})
+            return {}
+
+        mock_enrich.side_effect = spy_enrich
+
+        result = await pipeline.ingest_file(xyz_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert result.status == "ok"
+    mock_preprocess.assert_not_called()
+    assert enrich_chunk_kwargs, "enrich_chunk was never called"
+    for kwargs in enrich_chunk_kwargs:
+        assert kwargs["page_table"] is None, (
+            f"page_table must be None for unknown extensions, got: {kwargs['page_table']}"
+        )
+        assert kwargs["heading_table"] == [], (
+            f"heading_table must be [] for unknown non-docling extensions, got: {kwargs['heading_table']}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_ingest_md_front_matter_unchanged(tmp_path) -> None:
+    """Ingest a .md file with YAML front matter; front matter is extracted and _acl propagates."""
+    store = _make_mock_store_for_c2()
+    pipeline = _make_pipeline_with_detector(store)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text(
+        "---\n_acl: public\n---\n\n# Hello\n\nSome content here.\n" * 10
+    )
+
+    result = await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
+
+    assert result.status == "ok"
+    assert result.chunks_created > 0
+
+    # Verify chunks were stored — check via ingest_chunks call args.
+    # ingest_chunks signature: (collection, chunks, embedding_model, namespace)
+    # so call_args.args[0] = collection name, call_args.args[1] = chunks list.
+    call_args = store.ingest_chunks.call_args
+    assert call_args is not None
+    chunks_stored = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("chunks", [])
+    assert len(chunks_stored) > 0
+    # _acl must propagate to every chunk as a list containing "public"
+    for chunk in chunks_stored:
+        assert "public" in (chunk.acl or []), f"Expected 'public' in acl, got {chunk.acl!r}"

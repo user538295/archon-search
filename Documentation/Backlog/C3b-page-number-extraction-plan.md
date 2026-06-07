@@ -359,7 +359,7 @@ None.
 > **Releasable**: after Phase 4 — end-to-end ingest of a PDF/image file produces chunks with `_page_start` in `ChunkRecord.metadata`.
 
 #### Task 4.1 — Wire `preprocess` into `ingest_file`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 2.4, Task 3.1, Task 1.2
 - **Description**:
   - At the top of `ingest_file`, construct a per-call enricher: `enricher = MarkdownEnricher()`. The enricher is **not** stored on `SearchPipeline`; one fresh instance per ingest, per the "Enricher instance lifecycle" subsection in Architecture.
