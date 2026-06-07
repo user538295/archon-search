@@ -332,7 +332,7 @@ hyde = ["anthropic>=0.40"]                     # NEW
   - Checkpoint: `uv run pytest tests/test_pipeline.py -k "query_vector" -x`
 
 #### Task 2.2 — `SearchPipeline.search_many()` gains `query_vector`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `query_vector: list[float] | None = None` as a parameter to `search_many()` (after `namespace`).

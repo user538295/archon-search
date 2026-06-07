@@ -680,12 +680,13 @@ class SearchPipeline:
         query: str,
         collections: list[str],
         namespace: str = DEFAULT_NAMESPACE,
+        query_vector: list[float] | None = None,
     ) -> SearchPipelineResult:
         """Embed the query once, fan out hybrid retrieval across ``collections`` in
         parallel, merge with provenance, run a single global rerank pass, and return a
         unified result."""
-        # Step 1: embed exactly once.
-        vector = await self._global_embedder.embed_one(query)
+        # Step 1: embed exactly once (or use caller-provided vector for HyDE).
+        vector = list(query_vector) if query_vector is not None else await self._global_embedder.embed_one(query)
 
         # Step 2: metadata lookup, validation, namespace + model partitioning.
         try:

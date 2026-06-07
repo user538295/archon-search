@@ -3393,6 +3393,45 @@ async def test_search_many_acl_filtered_propagates() -> None:
 
 
 # ===========================================================================
+# C4 Task 2.2 — search_many() query_vector parameter
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_search_many_uses_provided_query_vector() -> None:
+    """search_many() uses caller-provided query_vector; _global_embedder.embed_one must NOT be called."""
+    cols = ["A"]
+    leg_map = {c: [_scored(c, "d" * 64, f"{'d' * 64}-000000")] for c in cols}
+    pipeline, store, embedder, reranker = _search_many_pipeline(
+        leg_map=leg_map, meta_list=[_meta(c) for c in cols]
+    )
+
+    provided_vector = [0.9, 0.8, 0.7, 0.6]
+    await pipeline.search_many("q", cols, query_vector=provided_vector)
+
+    embedder.embed_one.assert_not_called()
+
+    # Verify the provided vector was passed to the store's fan-out call.
+    call_args = store.hybrid_search_with_trace.await_args_list
+    assert len(call_args) == 1
+    passed_vector = call_args[0].args[1] if call_args[0].args else call_args[0].kwargs.get("vector")
+    assert list(passed_vector) == provided_vector
+
+
+@pytest.mark.asyncio
+async def test_search_many_embeds_when_no_query_vector() -> None:
+    """search_many() calls _global_embedder.embed_one when query_vector is None (pre-C4 behaviour)."""
+    cols = ["A"]
+    leg_map = {c: [_scored(c, "d" * 64, f"{'d' * 64}-000000")] for c in cols}
+    pipeline, store, embedder, reranker = _search_many_pipeline(
+        leg_map=leg_map, meta_list=[_meta(c) for c in cols]
+    )
+
+    await pipeline.search_many("q", cols, query_vector=None)
+
+    embedder.embed_one.assert_awaited_once_with("q")
+
+
+# ===========================================================================
 # B4 Task 3.1 — description_embedding populated at ingest
 # ===========================================================================
 
