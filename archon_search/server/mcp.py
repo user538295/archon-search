@@ -166,6 +166,11 @@ def create_app(
     ``job_store`` is required for the ``update_collection`` tool's 409 guard
     (active reindex check).
     """
+    # Late-bound import: archon_search.rag_fusion may be reloaded in tests,
+    # so we import lazily here (inside create_app) so the closures below always
+    # capture the current class from sys.modules at app-creation time.
+    from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
+
     app = FastMCP("archon-search")
 
     @app.tool()
@@ -181,20 +186,28 @@ def create_app(
         indexed_before: str | None = None,
         language: _LanguageParamSearch = None,
         hyde: bool = False,
+        rag_fusion: bool = False,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search."""
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
 
-        # Resolve HyDE vector before branching into single- or multi-collection paths.
-        _hyde_config = getattr(config, "hyde", None)
-        if _hyde_config is None:
-            from archon_search.config import HyDEConfig  # noqa: PLC0415
-            _hyde_config = HyDEConfig()
-        try:
-            hyde_vector, hyde_applied = await resolve_hyde_vector(query, hyde, hyde_generator, _hyde_config)
-        except RuntimeError as exc:
-            return McpErrorResponse(error=str(exc), code="validation_error")
+        # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
+        _rf_config = getattr(config, "rag_fusion", None)
+        if _rf_config is None:
+            from archon_search.config import RAGFusionConfig  # noqa: PLC0415
+            _rf_config = RAGFusionConfig()
+        if rag_fusion:
+            hyde_vector, hyde_applied = None, False
+        else:
+            _hyde_config = getattr(config, "hyde", None)
+            if _hyde_config is None:
+                from archon_search.config import HyDEConfig  # noqa: PLC0415
+                _hyde_config = HyDEConfig()
+            try:
+                hyde_vector, hyde_applied = await resolve_hyde_vector(query, hyde, hyde_generator, _hyde_config)
+            except RuntimeError as exc:
+                return McpErrorResponse(error=str(exc), code="validation_error")
 
         # Multi-collection fan-out path (B3). The single-collection path below is
         # unchanged; when neither field is set it falls back to default_collection.
@@ -226,7 +239,14 @@ def create_app(
                     code="validation_error",
                 )
             try:
-                result_obj = await pipeline.search_many(query, deduped, query_vector=hyde_vector)
+                result_obj = await pipeline.search_many(
+                    query, deduped, query_vector=hyde_vector,
+                    rag_fusion=rag_fusion,
+                    rag_fusion_generator=rag_fusion_generator,
+                    rag_fusion_config=_rf_config,
+                )
+            except RAGFusionDependencyError as exc:
+                return McpErrorResponse(error=str(exc), code="validation_error")
             except CollectionNotFoundError:
                 return McpErrorResponse(error="collection not found", code="not_found")
             except FanoutTimeoutError:
@@ -256,6 +276,8 @@ def create_app(
                             latency_ms=(monotonic() - start) * 1000.0,
                             excluded_count=excluded_count,
                             correlation_id=_correlation_id.get(),
+                            rag_fusion_applied=result_obj.rag_fusion_applied,
+                            rag_fusion_queries_used=result_obj.rag_fusion_queries_used,
                         )
                     )
                 except Exception:
@@ -267,6 +289,9 @@ def create_app(
                     {"name": e.name, "reason": e.reason} for e in result_obj.excluded_collections
                 ],
                 "hyde_applied": hyde_applied,
+                "rag_fusion_applied": result_obj.rag_fusion_applied,
+                "rag_fusion_queries_used": result_obj.rag_fusion_queries_used,
+                "rag_fusion_attempted": result_obj.rag_fusion_attempted,
             }
 
         try:
@@ -288,7 +313,10 @@ def create_app(
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 result_obj = await pipeline.search(
-                    query, _col, embedder=_search_embedder, filters=filters, query_vector=hyde_vector
+                    query, _col, embedder=_search_embedder, filters=filters, query_vector=hyde_vector,
+                    rag_fusion=rag_fusion,
+                    rag_fusion_generator=rag_fusion_generator,
+                    rag_fusion_config=_rf_config,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -312,6 +340,8 @@ def create_app(
                             latency_ms=(monotonic() - start) * 1000.0,
                             filter_flags=FilterFlags.from_search_filters(filters),
                             correlation_id=_correlation_id.get(),
+                            rag_fusion_applied=result_obj.rag_fusion_applied,
+                            rag_fusion_queries_used=result_obj.rag_fusion_queries_used,
                         )
                     )
                 except Exception:
@@ -331,7 +361,12 @@ def create_app(
                     {"name": e.name, "reason": e.reason} for e in result_obj.excluded_collections
                 ],
                 "hyde_applied": hyde_applied,
+                "rag_fusion_applied": result_obj.rag_fusion_applied,
+                "rag_fusion_queries_used": result_obj.rag_fusion_queries_used,
+                "rag_fusion_attempted": result_obj.rag_fusion_attempted,
             }
+        except RAGFusionDependencyError as exc:
+            return McpErrorResponse(error=str(exc), code="validation_error")
         except Exception as exc:
             if writer is not None:
                 try:
@@ -362,25 +397,34 @@ def create_app(
         indexed_before: str | None = None,
         language: _LanguageParamSearchWithContext = None,
         hyde: bool = False,
+        rag_fusion: bool = False,
     ) -> dict[str, Any]:
         """Search and return surrounding chunks for richer context.
 
-        Returns ``{"results": [...], "hyde_applied": bool}``.
+        Returns ``{"results": [...], "hyde_applied": bool, "rag_fusion_applied": bool,
+        "rag_fusion_queries_used": int, "rag_fusion_attempted": bool}``.
         """
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
 
-        # Resolve HyDE vector before pipeline dispatch.
-        _swc_hyde_config = getattr(config, "hyde", None)
-        if _swc_hyde_config is None:
-            from archon_search.config import HyDEConfig  # noqa: PLC0415
-            _swc_hyde_config = HyDEConfig()
-        try:
-            swc_hyde_vector, swc_hyde_applied = await resolve_hyde_vector(
-                query, hyde, hyde_generator, _swc_hyde_config
-            )
-        except RuntimeError as exc:
-            return McpErrorResponse(error=str(exc), code="validation_error")
+        # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
+        _swc_rf_config = getattr(config, "rag_fusion", None)
+        if _swc_rf_config is None:
+            from archon_search.config import RAGFusionConfig  # noqa: PLC0415
+            _swc_rf_config = RAGFusionConfig()
+        if rag_fusion:
+            swc_hyde_vector, swc_hyde_applied = None, False
+        else:
+            _swc_hyde_config = getattr(config, "hyde", None)
+            if _swc_hyde_config is None:
+                from archon_search.config import HyDEConfig  # noqa: PLC0415
+                _swc_hyde_config = HyDEConfig()
+            try:
+                swc_hyde_vector, swc_hyde_applied = await resolve_hyde_vector(
+                    query, hyde, hyde_generator, _swc_hyde_config
+                )
+            except RuntimeError as exc:
+                return McpErrorResponse(error=str(exc), code="validation_error")
 
         try:
             try:
@@ -400,9 +444,12 @@ def create_app(
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
-                results = await pipeline.search_with_context(
+                swc_result = await pipeline.search_with_context(
                     query, _swc_col, context_window, embedder=_swc_embedder, filters=filters,
                     query_vector=swc_hyde_vector,
+                    rag_fusion=rag_fusion,
+                    rag_fusion_generator=rag_fusion_generator,
+                    rag_fusion_config=_swc_rf_config,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -416,22 +463,25 @@ def create_app(
                             "stage_timings_ms": recorder.stage_timings_ms,
                         },
                     )
+            _swc_pipeline_result = swc_result.pipeline_result
             if writer is not None:
                 try:
                     writer.enqueue(
                         TelemetryEntry.from_search_tool_result(
                             endpoint="search_with_context",
                             collection=_swc_col,
-                            result_doc_ids=[r["result"].doc_id for r in results.results],
+                            result_doc_ids=[r["result"].doc_id for r in swc_result.results],
                             latency_ms=(monotonic() - start) * 1000.0,
                             filter_flags=FilterFlags.from_search_filters(filters),
                             correlation_id=_correlation_id.get(),
+                            rag_fusion_applied=_swc_pipeline_result.rag_fusion_applied,
+                            rag_fusion_queries_used=_swc_pipeline_result.rag_fusion_queries_used,
                         )
                     )
                 except Exception:
                     logger.warning("telemetry: search_with_context entry enqueue failed", exc_info=True)
             output = []
-            for r in results.results:
+            for r in swc_result.results:
                 result_dict = asdict(r["result"])
                 result_dict.pop("vector", None)
                 if not include_metadata:
@@ -444,7 +494,15 @@ def create_app(
                         "context_after": [_chunk_to_context_dict(c, include_metadata=include_metadata) for c in r["context_after"]],
                     }
                 )
-            return {"results": output, "hyde_applied": swc_hyde_applied}
+            return {
+                "results": output,
+                "hyde_applied": swc_hyde_applied,
+                "rag_fusion_applied": _swc_pipeline_result.rag_fusion_applied,
+                "rag_fusion_queries_used": _swc_pipeline_result.rag_fusion_queries_used,
+                "rag_fusion_attempted": _swc_pipeline_result.rag_fusion_attempted,
+            }
+        except RAGFusionDependencyError as exc:
+            return McpErrorResponse(error=str(exc), code="validation_error")
         except Exception as exc:
             if writer is not None:
                 try:
@@ -470,23 +528,31 @@ def create_app(
         top_k: int = 5,
         rerank: bool = True,
         hyde: bool = False,
+        rag_fusion: bool = False,
     ) -> dict[str, Any]:
         """Return the per-stage retrieval/reranking trace for a query, plus the
         routing decision when no collection is pinned. Operates in the default
         namespace only. The query is never echoed in the response or telemetry."""
         start = monotonic()
 
-        # Resolve HyDE vector once before branching.
-        _explain_hyde_config = getattr(config, "hyde", None)
-        if _explain_hyde_config is None:
-            from archon_search.config import HyDEConfig  # noqa: PLC0415
-            _explain_hyde_config = HyDEConfig()
-        try:
-            explain_hyde_vector, explain_hyde_applied = await resolve_hyde_vector(
-                query, hyde, hyde_generator, _explain_hyde_config
-            )
-        except RuntimeError as exc:
-            return McpErrorResponse(error=str(exc), code="validation_error")
+        # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
+        _explain_rf_config = getattr(config, "rag_fusion", None)
+        if _explain_rf_config is None:
+            from archon_search.config import RAGFusionConfig  # noqa: PLC0415
+            _explain_rf_config = RAGFusionConfig()
+        if rag_fusion:
+            explain_hyde_vector, explain_hyde_applied = None, False
+        else:
+            _explain_hyde_config = getattr(config, "hyde", None)
+            if _explain_hyde_config is None:
+                from archon_search.config import HyDEConfig  # noqa: PLC0415
+                _explain_hyde_config = HyDEConfig()
+            try:
+                explain_hyde_vector, explain_hyde_applied = await resolve_hyde_vector(
+                    query, hyde, hyde_generator, _explain_hyde_config
+                )
+            except RuntimeError as exc:
+                return McpErrorResponse(error=str(exc), code="validation_error")
 
         # Multi-collection fan-out path (B3). The single/routing path below is unchanged.
         if collection is not None and collections is not None:
@@ -520,7 +586,12 @@ def create_app(
                 result = await pipeline.explain(
                     query, collections=deduped, top_k=top_k, rerank=rerank, namespace=DEFAULT_NAMESPACE,
                     query_vector=explain_hyde_vector,
+                    rag_fusion=rag_fusion,
+                    rag_fusion_generator=rag_fusion_generator,
+                    rag_fusion_config=_explain_rf_config,
                 )
+            except RAGFusionDependencyError as exc:
+                return McpErrorResponse(error=str(exc), code="validation_error")
             except CollectionNotFoundError:
                 return McpErrorResponse(error="collection not found", code="not_found")
             except FanoutTimeoutError:
@@ -540,6 +611,11 @@ def create_app(
             response = ExplainResponse.from_pipeline_result(
                 rerank=rerank, collection="", routing=None, result=result, stage_timings_ms=None,
                 hyde_applied=explain_hyde_applied,
+                rag_fusion_applied=result.rag_fusion_applied,
+                rag_fusion_queries_used=result.rag_fusion_queries_used,
+                rag_fusion_attempted=result.rag_fusion_attempted,
+                rag_fusion_failure_reason=result.rag_fusion_failure_reason,
+                rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
             )
             result_dict = response.model_dump(mode="json", exclude_none=False)
             result_dict.pop("stage_timings_ms", None)
@@ -613,6 +689,9 @@ def create_app(
                 result = await pipeline.explain(
                     req.query, chosen, top_k=req.top_k, rerank=req.rerank, namespace=ns,
                     query_vector=query_vector, embedder=_explain_embedder,
+                    rag_fusion=rag_fusion,
+                    rag_fusion_generator=rag_fusion_generator,
+                    rag_fusion_config=_explain_rf_config,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -631,6 +710,11 @@ def create_app(
             response = ExplainResponse.from_pipeline_result(
                 rerank=req.rerank, collection=chosen, routing=routing, result=result,
                 stage_timings_ms=stage_timings, hyde_applied=explain_hyde_applied,
+                rag_fusion_applied=result.rag_fusion_applied,
+                rag_fusion_queries_used=result.rag_fusion_queries_used,
+                rag_fusion_attempted=result.rag_fusion_attempted,
+                rag_fusion_failure_reason=result.rag_fusion_failure_reason,
+                rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
             )
             if writer is not None:
                 try:
@@ -640,6 +724,8 @@ def create_app(
                             result_count=len(response.results),
                             latency_ms=(monotonic() - start) * 1000.0,
                             correlation_id=_correlation_id.get(),
+                            rag_fusion_applied=result.rag_fusion_applied,
+                            rag_fusion_queries_used=result.rag_fusion_queries_used,
                         )
                     )
                 except Exception:
@@ -648,6 +734,8 @@ def create_app(
             if stage_timings is None:
                 result_dict.pop("stage_timings_ms", None)
             return result_dict
+        except RAGFusionDependencyError as exc:
+            return McpErrorResponse(error=str(exc), code="validation_error")
         except ExplainStageError as exc:
             if writer is not None:
                 try:

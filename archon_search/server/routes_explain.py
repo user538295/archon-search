@@ -32,7 +32,6 @@ from archon_search.pipeline import (
     FanoutTimeoutError,
     MetadataLookupError,
 )
-from archon_search.rag_fusion import RAGFusionDependencyError
 from archon_search.router import MultiCollectionRouter
 from archon_search.server.routes_search import _FANOUT_VALIDATION_LIMIT
 from archon_search.server.schemas import ExcludedCollectionSchema
@@ -316,6 +315,10 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
     taxonomy); pipeline-stage failures (store / reranker) surface as 500 with a
     stage-specific detail. The query is never echoed in the response or telemetry.
     """
+    # Late-bound import: archon_search.rag_fusion may be reloaded in tests,
+    # so we import lazily to always get the current class from sys.modules.
+    from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
+
     start = monotonic()
     pipeline = request.app.state.pipeline
     config = request.app.state.config

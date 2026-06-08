@@ -482,4 +482,261 @@ def test_mcp_explain_hyde_false_returns_hyde_applied_false() -> None:
     assert result.get("hyde_applied") is False
 
 
+# ---------------------------------------------------------------------------
+# Task 5.1 — MCP RAG Fusion wiring tests
+# ---------------------------------------------------------------------------
 
+
+def _make_rag_fusion_pipeline_mock(
+    search_result=None,
+    search_many_result=None,
+    swc_result=None,
+    explain_result=None,
+):
+    """Return a pipeline mock configured for RAG Fusion wiring tests."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.pipeline import (
+        ExplainPipelineResult,
+        RagFusionSubQueryInfo,
+        SearchPipelineResult,
+        SearchWithContextResult,
+    )
+
+    if search_result is None:
+        search_result = SearchPipelineResult(
+            results=[], acl_filtered=False, excluded_collections=[],
+            rag_fusion_applied=True, rag_fusion_queries_used=2, rag_fusion_attempted=True,
+        )
+    if search_many_result is None:
+        search_many_result = SearchPipelineResult(
+            results=[], acl_filtered=False, excluded_collections=[],
+            rag_fusion_applied=True, rag_fusion_queries_used=2, rag_fusion_attempted=True,
+        )
+    if swc_result is None:
+        pipeline_result = SearchPipelineResult(
+            results=[], acl_filtered=False,
+            rag_fusion_applied=True, rag_fusion_queries_used=2, rag_fusion_attempted=True,
+        )
+        swc_result = SearchWithContextResult(results=[], pipeline_result=pipeline_result)
+    if explain_result is None:
+        explain_result = ExplainPipelineResult(
+            top_results=[], near_misses=[], acl_filtered=False,
+            excluded_collections=[],
+            rag_fusion_applied=True, rag_fusion_queries_used=2, rag_fusion_attempted=True,
+            rag_fusion_sub_query_results=[
+                RagFusionSubQueryInfo(variant_index=0, result_count=1, top_doc_ids=["doc-a"]),
+                RagFusionSubQueryInfo(variant_index=1, result_count=0, top_doc_ids=[]),
+                RagFusionSubQueryInfo(variant_index=2, result_count=1, top_doc_ids=["doc-b"]),
+            ],
+        )
+
+    pipeline = MagicMock()
+    pipeline._global_embedder = MagicMock()
+    pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
+    pipeline.search = AsyncMock(return_value=search_result)
+    pipeline.search_many = AsyncMock(return_value=search_many_result)
+    pipeline.search_with_context = AsyncMock(return_value=swc_result)
+    pipeline.explain = AsyncMock(return_value=explain_result)
+    pipeline.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col1"))
+    pipeline.get_all_collections_meta = AsyncMock(return_value=[CollectionMeta(name="col1")])
+    return pipeline
+
+
+def _make_config_with_rag_fusion(enabled: bool = True):
+    """Return a SearchConfig-like MagicMock with rag_fusion.enabled set."""
+    config = MagicMock()
+    config.hyde.enabled = False
+    config.rag_fusion.enabled = enabled
+    config.embedding_model = "test-model"
+    config.observability.stage_timings_enabled = False
+    config.routing_shortlist_size = 5
+    config.routing_confidence_threshold = 0.5
+    return config
+
+
+def _make_rag_fusion_generator_mock(variants=None):
+    """Return a mock RAGFusionGenerator whose generate_variants() returns variants."""
+    gen = MagicMock()
+    gen.generate_variants = AsyncMock(
+        return_value=variants if variants is not None else ["variant one", "variant two"]
+    )
+    return gen
+
+
+def _get_rag_fusion_tool_fn(
+    tool_name: str,
+    pipeline,
+    config=None,
+    hyde_generator=None,
+    rag_fusion_generator=None,
+):
+    """Build a stub-backed MCP app and return the named tool function."""
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+    importlib.reload(mcp_mod)
+    app = mcp_mod.create_app(
+        pipeline,
+        "col1",
+        config=config,
+        hyde_generator=hyde_generator,
+        rag_fusion_generator=rag_fusion_generator,
+    )
+    return app._tools[tool_name]
+
+
+def test_mcp_search_tool_rag_fusion_parameter_accepted() -> None:
+    """search tool accepts rag_fusion=True without error when generator is mocked."""
+    import asyncio
+
+    pipeline = _make_rag_fusion_pipeline_mock()
+    config = _make_config_with_rag_fusion(enabled=True)
+    gen = _make_rag_fusion_generator_mock()
+    tool_fn = _get_rag_fusion_tool_fn("search", pipeline, config=config, rag_fusion_generator=gen)
+
+    result = asyncio.run(tool_fn(query="what is archon?", collection="col1", rag_fusion=True))
+
+    assert isinstance(result, dict)
+    assert "error" not in result or result.get("code") != "internal_error"
+
+
+def test_mcp_search_tool_rag_fusion_applied_in_result() -> None:
+    """search tool returns rag_fusion_applied=True and rag_fusion_queries_used=2."""
+    import asyncio
+
+    pipeline = _make_rag_fusion_pipeline_mock()
+    config = _make_config_with_rag_fusion(enabled=True)
+    gen = _make_rag_fusion_generator_mock()
+    tool_fn = _get_rag_fusion_tool_fn("search", pipeline, config=config, rag_fusion_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True))
+
+    assert isinstance(result, dict)
+    assert result.get("rag_fusion_applied") is True
+    assert result.get("rag_fusion_queries_used") == 2
+
+
+def test_mcp_search_tool_rag_fusion_true_skips_hyde() -> None:
+    """search tool with rag_fusion=True skips HyDE: resolve_hyde_vector NOT called."""
+    import asyncio
+    from unittest.mock import patch
+
+    pipeline = _make_rag_fusion_pipeline_mock()
+    config = _make_config_with_rag_fusion(enabled=True)
+    rf_gen = _make_rag_fusion_generator_mock()
+    hyde_gen = MagicMock()
+    hyde_gen.generate = AsyncMock(return_value=[0.5] * 5)
+
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+    importlib.reload(mcp_mod)
+    app = mcp_mod.create_app(
+        pipeline, "col1", config=config,
+        hyde_generator=hyde_gen, rag_fusion_generator=rf_gen,
+    )
+    tool_fn = app._tools["search"]
+
+    with patch("archon_search.server.mcp.resolve_hyde_vector", new=AsyncMock(return_value=([0.5] * 5, True))) as mock_resolve:
+        result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True, hyde=True))
+
+    # resolve_hyde_vector must NOT have been called when rag_fusion=True
+    mock_resolve.assert_not_called()
+    assert isinstance(result, dict)
+    assert result.get("hyde_applied") is False
+
+
+def test_mcp_search_with_context_rag_fusion() -> None:
+    """search_with_context tool includes rag_fusion_applied, rag_fusion_queries_used, rag_fusion_attempted."""
+    import asyncio
+
+    pipeline = _make_rag_fusion_pipeline_mock()
+    config = _make_config_with_rag_fusion(enabled=True)
+    gen = _make_rag_fusion_generator_mock()
+    tool_fn = _get_rag_fusion_tool_fn(
+        "search_with_context", pipeline, config=config, rag_fusion_generator=gen
+    )
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True))
+
+    assert isinstance(result, dict)
+    assert "rag_fusion_applied" in result
+    assert "rag_fusion_queries_used" in result
+    assert "rag_fusion_attempted" in result
+    assert result.get("rag_fusion_applied") is True
+    assert result.get("rag_fusion_queries_used") == 2
+    assert result.get("rag_fusion_attempted") is True
+
+
+def test_mcp_search_with_context_telemetry_includes_feature_flags() -> None:
+    """search_with_context telemetry now includes rag_fusion fields (pre-existing gap fixed)."""
+    import asyncio
+
+    from archon_search.telemetry.writer import TelemetryWriter
+
+    pipeline = _make_rag_fusion_pipeline_mock()
+    config = _make_config_with_rag_fusion(enabled=False)
+
+    writer = MagicMock(spec=TelemetryWriter)
+
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+    importlib.reload(mcp_mod)
+    app = mcp_mod.create_app(pipeline, "col1", config=config, writer=writer)
+    tool_fn = app._tools["search_with_context"]
+
+    asyncio.run(tool_fn(query="test query", collection="col1", hyde=False, rag_fusion=False))
+
+    writer.enqueue.assert_called_once()
+    entry = writer.enqueue.call_args[0][0]
+    # Verify rag_fusion fields are present (may be None/False when disabled)
+    assert hasattr(entry, "rag_fusion_applied")
+    assert hasattr(entry, "rag_fusion_queries_used")
+
+
+def test_mcp_explain_rag_fusion() -> None:
+    """explain tool includes all five rag_fusion fields in result dict."""
+    import asyncio
+
+    pipeline = _make_rag_fusion_pipeline_mock()
+    config = _make_config_with_rag_fusion(enabled=True)
+    gen = _make_rag_fusion_generator_mock()
+    tool_fn = _get_rag_fusion_tool_fn(
+        "explain", pipeline, config=config, rag_fusion_generator=gen
+    )
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True))
+
+    assert isinstance(result, dict)
+    assert result.get("rag_fusion_applied") is True
+    assert result.get("rag_fusion_queries_used") == 2
+    assert result.get("rag_fusion_attempted") is True
+    assert "rag_fusion_sub_queries" in result
+
+
+
+def test_mcp_search_with_context_rag_fusion_true_skips_hyde() -> None:
+    """search_with_context with rag_fusion=True skips HyDE: resolve_hyde_vector NOT called."""
+    import asyncio
+    from unittest.mock import patch
+
+    pipeline = _make_rag_fusion_pipeline_mock()
+    config = _make_config_with_rag_fusion(enabled=True)
+    rf_gen = _make_rag_fusion_generator_mock()
+    hyde_gen = MagicMock()
+    hyde_gen.generate = AsyncMock(return_value=[0.5] * 5)
+
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+    importlib.reload(mcp_mod)
+    app = mcp_mod.create_app(
+        pipeline, "col1", config=config,
+        hyde_generator=hyde_gen, rag_fusion_generator=rf_gen,
+    )
+    tool_fn = app._tools["search_with_context"]
+
+    with patch("archon_search.server.mcp.resolve_hyde_vector", new=AsyncMock(return_value=([0.5] * 5, True))) as mock_resolve:
+        result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True, hyde=True))
+
+    mock_resolve.assert_not_called()
+    assert isinstance(result, dict)
+    assert result.get("hyde_applied") is False
+    assert result.get("rag_fusion_applied") is True

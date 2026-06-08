@@ -8,6 +8,19 @@
 
 ## Changelog
 
+### [next release] — C5 RAG Fusion: additive fields on MCP tool return dicts
+
+**Surface**: MCP tools `search`, `search_with_context`, and `explain`.
+
+**Additive fields** (backward-compatible for tolerant consumers; breaking for strict schema validators):
+- `search` and `search_with_context` return dicts gain `rag_fusion_applied: bool` (default `false`), `rag_fusion_queries_used: int` (default `0`), and `rag_fusion_attempted: bool` (default `false`).
+- `explain` return dict gains `rag_fusion_applied: bool` (default `false`), `rag_fusion_queries_used: int` (default `0`), `rag_fusion_attempted: bool` (default `false`), `rag_fusion_failure_reason: str | null` (default `null`), and `rag_fusion_sub_queries: list[{variant_index, result_count, top_doc_ids}] | null` (default `null`).
+- `search`, `search_with_context`, and `explain` tools each gain a new `rag_fusion: bool = false` parameter.
+
+**Migration**: no action required for consumers that ignore unknown fields. Strict schema validators should add these fields to their tool return type stubs.
+
+**Announced in**: this release.
+
 ### [next release] — C5 RAG Fusion: additive fields on ExplainResponse
 
 **Surface**: `POST /explain` response (`ExplainResponse`); `POST /explain` request (`ExplainRequest`).
