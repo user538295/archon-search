@@ -385,7 +385,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Checkpoint: `uv run pytest tests/test_pipeline.py -k "fuse_rag_fusion" -x`
 
 #### Task 2.2 — `SearchPipelineResult` RAG Fusion fields + `pipeline.search()` orchestration
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - Add `rag_fusion_applied: bool = False`, `rag_fusion_queries_used: int = 0`, and `rag_fusion_attempted: bool = False` to `SearchPipelineResult` dataclass (after `fanout_timings`).
