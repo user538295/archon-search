@@ -714,7 +714,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Checkpoint: `uv run pytest tests/test_integration_rag_fusion.py -m integration -x`
 
 #### Task 6.3 — Eval harness: latency + recall regression scenarios
-- [ ] **Files**: `tests/eval/test_eval_suite.py`, `tests/eval/thresholds.toml`, `tests/eval/README.md`
+- [x] **Files**: `tests/eval/test_eval_suite.py`, `tests/eval/thresholds.toml`, `tests/eval/README.md`
 - **Depends on**: Task 2.2
 - **Description**:
   - Add `[search_rag_fusion_disabled]` in `thresholds.toml`: `p95_ms = 5` (same ceiling as `[search_hyde_false]`). Guards that `rag_fusion=False` path adds zero overhead.

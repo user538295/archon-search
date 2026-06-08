@@ -99,3 +99,27 @@ p95_regression_pct_prefix_vs_unfiltered = 25
 # Set equal to [search_filtered].p95_ms_glob_filtered = 5 ms:
 # resolve_hyde_vector(hyde=False) returns immediately and must not add overhead.
 p95_ms = 5
+
+# ---------------------------------------------------------------------------
+# [search_rag_fusion_disabled] — latency regression guard for RAG Fusion disabled path
+# Purpose: confirm that rag_fusion=False adds no measurable overhead over unfiltered
+# hybrid search (zero overhead for callers who do not opt in to RAG Fusion).
+# Ceiling set equal to [search_filtered].p95_ms_glob_filtered = 5 ms.
+# ---------------------------------------------------------------------------
+
+[search_rag_fusion_disabled]
+# Absolute p95 ceiling (ms) for rag_fusion=false hybrid search (fast path, no generator call).
+# Guards that the rag_fusion=False path adds zero overhead.
+p95_ms = 5
+
+# ---------------------------------------------------------------------------
+# [search_rag_fusion_enabled] — latency regression guard for RAG Fusion enabled path
+# Purpose: confirm the mocked RAG Fusion path (no real LLM, no embedding) completes within
+# an acceptable ceiling. Set to ≤3× the 5 ms baseline p95, matching the brief's requirement.
+# ---------------------------------------------------------------------------
+
+[search_rag_fusion_enabled]
+# Absolute p95 ceiling (ms) for rag_fusion=true hybrid search (mocked generator,
+# N+1 hybrid_search calls but deterministic eval backend).
+# ≤3× the [search_rag_fusion_disabled].p95_ms baseline ceiling.
+p95_ms = 15

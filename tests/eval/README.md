@@ -287,3 +287,31 @@ request (`resolve_hyde_vector` + `hybrid_search`) and asserts p95 ≤
 `[search_hyde_false].p95_ms` from `thresholds.toml` (currently **5 ms** — same
 ceiling as `[search_filtered].p95_ms_glob_filtered`).  This guards against the
 HyDE fast-path accidentally adding measurable overhead over an unfiltered search.
+
+## RAG Fusion eval scenarios (C5)
+
+`tests/eval/test_eval_suite.py` includes three C5-specific eval scenarios:
+
+- **`test_eval_rag_fusion_regression_scenario`** (`@pytest.mark.eval`) — verifies that
+  the RAG Fusion path (mocked `RAGFusionGenerator.generate_variants()` returning
+  deterministic variants) does not break recall on the committed corpus.  Uses a
+  mocked generator returning `query + "_variant1"` and `query + "_variant2"`.
+  This scenario only guards against *breakage* of the RAG Fusion plumbing path —
+  it does **not** measure recall *improvement*.
+
+- **`test_bench_search_rag_fusion_disabled_latency`** (`@pytest.mark.benchmark`) —
+  asserts that `rag_fusion=False` adds no measurable overhead over unfiltered
+  hybrid search.  Threshold: `[search_rag_fusion_disabled].p95_ms` in
+  `thresholds.toml` (**5 ms** — same ceiling as `[search_hyde_false].p95_ms`).
+
+- **`test_bench_search_rag_fusion_enabled_latency`** (`@pytest.mark.benchmark`) —
+  asserts that the mocked RAG Fusion path (no real LLM, no real embedding model)
+  completes within ≤3× the disabled-path ceiling.  Threshold:
+  `[search_rag_fusion_enabled].p95_ms` in `thresholds.toml` (**15 ms**).
+  This is a regression guard against severe pipeline overhead — not a production SLA.
+
+**Measuring recall *improvement* from RAG Fusion** requires `@pytest.mark.live_eval`
+with real fastembed + real Claude API (set `ANTHROPIC_API_KEY` and use the live eval
+lane in `tests/eval/live/test_live_rag_fusion.py`).  The default deterministic eval
+gate cannot measure semantic uplift because the SHA-256 hash embedder is agnostic to
+LLM-generated variant text.

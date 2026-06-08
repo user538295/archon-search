@@ -770,3 +770,476 @@ async def test_eval_hyde_false_fast_path_no_overhead(tmp_path: Path) -> None:
     assert vector is None, "Expected None vector for hyde=False fast path"
     assert applied is False, "Expected hyde_applied=False for hyde=False fast path"
     mock_generator.generate.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# C5 RAG Fusion regression scenario tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.eval
+async def test_eval_rag_fusion_regression_scenario(tmp_path: Path) -> None:
+    """RAG Fusion with a deterministic mocked generator does not break recall on the
+    committed corpus.
+
+    Runs the committed retrieval queries through the full pipeline with a mocked
+    ``RAGFusionGenerator.generate_variants()`` that returns two deterministic variant
+    strings (``query + "_variant1"`` and ``query + "_variant2"``).
+
+    The deterministic eval backend cannot measure semantic improvement from the variants
+    (all queries including variants produce vectors via SHA-256 token hashing, so the
+    variants surface slightly different but overlapping result sets).  This scenario
+    only verifies RAG Fusion does not *break* recall.  Measuring recall *improvement*
+    requires ``@pytest.mark.live`` with real fastembed + real Claude API — see
+    ``tests/eval/live/test_live_rag_fusion.py``.
+
+    Acceptance: ``recall@5`` with the mocked RAG Fusion path is ≥
+    ``thresholds.quality_floors.recall_at_5`` (strict floor, no waiver delta).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.embedder import Embedder
+    from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
+    from archon_search.eval.fixtures import build_doc_collection_map, load_eval_corpus
+    from archon_search.eval.metrics import compute_recall_at_k
+    from archon_search.eval.types import EvalSearchResult, QueryEvalTrace
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.rag_fusion import RAGFusionGenerator
+    from archon_search.reranker import Reranker
+    from archon_search.store import SearchStore
+
+    try:
+        import tomllib  # Python 3.11+
+    except ImportError:
+        import tomli as tomllib  # type: ignore[no-redef]
+
+    # Load committed corpus and quality floors
+    corpus = load_eval_corpus(CORPUS_ROOT)
+    thresholds_data = tomllib.loads((CORPUS_ROOT / "thresholds.toml").read_text())
+    recall_at_5_floor: float = thresholds_data["quality_floors"]["recall_at_5"]
+
+    eval_backend = EvalEmbedderBackend()
+    embedder = Embedder(eval_backend)
+    reranker = Reranker(EvalRerankerBackend())
+    store = SearchStore(tmp_path / "lancedb")
+    await store.connect()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=embedder,
+        reranker=reranker,
+        chunker=DocumentChunker(chunk_size=256),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=10,
+    )
+
+    try:
+        # Ingest the full committed corpus
+        corpus_dir = (CORPUS_ROOT / "corpus").resolve()
+        by_collection: dict[str, list] = {}
+        for d in corpus.documents:
+            by_collection.setdefault(d.collection, []).append(d)
+        for collection, docs in by_collection.items():
+            for d in docs:
+                p = (CORPUS_ROOT / "corpus" / d.relative_path).resolve()
+                r = await pipeline.ingest_file(
+                    p, collection, rebuild_fts=False, embedder=embedder,
+                    collection_root=corpus_dir,
+                )
+                assert r.error is None, f"Ingest failed for {d.doc_id}: {r.error}"
+            await pipeline.store.rebuild_fts_index(collection)
+
+        # Build fixture path → doc_id mapping for result translation
+        path_to_fixture = build_doc_collection_map(corpus)
+
+        from archon_search._diagnostics import SearchScoreBreakdown
+
+        def _map_result(raw, corpus_root):
+            corpus_d = (corpus_root / "corpus").resolve()
+            try:
+                rel = str(Path(raw.source_path).resolve().relative_to(corpus_d))
+            except ValueError:
+                rel = raw.source_path
+            entry = path_to_fixture.get(rel)
+            if entry is None:
+                return None
+            fixture_doc_id, _ = entry
+            return EvalSearchResult(
+                doc_id=fixture_doc_id,
+                runtime_doc_id=raw.doc_id,
+                chunk_id=raw.chunk_id,
+                text=raw.text,
+                source_path=raw.source_path,
+                collection=raw.collection,
+                score_breakdown=SearchScoreBreakdown(
+                    vector_rank=None,
+                    vector_score=None,
+                    vector_score_kind=None,
+                    fts_rank=None,
+                    fts_score=None,
+                    fts_score_kind=None,
+                    rrf_score=raw.score,
+                    reranker_score=None,
+                ),
+            )
+
+        # Mock RAGFusionGenerator: returns two deterministic variant strings derived from
+        # the query. The deterministic eval backend produces slightly different vectors for
+        # these variants because SHA-256 hashing is query-text sensitive.
+        rag_fusion_config = RAGFusionConfig(enabled=True, num_queries=2)
+        mock_rag_generator = MagicMock(spec=RAGFusionGenerator)
+
+        async def _deterministic_variants(query: str) -> list[str]:
+            return [f"{query}_variant1", f"{query}_variant2"]
+
+        mock_rag_generator.generate_variants = AsyncMock(
+            side_effect=_deterministic_variants
+        )
+
+        # Run retrieval queries with RAG Fusion (deterministic variants) and collect traces
+        retrieval_queries = [
+            q for q in corpus.queries if q.metric_scope == "retrieval"
+        ]
+
+        rag_fusion_traces: list[QueryEvalTrace] = []
+        applied_count = 0
+        for q in retrieval_queries:
+            assert q.collection is not None
+            result = await pipeline.search(
+                q.text,
+                q.collection,
+                embedder=embedder,
+                rag_fusion=True,
+                rag_fusion_generator=mock_rag_generator,
+                rag_fusion_config=rag_fusion_config,
+            )
+            if result.rag_fusion_applied:
+                applied_count += 1
+            # Map chunk results back to fixture doc_ids
+            mapped = []
+            for r in result.results:
+                mapped_r = _map_result(r, CORPUS_ROOT)
+                if mapped_r is not None:
+                    mapped.append(mapped_r)
+            rag_fusion_traces.append(
+                QueryEvalTrace(
+                    query_id=q.query_id,
+                    query_text=q.text,
+                    collection=q.collection,
+                    metric_scope="retrieval",
+                    results=mapped,
+                )
+            )
+
+        # Verify RAG Fusion was actually applied for at least some queries
+        assert applied_count > 0, (
+            f"rag_fusion_applied was False for ALL {len(retrieval_queries)} retrieval "
+            "queries — the RAG Fusion pipeline path was never exercised. "
+            "Check has_vector_index() for the eval corpus collections."
+        )
+
+        # Compute recall@5 on the committed corpus with RAG Fusion (deterministic variants)
+        recall_at_5_rag = compute_recall_at_k(rag_fusion_traces, corpus.labels, k=5)
+
+        # Strict floor: RAG Fusion with deterministic variants must not break recall.
+        assert recall_at_5_rag >= recall_at_5_floor, (
+            f"RAG Fusion regression scenario failed: recall@5 with deterministic variants "
+            f"({recall_at_5_rag:.4f}) dropped below the strict floor ({recall_at_5_floor:.4f}). "
+            f"RAG Fusion plumbing has broken recall on the committed corpus."
+        )
+
+        # Verify generate_variants() was called for each retrieval query
+        assert mock_rag_generator.generate_variants.call_count == len(retrieval_queries), (
+            f"Expected RAGFusionGenerator.generate_variants() called "
+            f"{len(retrieval_queries)} times, "
+            f"got {mock_rag_generator.generate_variants.call_count}"
+        )
+
+    finally:
+        await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# C5 RAG Fusion latency benchmark tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.benchmark
+def test_bench_search_rag_fusion_disabled_latency(tmp_path_factory) -> None:  # type: ignore[no-untyped-def]
+    """RAG Fusion disabled path (rag_fusion=False) p95 must stay under the configured ceiling.
+
+    Exercises the full pipeline.search() code path with rag_fusion=False to confirm
+    the rag_fusion parameter check adds zero overhead — callers who do not opt in to
+    RAG Fusion pay nothing. Mirrors the HyDE fast-path benchmark pattern:
+    resolve step + pipeline.search() measured together.
+
+    Threshold: [search_rag_fusion_disabled].p95_ms in tests/eval/thresholds.toml.
+    """
+    import asyncio
+    import statistics
+    import time
+    import tomllib
+
+    import numpy as np
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.embedder import Embedder
+    from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.reranker import Reranker
+    from archon_search.store import SearchStore
+
+    # Must match EvalEmbedderBackend's internal dimension (128).
+    _DIM = 128
+    _N_CHUNKS = 500
+    _N_ITERS = 100
+    _WARMUP = 5
+    _TOP_K = 10
+    _THRESHOLDS_PATH = Path(__file__).resolve().parent / "thresholds.toml"
+
+    def _percentile(data: list[float], p: int) -> float:
+        return statistics.quantiles(data, n=100)[p - 1]
+
+    tmp = tmp_path_factory.mktemp("bench_rag_fusion_disabled")
+    store = SearchStore(tmp)
+
+    async def _setup() -> None:
+        await store.connect()
+        await store._require_connected().create_table(
+            "bench_rf",
+            schema=SearchStore._schema(_DIM),
+            exist_ok=True,
+        )
+        db = store._require_connected()
+        table = await db.open_table("bench_rf")
+        import hashlib
+
+        rows = []
+        for i in range(_N_CHUNKS):
+            doc_seed = f"doc-{i // 3}"
+            doc_id = hashlib.sha256(doc_seed.encode()).hexdigest()
+            chunk_id = f"{doc_id}-{(i % 3):06d}"
+            rng = np.random.default_rng(i)
+            vector = rng.random(_DIM, dtype=np.float32).tolist()
+            rows.append({
+                "doc_id": doc_id,
+                "chunk_id": chunk_id,
+                "text": f"benchmark chunk number {i}",
+                "vector": vector,
+                "source_path": f"/bench/file-{i:04d}.md",
+                "indexed_at": "2026-01-01T00:00:00.000000Z",
+                "file_type": "md",
+                "language": "",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "cli",
+                "updated_at": "2026-01-01T00:00:00.000000Z",
+                "acl": None,
+            })
+        await table.add(rows)
+        from lancedb.index import FTS
+        await table.create_index("text", config=FTS(), replace=True)
+
+    asyncio.run(_setup())
+
+    eval_backend = EvalEmbedderBackend()
+    embedder = Embedder(eval_backend)
+    reranker = Reranker(EvalRerankerBackend())
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=embedder,
+        reranker=reranker,
+        chunker=DocumentChunker(chunk_size=256),
+        parser=DocumentParser(),
+        top_k_retrieve=_TOP_K,
+        top_k_return=_TOP_K,
+    )
+
+    async def _measure_disabled(n_iters: int, warmup: int) -> list[float]:
+        """Run pipeline.search(rag_fusion=False) and return latencies in ms."""
+        query_text = "benchmark query rag fusion disabled"
+        for _ in range(warmup):
+            await pipeline.search(
+                query_text, "bench_rf", embedder=embedder, rag_fusion=False
+            )
+
+        latencies: list[float] = []
+        for i in range(n_iters):
+            t0 = time.perf_counter()
+            # rag_fusion=False: pipeline checks the flag and falls through to normal
+            # search — this confirms the rag_fusion=False code path adds no overhead.
+            await pipeline.search(
+                query_text, "bench_rf", embedder=embedder, rag_fusion=False
+            )
+            latencies.append((time.perf_counter() - t0) * 1000)
+        return latencies
+
+    try:
+        latencies = asyncio.run(_measure_disabled(_N_ITERS, _WARMUP))
+    finally:
+        asyncio.run(store.disconnect())
+
+    p50 = _percentile(latencies, 50)
+    p95 = _percentile(latencies, 95)
+    print(
+        f"\nrag_fusion=disabled: p50={p50:.1f} ms  p95={p95:.1f} ms  (n={len(latencies)})"
+    )
+
+    with open(_THRESHOLDS_PATH, "rb") as fh:
+        thresholds = tomllib.load(fh)
+    ceiling = thresholds["search_rag_fusion_disabled"]["p95_ms"]
+    assert p95 <= ceiling, (
+        f"rag_fusion=False p95 {p95:.1f} ms exceeds ceiling {ceiling} ms. "
+        "The rag_fusion=False pipeline path must not add overhead over unfiltered hybrid search."
+    )
+
+
+@pytest.mark.benchmark
+def test_bench_search_rag_fusion_enabled_latency(tmp_path_factory) -> None:  # type: ignore[no-untyped-def]
+    """RAG Fusion enabled path (rag_fusion=True, mocked generator) p95 stays under ceiling.
+
+    Confirms the mocked RAG Fusion path (deterministic variants, no real LLM, no real
+    embedding model) completes within ≤3× the disabled-path ceiling.  This is a
+    regression guard against severe pipeline overhead — not a production SLA.
+
+    Threshold: [search_rag_fusion_enabled].p95_ms in tests/eval/thresholds.toml.
+    """
+    import asyncio
+    import statistics
+    import time
+    import tomllib
+    from unittest.mock import AsyncMock, MagicMock
+
+    import numpy as np
+
+    from archon_search.config import RAGFusionConfig
+    from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
+    from archon_search.embedder import Embedder
+    from archon_search.rag_fusion import RAGFusionGenerator
+    from archon_search.reranker import Reranker
+    from archon_search.store import SearchStore
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    # Must match EvalEmbedderBackend's internal dimension (128).
+    _DIM = 128
+    _N_CHUNKS = 500
+    _N_ITERS = 100
+    _WARMUP = 5
+    _TOP_K = 10
+    _THRESHOLDS_PATH = Path(__file__).resolve().parent / "thresholds.toml"
+
+    def _percentile(data: list[float], p: int) -> float:
+        return statistics.quantiles(data, n=100)[p - 1]
+
+    tmp = tmp_path_factory.mktemp("bench_rag_fusion_enabled")
+    store = SearchStore(tmp)
+
+    async def _setup() -> None:
+        await store.connect()
+        await store._require_connected().create_table(
+            "bench_rf_on",
+            schema=SearchStore._schema(_DIM),
+            exist_ok=True,
+        )
+        db = store._require_connected()
+        table = await db.open_table("bench_rf_on")
+        import hashlib
+
+        rows = []
+        for i in range(_N_CHUNKS):
+            doc_seed = f"doc-{i // 3}"
+            doc_id = hashlib.sha256(doc_seed.encode()).hexdigest()
+            chunk_id = f"{doc_id}-{(i % 3):06d}"
+            rng = np.random.default_rng(i)
+            vector = rng.random(_DIM, dtype=np.float32).tolist()
+            rows.append({
+                "doc_id": doc_id,
+                "chunk_id": chunk_id,
+                "text": f"benchmark chunk {i}",
+                "vector": vector,
+                "source_path": f"/bench/file-{i:04d}.md",
+                "indexed_at": "2026-01-01T00:00:00.000000Z",
+                "file_type": "md",
+                "language": "",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "cli",
+                "updated_at": "2026-01-01T00:00:00.000000Z",
+                "acl": None,
+            })
+        await table.add(rows)
+        from lancedb.index import FTS
+        await table.create_index("text", config=FTS(), replace=True)
+
+    asyncio.run(_setup())
+
+    eval_backend = EvalEmbedderBackend()
+    embedder = Embedder(eval_backend)
+    reranker = Reranker(EvalRerankerBackend())
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=embedder,
+        reranker=reranker,
+        chunker=DocumentChunker(chunk_size=256),
+        parser=DocumentParser(),
+        top_k_retrieve=_TOP_K,
+        top_k_return=_TOP_K,
+    )
+
+    rag_fusion_config = RAGFusionConfig(enabled=True, num_queries=2)
+    mock_generator = MagicMock(spec=RAGFusionGenerator)
+
+    async def _two_variants(query: str) -> list[str]:
+        return [f"{query}_v1", f"{query}_v2"]
+
+    mock_generator.generate_variants = AsyncMock(side_effect=_two_variants)
+
+    async def _measure_enabled(n_iters: int, warmup: int) -> list[float]:
+        query_text = "benchmark query rag fusion enabled"
+        for _ in range(warmup):
+            await pipeline.search(
+                query_text, "bench_rf_on", embedder=embedder,
+                rag_fusion=True,
+                rag_fusion_generator=mock_generator,
+                rag_fusion_config=rag_fusion_config,
+            )
+
+        latencies: list[float] = []
+        for _ in range(n_iters):
+            t0 = time.perf_counter()
+            await pipeline.search(
+                query_text, "bench_rf_on", embedder=embedder,
+                rag_fusion=True,
+                rag_fusion_generator=mock_generator,
+                rag_fusion_config=rag_fusion_config,
+            )
+            latencies.append((time.perf_counter() - t0) * 1000)
+        return latencies
+
+    try:
+        latencies = asyncio.run(_measure_enabled(_N_ITERS, _WARMUP))
+    finally:
+        asyncio.run(store.disconnect())
+
+    p50 = _percentile(latencies, 50)
+    p95 = _percentile(latencies, 95)
+    print(
+        f"\nrag_fusion=enabled (mocked): p50={p50:.1f} ms  p95={p95:.1f} ms  "
+        f"(n={len(latencies)})"
+    )
+
+    with open(_THRESHOLDS_PATH, "rb") as fh:
+        thresholds = tomllib.load(fh)
+    ceiling = thresholds["search_rag_fusion_enabled"]["p95_ms"]
+    assert p95 <= ceiling, (
+        f"rag_fusion=True (mocked) p95 {p95:.1f} ms exceeds ceiling {ceiling} ms. "
+        "RAG Fusion pipeline has regressed significantly over baseline — investigate "
+        "hybrid_search_with_trace call count or fuse function overhead."
+    )
