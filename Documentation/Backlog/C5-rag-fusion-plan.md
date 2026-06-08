@@ -360,7 +360,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
 > **Note**: The `search_with_context()` return type change to `SearchWithContextResult` (Task 2.2) MUST be deployed atomically with the MCP handler update (Task 5.1). The Phase 2 intermediate state where `search_with_context()` returns `SearchWithContextResult` but the MCP handler still expects `list[dict]` will cause a runtime crash. Do NOT merge Phase 2 independently if Phase 5 is not also merged. The safest approach is to move the `search_with_context()` return type change to Task 5.1, keeping Task 2.2's `search_with_context()` signature unchanged while adding the RAG Fusion parameter forwarding.
 
 #### Task 2.1 — `_fuse_rag_fusion_results()` in `pipeline.py`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: nothing
 - **Description**:
   - Add module-level function `_fuse_rag_fusion_results(variant_results: list[list[ScoredSearchCandidate]], k: int = 60) -> list[ScoredSearchCandidate]`:

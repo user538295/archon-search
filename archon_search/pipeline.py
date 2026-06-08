@@ -112,6 +112,42 @@ _BINARY_EXTENSIONS = frozenset(
 _FRONT_MATTER_EXTENSIONS = frozenset({".md", ".txt", ".rst", ".html"})
 
 
+def _fuse_rag_fusion_results(
+    variant_results: list[list[ScoredSearchCandidate]],
+    k: int = 60,
+) -> list[ScoredSearchCandidate]:
+    """Second-pass Reciprocal Rank Fusion across RAG Fusion variant result lists.
+
+    For each variant result list, each candidate at index *i* (0-indexed) receives
+    score = 1.0 / (k + i + 1).  When the same chunk_id appears in multiple variant
+    lists, scores are accumulated.  The candidate instance kept is the one from the
+    variant where it ranked highest (lowest index).
+
+    Returns candidates sorted descending by accumulated fused RRF score.
+    Returns [] for empty or all-empty input.
+
+    k=60 matches the first-pass per-variant RRF constant used in store.py (_RRF_K).
+    Do NOT import _rrf_score from store.py — implement inline to avoid coupling to
+    store internals.
+    """
+    # accumulated score per chunk_id
+    scores: dict[str, float] = {}
+    # best candidate instance per chunk_id (from variant with lowest rank)
+    best_candidate: dict[str, ScoredSearchCandidate] = {}
+    best_rank: dict[str, int] = {}
+
+    for variant_list in variant_results:
+        for index, candidate in enumerate(variant_list):
+            cid = candidate.chunk_id
+            score = 1.0 / (k + index + 1)
+            scores[cid] = scores.get(cid, 0.0) + score
+            if cid not in best_rank or index < best_rank[cid]:
+                best_rank[cid] = index
+                best_candidate[cid] = candidate
+
+    return sorted(best_candidate.values(), key=lambda c: scores[c.chunk_id], reverse=True)
+
+
 def _extract_front_matter(text: str) -> tuple[dict, str]:
     """Detect and strip YAML front matter from the top of a text document.
 

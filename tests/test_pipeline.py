@@ -5575,3 +5575,132 @@ async def test_ingest_pdf_metadata_survives_store_roundtrip(connected_store, col
         assert "_page_start" in result.metadata, (
             f"_page_start must survive the LanceDB round-trip; metadata={result.metadata!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# _fuse_rag_fusion_results — Task 2.1 (C5 RAG Fusion)
+# ---------------------------------------------------------------------------
+
+def _make_candidate(chunk_id: str, doc_id: str = "doc-x") -> "ScoredSearchCandidate":
+    """Build a minimal ScoredSearchCandidate for fusion tests."""
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    return ScoredSearchCandidate(
+        doc_id=doc_id,
+        chunk_id=chunk_id,
+        text="test text",
+        source_path="/test/path",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=1,
+            vector_score=0.9,
+            vector_score_kind="similarity",
+            fts_rank=1,
+            fts_score=0.8,
+            fts_score_kind="bm25",
+            rrf_score=0.03,
+            reranker_score=None,
+        ),
+        collection="test-col",
+    )
+
+
+def test_fuse_rag_fusion_results_two_variants() -> None:
+    """Two variant lists with one overlapping chunk_id — overlapping chunk ranks higher."""
+    from archon_search.pipeline import _fuse_rag_fusion_results
+
+    shared = _make_candidate("chunk-shared")
+    only_v0 = _make_candidate("chunk-only-v0")
+    only_v1 = _make_candidate("chunk-only-v1")
+
+    # variant 0: shared at rank 0, only_v0 at rank 1
+    # variant 1: shared at rank 0, only_v1 at rank 1
+    variant_results = [
+        [shared, only_v0],
+        [shared, only_v1],
+    ]
+    fused = _fuse_rag_fusion_results(variant_results)
+
+    chunk_ids = [c.chunk_id for c in fused]
+    assert "chunk-shared" in chunk_ids
+    assert "chunk-only-v0" in chunk_ids
+    assert "chunk-only-v1" in chunk_ids
+
+    # shared must rank highest — it accumulated score from both variants
+    assert fused[0].chunk_id == "chunk-shared"
+
+
+def test_fuse_rag_fusion_results_no_overlap() -> None:
+    """Two variant lists with no shared chunk_ids — all chunks present."""
+    from archon_search.pipeline import _fuse_rag_fusion_results
+
+    a = _make_candidate("chunk-a")
+    b = _make_candidate("chunk-b")
+    c = _make_candidate("chunk-c")
+    d = _make_candidate("chunk-d")
+
+    fused = _fuse_rag_fusion_results([[a, b], [c, d]])
+    chunk_ids = {cand.chunk_id for cand in fused}
+    assert chunk_ids == {"chunk-a", "chunk-b", "chunk-c", "chunk-d"}
+
+
+def test_fuse_rag_fusion_results_empty_inputs() -> None:
+    """All-empty variant lists return empty list."""
+    from archon_search.pipeline import _fuse_rag_fusion_results
+
+    assert _fuse_rag_fusion_results([[], []]) == []
+
+
+def test_fuse_rag_fusion_results_single_variant() -> None:
+    """Single variant list — all chunks ranked by their per-list RRF scores."""
+    from archon_search.pipeline import _fuse_rag_fusion_results
+
+    a = _make_candidate("chunk-a")
+    b = _make_candidate("chunk-b")
+    c = _make_candidate("chunk-c")
+
+    fused = _fuse_rag_fusion_results([[a, b, c]])
+    assert [cand.chunk_id for cand in fused] == ["chunk-a", "chunk-b", "chunk-c"]
+
+
+def test_fuse_rag_fusion_results_multi_contribution_boost() -> None:
+    """Chunk in both variants at rank 1 scores higher than chunk only in one variant at rank 1."""
+    from archon_search.pipeline import _fuse_rag_fusion_results
+
+    boosted = _make_candidate("chunk-boosted")
+    single = _make_candidate("chunk-single")
+
+    # boosted appears at rank 0 in both variants
+    # single appears only in variant 0 at rank 0
+    fused = _fuse_rag_fusion_results([
+        [boosted, single],  # variant 0: boosted=rank0, single=rank1
+        [boosted],          # variant 1: boosted=rank0
+    ])
+    # boosted has 2× accumulation; single has 1× — boosted must rank first
+    assert fused[0].chunk_id == "chunk-boosted"
+    assert fused[1].chunk_id == "chunk-single"
+
+
+def test_fuse_rag_fusion_results_deterministic() -> None:
+    """Same inputs always produce the same output."""
+    from archon_search.pipeline import _fuse_rag_fusion_results
+
+    a = _make_candidate("chunk-a")
+    b = _make_candidate("chunk-b")
+    c = _make_candidate("chunk-c")
+
+    variant_results = [[a, b], [b, c]]
+    first = [cand.chunk_id for cand in _fuse_rag_fusion_results(variant_results)]
+    second = [cand.chunk_id for cand in _fuse_rag_fusion_results(variant_results)]
+    assert first == second
+
+
+def test_fuse_rag_fusion_results_same_doc_different_chunks() -> None:
+    """Dedup is by chunk_id, not doc_id — both chunks from same doc survive."""
+    from archon_search.pipeline import _fuse_rag_fusion_results
+
+    chunk1 = _make_candidate("chunk-001", doc_id="doc-x")
+    chunk2 = _make_candidate("chunk-002", doc_id="doc-x")
+
+    fused = _fuse_rag_fusion_results([[chunk1], [chunk2]])
+    chunk_ids = {c.chunk_id for c in fused}
+    assert "chunk-001" in chunk_ids
+    assert "chunk-002" in chunk_ids
