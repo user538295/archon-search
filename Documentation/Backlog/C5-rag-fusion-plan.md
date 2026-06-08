@@ -727,7 +727,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Checkpoint: `uv run pytest -m eval tests/eval/test_eval_suite.py -x`
 
 #### Task 6.4 — Live E2E tests: real fastembed + real Anthropic API
-- [ ] **File**: `tests/eval/live/test_live_rag_fusion.py` (new)
+- [x] **File**: `tests/eval/live/test_live_rag_fusion.py` (new)
 - **Depends on**: Task 6.2
 - **Description**:
   Follow the pattern in `tests/eval/live/test_live_acceptance.py`. Requires `ANTHROPIC_API_KEY` set and real model weights. Mark all tests `@pytest.mark.live_eval`. Excluded from default CI; run manually or in a dedicated live-eval CI job.
