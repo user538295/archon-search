@@ -1034,3 +1034,103 @@ def test_hyde_config_empty_model(tmp_path: Path) -> None:
     toml_file.write_text('[hyde]\nmodel = ""\n', encoding="utf-8")
     with pytest.raises(ConfigError, match="model"):
         load_config(path=toml_file)
+
+
+# ---------------------------------------------------------------------------
+# C5 Task 1.1 — RAGFusionConfig dataclass + [rag_fusion] TOML loader
+# ---------------------------------------------------------------------------
+
+
+def test_rag_fusion_config_defaults(tmp_path: Path) -> None:
+    """load_config with no TOML returns RAGFusionConfig with enabled=False, num_queries=2."""
+    from archon_search.config import RAGFusionConfig
+    from archon_search.constants import DEFAULT_FAST_MODEL
+
+    config = load_config(path=tmp_path / "nonexistent.toml")
+    assert isinstance(config.rag_fusion, RAGFusionConfig)
+    assert config.rag_fusion.enabled is False
+    assert config.rag_fusion.model == DEFAULT_FAST_MODEL
+    assert config.rag_fusion.timeout_seconds == 5.0
+    assert config.rag_fusion.max_requests_per_minute == 60
+    assert config.rag_fusion.num_queries == 2
+
+
+def test_rag_fusion_toml_all_keys(tmp_path: Path) -> None:
+    """TOML with all [rag_fusion] keys parses correctly."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text(
+        "[rag_fusion]\nenabled = true\nmodel = \"claude-test\"\ntimeout_seconds = 10.0\nmax_requests_per_minute = 30\nnum_queries = 3\n",
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.rag_fusion.enabled is True
+    assert config.rag_fusion.model == "claude-test"
+    assert config.rag_fusion.timeout_seconds == 10.0
+    assert config.rag_fusion.max_requests_per_minute == 30
+    assert config.rag_fusion.num_queries == 3
+
+
+def test_rag_fusion_toml_partial_keys(tmp_path: Path) -> None:
+    """TOML with only num_queries=3 applies that; other fields remain default."""
+    from archon_search.constants import DEFAULT_FAST_MODEL
+
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[rag_fusion]\nnum_queries = 3\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.rag_fusion.num_queries == 3
+    assert config.rag_fusion.enabled is False
+    assert config.rag_fusion.model == DEFAULT_FAST_MODEL
+    assert config.rag_fusion.timeout_seconds == 5.0
+    assert config.rag_fusion.max_requests_per_minute == 60
+
+
+def test_rag_fusion_config_invalid_timeout(tmp_path: Path) -> None:
+    """timeout_seconds = 0 raises ConfigError."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[rag_fusion]\ntimeout_seconds = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="timeout_seconds"):
+        load_config(path=toml_file)
+
+
+def test_rag_fusion_config_invalid_rpm(tmp_path: Path) -> None:
+    """max_requests_per_minute = 0 raises ConfigError."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[rag_fusion]\nmax_requests_per_minute = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="max_requests_per_minute"):
+        load_config(path=toml_file)
+
+
+def test_rag_fusion_config_empty_model(tmp_path: Path) -> None:
+    """model = "" raises ConfigError."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[rag_fusion]\nmodel = ""\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="model"):
+        load_config(path=toml_file)
+
+
+def test_rag_fusion_config_num_queries_zero(tmp_path: Path) -> None:
+    """num_queries = 0 raises ConfigError."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[rag_fusion]\nnum_queries = 0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="num_queries"):
+        load_config(path=toml_file)
+
+
+def test_rag_fusion_config_num_queries_six(tmp_path: Path) -> None:
+    """num_queries = 6 raises ConfigError."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[rag_fusion]\nnum_queries = 6\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="num_queries"):
+        load_config(path=toml_file)
+
+
+def test_rag_fusion_config_num_queries_one_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """num_queries = 1 does NOT raise; caplog contains WARNING about LLM overhead."""
+    import logging
+
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[rag_fusion]\nnum_queries = 1\n", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        config = load_config(path=toml_file)
+    assert config.rag_fusion.num_queries == 1
+    assert any("num_queries" in r.message and "overhead" in r.message for r in caplog.records)

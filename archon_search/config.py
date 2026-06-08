@@ -29,6 +29,15 @@ class HyDEConfig:
 
 
 @dataclass
+class RAGFusionConfig:
+    enabled: bool = False
+    model: str = field(default_factory=lambda: DEFAULT_FAST_MODEL)
+    timeout_seconds: float = 5.0
+    max_requests_per_minute: int = 60
+    num_queries: int = 2
+
+
+@dataclass
 class TelemetryConfig:
     enabled: bool = False
     retention_days: int = 30
@@ -94,6 +103,8 @@ class SearchConfig:
     namespaces: dict[str, str] = field(default_factory=dict)
     # [hyde]
     hyde: HyDEConfig = field(default_factory=HyDEConfig)
+    # [rag_fusion]
+    rag_fusion: RAGFusionConfig = field(default_factory=RAGFusionConfig)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -392,5 +403,35 @@ def load_config(path: Path | None = None) -> SearchConfig:
             raise ConfigError(f"[hyde].max_requests_per_minute must be >= 1, got {max_rpm}")
         hyde.max_requests_per_minute = max_rpm
     config.hyde = hyde
+
+    rag_fusion_cfg = doc.get("rag_fusion", {})
+    rag_fusion = RAGFusionConfig()
+    if "enabled" in rag_fusion_cfg:
+        rag_fusion.enabled = _coerce_bool(rag_fusion_cfg["enabled"], "[rag_fusion].enabled")
+    if "model" in rag_fusion_cfg:
+        model = _coerce_str(rag_fusion_cfg["model"], "[rag_fusion].model")
+        if not model:
+            raise ConfigError("[rag_fusion].model must be a non-empty string")
+        rag_fusion.model = model
+    if "timeout_seconds" in rag_fusion_cfg:
+        timeout_seconds = _coerce_float(rag_fusion_cfg["timeout_seconds"], "[rag_fusion].timeout_seconds")
+        if timeout_seconds <= 0:
+            raise ConfigError(f"[rag_fusion].timeout_seconds must be > 0, got {timeout_seconds}")
+        rag_fusion.timeout_seconds = timeout_seconds
+    if "max_requests_per_minute" in rag_fusion_cfg:
+        max_rpm = _coerce_int(rag_fusion_cfg["max_requests_per_minute"], "[rag_fusion].max_requests_per_minute")
+        if max_rpm < 1:
+            raise ConfigError(f"[rag_fusion].max_requests_per_minute must be >= 1, got {max_rpm}")
+        rag_fusion.max_requests_per_minute = max_rpm
+    if "num_queries" in rag_fusion_cfg:
+        num_queries = _coerce_int(rag_fusion_cfg["num_queries"], "[rag_fusion].num_queries")
+        if num_queries < 1 or num_queries > 5:
+            raise ConfigError(f"[rag_fusion].num_queries must be between 1 and 5, got {num_queries}")
+        if num_queries == 1:
+            _logger.warning(
+                "[rag_fusion].num_queries = 1: LLM overhead rarely justifies a single variant; consider num_queries >= 2"
+            )
+        rag_fusion.num_queries = num_queries
+    config.rag_fusion = rag_fusion
 
     return config
