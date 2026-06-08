@@ -547,7 +547,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
 > **Releasable**: after Task 4.3 — `POST /search` and `POST /explain` respect `rag_fusion=true`; all new response fields are correct.
 
 #### Task 4.1 — `RAGFusionGenerator` initialization in `app.py` + optional dep + example config
-- [ ] **Files**: `archon_search/server/app.py`, `pyproject.toml`, `archon-search.toml.example`
+- [x] **Files**: `archon_search/server/app.py`, `pyproject.toml`, `archon-search.toml.example`
 - **Depends on**: Task 1.2
 - **Description**:
   - Add `rag_fusion = ["anthropic>=0.40"]` to `[project.optional-dependencies]` in `pyproject.toml`.
