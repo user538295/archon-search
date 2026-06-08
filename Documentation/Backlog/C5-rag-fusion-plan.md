@@ -565,7 +565,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Checkpoint: `uv run pytest tests/test_app.py -k "rag_fusion" -x`
 
 #### Task 4.2 — Wire `routes_search.py` REST handler
-- [ ] **File**: `archon_search/server/routes_search.py`
+- [x] **File**: `archon_search/server/routes_search.py`
 - **Depends on**: Tasks 2.2, 2.3, 3.1, 4.1
 - **Description**:
   - In the `search` handler, before the `if body.collections is not None` branch:

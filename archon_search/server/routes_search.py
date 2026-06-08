@@ -19,6 +19,7 @@ from archon_search.pipeline import (
     FanoutTimeoutError,
     MetadataLookupError,
 )
+from archon_search.rag_fusion import RAGFusionDependencyError
 from archon_search.server.schemas import ExcludedCollectionSchema
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
@@ -143,16 +144,30 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     start = monotonic()
     timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
 
-    # Resolve HyDE vector before dispatching to either search path
-    generator = getattr(request.app.state, "hyde_generator", None)
-    try:
-        hyde_vector, hyde_applied = await resolve_hyde_vector(body.query, body.hyde, generator, config.hyde)
-    except RuntimeError as exc:
-        return JSONResponse({"detail": str(exc)}, status_code=422)
+    # Resolve HyDE vector and RAG Fusion generator — mutual exclusion: rag_fusion wins
+    rag_fusion_gen = getattr(request.app.state, "rag_fusion_generator", None)
+    if body.rag_fusion:
+        hyde_vector, hyde_applied = None, False
+    else:
+        generator = getattr(request.app.state, "hyde_generator", None)
+        try:
+            hyde_vector, hyde_applied = await resolve_hyde_vector(body.query, body.hyde, generator, config.hyde)
+        except RuntimeError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=422)
 
     if body.collections is not None:
         try:
-            result = await pipeline.search_many(body.query, body.collections, namespace=ns, query_vector=hyde_vector)
+            result = await pipeline.search_many(
+                body.query,
+                body.collections,
+                namespace=ns,
+                query_vector=hyde_vector,
+                rag_fusion=body.rag_fusion,
+                rag_fusion_generator=rag_fusion_gen,
+                rag_fusion_config=config.rag_fusion,
+            )
+        except RAGFusionDependencyError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=422)
         except CollectionNotFoundError:
             return JSONResponse({"detail": "collection not found"}, status_code=404)
         except MetadataLookupError:
@@ -171,6 +186,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                         latency_ms=(monotonic() - start) * 1000.0,
                         excluded_count=excluded_count,
                         correlation_id=_correlation_id.get(),
+                        rag_fusion_applied=result.rag_fusion_applied,
+                        rag_fusion_queries_used=result.rag_fusion_queries_used,
                     )
                 )
             except Exception:
@@ -184,6 +201,9 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             ],
             embedding_model=config.embedding_model,
             hyde_applied=hyde_applied,
+            rag_fusion_applied=result.rag_fusion_applied,
+            rag_fusion_queries_used=result.rag_fusion_queries_used,
+            rag_fusion_attempted=result.rag_fusion_attempted,
         )
 
     try:
@@ -223,7 +243,17 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 embedder = pipeline._global_embedder
                 active_model = config.embedding_model
             result = await asyncio.wait_for(
-                pipeline.search(body.query, body.collection, namespace=ns, embedder=embedder, filters=body.filters, query_vector=hyde_vector),
+                pipeline.search(
+                    body.query,
+                    body.collection,
+                    namespace=ns,
+                    embedder=embedder,
+                    filters=body.filters,
+                    query_vector=hyde_vector,
+                    rag_fusion=body.rag_fusion,
+                    rag_fusion_generator=rag_fusion_gen,
+                    rag_fusion_config=config.rag_fusion,
+                ),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
             include_metadata = body.filters is not None and body.filters.include_metadata
@@ -242,6 +272,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                             latency_ms=(monotonic() - start) * 1000.0,
                             filter_flags=flags,
                             correlation_id=_correlation_id.get(),
+                            rag_fusion_applied=result.rag_fusion_applied,
+                            rag_fusion_queries_used=result.rag_fusion_queries_used,
                         )
                     )
                 except Exception:
@@ -256,7 +288,13 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 ],
                 embedding_model=active_model,
                 hyde_applied=hyde_applied,
+                rag_fusion_applied=result.rag_fusion_applied,
+                rag_fusion_queries_used=result.rag_fusion_queries_used,
+                rag_fusion_attempted=result.rag_fusion_attempted,
             )
+        except RAGFusionDependencyError as exc:
+            _emit_timings()
+            return JSONResponse({"detail": str(exc)}, status_code=422)
         except asyncio.TimeoutError:
             _emit_timings()
             if writer is not None:

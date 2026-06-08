@@ -1115,3 +1115,117 @@ def test_search_response_has_rag_fusion_fields() -> None:
     assert resp.rag_fusion_applied is False
     assert resp.rag_fusion_queries_used == 0
     assert resp.rag_fusion_attempted is False
+
+
+# ---------------------------------------------------------------------------
+# C5 Task 4.2: routes_search.py handler wiring for RAG Fusion
+# ---------------------------------------------------------------------------
+
+
+def test_search_rag_fusion_true_skips_hyde(tmp_path: Path) -> None:
+    """rag_fusion=True must suppress HyDE: resolve_hyde_vector NOT called; response hyde_applied=False."""
+    app, client = _make_app(tmp_path)
+    results = [_make_search_result(1)]
+    pipeline_mock = _make_pipeline_mock(results=results)
+    pipeline_mock.search = AsyncMock(
+        return_value=SearchPipelineResult(
+            results=results, acl_filtered=False, rag_fusion_applied=True, rag_fusion_queries_used=2
+        )
+    )
+    app.state.pipeline = pipeline_mock
+
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=([0.1, 0.2], True)),
+    ) as mock_hyde:
+        response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": True, "hyde": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["hyde_applied"] is False
+    mock_hyde.assert_not_called()
+
+
+def test_search_rag_fusion_true_passes_to_pipeline(tmp_path: Path) -> None:
+    """rag_fusion=True: pipeline called with rag_fusion params; response carries rag_fusion_applied and rag_fusion_queries_used."""
+    app, client = _make_app(tmp_path)
+    results = [_make_search_result(1)]
+    pipeline_mock = _make_pipeline_mock(results=results)
+    pipeline_mock.search = AsyncMock(
+        return_value=SearchPipelineResult(
+            results=results, acl_filtered=False, rag_fusion_applied=True, rag_fusion_queries_used=2, rag_fusion_attempted=True
+        )
+    )
+    app.state.pipeline = pipeline_mock
+
+    with patch("archon_search.server.routes_search.resolve_hyde_vector", new=AsyncMock(return_value=(None, False))):
+        response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["rag_fusion_applied"] is True
+    assert data["rag_fusion_queries_used"] == 2
+    assert data["rag_fusion_attempted"] is True
+    # Verify pipeline was called with rag_fusion=True
+    call_kwargs = pipeline_mock.search.call_args.kwargs
+    assert call_kwargs.get("rag_fusion") is True
+    assert call_kwargs.get("rag_fusion_generator") is not None
+    assert call_kwargs.get("rag_fusion_config") is not None
+
+
+def test_search_rag_fusion_false_hyde_still_works(tmp_path: Path) -> None:
+    """rag_fusion=False + hyde=True: resolve_hyde_vector IS called normally."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock()
+
+    hyde_vector = [0.5, 0.6, 0.7]
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=(hyde_vector, True)),
+    ) as mock_hyde:
+        response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": False, "hyde": True})
+
+    assert response.status_code == 200
+    mock_hyde.assert_called_once()
+    assert response.json()["hyde_applied"] is True
+
+
+def test_search_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
+    """pipeline.search() raises RAGFusionDependencyError → 422 response."""
+    from archon_search.rag_fusion import RAGFusionDependencyError
+
+    app, client = _make_app(tmp_path)
+    pipeline_mock = _make_pipeline_mock()
+    pipeline_mock.search = AsyncMock(side_effect=RAGFusionDependencyError("Install archon-search[rag_fusion]"))
+    app.state.pipeline = pipeline_mock
+
+    with patch("archon_search.server.routes_search.resolve_hyde_vector", new=AsyncMock(return_value=(None, False))):
+        response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": True})
+
+    assert response.status_code == 422
+    assert "rag_fusion" in response.json()["detail"].lower() or "install" in response.json()["detail"].lower()
+
+
+def test_search_many_rag_fusion_true(tmp_path: Path) -> None:
+    """Multi-collection path with rag_fusion=True passes rag_fusion params to search_many."""
+    app, client = _make_app(tmp_path)
+    pipeline_mock = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(
+            results=[], acl_filtered=False, rag_fusion_applied=True, rag_fusion_queries_used=2
+        )
+    )
+    app.state.pipeline = pipeline_mock
+
+    with patch("archon_search.server.routes_search.resolve_hyde_vector", new=AsyncMock(return_value=(None, False))):
+        response = client.post("/search", json={"collections": ["a", "b"], "query": "q", "rag_fusion": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["rag_fusion_applied"] is True
+    assert data["rag_fusion_queries_used"] == 2
+    call_kwargs = pipeline_mock.search_many.call_args.kwargs
+    assert call_kwargs.get("rag_fusion") is True
+    assert call_kwargs.get("rag_fusion_generator") is not None
+    assert call_kwargs.get("rag_fusion_config") is not None
+    # HyDE must be suppressed: query_vector=None when rag_fusion=True
+    assert call_kwargs.get("query_vector") is None
