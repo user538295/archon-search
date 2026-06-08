@@ -484,7 +484,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
 > **Releasable**: after Task 3.3 — all request/response and telemetry Pydantic models carry the new fields; OpenAPI snapshot updated.
 
 #### Task 3.1 — `SearchRequest` + `SearchResponse` RAG Fusion fields
-- [ ] **File**: `archon_search/server/routes_search.py`
+- [x] **File**: `archon_search/server/routes_search.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `rag_fusion: bool = False` to `SearchRequest` (after `hyde`).
@@ -493,9 +493,9 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Update OpenAPI snapshot: `uv run --python 3.12 python -c "..."` (follow existing snapshot script).
 - **Releasable**: `POST /search` with `{"rag_fusion": true}` deserialises; response includes both new fields.
 - **Tests (TDD)** — `tests/test_routes_search.py`:
-  - Unit: `test_search_request_rag_fusion_default_false` — `SearchRequest(query="q", collection="c")` has `rag_fusion == False`.
-  - Unit: `test_search_request_accepts_rag_fusion_true` — `SearchRequest(..., rag_fusion=True)` validates without error.
-  - Unit: `test_search_response_has_rag_fusion_fields` — `SearchResponse(results=[], acl_filtered=False)` has `rag_fusion_applied=False, rag_fusion_queries_used=0, rag_fusion_attempted=False`.
+  - [x] Unit: `test_search_request_rag_fusion_default_false` — `SearchRequest(query="q", collection="c")` has `rag_fusion == False`.
+  - [x] Unit: `test_search_request_accepts_rag_fusion_true` — `SearchRequest(..., rag_fusion=True)` validates without error.
+  - [x] Unit: `test_search_response_has_rag_fusion_fields` — `SearchResponse(results=[], acl_filtered=False)` has `rag_fusion_applied=False, rag_fusion_queries_used=0, rag_fusion_attempted=False`.
   - Checkpoint: `uv run pytest tests/test_routes_search.py -k "rag_fusion" -x`
 
 #### Task 3.2 — `ExplainRequest` + `ExplainResponse` + `RagFusionSubQueryResult` schema

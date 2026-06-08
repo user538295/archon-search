@@ -1444,6 +1444,11 @@
             "title": "Query",
             "type": "string"
           },
+          "rag_fusion": {
+            "default": false,
+            "title": "Rag Fusion",
+            "type": "boolean"
+          },
           "top_k": {
             "default": 5,
             "maximum": 100.0,
@@ -1480,6 +1485,21 @@
             "default": false,
             "title": "Hyde Applied",
             "type": "boolean"
+          },
+          "rag_fusion_applied": {
+            "default": false,
+            "title": "Rag Fusion Applied",
+            "type": "boolean"
+          },
+          "rag_fusion_attempted": {
+            "default": false,
+            "title": "Rag Fusion Attempted",
+            "type": "boolean"
+          },
+          "rag_fusion_queries_used": {
+            "default": 0,
+            "title": "Rag Fusion Queries Used",
+            "type": "integer"
           },
           "results": {
             "items": {
@@ -1874,7 +1894,8 @@
   },
   "info": {
     "description": "REST API for archon-search document search and collection management",
-    "title": "archon-search"
+    "title": "archon-search",
+    "version": "26.6.710.post1.dev62"
   },
   "openapi": "3.1.0",
   "paths": {

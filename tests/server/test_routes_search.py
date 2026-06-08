@@ -1088,3 +1088,30 @@ def test_search_many_hyde_true(tmp_path: Path) -> None:
     call_kwargs = pipeline_mock.search_many.call_args
     # query_vector should be passed as positional or keyword
     assert hyde_vector in call_kwargs.args or call_kwargs.kwargs.get("query_vector") == hyde_vector
+
+
+# ---------------------------------------------------------------------------
+# C5 Task 3.1: SearchRequest.rag_fusion + SearchResponse RAG Fusion fields
+# ---------------------------------------------------------------------------
+
+
+def test_search_request_rag_fusion_default_false() -> None:
+    """SearchRequest without rag_fusion field should default to False."""
+    req = SearchRequest(query="q", collection="c")
+    assert req.rag_fusion is False
+
+
+def test_search_request_accepts_rag_fusion_true() -> None:
+    """SearchRequest with rag_fusion=True should validate without error."""
+    req = SearchRequest(query="q", collection="c", rag_fusion=True)
+    assert req.rag_fusion is True
+
+
+def test_search_response_has_rag_fusion_fields() -> None:
+    """SearchResponse should have rag_fusion_applied=False, rag_fusion_queries_used=0, rag_fusion_attempted=False by default."""
+    from archon_search.server.routes_search import SearchResponse
+
+    resp = SearchResponse(results=[], acl_filtered=False)
+    assert resp.rag_fusion_applied is False
+    assert resp.rag_fusion_queries_used == 0
+    assert resp.rag_fusion_attempted is False

@@ -24,7 +24,16 @@ from archon_search.server.routes_search import SearchResponse, SearchResultSchem
 
 def test_search_response_schema_fields() -> None:
     result = SearchResponse(results=[], acl_filtered=False).model_dump()
-    assert result == {"results": [], "acl_filtered": False, "excluded_collections": [], "embedding_model": "", "hyde_applied": False}
+    assert result == {
+        "results": [],
+        "acl_filtered": False,
+        "excluded_collections": [],
+        "embedding_model": "",
+        "hyde_applied": False,
+        "rag_fusion_applied": False,
+        "rag_fusion_queries_used": 0,
+        "rag_fusion_attempted": False,
+    }
 
 
 def test_search_response_is_never_bare_array() -> None:

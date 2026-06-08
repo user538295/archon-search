@@ -8,6 +8,20 @@
 
 ## Changelog
 
+### [next release] — C5 RAG Fusion: additive fields on SearchResponse
+
+**Surface**: `POST /search` response (`SearchResponse`); `POST /search` request (`SearchRequest`).
+
+**Additive fields** (backward-compatible for tolerant consumers; breaking for strict schema validators):
+- `SearchRequest` gains `rag_fusion: bool` (default `false`). Clients that validate the request schema strictly must allow this new optional field.
+- `SearchResponse` gains `rag_fusion_applied: bool` (default `false`). Indicates whether the search used RAG Fusion multi-query decomposition and result fusion.
+- `SearchResponse` gains `rag_fusion_queries_used: int` (default `0`). Number of successful LLM-generated variant searches (not counting the original query).
+- `SearchResponse` gains `rag_fusion_attempted: bool` (default `false`). Indicates whether RAG Fusion generation was attempted (true even if fallback to single-query occurred).
+
+**Migration**: no action required for consumers that ignore unknown fields. Strict schema validators should add these fields to their `SearchResponse` and `SearchRequest` type stubs.
+
+**Announced in**: this release.
+
 ### [next release] — C4 HyDE query expansion: additive fields on SearchResponse and ExplainResponse
 
 **Surface**: `POST /search` response (`SearchResponse`); `POST /search` request (`SearchRequest`); `POST /explain` response (`ExplainResponse`); `POST /explain` request (`ExplainRequest`).
