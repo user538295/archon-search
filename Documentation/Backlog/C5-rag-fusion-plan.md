@@ -667,7 +667,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
 > **Releasable**: after Task 6.3 — full test suite passes, CI guard active, integration tests green, eval harness updated. Task 6.4 (live E2E) is not a CI gate but must pass manually before merge.
 
 #### Task 6.1 — Telemetry invariant CI guard for `rag_fusion.py`
-- [ ] **File**: `tests/test_no_query_log_in_rag_fusion.py` (new)
+- [x] **File**: `tests/test_no_query_log_in_rag_fusion.py` (new)
 - **Depends on**: Task 1.2
 - **Description**:
   - Analogous to `tests/test_no_query_log_in_hyde.py`. Copy the full guard implementation (both regex patterns, `_extract_call_args`, `_bare_query_in_log_violations`, all meta-tests). Change the final integration test to read `archon_search/rag_fusion.py` instead of `hyde.py`.
