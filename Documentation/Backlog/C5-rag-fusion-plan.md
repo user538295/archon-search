@@ -524,7 +524,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Checkpoint: `uv run pytest tests/test_routes_explain.py -k "rag_fusion" -x`
 
 #### Task 3.3 — `TelemetryEntry` RAG Fusion fields
-- [ ] **File**: `archon_search/telemetry/entry.py`
+- [x] **File**: `archon_search/telemetry/entry.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `rag_fusion_applied: bool | None = None` and `rag_fusion_queries_used: int | None = None` to `TelemetryEntry` (after existing fields).
@@ -534,11 +534,11 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - No `query` or variant text parameter anywhere — structural invariant preserved.
 - **Releasable**: telemetry entries can carry RAG Fusion metadata; all existing call sites remain unmodified (new kwargs are optional).
 - **Tests (TDD)** — `tests/test_telemetry.py` (extend):
-  - Unit: `test_telemetry_entry_rag_fusion_fields_default_none` — `TelemetryEntry` created without new kwargs has `rag_fusion_applied=None, rag_fusion_queries_used=None`.
-  - Unit: `test_telemetry_entry_from_search_tool_result_with_rag_fusion` — factory method sets both fields when provided.
-  - Unit: `test_telemetry_entry_from_search_multi_result_with_rag_fusion` — same for multi-result factory.
-  - Unit: `test_telemetry_entry_from_explain_result_with_rag_fusion` — same for explain factory.
-  - Unit: `test_telemetry_entry_no_query_param` — static inspection of all three updated factory method signatures confirms no `query` parameter exists.
+  - [x] Unit: `test_telemetry_entry_rag_fusion_fields_default_none` — `TelemetryEntry` created without new kwargs has `rag_fusion_applied=None, rag_fusion_queries_used=None`.
+  - [x] Unit: `test_telemetry_entry_from_search_tool_result_with_rag_fusion` — factory method sets both fields when provided.
+  - [x] Unit: `test_telemetry_entry_from_search_multi_result_with_rag_fusion` — same for multi-result factory.
+  - [x] Unit: `test_telemetry_entry_from_explain_result_with_rag_fusion` — same for explain factory.
+  - [x] Unit: `test_telemetry_entry_no_query_param` — static inspection of all three updated factory method signatures confirms no `query` parameter exists.
   - Checkpoint: `uv run pytest tests/test_telemetry.py -k "rag_fusion" -x`
 
 ---

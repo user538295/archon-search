@@ -271,6 +271,17 @@ def test_jsonl_key_set_equals_documented_schema(tmp_path: Path) -> None:
         )
         writer.enqueue(corr_entry)
 
+        # rag_fusion entry — provides: rag_fusion_applied, rag_fusion_queries_used keys in JSONL.
+        rag_fusion_entry = TelemetryEntry.from_search_tool_result(
+            endpoint="search",
+            collection="col1",
+            result_doc_ids=["doc1"],
+            latency_ms=25.0,
+            rag_fusion_applied=True,
+            rag_fusion_queries_used=2,
+        )
+        writer.enqueue(rag_fusion_entry)
+
     # lifespan exit has drained the writer
 
     entries = _read_all_jsonl(log_dir)

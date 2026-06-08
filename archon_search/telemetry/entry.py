@@ -100,6 +100,8 @@ DOCUMENTED_SCHEMA_FIELDS: frozenset[str] = frozenset(
         "error_kind",
         "filter_flags",
         "correlation_id",
+        "rag_fusion_applied",
+        "rag_fusion_queries_used",
     }
 )
 
@@ -129,6 +131,9 @@ class TelemetryEntry(BaseModel):
     filter_flags: FilterFlags = Field(default_factory=FilterFlags)
     correlation_id: str | None = None
 
+    rag_fusion_applied: bool | None = None
+    rag_fusion_queries_used: int | None = None
+
     @staticmethod
     def _new_query_id() -> str:
         return uuid.uuid4().hex
@@ -147,6 +152,8 @@ class TelemetryEntry(BaseModel):
         latency_ms: float,
         filter_flags: FilterFlags | None = None,
         correlation_id: str | None = None,
+        rag_fusion_applied: bool | None = None,
+        rag_fusion_queries_used: int | None = None,
     ) -> TelemetryEntry:
         if endpoint not in ("search", "search_with_context"):
             raise ValueError(
@@ -164,6 +171,8 @@ class TelemetryEntry(BaseModel):
             result_doc_ids=result_doc_ids,
             filter_flags=filter_flags if filter_flags is not None else FilterFlags(),
             correlation_id=correlation_id,
+            rag_fusion_applied=rag_fusion_applied,
+            rag_fusion_queries_used=rag_fusion_queries_used,
         )
 
     @classmethod
@@ -176,6 +185,8 @@ class TelemetryEntry(BaseModel):
         latency_ms: float,
         excluded_count: int,
         correlation_id: str | None = None,
+        rag_fusion_applied: bool | None = None,
+        rag_fusion_queries_used: int | None = None,
     ) -> TelemetryEntry:
         """Telemetry for a multi-collection (fan-out) search.
 
@@ -194,6 +205,8 @@ class TelemetryEntry(BaseModel):
             result_count=result_count,
             excluded_count=excluded_count,
             correlation_id=correlation_id,
+            rag_fusion_applied=rag_fusion_applied,
+            rag_fusion_queries_used=rag_fusion_queries_used,
         )
 
     @classmethod
@@ -246,6 +259,8 @@ class TelemetryEntry(BaseModel):
         result_count: int,
         latency_ms: float,
         correlation_id: str | None = None,
+        rag_fusion_applied: bool | None = None,
+        rag_fusion_queries_used: int | None = None,
     ) -> TelemetryEntry:
         return cls(
             query_id=cls._new_query_id(),
@@ -256,4 +271,6 @@ class TelemetryEntry(BaseModel):
             collection=collection,
             result_count=result_count,
             correlation_id=correlation_id,
+            rag_fusion_applied=rag_fusion_applied,
+            rag_fusion_queries_used=rag_fusion_queries_used,
         )
