@@ -630,7 +630,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
 > **Releasable**: after Task 5.1 — MCP `search`, `search_with_context`, and `explain` tools support `rag_fusion: bool`.
 
 #### Task 5.1 — Wire MCP tools: `search`, `search_with_context`, `explain`
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Tasks 2.2, 2.3, 2.4, 4.1
 - **Description**:
   - `create_mcp_app()` closure now has access to `rag_fusion_generator` via its parameter.
