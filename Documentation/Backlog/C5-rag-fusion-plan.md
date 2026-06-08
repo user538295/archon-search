@@ -596,7 +596,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Checkpoint: `uv run pytest tests/test_routes_search.py -k "rag_fusion" -x`
 
 #### Task 4.3 — Wire `routes_explain.py` REST handler
-- [ ] **File**: `archon_search/server/routes_explain.py`
+- [x] **File**: `archon_search/server/routes_explain.py`
 - **Depends on**: Tasks 2.4, 3.2, 4.1
 - **Description**:
   - In `explain_endpoint`, resolve mutual exclusion at the top of the handler body:
