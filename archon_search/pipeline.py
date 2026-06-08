@@ -873,14 +873,14 @@ class SearchPipeline:
         collections: list[str],
         namespace: str = DEFAULT_NAMESPACE,
         query_vector: list[float] | None = None,
+        rag_fusion: bool = False,
+        rag_fusion_generator: "RAGFusionGenerator | None" = None,
+        rag_fusion_config: "RAGFusionConfig | None" = None,
     ) -> SearchPipelineResult:
         """Embed the query once, fan out hybrid retrieval across ``collections`` in
         parallel, merge with provenance, run a single global rerank pass, and return a
         unified result."""
-        # Step 1: embed exactly once (or use caller-provided vector for HyDE).
-        vector = list(query_vector) if query_vector is not None else await self._global_embedder.embed_one(query)
-
-        # Step 2: metadata lookup, validation, namespace + model partitioning.
+        # Step 1: metadata lookup, validation, namespace + model partitioning.
         try:
             all_meta = await self.get_all_collections_meta(namespace)
         except Exception as exc:
@@ -907,6 +907,146 @@ class SearchPipeline:
                 acl_filtered=False,
                 excluded_collections=excluded_collections,
             )
+
+        # --- RAG Fusion path ---
+        if (
+            rag_fusion
+            and rag_fusion_generator is not None
+            and rag_fusion_config is not None
+            and rag_fusion_config.enabled
+        ):
+            from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
+
+            candidate_depth = max(self._top_k_retrieve * 3, 20)
+
+            # Step A: Generate variants once (single LLM call, not per-collection).
+            try:
+                variants = await rag_fusion_generator.generate_variants(query)
+            except RAGFusionDependencyError:
+                raise
+            except Exception:
+                logger.warning(
+                    "rag_fusion search_many generate_variants failed for query=%s; falling back",
+                    _query_fingerprint(query),
+                )
+                variants = []
+
+            all_queries_rf = [query] + variants
+            rag_fusion_attempted = True
+
+            # Step B: Embed all queries in parallel.
+            try:
+                all_vectors: list[list[float]] = list(await asyncio.gather(
+                    *[self._global_embedder.embed_one(q) for q in all_queries_rf]
+                ))
+            except Exception:
+                logger.warning(
+                    "rag_fusion search_many embedding failed for query=%s; falling back to single-query",
+                    _query_fingerprint(query),
+                )
+                # Explicit fallback: run standard fan-out with rag_fusion_attempted preserved.
+                std_vector = await self._global_embedder.embed_one(query)
+                std_merged, std_acl_filtered, std_leg_times = await self._fanout_merge_acl(
+                    query, std_vector, collections_in_scope, namespace, candidate_depth
+                )
+                if self._reranker is not None:
+                    t0 = monotonic()
+                    std_ranked = await self._reranker.rerank_candidates(
+                        query, std_merged, top_k=self._top_k_return
+                    )
+                    std_rerank_ms = (monotonic() - t0) * 1000.0
+                else:
+                    std_merged.sort(key=lambda c: -c.score_breakdown.rrf_score)
+                    std_ranked = std_merged[:self._top_k_return]
+                    std_rerank_ms = 0.0
+                return SearchPipelineResult(
+                    results=[self._candidate_to_search_result(c) for c in std_ranked],
+                    acl_filtered=std_acl_filtered,
+                    excluded_collections=excluded_collections,
+                    fanout_timings=FanoutTimings(leg_times=std_leg_times, rerank_time_ms=std_rerank_ms),
+                    rag_fusion_attempted=True,
+                )
+
+            # Step C: Per-collection fan-out with fusion.
+            trim = max(self._fanout_leg_trim, 1)
+            trimmed_per_coll: dict[str, list[ScoredSearchCandidate]] = {}
+            # Track successful variant searches across all collections (variant idx > 0).
+            # A variant is "successful" if its search succeeded for at least one collection.
+            successful_variant_indices: set[int] = set()
+
+            for coll in sorted(collections_in_scope):
+                has_vi = await self.store.has_vector_index(coll)
+                if has_vi:
+                    # N+1 searches (original + variants) in parallel.
+                    coll_raw = await asyncio.gather(
+                        *[
+                            self.store.hybrid_search_with_trace(
+                                coll, v, query, candidate_depth=candidate_depth
+                            )
+                            for v in all_vectors
+                        ],
+                        return_exceptions=True,
+                    )
+                    successful_coll: list[list[ScoredSearchCandidate]] = []
+                    for idx, r in enumerate(coll_raw):
+                        if not isinstance(r, BaseException):
+                            successful_coll.append(r)  # type: ignore[arg-type]
+                            if idx > 0:  # idx 0 = original query, idx 1..N = variants
+                                successful_variant_indices.add(idx)
+                    if successful_coll:
+                        fused_coll = _fuse_rag_fusion_results(successful_coll)
+                    else:
+                        fused_coll = []
+                else:
+                    # FTS-only collection: single search with original query only.
+                    fts_result = await self.store.hybrid_search_with_trace(
+                        coll, all_vectors[0], query, candidate_depth=candidate_depth
+                    )
+                    fused_coll = list(fts_result)
+
+                fused_sorted = sorted(
+                    fused_coll, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
+                )
+                trimmed_per_coll[coll] = fused_sorted[:trim]
+
+            # Step D: Cross-collection merge.
+            merged: list[ScoredSearchCandidate] = []
+            for coll in sorted(trimmed_per_coll):
+                merged.extend(trimmed_per_coll[coll])
+
+            # Step E: ACL filter on merged set.
+            merged, acl_filtered = apply_acl_filter(merged, lambda c: c.acl, namespace)
+
+            # Step F: Rerank on merged set using original query.
+            if self._reranker is not None:
+                t0 = monotonic()
+                ranked = await self._reranker.rerank_candidates(
+                    query, merged, top_k=self._top_k_return
+                )
+                rerank_time_ms = (monotonic() - t0) * 1000.0
+            else:
+                merged.sort(key=lambda c: -c.score_breakdown.rrf_score)
+                ranked = merged[:self._top_k_return]
+                rerank_time_ms = 0.0
+
+            results = [self._candidate_to_search_result(c) for c in ranked]
+
+            # rag_fusion_queries_used = successful LLM-generated variant searches.
+            # Count unique variant indices that succeeded in at least one collection.
+            num_successful_variants = len(successful_variant_indices)
+
+            return SearchPipelineResult(
+                results=results,
+                acl_filtered=acl_filtered,
+                excluded_collections=excluded_collections,
+                rag_fusion_applied=num_successful_variants > 0,
+                rag_fusion_queries_used=num_successful_variants,
+                rag_fusion_attempted=rag_fusion_attempted,
+            )
+
+        # --- Standard path ---
+        # Step 1: embed exactly once (or use caller-provided vector for HyDE).
+        vector = list(query_vector) if query_vector is not None else await self._global_embedder.embed_one(query)
 
         # Step 3: fan-out + per-leg trim + merge + ACL.
         candidate_depth = max(self._top_k_retrieve * 3, 20)

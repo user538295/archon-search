@@ -430,7 +430,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Checkpoint: `uv run pytest tests/test_pipeline.py -k "rag_fusion" -x`
 
 #### Task 2.3 — `pipeline.search_many()` gains RAG Fusion orchestration
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - Add `rag_fusion: bool = False`, `rag_fusion_generator: "RAGFusionGenerator | None" = None`, `rag_fusion_config: "RAGFusionConfig | None" = None` to `search_many()`.
