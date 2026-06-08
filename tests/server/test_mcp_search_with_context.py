@@ -87,8 +87,12 @@ def _result(idx: int, language: str = "") -> SearchResult:
 
 
 async def _call_search_with_context(results_list, include_metadata: bool = False):
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
     pipeline = MagicMock()
-    pipeline.search_with_context = AsyncMock(return_value=results_list)
+    pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(
+        results=results_list,
+        pipeline_result=SearchPipelineResult(results=[], acl_filtered=False),
+    ))
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         from archon_search.server import mcp as mcp_module

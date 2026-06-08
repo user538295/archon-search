@@ -194,7 +194,11 @@ def _make_swc_pipeline(
     if raises is not None:
         pipeline.search_with_context = AsyncMock(side_effect=raises)
     else:
-        pipeline.search_with_context = AsyncMock(return_value=results or [])
+        from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+        pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(
+            results=results or [],
+            pipeline_result=SearchPipelineResult(results=[], acl_filtered=False),
+        ))
     return pipeline
 
 

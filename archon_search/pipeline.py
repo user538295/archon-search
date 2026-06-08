@@ -12,6 +12,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from archon_search._diagnostics import ScoredSearchCandidate
+from archon_search._privacy import _query_fingerprint
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, FanoutTimings, IngestedBy, IngestResult, SearchResult
 from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.observability import record_stage
@@ -28,8 +29,9 @@ from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
 from archon_search.store import SearchStore, StoreBusyError, elementwise_sum
 
 if TYPE_CHECKING:
-    from archon_search.config import SearchConfig
+    from archon_search.config import RAGFusionConfig, SearchConfig
     from archon_search.language_detector import LanguageDetector
+    from archon_search.rag_fusion import RAGFusionGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,17 @@ class SearchPipelineResult:
     acl_filtered: bool
     excluded_collections: list[ExcludedCollection] = field(default_factory=list)
     fanout_timings: FanoutTimings | None = None
+    rag_fusion_applied: bool = False
+    rag_fusion_queries_used: int = 0
+    rag_fusion_attempted: bool = False
+
+
+@dataclass
+class SearchWithContextResult:
+    """Return type for search_with_context() — carries context results and the pipeline result."""
+
+    results: list[dict[str, Any]]
+    pipeline_result: SearchPipelineResult
 
 
 class CollectionNotFoundError(Exception):
@@ -562,7 +575,146 @@ class SearchPipeline:
         embedder: Embedder,
         filters: SearchFilters | None = None,
         query_vector: list[float] | None = None,
+        rag_fusion: bool = False,
+        rag_fusion_generator: "RAGFusionGenerator | None" = None,
+        rag_fusion_config: "RAGFusionConfig | None" = None,
     ) -> SearchPipelineResult:
+        # --- RAG Fusion path ---
+        if (
+            rag_fusion
+            and rag_fusion_generator is not None
+            and rag_fusion_config is not None
+            and rag_fusion_config.enabled
+        ):
+            from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
+
+            # 0. Vector conflict guard: ignore caller-supplied query_vector when RAG Fusion active.
+            if query_vector is not None:
+                logger.warning(
+                    "rag_fusion=True received with pre-computed query_vector=%s; ignoring query_vector",
+                    _query_fingerprint(query),
+                )
+                query_vector = None
+
+            # 1. FTS-only guard.
+            if not await self.store.has_vector_index(collection):
+                return await self._search_standard(
+                    query, collection, namespace, embedder=embedder,
+                    filters=filters, query_vector=None,
+                )
+
+            # 2. Generate variants.
+            try:
+                variants = await rag_fusion_generator.generate_variants(query)
+            except RAGFusionDependencyError:
+                raise
+            except Exception:
+                logger.warning(
+                    "rag_fusion generate_variants failed unexpectedly for query=%s; falling back",
+                    _query_fingerprint(query),
+                )
+                return await self._search_standard(
+                    query, collection, namespace, embedder=embedder,
+                    filters=filters, query_vector=None,
+                    rag_fusion_attempted=True,
+                )
+
+            # 3. All queries = original + variants.
+            all_queries = [query] + variants
+
+            # 4. Embed all queries in parallel.
+            try:
+                vectors = await asyncio.gather(*[embedder.embed_one(q) for q in all_queries])
+            except Exception:
+                logger.warning(
+                    "rag_fusion embedding stage failed for query=%s; falling back to single-query search",
+                    _query_fingerprint(query),
+                )
+                return await self._search_standard(
+                    query, collection, namespace, embedder=embedder,
+                    filters=filters, query_vector=None,
+                    rag_fusion_attempted=True,
+                )
+
+            # 5. Parallel variant searches using hybrid_search_with_trace.
+            search_calls = [
+                self.store.hybrid_search_with_trace(
+                    collection, v, query, candidate_depth=self._top_k_retrieve, filters=filters
+                )
+                for v in vectors
+            ]
+            raw_results = await asyncio.gather(*search_calls, return_exceptions=True)
+
+            # 6. Partition successes and failures.
+            successful_results: list[list[ScoredSearchCandidate]] = []
+            for idx, r in enumerate(raw_results):
+                if isinstance(r, BaseException):
+                    logger.warning(
+                        "rag_fusion variant search %d failed for query=%s: %s",
+                        idx, _query_fingerprint(query), type(r).__name__,
+                    )
+                else:
+                    successful_results.append(r)  # type: ignore[arg-type]
+
+            if not successful_results:
+                # All searches failed — fall back to standard single-query search.
+                return await self._search_standard(
+                    query, collection, namespace, embedder=embedder,
+                    filters=filters, query_vector=None,
+                    rag_fusion_attempted=True,
+                )
+
+            # rag_fusion_queries_used = successful variant searches (not counting original).
+            # The original query is index 0; variants start at 1.
+            num_successful_variants = sum(
+                1 for idx, r in enumerate(raw_results)
+                if idx > 0 and not isinstance(r, BaseException)
+            )
+
+            # 7. Fuse results.
+            fused = _fuse_rag_fusion_results(successful_results)
+
+            # 8. ACL filter on fused set.
+            fused, acl_filtered = apply_acl_filter(fused, lambda c: c.acl, namespace)
+
+            # 9. Rerank on fused set using the original query.
+            if self._reranker is not None:
+                fused = await self._reranker.rerank_candidates(
+                    query, fused, top_k=self._top_k_return
+                )
+            else:
+                fused = fused[:self._top_k_return]
+
+            results = [self._candidate_to_search_result(c) for c in fused]
+            # rag_fusion_applied=True only when at least one variant was generated and searched.
+            # When variants=[], num_successful_variants=0 and rag_fusion_applied=False.
+            rag_fusion_applied = num_successful_variants > 0
+            return SearchPipelineResult(
+                results=results,
+                acl_filtered=acl_filtered,
+                rag_fusion_applied=rag_fusion_applied,
+                rag_fusion_queries_used=num_successful_variants,
+                rag_fusion_attempted=True,
+            )
+
+        # --- Standard path ---
+        return await self._search_standard(
+            query, collection, namespace, embedder=embedder,
+            filters=filters, query_vector=query_vector,
+        )
+
+    async def _search_standard(
+        self,
+        query: str,
+        collection: str,
+        namespace: str,
+        *,
+        embedder: Embedder,
+        filters: SearchFilters | None = None,
+        query_vector: list[float] | None = None,
+        rag_fusion_attempted: bool = False,
+    ) -> SearchPipelineResult:
+        """Standard single-query search path (no RAG Fusion)."""
         vector = list(query_vector) if query_vector is not None else await embedder.embed_one(query)
         candidates = await self.store.hybrid_search(
             collection, vector, query, top_k=self._top_k_retrieve, filters=filters
@@ -590,7 +742,11 @@ class SearchPipeline:
         else:
             candidates = candidates[:self._top_k_return]
             results = [self._candidate_to_search_result(c) for c in candidates]
-        return SearchPipelineResult(results=results, acl_filtered=acl_filtered)
+        return SearchPipelineResult(
+            results=results,
+            acl_filtered=acl_filtered,
+            rag_fusion_attempted=rag_fusion_attempted,
+        )
 
     async def explain(
         self,
@@ -859,8 +1015,25 @@ class SearchPipeline:
         embedder: Embedder,
         filters: SearchFilters | None = None,
         query_vector: list[float] | None = None,
-    ) -> list[dict[str, Any]]:
-        result_obj = await self.search(query, collection, namespace=namespace, embedder=embedder, filters=filters, query_vector=query_vector)
+        rag_fusion: bool = False,
+        rag_fusion_generator: "RAGFusionGenerator | None" = None,
+        rag_fusion_config: "RAGFusionConfig | None" = None,
+    ) -> SearchWithContextResult:
+        """Search with surrounding context chunks.
+
+        Returns a :class:`SearchWithContextResult` containing the context-enriched
+        result list and the underlying :class:`SearchPipelineResult` (which carries
+        ``rag_fusion_applied``, ``rag_fusion_queries_used``, etc.).
+
+        The MCP ``search_with_context`` handler (Task 5.1) unpacks the
+        ``pipeline_result`` field to include RAG Fusion metadata in its return dict.
+        """
+        result_obj = await self.search(
+            query, collection, namespace=namespace, embedder=embedder,
+            filters=filters, query_vector=query_vector,
+            rag_fusion=rag_fusion, rag_fusion_generator=rag_fusion_generator,
+            rag_fusion_config=rag_fusion_config,
+        )
         output: list[dict[str, Any]] = []
 
         with record_stage("context"):
@@ -892,7 +1065,7 @@ class SearchPipeline:
 
                 output.append({"result": result, "context_before": context_before, "context_after": context_after})
 
-        return output
+        return SearchWithContextResult(results=output, pipeline_result=result_obj)
 
     # ------------------------------------------------------------------
     # Document management

@@ -568,8 +568,9 @@ async def test_search_with_context_acl_filter_applied(tmp_path):
         top_k_retrieve=5, top_k_return=3,
     )
 
-    output = await pipeline.search_with_context("query", "col", namespace="ns1", embedder=pipeline._global_embedder)
+    swc_result = await pipeline.search_with_context("query", "col", namespace="ns1", embedder=pipeline._global_embedder)
 
+    output = swc_result.results
     assert len(output) == 1
     entry = output[0]
     assert entry["result"].text == "main chunk"
@@ -677,8 +678,9 @@ async def test_search_context_expansion_acl_filtered(tmp_path):
         top_k_retrieve=5, top_k_return=3,
     )
 
-    output = await pipeline.search_with_context("query", "col", namespace="ns1", embedder=pipeline._global_embedder)
+    swc_result = await pipeline.search_with_context("query", "col", namespace="ns1", embedder=pipeline._global_embedder)
 
+    output = swc_result.results
     assert len(output) == 1
     entry = output[0]
     before_texts = [c.text for c in entry["context_before"]]

@@ -180,7 +180,8 @@ async def test_mcp_search_with_context_forwards_filters_to_pipeline() -> None:
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
-    pipeline.search_with_context = AsyncMock(return_value=[])
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+    pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
@@ -229,7 +230,8 @@ async def test_mcp_search_with_context_invalid_filter_surfaces_validator_error()
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
-    pipeline.search_with_context = AsyncMock(return_value=[])
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+    pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
@@ -288,7 +290,8 @@ async def test_mcp_search_tool_input_schema_is_superset_of_search_filters() -> N
 
     pipeline = MagicMock()
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
-    pipeline.search_with_context = AsyncMock(return_value=[])
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+    pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 
     # Use the real FastMCP so list_tools() reflects actual type annotations
     import archon_search.server.mcp as mcp_module
@@ -503,7 +506,8 @@ async def test_search_with_context_tool_language_param_described() -> None:
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
-    pipeline.search_with_context = AsyncMock(return_value=[])
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+    pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 
     real_app = mcp_module.create_app(pipeline, "default", writer=None)
     tools_list = await real_app.list_tools()

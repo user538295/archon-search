@@ -1540,11 +1540,38 @@ class SearchStore:
         query_vector: list[float],
         query_text: str,
         candidate_depth: int,
+        filters: "SearchFilters | None" = None,
     ) -> list[ScoredSearchCandidate]:
-        """Thin instance-method delegate to module-level _hybrid_search_with_trace."""
+        """Thin instance-method delegate to module-level _hybrid_search_with_trace.
+
+        Used both for eval/debug observability and as the production search backend
+        for the RAG Fusion path (Task 2.2, C5).  The *filters* parameter applies
+        the same field-predicate logic as :meth:`hybrid_search`.
+        """
         return await _hybrid_search_with_trace(
-            self, collection, query_vector, query_text, candidate_depth
+            self, collection, query_vector, query_text, candidate_depth, filters=filters
         )
+
+    async def has_vector_index(self, collection: str) -> bool:
+        """Return True if *collection* has a vector column in its LanceDB schema.
+
+        Forward-compatibility guard: all current collections always have a vector
+        column (created via ``ensure_collection``), but FTS-only collections
+        created in future may not.  Returns False when the collection does not
+        exist.  O(1) — reads Arrow schema metadata only.
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return False
+        schema = await table.schema()
+        try:
+            schema.field("vector")
+            return True
+        except KeyError:
+            return False
 
     # ------------------------------------------------------------------
     # Delete
@@ -1863,11 +1890,13 @@ async def _hybrid_search_with_trace(
     query_vector: list[float],
     query_text: str,
     candidate_depth: int,
+    filters: "SearchFilters | None" = None,
 ) -> list[ScoredSearchCandidate]:
     """Internal trace helper — returns full score provenance per candidate.
 
-    This is a private, eval/debug-only function.  It must NOT appear in the
-    public ``archon_search`` package exports.
+    Used both for eval/debug observability and as the production search backend
+    for the RAG Fusion path (Task 2.2, C5).  The optional *filters* parameter
+    applies the same field-predicate logic as :meth:`SearchStore.hybrid_search`.
 
     Args:
         store: A connected :class:`SearchStore` instance.
@@ -1876,6 +1905,7 @@ async def _hybrid_search_with_trace(
         query_text: Text query for FTS search.
         candidate_depth: Maximum number of raw candidates to fetch from each
             search leg (analogous to ``fetch`` in :meth:`SearchStore.hybrid_search`).
+        filters: Optional field filters applied to both the vector and FTS legs.
 
     Returns:
         List of :class:`ScoredSearchCandidate` ordered by descending RRF score.
@@ -1888,11 +1918,14 @@ async def _hybrid_search_with_trace(
     except ValueError:
         return []
 
+    pred = build_where(filters) if filters else ""
+
     # --- Vector search ---
     with record_stage("vector"):
-        vec_rows: list[dict[str, Any]] = await (
-            table.vector_search(query_vector).limit(candidate_depth).to_list()
-        )
+        vec_q = table.vector_search(query_vector)
+        if pred:
+            vec_q = vec_q.where(pred)
+        vec_rows: list[dict[str, Any]] = await vec_q.limit(candidate_depth).to_list()
         # Map chunk_id → (rank, raw_distance | None)
         vec_rank: dict[str, int] = {}
         vec_raw: dict[str, float | None] = {}
@@ -1909,6 +1942,8 @@ async def _hybrid_search_with_trace(
     _fts_t0 = time.perf_counter()
     try:
         fts_q = await table.search(query_text, query_type="fts")
+        if pred:
+            fts_q = fts_q.where(pred)
         fts_rows = await fts_q.limit(candidate_depth).to_list()
         for i, row in enumerate(fts_rows):
             cid = row["chunk_id"]

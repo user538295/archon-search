@@ -420,7 +420,7 @@ def create_app(
                         TelemetryEntry.from_search_tool_result(
                             endpoint="search_with_context",
                             collection=_swc_col,
-                            result_doc_ids=[r["result"].doc_id for r in results],
+                            result_doc_ids=[r["result"].doc_id for r in results.results],
                             latency_ms=(monotonic() - start) * 1000.0,
                             filter_flags=FilterFlags.from_search_filters(filters),
                             correlation_id=_correlation_id.get(),
@@ -429,7 +429,7 @@ def create_app(
                 except Exception:
                     logger.warning("telemetry: search_with_context entry enqueue failed", exc_info=True)
             output = []
-            for r in results:
+            for r in results.results:
                 result_dict = asdict(r["result"])
                 result_dict.pop("vector", None)
                 if not include_metadata:

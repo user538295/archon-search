@@ -146,7 +146,8 @@ async def test_mcp_search_with_context_calls_embedder_cache_get_or_load() -> Non
     pipeline = MagicMock()
     meta = _make_collection_meta("model-X")
     pipeline.get_collection_meta = AsyncMock(return_value=meta)
-    pipeline.search_with_context = AsyncMock(return_value=[])
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+    pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 
     cache, resolved = _make_embedder_cache("model-X")
     app = _make_mcp_app(pipeline, embedder_cache=cache)
@@ -162,7 +163,8 @@ async def test_mcp_search_with_context_passes_resolved_embedder_to_pipeline() ->
     pipeline = MagicMock()
     meta = _make_collection_meta("model-X")
     pipeline.get_collection_meta = AsyncMock(return_value=meta)
-    pipeline.search_with_context = AsyncMock(return_value=[])
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+    pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 
     cache, resolved = _make_embedder_cache("model-X")
     app = _make_mcp_app(pipeline, embedder_cache=cache)

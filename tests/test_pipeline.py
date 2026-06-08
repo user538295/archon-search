@@ -286,9 +286,10 @@ async def test_pipeline_search_with_context_returns_neighbors(connected_store, c
 
     results = await pipeline2.search_with_context("Content chunk", col_name, context_window=1, embedder=pipeline2._global_embedder)
 
-    assert isinstance(results, list)
-    assert len(results) > 0
-    for item in results:
+    from archon_search.pipeline import SearchWithContextResult
+    assert isinstance(results, SearchWithContextResult)
+    assert len(results.results) > 0
+    for item in results.results:
         assert "result" in item
         assert "context_before" in item
         assert "context_after" in item
@@ -1041,10 +1042,12 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
 
     results = await pipeline.search_with_context("query", "test-collection", context_window=1, embedder=pipeline._global_embedder)
 
-    assert len(results) == 1
-    assert results[0]["result"] == malformed_result
-    assert results[0]["context_before"] == []
-    assert results[0]["context_after"] == []
+    from archon_search.pipeline import SearchWithContextResult
+    assert isinstance(results, SearchWithContextResult)
+    assert len(results.results) == 1
+    assert results.results[0]["result"] == malformed_result
+    assert results.results[0]["context_before"] == []
+    assert results.results[0]["context_after"] == []
 
 
 @pytest.mark.asyncio
@@ -2340,9 +2343,10 @@ async def test_search_with_context_still_works_after_type_change(connected_store
 
     results = await pipeline.search_with_context("content chunk", col_name, context_window=1, embedder=pipeline._global_embedder)
 
-    assert isinstance(results, list)
-    assert len(results) > 0
-    for item in results:
+    from archon_search.pipeline import SearchWithContextResult
+    assert isinstance(results, SearchWithContextResult)
+    assert len(results.results) > 0
+    for item in results.results:
         assert "result" in item
         assert "context_before" in item
         assert "context_after" in item
@@ -5704,3 +5708,815 @@ def test_fuse_rag_fusion_results_same_doc_different_chunks() -> None:
     chunk_ids = {c.chunk_id for c in fused}
     assert "chunk-001" in chunk_ids
     assert "chunk-002" in chunk_ids
+
+
+# ---------------------------------------------------------------------------
+# Task 2.2 (C5 RAG Fusion) — SearchPipelineResult fields + search() orchestration
+# ---------------------------------------------------------------------------
+
+
+def test_search_pipeline_result_has_rag_fusion_fields() -> None:
+    """SearchPipelineResult created with only required fields has rag_fusion defaults."""
+    from archon_search.pipeline import SearchPipelineResult
+
+    result = SearchPipelineResult(results=[], acl_filtered=False)
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_queries_used == 0
+    assert result.rag_fusion_attempted is False
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_calls_generate_variants() -> None:
+    """With rag_fusion=True and 2 variants, store.hybrid_search_with_trace called 3 times."""
+    from unittest.mock import AsyncMock
+
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    def _cand(chunk_id: str) -> ScoredSearchCandidate:
+        return ScoredSearchCandidate(
+            doc_id="doc-a",
+            chunk_id=chunk_id,
+            text="text",
+            source_path="/p",
+            score_breakdown=SearchScoreBreakdown(
+                vector_rank=0, vector_score=0.9, vector_score_kind="distance",
+                fts_rank=None, fts_score=None, fts_score_kind=None,
+                rrf_score=0.016, reranker_score=None,
+            ),
+            collection="col",
+        )
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[_cand("chunk-001")])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["variant1", "variant2"])
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=2)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    result = await pipeline.search(
+        "original query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    assert mock_store.hybrid_search_with_trace.call_count == 3  # original + 2 variants
+    assert result.rag_fusion_applied is True
+    assert result.rag_fusion_queries_used == 2
+    assert result.rag_fusion_attempted is True
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_empty_variants_still_searches() -> None:
+    """When generator returns [], one search (original) is done; rag_fusion_applied=False."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=[])
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=2)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    result = await pipeline.search(
+        "original query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    # Only the original query was searched (no variants)
+    assert mock_store.hybrid_search_with_trace.call_count == 1
+    assert result.rag_fusion_attempted is True
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_queries_used == 0
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_disabled_config_skips() -> None:
+    """When rag_fusion_config.enabled=False, generator NOT called; rag_fusion_attempted=False."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["v1"])
+
+    rag_config = RAGFusionConfig(enabled=False)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    result = await pipeline.search(
+        "query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    mock_generator.generate_variants.assert_not_called()
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_attempted is False
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_no_generator_skips() -> None:
+    """When rag_fusion_generator=None, standard single-query search; rag_fusion_applied=False."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+
+    rag_config = RAGFusionConfig(enabled=True)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    result = await pipeline.search(
+        "query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=None,
+        rag_fusion_config=rag_config,
+    )
+
+    assert result.rag_fusion_applied is False
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_fts_only_guard() -> None:
+    """When store.has_vector_index returns False, generator NOT called; rag_fusion_applied=False."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.has_vector_index = AsyncMock(return_value=False)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["v1"])
+
+    rag_config = RAGFusionConfig(enabled=True)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    result = await pipeline.search(
+        "query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    mock_generator.generate_variants.assert_not_called()
+    assert result.rag_fusion_applied is False
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_false_no_overhead() -> None:
+    """With rag_fusion=False, generate_variants NOT called; no extra store calls."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["v1"])
+
+    rag_config = RAGFusionConfig(enabled=True)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    result = await pipeline.search(
+        "query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=False,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    mock_generator.generate_variants.assert_not_called()
+    assert not hasattr(mock_store, 'hybrid_search_with_trace') or mock_store.hybrid_search_with_trace.call_count == 0
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_attempted is False
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_rag_fusion_forwarded() -> None:
+    """search_with_context(..., rag_fusion=True, rag_fusion_generator=mock) forwards to search()."""
+    from unittest.mock import AsyncMock
+
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline, SearchPipelineResult, SearchWithContextResult
+
+    def _cand(chunk_id: str) -> ScoredSearchCandidate:
+        return ScoredSearchCandidate(
+            doc_id="doc-a",
+            chunk_id=chunk_id,
+            text="text",
+            source_path="/p",
+            score_breakdown=SearchScoreBreakdown(
+                vector_rank=0, vector_score=0.9, vector_score_kind="distance",
+                fts_rank=None, fts_score=None, fts_score_kind=None,
+                rrf_score=0.016, reranker_score=None,
+            ),
+            collection="col",
+        )
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[_cand("chunk-001")])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+    mock_store.fetch_adjacent_chunks = AsyncMock(return_value=[])
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["variant1", "variant2"])
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=2)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    result = await pipeline.search_with_context(
+        "original query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    assert isinstance(result, SearchWithContextResult)
+    assert result.pipeline_result.rag_fusion_applied is True
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_reranker_uses_original_query() -> None:
+    """Reranker is called once with the original query, not any variant text."""
+    from unittest.mock import AsyncMock, call
+
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    def _cand(chunk_id: str) -> ScoredSearchCandidate:
+        return ScoredSearchCandidate(
+            doc_id="doc-a",
+            chunk_id=chunk_id,
+            text="text",
+            source_path="/p",
+            score_breakdown=SearchScoreBreakdown(
+                vector_rank=0, vector_score=0.9, vector_score_kind="distance",
+                fts_rank=None, fts_score=None, fts_score_kind=None,
+                rrf_score=0.016, reranker_score=None,
+            ),
+            collection="col",
+        )
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[_cand("chunk-001")])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["variant1", "variant2"])
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=2)
+
+    mock_reranker = AsyncMock()
+    mock_reranker.rerank_candidates = AsyncMock(return_value=[_cand("chunk-001")])
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=mock_reranker,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    original_query = "my original question"
+    result = await pipeline.search(
+        original_query,
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    assert mock_reranker.rerank_candidates.call_count == 1
+    first_call_args = mock_reranker.rerank_candidates.call_args
+    assert first_call_args[0][0] == original_query
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_config_none_skips() -> None:
+    """search(..., rag_fusion=True, rag_fusion_config=None) falls back to standard search."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["v1"])
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    result = await pipeline.search(
+        "query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=None,
+    )
+
+    mock_generator.generate_variants.assert_not_called()
+    assert result.rag_fusion_applied is False
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_acl_filter_applied_to_fused_results() -> None:
+    """ACL filter runs on merged fused set — restricted candidate excluded."""
+    from unittest.mock import AsyncMock
+
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    def _cand(chunk_id: str, acl: list[str] | None = None) -> ScoredSearchCandidate:
+        return ScoredSearchCandidate(
+            doc_id="doc-a",
+            chunk_id=chunk_id,
+            text="text",
+            source_path="/p",
+            score_breakdown=SearchScoreBreakdown(
+                vector_rank=0, vector_score=0.9, vector_score_kind="distance",
+                fts_rank=None, fts_score=None, fts_score_kind=None,
+                rrf_score=0.016, reranker_score=None,
+            ),
+            collection="col",
+            acl=acl,
+        )
+
+    open_cand = _cand("chunk-open", acl=None)
+    restricted_cand = _cand("chunk-restricted", acl=["restricted-namespace"])
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    # All variant searches return both candidates
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[open_cand, restricted_cand])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["v1"])
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=1)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    # Default namespace — restricted_cand should be filtered out
+    result = await pipeline.search(
+        "query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    result_chunk_ids = {r.chunk_id for r in result.results}
+    assert "chunk-open" in result_chunk_ids
+    assert "chunk-restricted" not in result_chunk_ids
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_partial_search_failure() -> None:
+    """When some variant searches fail, fusion uses successful ones; rag_fusion_applied=True."""
+    from unittest.mock import AsyncMock
+
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    def _cand(chunk_id: str) -> ScoredSearchCandidate:
+        return ScoredSearchCandidate(
+            doc_id="doc-a",
+            chunk_id=chunk_id,
+            text="text",
+            source_path="/p",
+            score_breakdown=SearchScoreBreakdown(
+                vector_rank=0, vector_score=0.9, vector_score_kind="distance",
+                fts_rank=None, fts_score=None, fts_score_kind=None,
+                rrf_score=0.016, reranker_score=None,
+            ),
+            collection="col",
+        )
+
+    call_count = 0
+
+    async def _mock_search_with_trace(collection, query_vector, query_text, candidate_depth, filters=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:  # variant 1 fails
+            raise RuntimeError("LanceDB error")
+        return [_cand(f"chunk-{call_count:03d}")]
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = _mock_search_with_trace
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["variant1", "variant2"])
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=2)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    result = await pipeline.search(
+        "query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    # 2 of 3 searches succeeded → partial fusion happened
+    assert result.rag_fusion_applied is True
+    # 1 successful variant (not counting original)
+    assert result.rag_fusion_queries_used == 1
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_all_searches_fail() -> None:
+    """When ALL variant searches raise, fallback to standard single-query; rag_fusion_applied=False."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    async def _always_fail(*args, **kwargs):
+        raise RuntimeError("LanceDB error")
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = _always_fail
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["v1", "v2"])
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=2)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    result = await pipeline.search(
+        "query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    # All searches failed → fallback to standard single-query
+    assert result.rag_fusion_applied is False
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_ignores_caller_query_vector() -> None:
+    """With rag_fusion=True, caller-provided query_vector is ignored; pipeline re-embeds."""
+    from unittest.mock import AsyncMock
+
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.embedder import Embedder
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    def _cand(chunk_id: str) -> ScoredSearchCandidate:
+        return ScoredSearchCandidate(
+            doc_id="doc-a",
+            chunk_id=chunk_id,
+            text="text",
+            source_path="/p",
+            score_breakdown=SearchScoreBreakdown(
+                vector_rank=0, vector_score=0.9, vector_score_kind="distance",
+                fts_rank=None, fts_score=None, fts_score_kind=None,
+                rrf_score=0.016, reranker_score=None,
+            ),
+            collection="col",
+        )
+
+    embed_call_count = 0
+    original_backend = MockEmbedderBackend()
+
+    class TrackingEmbedderBackend:
+        model_name: str = "mock-embedder"
+        is_warm: bool = False
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            nonlocal embed_call_count
+            embed_call_count += len(texts)
+            return [[0.1] * 4 for _ in texts]
+
+    tracking_embedder = Embedder(TrackingEmbedderBackend())
+    # Warmup
+    await tracking_embedder.embed(["warmup"])
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[_cand("chunk-001")])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["v1"])
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=1)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=tracking_embedder,
+        reranker=None,
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    embed_call_count = 0  # reset after warmup
+    caller_vector = [9.9] * 4  # distinctive caller-provided vector
+
+    result = await pipeline.search(
+        "original query",
+        "col",
+        embedder=tracking_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+        query_vector=caller_vector,
+    )
+
+    # Embedder MUST have been called (pipeline re-embedded rather than using caller vector)
+    assert embed_call_count > 0
+    assert result.rag_fusion_applied is True
+
+
+# ---------------------------------------------------------------------------
+# Task 2.2 — store.has_vector_index + hybrid_search_with_trace filters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_store_has_vector_index_true_for_normal_collection(
+    connected_store, col_name
+) -> None:
+    """has_vector_index returns True for a collection that was created with a vector column."""
+    # ensure_collection creates a table with a vector column (embedding_dim=4)
+    await connected_store.ensure_collection(col_name, embedding_dim=4)
+    result = await connected_store.has_vector_index(col_name)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_store_has_vector_index_false_for_missing_collection(connected_store) -> None:
+    """has_vector_index returns False for a collection that does not exist."""
+    result = await connected_store.has_vector_index("nonexistent-collection-xyz")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_hybrid_search_with_trace_filters_applied(connected_store, col_name, tmp_path) -> None:
+    """hybrid_search_with_trace with filters excludes documents that don't match."""
+    from archon_search.filters import SearchFilters
+
+    pipeline = make_pipeline(connected_store)
+    doc1 = tmp_path / "doc1.md"
+    doc1.write_text("# Doc One\n\nContent about apples and fruit.\n" * 5)
+    doc2 = tmp_path / "doc2.py"
+    doc2.write_text("# Python code about bananas\n" * 5)
+
+    await pipeline.ingest_file(doc1, col_name, embedder=pipeline._global_embedder)
+    await pipeline.ingest_file(doc2, col_name, embedder=pipeline._global_embedder)
+
+    vector = await pipeline._global_embedder.embed_one("query")
+
+    # Filter to only Python files
+    filters = SearchFilters(file_type="py")
+    results = await connected_store.hybrid_search_with_trace(
+        col_name, vector, "query", candidate_depth=10, filters=filters
+    )
+
+    file_types = {r.file_type for r in results}
+    assert "py" in file_types
+    assert "md" not in file_types
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_dependency_error_reraises() -> None:
+    """RAGFusionDependencyError from generate_variants must propagate (not be swallowed)."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.rag_fusion import RAGFusionDependencyError
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(
+        side_effect=RAGFusionDependencyError("Install archon-search[rag_fusion]")
+    )
+
+    rag_config = RAGFusionConfig(enabled=True)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    with pytest.raises(RAGFusionDependencyError, match="Install archon-search"):
+        await pipeline.search(
+            "query",
+            "col",
+            embedder=pipeline._global_embedder,
+            rag_fusion=True,
+            rag_fusion_generator=mock_generator,
+            rag_fusion_config=rag_config,
+        )

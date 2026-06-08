@@ -206,7 +206,7 @@ def test_lance_store_hybrid_search_with_trace_delegates_to_module_function(
             store.hybrid_search_with_trace("col", [0.1], "q", 7)
         )
 
-    mock_fn.assert_awaited_once_with(store, "col", [0.1], "q", 7)
+    mock_fn.assert_awaited_once_with(store, "col", [0.1], "q", 7, filters=None)
     assert result is fake_candidates
 
 

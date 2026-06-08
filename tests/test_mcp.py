@@ -305,7 +305,11 @@ def _make_hyde_pipeline_mock(search_result=None, search_many_result=None, swc_re
         from archon_search.pipeline import SearchPipelineResult
         search_many_result = SearchPipelineResult(results=[], acl_filtered=False, excluded_collections=[])
     if swc_result is None:
-        swc_result = []
+        from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+        swc_result = SearchWithContextResult(
+            results=[],
+            pipeline_result=SearchPipelineResult(results=[], acl_filtered=False),
+        )
     if explain_result is None:
         explain_result = ExplainPipelineResult(
             top_results=[], near_misses=[], acl_filtered=False,

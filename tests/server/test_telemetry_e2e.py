@@ -130,8 +130,12 @@ def _make_ok_pipeline(results: list[SearchResult]) -> MagicMock:
 
     pipeline = MagicMock()
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=results, acl_filtered=False))
-    swc_results = [{"result": r, "context_before": [], "context_after": []} for r in results]
-    pipeline.search_with_context = AsyncMock(return_value=swc_results)
+    swc_items = [{"result": r, "context_before": [], "context_after": []} for r in results]
+    from archon_search.pipeline import SearchWithContextResult
+    pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(
+        results=swc_items,
+        pipeline_result=SearchPipelineResult(results=results, acl_filtered=False),
+    ))
     return pipeline
 
 

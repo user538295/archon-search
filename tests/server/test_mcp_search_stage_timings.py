@@ -78,12 +78,13 @@ def _make_search_with_context_pipeline() -> MagicMock:
     """Pipeline whose search_with_context() records embed + context stages."""
     pipeline = MagicMock()
 
-    async def _search_with_context(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+    async def _search_with_context(*args: Any, **kwargs: Any):
+        from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
         with record_stage("embed"):
             pass
         with record_stage("context"):
             pass
-        return []
+        return SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False))
 
     pipeline.search_with_context = AsyncMock(side_effect=_search_with_context)
     return pipeline
