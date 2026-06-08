@@ -304,7 +304,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Checkpoint: `uv run pytest tests/test_config.py -k "rag_fusion" -x`
 
 #### Task 1.2 — `RAGFusionGenerator` class + variant generation + validation
-- [ ] **File**: `archon_search/rag_fusion.py` (new)
+- [x] **File**: `archon_search/rag_fusion.py` (new)
 - **Depends on**: Task 1.1
 - **Description**:
   - Create a stub `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md` with title, context, and a 'Status: Draft — to be finalized in Task 7.1' note. This satisfies the ADR-required-before-merge gate.
