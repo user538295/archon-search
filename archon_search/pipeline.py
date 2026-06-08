@@ -76,11 +76,29 @@ class MetadataLookupError(Exception):
 
 
 @dataclass
+class RagFusionSubQueryInfo:
+    """Pipeline-internal type for per-sub-query RAG Fusion result info.
+
+    Route handlers map this to the Pydantic ``RagFusionSubQueryResult`` schema by field name.
+    variant_index=0 is the original query; 1..N are LLM-generated variants.
+    """
+
+    variant_index: int
+    result_count: int
+    top_doc_ids: list[str]
+
+
+@dataclass
 class ExplainPipelineResult:
     top_results: list[ScoredSearchCandidate]
     near_misses: list[ScoredSearchCandidate]
     acl_filtered: bool
     excluded_collections: list[ExcludedCollection] = field(default_factory=list)
+    rag_fusion_applied: bool = False
+    rag_fusion_queries_used: int = 0
+    rag_fusion_attempted: bool = False
+    rag_fusion_failure_reason: str | None = None
+    rag_fusion_sub_query_results: list[RagFusionSubQueryInfo] | None = None
 
 
 class ExplainMultiCollectionNoRerankError(Exception):
@@ -759,6 +777,9 @@ class SearchPipeline:
         namespace: str = DEFAULT_NAMESPACE,
         query_vector: list[float] | None = None,
         embedder: Embedder | None = None,
+        rag_fusion: bool = False,
+        rag_fusion_generator: "RAGFusionGenerator | None" = None,
+        rag_fusion_config: "RAGFusionConfig | None" = None,
     ) -> ExplainPipelineResult:
         """Fetch an amplified pool (``max(top_k_retrieve*3, 20)`` candidates) and, when
         ``rerank=True``, rerank the entire ACL-filtered pool so near-misses carry real
@@ -770,6 +791,11 @@ class SearchPipeline:
         per-collection provenance preserved on each candidate.  The route layer resolves
         routing before calling this method, so exactly one of ``collection`` /
         ``collections`` must be supplied.
+
+        When ``rag_fusion=True`` and a generator is supplied, the single-collection path
+        decomposes the query into variants, searches in parallel, and fuses results via
+        second-pass RRF. Multi-collection path (``collections``) ignores RAG Fusion in
+        this version (falls back to standard explain).
         """
         if collection is not None and collections is not None:
             raise ValueError("supply either collection or collections, not both")
@@ -835,9 +861,160 @@ class SearchPipeline:
                 excluded_collections=excluded,
             )
 
-        _single_embedder = embedder if embedder is not None else self._global_embedder
-        vector = query_vector if query_vector is not None else await _single_embedder.embed_one(query)
+        # --- Single-collection RAG Fusion path ---
+        if (
+            rag_fusion
+            and rag_fusion_generator is not None
+            and rag_fusion_config is not None
+            and rag_fusion_config.enabled
+        ):
+            from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
 
+            _single_embedder = embedder if embedder is not None else self._global_embedder
+            candidate_depth = max(self._top_k_retrieve * 3, 20)
+
+            # FTS-only guard.
+            if not await self.store.has_vector_index(collection):
+                return await self._explain_standard(
+                    query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
+                    query_vector=query_vector, embedder=_single_embedder,
+                )
+
+            # Generate variants.
+            try:
+                variants = await rag_fusion_generator.generate_variants(query)
+            except RAGFusionDependencyError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "rag_fusion explain generate_variants failed for query=%s; falling back",
+                    _query_fingerprint(query),
+                )
+                return await self._explain_standard(
+                    query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
+                    query_vector=None, embedder=_single_embedder,
+                    rag_fusion_attempted=True,
+                    rag_fusion_failure_reason=type(exc).__name__,
+                )
+
+            # All queries = original + variants.
+            all_queries = [query] + variants
+
+            # Embed all queries in parallel.
+            try:
+                vectors = await asyncio.gather(*[_single_embedder.embed_one(q) for q in all_queries])
+            except Exception as exc:
+                logger.warning(
+                    "rag_fusion explain embedding stage failed for query=%s; falling back",
+                    _query_fingerprint(query),
+                )
+                return await self._explain_standard(
+                    query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
+                    query_vector=None, embedder=_single_embedder,
+                    rag_fusion_attempted=True,
+                    rag_fusion_failure_reason=type(exc).__name__,
+                )
+
+            # Parallel variant searches using hybrid_search_with_trace.
+            search_calls = [
+                self.store.hybrid_search_with_trace(
+                    collection, v, query, candidate_depth=candidate_depth
+                )
+                for v in vectors
+            ]
+            raw_results = await asyncio.gather(*search_calls, return_exceptions=True)
+
+            # Partition successes and failures; track which variant_index each maps to.
+            successful_results: list[list[ScoredSearchCandidate]] = []
+            successful_indices: list[int] = []  # 0=original, 1..N=variants
+            for idx, r in enumerate(raw_results):
+                if isinstance(r, BaseException):
+                    logger.warning(
+                        "rag_fusion explain variant search %d failed for query=%s: %s",
+                        idx, _query_fingerprint(query), type(r).__name__,
+                    )
+                else:
+                    successful_results.append(r)  # type: ignore[arg-type]
+                    successful_indices.append(idx)
+
+            if not successful_results:
+                # All searches failed — fall back to standard explain.
+                return await self._explain_standard(
+                    query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
+                    query_vector=None, embedder=_single_embedder,
+                    rag_fusion_attempted=True,
+                )
+
+            # rag_fusion_queries_used = successful variant searches (not counting original).
+            num_successful_variants = sum(1 for idx in successful_indices if idx > 0)
+
+            # Fuse results via second-pass RRF.
+            fused = _fuse_rag_fusion_results(successful_results)
+
+            # ACL filter on fused set.
+            fused, acl_filtered = apply_acl_filter(fused, lambda c: c.acl, namespace)
+
+            # Rerank on fused set using the original query.
+            if rerank and self._reranker is not None:
+                try:
+                    fused = await self._reranker.rerank_candidates(
+                        query, fused, top_k=len(fused)
+                    )
+                except Exception as exc:
+                    raise ExplainStageError("reranker", exc) from exc
+
+            fused.sort(key=lambda c: (-_final_score(c), c.doc_id, c.chunk_id))
+
+            top_results = fused[:top_k]
+            near_misses = fused[top_k : top_k + 20]
+
+            # Build sub_query_results — only for successful searches (failed variants omitted).
+            sub_query_results = [
+                RagFusionSubQueryInfo(
+                    variant_index=variant_idx,
+                    result_count=len(result_list),
+                    top_doc_ids=[c.doc_id for c in result_list[:5]],
+                )
+                for variant_idx, result_list in zip(successful_indices, successful_results)
+            ]
+
+            return ExplainPipelineResult(
+                top_results=top_results,
+                near_misses=near_misses,
+                acl_filtered=acl_filtered,
+                rag_fusion_applied=num_successful_variants > 0,
+                rag_fusion_queries_used=num_successful_variants,
+                rag_fusion_attempted=True,
+                rag_fusion_sub_query_results=sub_query_results,
+            )
+
+        # --- Standard single-collection path ---
+        _single_embedder = embedder if embedder is not None else self._global_embedder
+        return await self._explain_standard(
+            query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
+            query_vector=query_vector, embedder=_single_embedder,
+        )
+
+    async def _explain_standard(
+        self,
+        query: str,
+        collection: str,
+        *,
+        top_k: int = 5,
+        rerank: bool = True,
+        namespace: str = DEFAULT_NAMESPACE,
+        query_vector: list[float] | None = None,
+        embedder: Embedder,
+        rag_fusion_attempted: bool = False,
+        rag_fusion_failure_reason: str | None = None,
+    ) -> ExplainPipelineResult:
+        """Standard single-collection explain path (no RAG Fusion)."""
+
+        def _final_score(c: ScoredSearchCandidate) -> float:
+            rs = c.score_breakdown.reranker_score
+            return rs if rs is not None else c.score_breakdown.rrf_score
+
+        vector = query_vector if query_vector is not None else await embedder.embed_one(query)
         candidate_depth = max(self._top_k_retrieve * 3, 20)
         try:
             candidates = await self.store.hybrid_search_with_trace(
@@ -865,6 +1042,8 @@ class SearchPipeline:
             top_results=top_results,
             near_misses=near_misses,
             acl_filtered=acl_filtered,
+            rag_fusion_attempted=rag_fusion_attempted,
+            rag_fusion_failure_reason=rag_fusion_failure_reason,
         )
 
     async def search_many(

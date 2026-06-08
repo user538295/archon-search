@@ -6820,3 +6820,308 @@ async def test_search_many_rag_fusion_partial_collection_search_failure() -> Non
     assert result.rag_fusion_attempted is True
     assert result.rag_fusion_applied is True
     assert result.rag_fusion_queries_used == 1  # only 1 variant succeeded
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4 (C5 RAG Fusion) — ExplainPipelineResult fields + explain() orchestration
+# ---------------------------------------------------------------------------
+
+
+def test_explain_pipeline_result_has_rag_fusion_fields() -> None:
+    """ExplainPipelineResult created with required fields has rag_fusion defaults."""
+    from archon_search.pipeline import ExplainPipelineResult
+
+    result = ExplainPipelineResult(top_results=[], near_misses=[], acl_filtered=False)
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_queries_used == 0
+    assert result.rag_fusion_attempted is False
+    assert result.rag_fusion_failure_reason is None
+    assert result.rag_fusion_sub_query_results is None
+
+
+@pytest.mark.asyncio
+async def test_explain_rag_fusion_sub_query_results_populated() -> None:
+    """With rag_fusion=True and 2 successful variants, explain returns 3 RagFusionSubQueryInfo entries."""
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import RagFusionSubQueryInfo, SearchPipeline
+
+    def _cand(chunk_id: str, doc_id: str = "doc-a") -> ScoredSearchCandidate:
+        return ScoredSearchCandidate(
+            doc_id=doc_id,
+            chunk_id=chunk_id,
+            text="text",
+            source_path="/p",
+            score_breakdown=SearchScoreBreakdown(
+                vector_rank=0, vector_score=0.9, vector_score_kind="distance",
+                fts_rank=None, fts_score=None, fts_score_kind=None,
+                rrf_score=0.016, reranker_score=None,
+            ),
+            collection="col",
+        )
+
+    mock_store = MagicMock()
+    # Return different candidates for original and each variant search
+    call_count = [0]
+
+    async def _trace(coll, vector, query_text, candidate_depth, filters=None):
+        call_count[0] += 1
+        return [_cand(f"chunk-{call_count[0]:03d}", f"doc-{call_count[0]:03d}")]
+
+    mock_store.hybrid_search_with_trace = AsyncMock(side_effect=_trace)
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["variant1", "variant2"])
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=2)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    result = await pipeline.explain(
+        "original query",
+        "col",
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    assert result.rag_fusion_applied is True
+    assert result.rag_fusion_queries_used == 2
+    assert result.rag_fusion_attempted is True
+    assert result.rag_fusion_sub_query_results is not None
+    # 3 entries: original (variant_index=0) + 2 variants (variant_index=1, 2)
+    assert len(result.rag_fusion_sub_query_results) == 3
+    indices = [r.variant_index for r in result.rag_fusion_sub_query_results]
+    assert 0 in indices
+    assert 1 in indices
+    assert 2 in indices
+    for entry in result.rag_fusion_sub_query_results:
+        assert isinstance(entry, RagFusionSubQueryInfo)
+        assert isinstance(entry.result_count, int)
+        assert isinstance(entry.top_doc_ids, list)
+
+
+@pytest.mark.asyncio
+async def test_explain_rag_fusion_failure_sets_attempted_and_reason() -> None:
+    """When generate_variants raises asyncio.TimeoutError, explain still completes with fallback."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    # Generator raises TimeoutError internally (the RAGFusionGenerator catches it and returns []
+    # in real use, but here we simulate a scenario where the exception propagates from the generator)
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(side_effect=asyncio.TimeoutError())
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=2)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    result = await pipeline.explain(
+        "original query",
+        "col",
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    # Generator raised TimeoutError — attempted is True, failure_reason is non-empty, explain completes
+    assert result.rag_fusion_attempted is True
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_queries_used == 0
+    assert result.rag_fusion_failure_reason is not None
+    assert len(result.rag_fusion_failure_reason) > 0
+
+
+@pytest.mark.asyncio
+async def test_explain_rag_fusion_exception_sets_failure_reason() -> None:
+    """When generate_variants raises an unexpected exception, failure_reason is set."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    # Generator raises an exception (unexpected path)
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(side_effect=RuntimeError("unexpected error"))
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=2)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    result = await pipeline.explain(
+        "original query",
+        "col",
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    assert result.rag_fusion_attempted is True
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_failure_reason is not None
+    assert len(result.rag_fusion_failure_reason) > 0
+
+
+@pytest.mark.asyncio
+async def test_explain_rag_fusion_false_unchanged() -> None:
+    """With rag_fusion=False, explain() behavior is identical to pre-C5."""
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    def _cand(chunk_id: str) -> ScoredSearchCandidate:
+        return ScoredSearchCandidate(
+            doc_id="doc-a", chunk_id=chunk_id, text="text", source_path="/p",
+            score_breakdown=SearchScoreBreakdown(
+                vector_rank=0, vector_score=0.9, vector_score_kind="distance",
+                fts_rank=None, fts_score=None, fts_score_kind=None,
+                rrf_score=0.016, reranker_score=None,
+            ),
+            collection="col",
+        )
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[_cand("chunk-001")])
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["variant1"])
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=1)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    result = await pipeline.explain(
+        "original query",
+        "col",
+        rag_fusion=False,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    # Standard path: generator should NOT be called
+    mock_generator.generate_variants.assert_not_called()
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_attempted is False
+    assert result.rag_fusion_queries_used == 0
+    assert result.rag_fusion_sub_query_results is None
+
+
+@pytest.mark.asyncio
+async def test_explain_rag_fusion_partial_search_failure() -> None:
+    """With some variant searches failing, only successful ones contribute; partial fusion applied."""
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    def _cand(chunk_id: str) -> ScoredSearchCandidate:
+        return ScoredSearchCandidate(
+            doc_id="doc-a", chunk_id=chunk_id, text="text", source_path="/p",
+            score_breakdown=SearchScoreBreakdown(
+                vector_rank=0, vector_score=0.9, vector_score_kind="distance",
+                fts_rank=None, fts_score=None, fts_score_kind=None,
+                rrf_score=0.016, reranker_score=None,
+            ),
+            collection="col",
+        )
+
+    call_num = [0]
+
+    async def _failing_trace(coll, vector, query_text, candidate_depth, filters=None):
+        call_num[0] += 1
+        if call_num[0] == 2:  # 2nd call (variant 1) fails
+            raise RuntimeError("transient error")
+        return [_cand(f"chunk-{call_num[0]:03d}")]
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search_with_trace = AsyncMock(side_effect=_failing_trace)
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.has_vector_index = AsyncMock(return_value=True)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["variant1", "variant2"])
+
+    rag_config = RAGFusionConfig(enabled=True, num_queries=2)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    result = await pipeline.explain(
+        "original query",
+        "col",
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    # 3 searches: original success, variant1 fail, variant2 success
+    # rag_fusion_queries_used = 1 (only variant2 succeeded)
+    assert result.rag_fusion_applied is True
+    assert result.rag_fusion_attempted is True
+    assert result.rag_fusion_queries_used == 1
+    # sub_query_results: 2 entries — original (idx=0) and variant2 (idx=2), not idx=1
+    assert result.rag_fusion_sub_query_results is not None
+    indices = [r.variant_index for r in result.rag_fusion_sub_query_results]
+    assert 0 in indices  # original
+    assert 1 not in indices  # failed variant omitted
+    assert 2 in indices  # successful variant

@@ -452,7 +452,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Checkpoint: `uv run pytest tests/test_pipeline.py -k "search_many.*rag" -x`
 
 #### Task 2.4 — `ExplainPipelineResult` RAG Fusion fields + `pipeline.explain()` orchestration
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - Add to `ExplainPipelineResult` dataclass:
