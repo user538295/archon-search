@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from archon_search.config import SearchConfig
     from archon_search.hyde import HyDEGenerator
     from archon_search.jobs.store import JobStore
+    from archon_search.rag_fusion import RAGFusionGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,7 @@ def create_app(
     embedder_cache: EmbedderCache | None = None,
     job_store: JobStore | None = None,
     hyde_generator: "HyDEGenerator | None" = None,
+    rag_fusion_generator: "RAGFusionGenerator | None" = None,
 ) -> FastMCP:
     """Create a FastMCP app with 11 RAG tools registered.
 
@@ -971,6 +973,7 @@ def create_mcp_http_app(
     embedder_cache: EmbedderCache | None = None,
     job_store: JobStore | None = None,
     hyde_generator: "HyDEGenerator | None" = None,
+    rag_fusion_generator: "RAGFusionGenerator | None" = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
@@ -980,7 +983,7 @@ def create_mcp_http_app(
     """
     from archon_search.server.middleware_context import RequestContextMiddleware
 
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator)
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator)
     starlette_app: Starlette = fastmcp_app.streamable_http_app()
     api_key, _ = load_or_generate_key()
     starlette_app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces={})

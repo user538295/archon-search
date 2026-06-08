@@ -123,6 +123,9 @@ hyde = [
 multilingual = [
     { name = "fasttext-wheel" },
 ]
+rag-fusion = [
+    { name = "anthropic" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -136,6 +139,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", marker = "extra == 'hyde'", specifier = ">=0.40" },
+    { name = "anthropic", marker = "extra == 'rag-fusion'", specifier = ">=0.40" },
     { name = "chonkie", specifier = ">=0.5.0" },
     { name = "claude-agent-sdk", specifier = ">=0.1.46" },
     { name = "click", specifier = ">=8.1" },
@@ -159,7 +163,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "watchdog", specifier = ">=3.0" },
 ]
-provides-extras = ["code", "hyde", "multilingual"]
+provides-extras = ["code", "hyde", "multilingual", "rag-fusion"]
 
 [package.metadata.requires-dev]
 dev = [

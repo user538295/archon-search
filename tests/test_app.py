@@ -554,3 +554,73 @@ def test_app_startup_no_log_when_hyde_disabled(
         if r.levelno == logging.INFO and "HyDE" in r.message and "Anthropic" in r.message
     ]
     assert not hyde_msgs, f"Unexpected HyDE INFO message when disabled: {hyde_msgs}"
+
+
+# ---------------------------------------------------------------------------
+# Task 4.1 — RAGFusionGenerator in app.state + pyproject.toml optional dep
+# ---------------------------------------------------------------------------
+
+
+def test_app_state_has_rag_fusion_generator(config: SearchConfig, job_store: JobStore) -> None:
+    """create_app() must set app.state.rag_fusion_generator to a RAGFusionGenerator instance."""
+    from archon_search.rag_fusion import RAGFusionGenerator
+
+    app = create_app(config, job_store)
+    assert hasattr(app.state, "rag_fusion_generator")
+    assert isinstance(app.state.rag_fusion_generator, RAGFusionGenerator)
+
+
+def test_rag_fusion_optional_dep_in_pyproject() -> None:
+    """pyproject.toml must declare anthropic under [project.optional-dependencies].rag_fusion."""
+    import tomlkit
+
+    pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
+    doc = tomlkit.loads(pyproject_path.read_text())
+    optional_deps = doc["project"]["optional-dependencies"]  # type: ignore[index]
+    assert "rag_fusion" in optional_deps, "rag_fusion extra missing from [project.optional-dependencies]"
+    rag_fusion_deps = list(optional_deps["rag_fusion"])
+    assert any("anthropic" in dep for dep in rag_fusion_deps), (
+        f"anthropic not found in rag_fusion deps: {rag_fusion_deps}"
+    )
+
+
+def test_app_startup_logs_info_when_rag_fusion_enabled(
+    tmp_path: Path, job_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When config.rag_fusion.enabled=True, create_app must log an INFO about RAG Fusion and Anthropic's API."""
+    import logging
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.rag_fusion.enabled = True
+
+    with caplog.at_level(logging.INFO, logger="archon_search.server.app"):
+        create_app(cfg, job_store)
+
+    messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    rag_fusion_msgs = [m for m in messages if "RAG Fusion" in m and "Anthropic" in m]
+    assert rag_fusion_msgs, (
+        f"Expected INFO message about RAG Fusion and Anthropic's API, got: {messages}"
+    )
+    # Must include the model name
+    assert any(cfg.rag_fusion.model in m for m in rag_fusion_msgs)
+
+
+def test_app_startup_no_log_when_rag_fusion_disabled(
+    tmp_path: Path, job_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When config.rag_fusion.enabled=False (default), no RAG Fusion INFO message is logged."""
+    import logging
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.rag_fusion.enabled = False
+
+    with caplog.at_level(logging.INFO, logger="archon_search.server.app"):
+        create_app(cfg, job_store)
+
+    rag_fusion_msgs = [
+        r.message for r in caplog.records
+        if r.levelno == logging.INFO and "RAG Fusion" in r.message and "Anthropic" in r.message
+    ]
+    assert not rag_fusion_msgs, f"Unexpected RAG Fusion INFO message when disabled: {rag_fusion_msgs}"

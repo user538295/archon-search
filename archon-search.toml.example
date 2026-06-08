@@ -146,6 +146,39 @@ timeout_seconds = 5.0
 # In multi-worker deployments the effective rate is multiplied by worker count.
 max_requests_per_minute = 60
 
+[rag_fusion]
+# RAG Fusion — optional multi-query recall booster using LLM-generated query variants.
+# Disabled by default.
+#
+# WARNING: setting enabled = true causes the raw query text to be sent to Anthropic's
+# API servers on every request that includes rag_fusion=true. Do not enable in air-gapped
+# deployments or where data residency requirements apply.
+#
+# Prerequisites:
+#   1. Install the optional dependency: pip install archon-search[rag_fusion]
+#   2. Set ANTHROPIC_API_KEY in the server's environment.
+#
+# When enabled = false (the default), rag_fusion=true in a request is silently ignored and
+# standard single-query search is used (rag_fusion_applied: false in the response).
+#
+# RATE LIMIT WARNING: [hyde].max_requests_per_minute + [rag_fusion].max_requests_per_minute
+# must not exceed your Anthropic account rate limit — both features share the same API key.
+# In multi-worker deployments, the effective rate per feature is multiplied by worker count.
+enabled = false
+# Claude model used to generate query variants.
+model = "claude-haiku-4-5-20251001"
+# Per-request timeout (seconds) for the Anthropic API call. On timeout, the server
+# falls back silently to single-query search (rag_fusion_applied: false).
+timeout_seconds = 5.0
+# Per-process rate limit (requests per minute) for the Anthropic API. Requests that
+# exceed this limit fall back to single-query search (rag_fusion_applied: false).
+# In multi-worker deployments the effective rate is multiplied by worker count.
+max_requests_per_minute = 60
+# Number of LLM-generated query variants (not counting the original query).
+# Total searches per request = num_queries + 1. Valid range: 1–5.
+# NOTE: num_queries = 1 incurs LLM overhead for minimal benefit; consider using 2 or more.
+num_queries = 2
+
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #

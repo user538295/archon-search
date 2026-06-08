@@ -235,6 +235,13 @@ def create_app(
             "HyDE is enabled — search query text will be sent to Anthropic's API (model: %s)",
             config.hyde.model,
         )
+    from archon_search.rag_fusion import RAGFusionGenerator  # noqa: PLC0415
+    app.state.rag_fusion_generator = RAGFusionGenerator(config=config.rag_fusion)
+    if config.rag_fusion.enabled:
+        logger.info(
+            "RAG Fusion is enabled — search query text will be sent to Anthropic's API (model: %s)",
+            config.rag_fusion.model,
+        )
     app.include_router(collections_router)
     app.include_router(health_router)
     app.include_router(ready_router)
