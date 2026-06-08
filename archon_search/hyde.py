@@ -9,7 +9,6 @@ lazily inside ``__init__`` under a try/except guard to keep the package optional
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import time
@@ -18,6 +17,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from archon_search.embedder import Embedder
 
+from archon_search._privacy import _query_fingerprint
 from archon_search.config import HyDEConfig
 
 _logger = logging.getLogger(__name__)
@@ -29,11 +29,6 @@ Output only the passage — no preamble, no explanation.
 ---
 {query}
 ---"""
-
-
-def _query_fingerprint(query: str) -> str:
-    """Return sha256(query)[:16] — a non-reversible log correlation token."""
-    return hashlib.sha256(query.encode()).hexdigest()[:16]
 
 
 class HyDEGenerator:
