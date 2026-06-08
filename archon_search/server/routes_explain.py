@@ -169,6 +169,14 @@ class RoutingExplain(BaseModel):
     candidates: list[RoutingCandidate]
 
 
+class RagFusionSubQueryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    variant_index: int
+    result_count: int
+    top_doc_ids: list[str]
+
+
 class ExplainRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -178,6 +186,7 @@ class ExplainRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=100)
     rerank: bool = True
     hyde: bool = False
+    rag_fusion: bool = False
 
     @field_validator("query")
     @classmethod
@@ -242,6 +251,11 @@ class ExplainResponse(BaseModel):
     embedding_model: str = ""
     hyde_applied: bool = False
     stage_timings_ms: dict[str, float] | None = None
+    rag_fusion_applied: bool = False
+    rag_fusion_queries_used: int = 0
+    rag_fusion_attempted: bool = False
+    rag_fusion_failure_reason: str | None = None
+    rag_fusion_sub_queries: list[RagFusionSubQueryResult] | None = None
 
     @classmethod
     def from_pipeline_result(
@@ -254,7 +268,22 @@ class ExplainResponse(BaseModel):
         embedding_model: str = "",
         hyde_applied: bool = False,
         stage_timings_ms: dict[str, float] | None = None,
+        rag_fusion_applied: bool = False,
+        rag_fusion_queries_used: int = 0,
+        rag_fusion_attempted: bool = False,
+        rag_fusion_failure_reason: str | None = None,
+        rag_fusion_sub_query_results: list | None = None,
     ) -> ExplainResponse:
+        sub_queries: list[RagFusionSubQueryResult] | None = None
+        if rag_fusion_sub_query_results is not None:
+            sub_queries = [
+                RagFusionSubQueryResult(
+                    variant_index=r.variant_index,
+                    result_count=r.result_count,
+                    top_doc_ids=r.top_doc_ids,
+                )
+                for r in rag_fusion_sub_query_results
+            ]
         return cls(
             rerank=rerank,
             routing=routing,
@@ -269,6 +298,11 @@ class ExplainResponse(BaseModel):
             embedding_model=embedding_model,
             hyde_applied=hyde_applied,
             stage_timings_ms=stage_timings_ms,
+            rag_fusion_applied=rag_fusion_applied,
+            rag_fusion_queries_used=rag_fusion_queries_used,
+            rag_fusion_attempted=rag_fusion_attempted,
+            rag_fusion_failure_reason=rag_fusion_failure_reason,
+            rag_fusion_sub_queries=sub_queries,
         )
 
 

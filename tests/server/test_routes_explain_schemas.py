@@ -244,6 +244,11 @@ def test_explain_response_round_trips_brief_example() -> None:
         "embedding_model": "",
         "hyde_applied": False,
         "stage_timings_ms": None,
+        "rag_fusion_applied": False,
+        "rag_fusion_queries_used": 0,
+        "rag_fusion_attempted": False,
+        "rag_fusion_failure_reason": None,
+        "rag_fusion_sub_queries": None,
     }
     resp = ExplainResponse.model_validate(payload)
     dumped = resp.model_dump(mode="json", exclude_none=False)

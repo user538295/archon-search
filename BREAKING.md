@@ -8,6 +8,22 @@
 
 ## Changelog
 
+### [next release] — C5 RAG Fusion: additive fields on ExplainResponse
+
+**Surface**: `POST /explain` response (`ExplainResponse`); `POST /explain` request (`ExplainRequest`).
+
+**Additive fields** (backward-compatible for tolerant consumers; breaking for strict schema validators):
+- `ExplainRequest` gains `rag_fusion: bool` (default `false`). Clients that validate the request schema strictly must allow this new optional field.
+- `ExplainResponse` gains `rag_fusion_applied: bool` (default `false`). Indicates whether the explain used RAG Fusion multi-query decomposition and result fusion.
+- `ExplainResponse` gains `rag_fusion_queries_used: int` (default `0`). Number of successful LLM-generated variant searches (not counting the original query).
+- `ExplainResponse` gains `rag_fusion_attempted: bool` (default `false`). Indicates whether RAG Fusion generation was attempted (true even if fallback to single-query occurred).
+- `ExplainResponse` gains `rag_fusion_failure_reason: str | null` (default `null`). Populated with the error type when RAG Fusion was attempted but fell back.
+- `ExplainResponse` gains `rag_fusion_sub_queries: list[RagFusionSubQueryResult] | null` (default `null`). Per-variant result summaries when RAG Fusion succeeded; each entry has `variant_index`, `result_count`, and `top_doc_ids`.
+
+**Migration**: no action required for consumers that ignore unknown fields. Strict schema validators should add all six fields to their `ExplainResponse` and `ExplainRequest` type stubs.
+
+**Announced in**: this release.
+
 ### [next release] — C5 RAG Fusion: additive fields on SearchResponse
 
 **Surface**: `POST /search` response (`SearchResponse`); `POST /search` request (`SearchRequest`).

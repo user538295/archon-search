@@ -517,6 +517,11 @@
             "title": "Query",
             "type": "string"
           },
+          "rag_fusion": {
+            "default": false,
+            "title": "Rag Fusion",
+            "type": "boolean"
+          },
           "rerank": {
             "default": true,
             "title": "Rerank",
@@ -571,6 +576,46 @@
             },
             "title": "Near Misses",
             "type": "array"
+          },
+          "rag_fusion_applied": {
+            "default": false,
+            "title": "Rag Fusion Applied",
+            "type": "boolean"
+          },
+          "rag_fusion_attempted": {
+            "default": false,
+            "title": "Rag Fusion Attempted",
+            "type": "boolean"
+          },
+          "rag_fusion_failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rag Fusion Failure Reason"
+          },
+          "rag_fusion_queries_used": {
+            "default": 0,
+            "title": "Rag Fusion Queries Used",
+            "type": "integer"
+          },
+          "rag_fusion_sub_queries": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RagFusionSubQueryResult"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rag Fusion Sub Queries"
           },
           "rerank": {
             "title": "Rerank",
@@ -1104,6 +1149,33 @@
           "embedding_model"
         ],
         "title": "PatchCollectionBody",
+        "type": "object"
+      },
+      "RagFusionSubQueryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "result_count": {
+            "title": "Result Count",
+            "type": "integer"
+          },
+          "top_doc_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Top Doc Ids",
+            "type": "array"
+          },
+          "variant_index": {
+            "title": "Variant Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "variant_index",
+          "result_count",
+          "top_doc_ids"
+        ],
+        "title": "RagFusionSubQueryResult",
         "type": "object"
       },
       "ReadinessChecks": {
@@ -1894,8 +1966,7 @@
   },
   "info": {
     "description": "REST API for archon-search document search and collection management",
-    "title": "archon-search",
-    "version": "26.6.710.post1.dev62"
+    "title": "archon-search"
   },
   "openapi": "3.1.0",
   "paths": {

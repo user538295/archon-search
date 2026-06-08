@@ -343,3 +343,89 @@ def test_explain_collectionless_routing_hyde_true_passes_vector(tmp_path: Path) 
 
     _, kwargs = pipeline.explain.call_args
     assert kwargs.get("query_vector") == hyde_vector
+
+
+# ---------------------------------------------------------------------------
+# Task 3.2 — RAG Fusion schema fields on ExplainRequest / ExplainResponse
+# ---------------------------------------------------------------------------
+
+
+def test_explain_request_rag_fusion_default_false() -> None:
+    """ExplainRequest without rag_fusion defaults to False."""
+    req = ExplainRequest(query="test", collection="col")
+    assert req.rag_fusion is False
+
+
+def test_explain_request_accepts_rag_fusion_true() -> None:
+    """ExplainRequest with rag_fusion=True validates without error."""
+    req = ExplainRequest(query="test", collection="col", rag_fusion=True)
+    assert req.rag_fusion is True
+
+
+def test_explain_response_has_rag_fusion_fields() -> None:
+    """ExplainResponse has all five RAG Fusion fields with correct defaults."""
+    from archon_search.pipeline import ExplainPipelineResult as EPR
+    from archon_search.server.routes_explain import ExplainResponse
+
+    result = EPR(top_results=[], near_misses=[], acl_filtered=False)
+    resp = ExplainResponse.from_pipeline_result(
+        rerank=True,
+        collection="col",
+        routing=None,
+        result=result,
+    )
+    assert resp.rag_fusion_applied is False
+    assert resp.rag_fusion_queries_used == 0
+    assert resp.rag_fusion_attempted is False
+    assert resp.rag_fusion_failure_reason is None
+    assert resp.rag_fusion_sub_queries is None
+
+
+def test_rag_fusion_sub_query_result_schema() -> None:
+    """RagFusionSubQueryResult validates fields correctly."""
+    from archon_search.server.routes_explain import RagFusionSubQueryResult
+
+    obj = RagFusionSubQueryResult(variant_index=0, result_count=3, top_doc_ids=["a", "b", "c"])
+    assert obj.variant_index == 0
+    assert obj.result_count == 3
+    assert obj.top_doc_ids == ["a", "b", "c"]
+
+
+def test_explain_from_pipeline_result_threads_rag_fusion() -> None:
+    """from_pipeline_result sets RAG Fusion fields when provided."""
+    from archon_search.pipeline import ExplainPipelineResult as EPR, RagFusionSubQueryInfo
+    from archon_search.server.routes_explain import ExplainResponse
+
+    sub_query_results = [
+        RagFusionSubQueryInfo(variant_index=0, result_count=3, top_doc_ids=["doc1", "doc2", "doc3"]),
+        RagFusionSubQueryInfo(variant_index=1, result_count=2, top_doc_ids=["doc4", "doc5"]),
+    ]
+    result = EPR(
+        top_results=[],
+        near_misses=[],
+        acl_filtered=False,
+        rag_fusion_applied=True,
+        rag_fusion_queries_used=2,
+        rag_fusion_attempted=True,
+        rag_fusion_failure_reason=None,
+        rag_fusion_sub_query_results=sub_query_results,
+    )
+    resp = ExplainResponse.from_pipeline_result(
+        rerank=True,
+        collection="col",
+        routing=None,
+        result=result,
+        rag_fusion_applied=True,
+        rag_fusion_queries_used=2,
+        rag_fusion_attempted=True,
+        rag_fusion_sub_query_results=sub_query_results,
+    )
+    assert resp.rag_fusion_applied is True
+    assert resp.rag_fusion_queries_used == 2
+    assert resp.rag_fusion_attempted is True
+    assert resp.rag_fusion_failure_reason is None
+    assert resp.rag_fusion_sub_queries is not None
+    assert len(resp.rag_fusion_sub_queries) == 2
+    assert resp.rag_fusion_sub_queries[0].variant_index == 0
+    assert resp.rag_fusion_sub_queries[0].result_count == 3
+    assert resp.rag_fusion_sub_queries[1].variant_index == 1

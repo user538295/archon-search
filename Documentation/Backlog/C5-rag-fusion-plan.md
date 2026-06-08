@@ -499,7 +499,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Checkpoint: `uv run pytest tests/test_routes_search.py -k "rag_fusion" -x`
 
 #### Task 3.2 — `ExplainRequest` + `ExplainResponse` + `RagFusionSubQueryResult` schema
-- [ ] **File**: `archon_search/server/routes_explain.py`
+- [x] **File**: `archon_search/server/routes_explain.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `RagFusionSubQueryResult(BaseModel)` before `ExplainRequest`:
@@ -516,11 +516,11 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Update OpenAPI snapshot.
 - **Releasable**: `POST /explain` with `{"rag_fusion": true}` deserialises; response schema includes all new fields.
 - **Tests (TDD)** — `tests/test_routes_explain.py`:
-  - Unit: `test_explain_request_rag_fusion_default_false` — `ExplainRequest(query="q", collection="c")` has `rag_fusion == False`.
-  - Unit: `test_explain_request_accepts_rag_fusion_true`
-  - Unit: `test_explain_response_has_rag_fusion_fields` — all five new fields present with defaults; `rag_fusion_sub_queries=None`.
-  - Unit: `test_rag_fusion_sub_query_result_schema` — `RagFusionSubQueryResult(variant_index=0, result_count=3, top_doc_ids=["a","b","c"])` validates correctly.
-  - Unit: `test_explain_from_pipeline_result_threads_rag_fusion` — `from_pipeline_result(..., rag_fusion_applied=True, rag_fusion_queries_used=2, rag_fusion_sub_query_results=[...])` sets those fields on the response.
+  - [x] Unit: `test_explain_request_rag_fusion_default_false` — `ExplainRequest(query="q", collection="c")` has `rag_fusion == False`.
+  - [x] Unit: `test_explain_request_accepts_rag_fusion_true`
+  - [x] Unit: `test_explain_response_has_rag_fusion_fields` — all five new fields present with defaults; `rag_fusion_sub_queries=None`.
+  - [x] Unit: `test_rag_fusion_sub_query_result_schema` — `RagFusionSubQueryResult(variant_index=0, result_count=3, top_doc_ids=["a","b","c"])` validates correctly.
+  - [x] Unit: `test_explain_from_pipeline_result_threads_rag_fusion` — `from_pipeline_result(..., rag_fusion_applied=True, rag_fusion_queries_used=2, rag_fusion_sub_query_results=[...])` sets those fields on the response.
   - Checkpoint: `uv run pytest tests/test_routes_explain.py -k "rag_fusion" -x`
 
 #### Task 3.3 — `TelemetryEntry` RAG Fusion fields
