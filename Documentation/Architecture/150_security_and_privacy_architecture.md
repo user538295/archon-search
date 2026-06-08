@@ -15,7 +15,7 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
 1. **Local trust boundary.** The threat model assumes anything running as the same OS user is trusted; the server binds to `127.0.0.1` by default.
 2. **Bearer auth on every endpoint except `/health` and `/ready`.** No anonymous access to data planes.
 3. **Privacy is structural, not procedural.** The telemetry schema cannot represent a raw query — there is no field for it and no factory that accepts one.
-4. **No outbound network calls for telemetry.** `export_enabled` is silently coerced to `false`; nothing leaves the host. **Exception (C4)**: when `[hyde] enabled = true` and a caller sends `hyde=true`, the raw query is sent to Anthropic's API — this is an explicit operator opt-in; see the HyDE section under Privacy.
+4. **No outbound network calls for telemetry.** `export_enabled` is silently coerced to `false`; nothing leaves the host. **Exception (C4/C5)**: when `[hyde] enabled = true` and a caller sends `hyde=true`, or when `[rag_fusion] enabled = true` and a caller sends `rag_fusion=true`, the raw query is sent to Anthropic's API — both are explicit operator opt-ins; see the HyDE and RAG Fusion sections under Privacy. The two features are mutually exclusive per request.
 5. **ACL is best-effort, default-open.** Documents without an explicit `_acl` are visible to all namespaces. Misconfigured ACLs fail-open with a warning, never crash.
 
 ## Threat model — scope and non-scope
@@ -157,7 +157,7 @@ This is documented as accepted risk: telemetry is local-only and the operator al
 
 ### HyDE external LLM transmission (C4) — explicit opt-in exception
 
-**C4 introduces the only point in archon-search v1 where user data can leave the host by design.**
+**C4 introduces the first point in archon-search v1 where user data can leave the host by design. C5 introduces a second (see the RAG Fusion section below).**
 
 When `[hyde] enabled = true` in config *and* a request includes `hyde=true`, the user's raw query (up to 2000 characters) is sent to Anthropic's API servers over HTTPS to generate a hypothetical answer passage. This is a deliberate operator opt-in, not a default behaviour.
 
@@ -175,6 +175,29 @@ When `[hyde] enabled = true` in config *and* a request includes `hyde=true`, the
 **Operator visibility:** when `enabled = true`, the server logs an INFO message at startup naming the model. This makes the data-transmission fact visible in server logs without the operator needing to read config.
 
 See `Documentation/ADRs/C4-hyde-external-llm-dependency.md` for the full decision record.
+
+### RAG Fusion external LLM transmission (C5) — explicit opt-in exception
+
+**C5 introduces a second point where user data can leave the host by design**, following the same opt-in pattern as HyDE (C4).
+
+When `[rag_fusion] enabled = true` in config *and* a request includes `rag_fusion=true`, the user's raw query (up to 2000 characters) is sent to Anthropic's API servers over HTTPS to generate semantic query variants. This is a deliberate operator opt-in, not default behaviour.
+
+**Gating requirements** — RAG Fusion transmission occurs only when all three conditions are true simultaneously:
+
+1. The operator has installed `archon-search[rag_fusion]` (optional dependency).
+2. The operator has set `[rag_fusion] enabled = true` in `~/.archon-search/archon-search.toml`.
+3. The caller includes `rag_fusion=true` in the request body.
+
+**Invariants preserved despite the external call:**
+
+- LLM-generated query variants are consumed only by the local embedder. They are **never logged, stored in LanceDB, or returned to the caller**.
+- Log messages in `archon_search/rag_fusion.py` use `_query_fingerprint(query)` (from `archon_search/_privacy.py`) — the raw query is never passed to any logging call. A CI guard (`tests/test_no_query_log_in_rag_fusion.py`) enforces this structurally.
+- `TelemetryEntry` factories receive no query text — the RAG Fusion path does not weaken the telemetry structural invariant.
+- Fallback is silent: timeout, API error, missing key, or rate limit causes `rag_fusion_applied: false` in the response, not an error. Availability is never degraded.
+
+**Shared API key operational risk:** both HyDE and RAG Fusion use `ANTHROPIC_API_KEY`. Each maintains independent per-process token-bucket rate limiters (`[hyde].max_requests_per_minute` and `[rag_fusion].max_requests_per_minute`). In steady state, the combined peak rate from a single process can approach `hyde_rpm + rag_fusion_rpm` API calls per minute. In multi-worker deployments this is multiplied by the worker count. Operators must ensure the combined rate does not exceed their Anthropic account rate limit. See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md` for the full decision record.
+
+**HyDE and RAG Fusion are mutually exclusive**: when `rag_fusion=true` is present, HyDE is skipped regardless of the `hyde` flag value. This prevents compounding privacy risk (both calls for a single request) and avoids multiplying LLM cost.
 
 ### No external transmission (baseline — non-HyDE traffic)
 

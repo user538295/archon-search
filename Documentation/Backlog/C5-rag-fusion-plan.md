@@ -761,7 +761,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
 ### Phase 7 — Verification & Documentation
 
 #### Task 7.1 — Final verification & documentation update + C5-ADR
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Write `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md` — ADR documenting: (a) why LLM-based decomposition vs. heuristic (semantic richness is the point); (b) privacy trade-off (query text leaves the machine); (c) HyDE mutual exclusion design decision and rationale; (d) shared Anthropic API key operational risk (`[hyde].max_requests_per_minute + [rag_fusion].max_requests_per_minute` ≤ account limit); (e) evaluated alternatives; (f) the decision and rationale. ADRs are append-only — new file.

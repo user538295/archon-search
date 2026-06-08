@@ -252,6 +252,108 @@ HyDE is designed to **never degrade availability**. It falls back silently (retu
 - **API key rotation**: the key is read from the environment at startup; restart the server after changing it.
 - **Model choice**: `claude-haiku-4-5-20251001` (the default) is fast and cheap. Larger models may produce better hypotheses at higher latency and cost.
 
+## RAG Fusion multi-query recall (C5)
+
+RAG Fusion improves recall for multi-faceted queries — cases where the user's query can be expressed in several ways and the best documents only surface with different phrasings. When enabled, the server asks Claude to generate N semantic variants of the original query, searches with all N+1 queries in parallel, and fuses the result sets via second-pass Reciprocal Rank Fusion (RRF).
+
+> **Privacy notice**: `rag_fusion=true` sends the user's raw query to Anthropic's API servers to generate variants. Do not enable RAG Fusion in air-gapped deployments or where data residency requirements apply. See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md` for the full privacy trade-off.
+
+### Installation
+
+RAG Fusion requires the optional `anthropic` package:
+
+```bash
+pip install archon-search[rag_fusion]
+```
+
+### Configuration
+
+Add or edit the `[rag_fusion]` section in `~/.archon-search/archon-search.toml`:
+
+```toml
+[rag_fusion]
+# WARNING: enabled = true sends query text to Anthropic's API.
+enabled = true
+model = "claude-haiku-4-5-20251001"
+timeout_seconds = 5.0
+max_requests_per_minute = 60
+num_queries = 2   # LLM-generated variants; total searches = num_queries + 1
+```
+
+| Key | Type | Default | Constraints | Description |
+|---|---|---|---|---|
+| `enabled` | `bool` | `false` | — | Kill-switch. When `false`, `rag_fusion=true` in requests is silently ignored. |
+| `model` | `str` | `"claude-haiku-4-5-20251001"` | Non-empty | Claude model used for query variant generation. |
+| `timeout_seconds` | `float` | `5.0` | `> 0` | Per-request Anthropic API timeout. |
+| `max_requests_per_minute` | `int` | `60` | `>= 1` | Per-process token-bucket rate limit. |
+| `num_queries` | `int` | `2` | `1–5` | Number of LLM-generated variants (not counting original). `num_queries=1` logs a WARNING. |
+
+Set `ANTHROPIC_API_KEY` in the server's environment before starting:
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+archon-search start
+```
+
+When `enabled = true`, the server logs an INFO message at startup:
+
+```
+RAG Fusion is enabled — search query text will be sent to Anthropic's API (model: claude-haiku-4-5-20251001)
+```
+
+### Usage
+
+Pass `rag_fusion: true` on any `/search` or `/explain` request:
+
+```bash
+source ~/.archon-search/.search.env
+
+curl -s -X POST http://127.0.0.1:8765/search \
+  -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"docs","query":"how do I remove the CLI on macOS?","rag_fusion":true}'
+```
+
+The response includes:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `rag_fusion_applied` | `bool` | `true` when at least one LLM variant was generated and fused; `false` on fallback. |
+| `rag_fusion_queries_used` | `int` | Number of successful LLM-generated variant searches (`0..num_queries`; does not count the original query search). |
+| `rag_fusion_attempted` | `bool` | `true` when the generator was called (even if it returned no variants). |
+
+The `/explain` response additionally includes:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `rag_fusion_failure_reason` | `str \| null` | Error type string when variant generation failed (e.g. `"TimeoutError"`). |
+| `rag_fusion_sub_queries` | `list \| null` | Per-sub-query result summary: `variant_index` (0 = original query), `result_count`, `top_doc_ids` (top 5). |
+
+### Mutual exclusion with HyDE
+
+`rag_fusion=true` and `hyde=true` cannot be combined. When both are present in a request, RAG Fusion executes and HyDE is skipped (`hyde_applied: false` in the response). RAG Fusion subsumes HyDE's intent and adding both would multiply LLM cost without meaningful recall benefit.
+
+### Fallback behaviour
+
+RAG Fusion is designed to **never degrade availability**. It falls back silently (`rag_fusion_applied: false`) when:
+
+- `[rag_fusion] enabled = false` in config (the kill-switch).
+- `rag_fusion=true` in the request but the `anthropic` package is not installed — in this case a `422` is returned (configuration error, not a runtime fallback).
+- `ANTHROPIC_API_KEY` is absent from the environment (WARNING logged once).
+- The Anthropic API call times out (after `timeout_seconds`).
+- The Anthropic API returns an error.
+- The per-process rate limit (`max_requests_per_minute`) is exhausted.
+- The collection has no vector index (FTS-only mode).
+
+When the generator returns no variants (all failure paths), the original query is still searched normally.
+
+### Operator notes
+
+- **Multi-worker deployments**: the rate limit is per-process. With N workers the effective call rate can be up to `N × max_requests_per_minute`. For deployments with both HyDE and RAG Fusion enabled, the combined limit applies: `N × (hyde.max_requests_per_minute + rag_fusion.max_requests_per_minute)` must not exceed your Anthropic account rate limit.
+- **Shared API key with HyDE**: both features use `ANTHROPIC_API_KEY`. Tune both `max_requests_per_minute` values together to stay within your account limit.
+- **FTS-only collections**: `rag_fusion=true` is silently ignored (`rag_fusion_applied: false`) for collections without a vector index.
+- **`rag_fusion_queries_used` semantics**: counts only successful LLM-generated variant searches — does not count the original query search. The `rag_fusion_sub_queries` list (in `/explain` responses) will have `rag_fusion_queries_used + 1` entries.
+
 ## Related documents
 
 - [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) — full REST/MCP reference.
