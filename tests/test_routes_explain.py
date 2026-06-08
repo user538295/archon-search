@@ -429,3 +429,231 @@ def test_explain_from_pipeline_result_threads_rag_fusion() -> None:
     assert resp.rag_fusion_sub_queries[0].variant_index == 0
     assert resp.rag_fusion_sub_queries[0].result_count == 3
     assert resp.rag_fusion_sub_queries[1].variant_index == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 4.3 — Wire RAG Fusion into routes_explain.py handler
+# ---------------------------------------------------------------------------
+
+
+def test_explain_rag_fusion_true_skips_hyde(tmp_path: Path) -> None:
+    """rag_fusion=True and hyde=True: resolve_hyde_vector NOT called; response has hyde_applied=False."""
+    from unittest.mock import patch, AsyncMock as AM
+
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.explain = AsyncMock(return_value=_make_explain_result())
+    cache = _make_embedder_cache_mock()
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    with patch(
+        "archon_search.server.routes_explain.resolve_hyde_vector",
+        new=AM(return_value=([0.1, 0.2], True)),
+    ) as mock_hyde:
+        response = client.post(
+            "/explain",
+            json={"collection": "col", "query": "test", "rag_fusion": True, "hyde": True},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    # HyDE must be suppressed when rag_fusion=True
+    assert data["hyde_applied"] is False
+    # resolve_hyde_vector must NOT be called
+    mock_hyde.assert_not_awaited()
+
+
+def test_explain_rag_fusion_true_passes_to_pipeline(tmp_path: Path) -> None:
+    """rag_fusion=True: pipeline.explain called with rag_fusion fields; response carries all five new fields."""
+    from archon_search.pipeline import RagFusionSubQueryInfo, ExplainPipelineResult as EPR
+
+    sub_query_results = [
+        RagFusionSubQueryInfo(variant_index=0, result_count=5, top_doc_ids=["d1", "d2"]),
+        RagFusionSubQueryInfo(variant_index=1, result_count=3, top_doc_ids=["d3"]),
+    ]
+    pipeline_result = EPR(
+        top_results=[],
+        near_misses=[],
+        acl_filtered=False,
+        rag_fusion_applied=True,
+        rag_fusion_queries_used=2,
+        rag_fusion_attempted=True,
+        rag_fusion_failure_reason=None,
+        rag_fusion_sub_query_results=sub_query_results,
+    )
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.explain = AsyncMock(return_value=pipeline_result)
+    cache = _make_embedder_cache_mock()
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    response = client.post("/explain", json={"collection": "col", "query": "test", "rag_fusion": True})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["rag_fusion_applied"] is True
+    assert data["rag_fusion_queries_used"] == 2
+    assert data["rag_fusion_attempted"] is True
+    assert data["rag_fusion_failure_reason"] is None
+    assert data["rag_fusion_sub_queries"] is not None
+    assert len(data["rag_fusion_sub_queries"]) == 2
+
+    # Verify pipeline.explain was called with rag_fusion=True
+    _, kwargs = pipeline.explain.call_args
+    assert kwargs.get("rag_fusion") is True
+
+
+def test_explain_rag_fusion_failure_reason_in_response(tmp_path: Path) -> None:
+    """Pipeline result with rag_fusion_attempted=True and failure_reason: response maps both through."""
+    from archon_search.pipeline import ExplainPipelineResult as EPR
+
+    pipeline_result = EPR(
+        top_results=[],
+        near_misses=[],
+        acl_filtered=False,
+        rag_fusion_applied=False,
+        rag_fusion_queries_used=0,
+        rag_fusion_attempted=True,
+        rag_fusion_failure_reason="timeout",
+        rag_fusion_sub_query_results=None,
+    )
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.explain = AsyncMock(return_value=pipeline_result)
+    cache = _make_embedder_cache_mock()
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    response = client.post("/explain", json={"collection": "col", "query": "test", "rag_fusion": True})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["rag_fusion_attempted"] is True
+    assert data["rag_fusion_failure_reason"] == "timeout"
+
+
+def test_explain_rag_fusion_sub_queries_mapped_to_schema(tmp_path: Path) -> None:
+    """rag_fusion_sub_query_results on pipeline result → rag_fusion_sub_queries in response (mapped by field name)."""
+    from archon_search.pipeline import ExplainPipelineResult as EPR, RagFusionSubQueryInfo
+
+    sub_query_results = [
+        RagFusionSubQueryInfo(variant_index=0, result_count=3, top_doc_ids=["a", "b", "c"]),
+        RagFusionSubQueryInfo(variant_index=1, result_count=2, top_doc_ids=["b", "c"]),
+    ]
+    pipeline_result = EPR(
+        top_results=[],
+        near_misses=[],
+        acl_filtered=False,
+        rag_fusion_applied=True,
+        rag_fusion_queries_used=1,
+        rag_fusion_attempted=True,
+        rag_fusion_sub_query_results=sub_query_results,
+    )
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.explain = AsyncMock(return_value=pipeline_result)
+    cache = _make_embedder_cache_mock()
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    response = client.post("/explain", json={"collection": "col", "query": "test", "rag_fusion": True})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["rag_fusion_sub_queries"] is not None
+    assert len(data["rag_fusion_sub_queries"]) == 2
+    assert data["rag_fusion_sub_queries"][0]["variant_index"] == 0
+    assert data["rag_fusion_sub_queries"][0]["result_count"] == 3
+    assert data["rag_fusion_sub_queries"][0]["top_doc_ids"] == ["a", "b", "c"]
+    assert data["rag_fusion_sub_queries"][1]["variant_index"] == 1
+
+
+def test_explain_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
+    """Pipeline raises RAGFusionDependencyError (package not installed): response is 422."""
+    from archon_search.rag_fusion import RAGFusionDependencyError
+
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.explain = AsyncMock(side_effect=RAGFusionDependencyError("Install archon-search[rag_fusion]"))
+    cache = _make_embedder_cache_mock()
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    response = client.post("/explain", json={"collection": "col", "query": "test", "rag_fusion": True})
+    assert response.status_code == 422
+    assert "rag_fusion" in response.json()["detail"].lower()
+
+
+def test_explain_rag_fusion_false_hyde_still_works(tmp_path: Path) -> None:
+    """rag_fusion=False, hyde=True: resolve_hyde_vector IS called (mutual exclusion is directional)."""
+    from unittest.mock import patch, AsyncMock as AM
+
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.explain = AsyncMock(return_value=_make_explain_result())
+    cache = _make_embedder_cache_mock()
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    hyde_vector = [0.1, 0.2, 0.3]
+    with patch(
+        "archon_search.server.routes_explain.resolve_hyde_vector",
+        new=AM(return_value=(hyde_vector, True)),
+    ) as mock_hyde:
+        response = client.post(
+            "/explain",
+            json={"collection": "col", "query": "test", "rag_fusion": False, "hyde": True},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["hyde_applied"] is True
+    mock_hyde.assert_awaited_once()
+    _, kwargs = pipeline.explain.call_args
+    assert kwargs.get("query_vector") == hyde_vector
+
+
+def test_explain_multi_collection_rag_fusion_passes_to_pipeline(tmp_path: Path) -> None:
+    """Multi-collection path: rag_fusion=True passes rag_fusion params to pipeline.explain."""
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    pipeline.explain = AsyncMock(return_value=_make_explain_result())
+    app.state.pipeline = pipeline
+
+    response = client.post(
+        "/explain",
+        json={"collections": ["col1", "col2"], "query": "test", "rag_fusion": True},
+    )
+    assert response.status_code == 200
+    _, kwargs = pipeline.explain.call_args
+    assert kwargs.get("rag_fusion") is True
+    assert "rag_fusion_generator" in kwargs
+    assert "rag_fusion_config" in kwargs
+
+
+def test_explain_multi_collection_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
+    """Multi-collection path: RAGFusionDependencyError from pipeline returns 422."""
+    from archon_search.rag_fusion import RAGFusionDependencyError
+
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    pipeline.explain = AsyncMock(side_effect=RAGFusionDependencyError("Install archon-search[rag_fusion]"))
+    app.state.pipeline = pipeline
+
+    response = client.post(
+        "/explain",
+        json={"collections": ["col1", "col2"], "query": "test", "rag_fusion": True},
+    )
+    assert response.status_code == 422
+    assert "rag_fusion" in response.json()["detail"].lower()

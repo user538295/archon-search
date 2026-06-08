@@ -32,6 +32,7 @@ from archon_search.pipeline import (
     FanoutTimeoutError,
     MetadataLookupError,
 )
+from archon_search.rag_fusion import RAGFusionDependencyError
 from archon_search.router import MultiCollectionRouter
 from archon_search.server.routes_search import _FANOUT_VALIDATION_LIMIT
 from archon_search.server.schemas import ExcludedCollectionSchema
@@ -322,7 +323,12 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
     ns: str = request.state.namespace
     timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
 
-    def _emit_ok(collection: str, result_count: int) -> None:
+    def _emit_ok(
+        collection: str,
+        result_count: int,
+        rag_fusion_applied: bool | None = None,
+        rag_fusion_queries_used: int | None = None,
+    ) -> None:
         if writer is None:
             return
         try:
@@ -332,6 +338,8 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     result_count=result_count,
                     latency_ms=(monotonic() - start) * 1000.0,
                     correlation_id=_correlation_id.get(),
+                    rag_fusion_applied=rag_fusion_applied,
+                    rag_fusion_queries_used=rag_fusion_queries_used,
                 )
             )
         except Exception as tel_exc:
@@ -354,15 +362,19 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
 
     routing: RoutingExplain | None = None
+    rag_fusion_gen = getattr(request.app.state, "rag_fusion_generator", None)
 
-    # Resolve HyDE vector before dispatching to any pipeline path.
-    generator = getattr(request.app.state, "hyde_generator", None)
-    try:
-        hyde_vector, hyde_applied = await resolve_hyde_vector(
-            body.query, body.hyde, generator, config.hyde
-        )
-    except RuntimeError as exc:
-        return JSONResponse({"detail": str(exc)}, status_code=422)
+    # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
+    if body.rag_fusion:
+        hyde_vector, hyde_applied = None, False
+    else:
+        generator = getattr(request.app.state, "hyde_generator", None)
+        try:
+            hyde_vector, hyde_applied = await resolve_hyde_vector(
+                body.query, body.hyde, generator, config.hyde
+            )
+        except RuntimeError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=422)
 
     with ExitStack() as stack:
         recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
@@ -380,7 +392,12 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     namespace=ns,
                     query_vector=hyde_vector,
                     embedder=None,
+                    rag_fusion=body.rag_fusion,
+                    rag_fusion_generator=rag_fusion_gen,
+                    rag_fusion_config=config.rag_fusion,
                 )
+            except RAGFusionDependencyError as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=422)
             except CollectionNotFoundError:
                 return JSONResponse({"detail": "collection not found"}, status_code=404)
             except MetadataLookupError:
@@ -419,8 +436,18 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 embedding_model=config.embedding_model,
                 hyde_applied=hyde_applied,
                 stage_timings_ms=stage_timings,
+                rag_fusion_applied=result.rag_fusion_applied,
+                rag_fusion_queries_used=result.rag_fusion_queries_used,
+                rag_fusion_attempted=result.rag_fusion_attempted,
+                rag_fusion_failure_reason=result.rag_fusion_failure_reason,
+                rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
             )
-            _emit_ok("", len(response.results))
+            _emit_ok(
+                "",
+                len(response.results),
+                rag_fusion_applied=result.rag_fusion_applied,
+                rag_fusion_queries_used=result.rag_fusion_queries_used,
+            )
             result_dict = response.model_dump(mode="json")
             if stage_timings is None:
                 result_dict.pop("stage_timings_ms", None)
@@ -493,7 +520,12 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 namespace=ns,
                 query_vector=hyde_vector,
                 embedder=_embedder,
+                rag_fusion=body.rag_fusion,
+                rag_fusion_generator=rag_fusion_gen,
+                rag_fusion_config=config.rag_fusion,
             )
+        except RAGFusionDependencyError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=422)
         except ExplainStageError as exc:
             # Full original is logged server-side; the response detail is sanitized to
             # stage + exception type only — the original message could echo the query
@@ -527,8 +559,18 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
         embedding_model=active_model,
         hyde_applied=hyde_applied,
         stage_timings_ms=stage_timings,
+        rag_fusion_applied=result.rag_fusion_applied,
+        rag_fusion_queries_used=result.rag_fusion_queries_used,
+        rag_fusion_attempted=result.rag_fusion_attempted,
+        rag_fusion_failure_reason=result.rag_fusion_failure_reason,
+        rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
     )
-    _emit_ok(chosen, len(response.results))
+    _emit_ok(
+        chosen,
+        len(response.results),
+        rag_fusion_applied=result.rag_fusion_applied,
+        rag_fusion_queries_used=result.rag_fusion_queries_used,
+    )
     result_dict = response.model_dump(mode="json")
     if stage_timings is None:
         result_dict.pop("stage_timings_ms", None)
