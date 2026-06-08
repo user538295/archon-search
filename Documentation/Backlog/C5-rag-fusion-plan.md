@@ -681,7 +681,7 @@ Factory methods `from_search_tool_result()`, `from_search_multi_result()`, `from
   - Checkpoint: `uv run pytest tests/test_no_query_log_in_rag_fusion.py -x`
 
 #### Task 6.2 — E2E integration tests: real store, real HTTP, mock generator only
-- [ ] **File**: `tests/test_integration_rag_fusion.py` (new)
+- [x] **File**: `tests/test_integration_rag_fusion.py` (new)
 - **Depends on**: Tasks 4.2, 4.3, 5.1
 - **Description**:
   Follow the pattern established by `tests/test_integration_hyde.py` exactly: real LanceDB store, real data ingested before each test, real HTTP calls through `TestClient`, mock only `RAGFusionGenerator.generate_variants` to avoid real Anthropic API calls. Do NOT use `AsyncClient` or mock the store.
