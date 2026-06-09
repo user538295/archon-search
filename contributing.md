@@ -46,10 +46,18 @@ Full standards live in [`Documentation/Architecture/500_development_workflows_an
 
 ## Tests
 
-The default suite is fast and hermetic:
+The default suite is fast, hermetic, and runs in parallel via `pytest-xdist`:
 
 ```bash
 uv run pytest
+```
+
+For debugging, use serial mode:
+
+```bash
+uv run pytest -n0          # serial execution
+uv run pytest -n0 -x       # stop on first failure (xdist workers don't support -x directly)
+uv run pytest -n0 -s       # show stdout (suppressed by xdist)
 ```
 
 Marker-gated suites are excluded from the default run and opted into explicitly:
@@ -61,7 +69,7 @@ uv run pytest -m live
 uv run pytest -m benchmark   # needs a running server; auto-skips if unreachable
 ```
 
-The test pyramid, marker semantics, and the role of the eval harness are documented in [`Documentation/Architecture/200_testing_strategy.md`](Documentation/Architecture/200_testing_strategy.md). The eval fixture and threshold maintenance guide is [`tests/eval/README.md`](tests/eval/README.md).
+The test pyramid, marker semantics, parallelism configuration, and the role of the eval harness are documented in [`Documentation/Architecture/200_testing_strategy.md`](Documentation/Architecture/200_testing_strategy.md). The eval fixture and threshold maintenance guide is [`tests/eval/README.md`](tests/eval/README.md).
 
 ## Pull requests
 

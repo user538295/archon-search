@@ -217,7 +217,7 @@ No production code changes. All changes are in test infrastructure and configura
 ### Final Phase — Verification & Documentation
 
 #### Task F.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: Task 1.1, Task 1.2, Task 1.3, Task 2.1, Task 3.1
 - **Description**:
   - Spawn an agent to update every documentation file affected by this change:

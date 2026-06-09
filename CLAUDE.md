@@ -19,12 +19,17 @@ uv sync --dev
 # Run the server (entry point archon_search.cli.main:main)
 uv run archon-search
 
-# Full test suite (default addopts enforce --cov-fail-under=85)
+# Full test suite (default addopts enforce --cov-fail-under=85; runs in parallel via pytest-xdist)
 uv run pytest
+
+# Serial execution — required for fail-fast (-x) and stdout passthrough (-s)
+uv run pytest -n0
+uv run pytest -n0 -x          # stop on first failure
+uv run pytest -n0 -s          # show stdout (suppressed by xdist)
 
 # Single test file / single test
 uv run pytest tests/test_router.py
-uv run pytest tests/test_router.py::test_name -x
+uv run pytest tests/test_router.py::test_name -n0 -x
 
 # Skip coverage locally (developer override only — never bake into addopts)
 uv run pytest --no-cov
@@ -40,6 +45,8 @@ bash release.sh           # interactive
 bash release.sh -y        # non-interactive
 bash release.sh --dry-run
 ```
+
+Note: release CI (`archon-search-release.yml` and `archon-search-pr.yml`) passes `-n0` explicitly to disable xdist parallelism. CI uses multi-step `--cov-append` across separate pytest invocations; xdist's per-invocation combine step would corrupt the accumulated `.coverage` file.
 
 `git-cliff >= 2.4` is a release-only prerequisite (not needed for development): `brew install git-cliff` (macOS) or `cargo install git-cliff --version '>=2.4'` (cross-platform).
 

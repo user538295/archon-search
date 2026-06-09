@@ -65,6 +65,8 @@ bash release.sh --dry-run
 
 The default `pytest` invocation excludes the `live`, `eval`, `benchmark`, and `integration` markers via `addopts` in `pyproject.toml`. Those suites are opt-in and run explicitly.
 
+The default run is parallel by default (`-n auto --dist=loadfile` in `addopts`). For debugging use `-n0` to run serially: `uv run pytest -n0`. Fail-fast requires `-n0 -x` and stdout passthrough requires `-n0 -s` (xdist suppresses both by default).
+
 ## Naming Convention: Package vs. Distribution
 
 This trips people up often enough to deserve its own section.

@@ -133,10 +133,18 @@ The default test command:
 uv run pytest
 ```
 
-This run excludes `live`, `eval`, `benchmark`, and `integration` markers and enforces `--cov-fail-under=85`. To skip coverage while iterating locally:
+This run excludes `live`, `eval`, `benchmark`, and `integration` markers, enforces `--cov-fail-under=85`, and runs tests in parallel via `pytest-xdist` (`-n auto --dist=loadfile`). To skip coverage while iterating locally:
 
 ```bash
 uv run pytest --no-cov
+```
+
+To run serially (required for fail-fast and stdout passthrough):
+
+```bash
+uv run pytest -n0          # serial mode
+uv run pytest -n0 -x       # stop on first failure
+uv run pytest -n0 -s       # show stdout (suppressed by xdist)
 ```
 
 Marker-gated suites (run explicitly when relevant):
