@@ -122,7 +122,7 @@ No production code changes. All changes are in test infrastructure and configura
 ---
 
 #### Task 1.2 — Fix `three_page_pdf` session fixture for xdist safety
-- [ ] **File**: `tests/conftest.py`
+- [x] **File**: `tests/conftest.py`
 - **Depends on**: Task 1.1 (checkpoint uses `-n2 --dist=loadfile`)
 - **Description**:
   - Remove the module-level constant `_PDF_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "pdfs" / "three_page.pdf"`.

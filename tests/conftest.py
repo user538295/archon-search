@@ -76,19 +76,18 @@ def col_name() -> str:
 # Three-page PDF fixture (Task 5.1 — C3b)
 # ---------------------------------------------------------------------------
 
-_PDF_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "pdfs" / "three_page.pdf"
-
-
 @pytest.fixture(scope="session")
-def three_page_pdf() -> Path:
+def three_page_pdf(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Session-scoped fixture returning the path to a deterministic three-page PDF.
 
-    Generates ``tests/fixtures/pdfs/three_page.pdf`` on first use via reportlab.
+    Generates a three-page PDF in a temporary directory on first use via reportlab.
     Page contents are pinned to "alpha content", "beta content", "gamma content".
 
     The PDF is byte-deterministic (invariant=True suppresses reportlab timestamps).
+    Uses tmp_path_factory so each xdist worker gets its own isolated copy.
     """
     from _pdf_fixture import generate_three_page_pdf  # noqa: PLC0415
 
-    generate_three_page_pdf(_PDF_FIXTURE_PATH)
-    return _PDF_FIXTURE_PATH
+    pdf_path = tmp_path_factory.mktemp("pdfs") / "three_page.pdf"
+    generate_three_page_pdf(pdf_path)
+    return pdf_path
