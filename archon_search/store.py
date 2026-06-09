@@ -62,6 +62,14 @@ class StoreBusyError(Exception):
         )
         self.timeout_s = timeout_s
 
+
+class FTSIndexNotFoundError(RuntimeError):
+    """Raised by ``optimize_fts`` when the collection has no FTS index.
+
+    This signals that ``rebuild_fts_index()`` must be called first to create
+    the initial index before incremental optimize operations can be used.
+    """
+
 if TYPE_CHECKING:
     import lancedb
     import pyarrow as pa
@@ -1312,6 +1320,13 @@ class SearchStore:
         db = self._require_connected()
         logger.debug("optimize_fts: collection=%s", collection)
         table = await db.open_table(collection)
+        indices = await table.list_indices()
+        fts_indices = [idx for idx in indices if getattr(idx, "index_type", "") == "FTS"]
+        if not fts_indices:
+            raise FTSIndexNotFoundError(
+                f"optimize_fts: collection {collection!r} has no FTS index; "
+                "call rebuild_fts_index() first to create the initial index"
+            )
         await table.optimize()
 
     # ------------------------------------------------------------------
@@ -1669,7 +1684,14 @@ class SearchStore:
         # during a potentially long optimize/rebuild operation.
         if count > 0 and not skip_fts_optimize:
             if self.supports_incremental_fts_delete:
-                await self.optimize_fts(collection)
+                try:
+                    await self.optimize_fts(collection)
+                except FTSIndexNotFoundError:
+                    # No FTS index exists yet — no phantom hits are possible.
+                    logger.debug(
+                        "optimize_fts skipped for collection %r: no FTS index present",
+                        collection,
+                    )
             else:
                 dominant_lang = await self.get_dominant_language(collection)
                 await self.rebuild_fts_index(collection, language=dominant_lang)

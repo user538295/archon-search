@@ -408,7 +408,7 @@ class SearchPipeline:
         with record_stage("persist"):
             await self.store.ensure_collection(collection, embedder.embedding_dim)
             try:
-                await self.store.delete_document(collection, doc_id, namespace=namespace)
+                await self.store.delete_document(collection, doc_id, namespace=namespace, skip_fts_optimize=True)
             except StoreBusyError:
                 return IngestResult(doc_id=doc_id, chunks_created=0, status="error")
             ingest_result = await self.store.ingest_chunks(
@@ -421,8 +421,20 @@ class SearchPipeline:
                 await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
 
             if rebuild_fts:
-                dominant_lang = await self.store.get_dominant_language(collection)
-                await self.store.rebuild_fts_index(collection, language=dominant_lang)
+                if self.store.supports_incremental_fts_delete:
+                    try:
+                        await self.store.optimize_fts(collection)
+                    except Exception:
+                        dominant_lang = await self.store.get_dominant_language(collection)
+                        logger.warning(
+                            "optimize_fts failed for collection %r; falling back to rebuild_fts_index",
+                            collection,
+                            exc_info=True,
+                        )
+                        await self.store.rebuild_fts_index(collection, language=dominant_lang)
+                else:
+                    dominant_lang = await self.store.get_dominant_language(collection)
+                    await self.store.rebuild_fts_index(collection, language=dominant_lang)
 
         return IngestResult(
             doc_id=doc_id,

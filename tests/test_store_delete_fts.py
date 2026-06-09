@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search._types import ChunkRecord
-from archon_search.store import SearchStore
+from archon_search.store import FTSIndexNotFoundError, SearchStore
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +213,31 @@ def test_delete_document_calls_rebuild_when_plan_b_active(
     assert rebuild_calls == ["my-collection"], (
         f"rebuild_fts_index must be called under Plan B; got {rebuild_calls!r}"
     )
+
+
+def test_delete_document_does_not_raise_when_no_fts_index(tmp_path: Any) -> None:
+    """delete_document() must silently skip FTS maintenance when no FTS index exists.
+
+    If ``optimize_fts`` raises ``FTSIndexNotFoundError`` (no FTS index present), the
+    delete must still complete successfully — no phantom hits are possible if FTS
+    was never created.
+    """
+    store, _, _ = _make_store_with_mock_db(tmp_path, count=1)
+
+    doc_id = _doc_id()
+
+    async def mock_optimize_fts_no_index(collection: str) -> None:
+        raise FTSIndexNotFoundError(f"optimize_fts: collection {collection!r} has no FTS index")
+
+    store.optimize_fts = mock_optimize_fts_no_index  # type: ignore[method-assign]
+
+    async def _run() -> int:
+        with patch.object(store, "_do_fetch_doc_vectors_unlocked", AsyncMock(return_value=[])):
+            return await store.delete_document("my-collection", doc_id)
+
+    # Must NOT raise — FTSIndexNotFoundError is silently swallowed
+    result = asyncio.run(_run())
+    assert result == 1, "delete_document must return the deleted chunk count even without FTS"
 
 
 def test_delete_document_exception_before_count_does_not_raise_unbound(tmp_path: Any) -> None:

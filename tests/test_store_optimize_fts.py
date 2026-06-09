@@ -11,12 +11,12 @@ import hashlib
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from archon_search._types import ChunkRecord
-from archon_search.store import SearchStore
+from archon_search.store import FTSIndexNotFoundError, SearchStore
 
 
 # ---------------------------------------------------------------------------
@@ -68,12 +68,39 @@ def test_optimize_fts_requires_connected_store(tmp_path: Any) -> None:
         asyncio.run(_run())
 
 
+def test_optimize_fts_raises_when_no_fts_index(tmp_path: Any) -> None:
+    """optimize_fts() must raise RuntimeError when the collection has no FTS index."""
+    store = SearchStore(tmp_path / "db")
+
+    mock_table = AsyncMock()
+    mock_table.list_indices = AsyncMock(return_value=[])  # no FTS index
+
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+
+    store._db = mock_db
+
+    async def _run() -> None:
+        await store.optimize_fts("my-collection")
+
+    with pytest.raises(FTSIndexNotFoundError, match="no FTS index"):
+        asyncio.run(_run())
+
+
+def _make_mock_fts_index() -> Any:
+    """Return a mock object that looks like an FTS index entry (index_type='FTS')."""
+    idx = MagicMock()
+    idx.index_type = "FTS"
+    return idx
+
+
 def test_optimize_fts_calls_table_optimize(tmp_path: Any) -> None:
     """optimize_fts() must await table.optimize() exactly once."""
     store = SearchStore(tmp_path / "db")
 
     mock_table = AsyncMock()
     mock_table.optimize = AsyncMock(return_value=None)
+    mock_table.list_indices = AsyncMock(return_value=[_make_mock_fts_index()])
 
     mock_db = AsyncMock()
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -94,6 +121,7 @@ def test_optimize_fts_opens_correct_table(tmp_path: Any) -> None:
 
     mock_table = AsyncMock()
     mock_table.optimize = AsyncMock(return_value=None)
+    mock_table.list_indices = AsyncMock(return_value=[_make_mock_fts_index()])
 
     mock_db = AsyncMock()
     mock_db.open_table = AsyncMock(return_value=mock_table)

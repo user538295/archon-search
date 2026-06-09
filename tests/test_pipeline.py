@@ -132,6 +132,10 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
         from archon_search.config import SearchConfig
         _config = SearchConfig()
 
+        @property
+        def supports_incremental_fts_delete(self) -> bool:
+            return True
+
         async def ensure_collection(self, *a: Any, **kw: Any) -> None:
             pass
 
@@ -141,6 +145,9 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
         async def ingest_chunks(self, collection: str, records: list[ChunkRecord], **kw: Any) -> ChunkIngestResult:
             captured_records.extend(records)
             return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
+
+        async def optimize_fts(self, *a: Any, **kw: Any) -> None:
+            pass
 
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
@@ -182,6 +189,10 @@ async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_na
         from archon_search.config import SearchConfig
         _config = SearchConfig()
 
+        @property
+        def supports_incremental_fts_delete(self) -> bool:
+            return True
+
         async def ensure_collection(self, *a: Any, **kw: Any) -> None:
             pass
 
@@ -191,6 +202,9 @@ async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_na
         async def ingest_chunks(self, collection: str, records: list[ChunkRecord], **kw: Any) -> ChunkIngestResult:
             captured_records.extend(records)
             return ChunkIngestResult(chunks_ingested=len(records), needs_recompute=False)
+
+        async def optimize_fts(self, *a: Any, **kw: Any) -> None:
+            pass
 
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
@@ -902,6 +916,10 @@ async def test_ingest_file_records_parse_embed_persist(tmp_path):
     from archon_search.observability import bind_stage_recorder
 
     class StubStore:
+        @property
+        def supports_incremental_fts_delete(self) -> bool:
+            return True
+
         async def ensure_collection(self, *a: Any, **kw: Any) -> None:
             pass
 
@@ -910,6 +928,9 @@ async def test_ingest_file_records_parse_embed_persist(tmp_path):
 
         async def ingest_chunks(self, *a: Any, **kw: Any) -> ChunkIngestResult:
             return ChunkIngestResult(chunks_ingested=1, needs_recompute=False)
+
+        async def optimize_fts(self, *a: Any, **kw: Any) -> None:
+            pass
 
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
@@ -954,6 +975,10 @@ async def test_pipeline_noop_when_unbound(tmp_path):
     )
 
     class StubStore:
+        @property
+        def supports_incremental_fts_delete(self) -> bool:
+            return True
+
         async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
             return [search_result]
 
@@ -968,6 +993,9 @@ async def test_pipeline_noop_when_unbound(tmp_path):
 
         async def ingest_chunks(self, *a: Any, **kw: Any) -> ChunkIngestResult:
             return ChunkIngestResult(chunks_ingested=1, needs_recompute=False)
+
+        async def optimize_fts(self, *a: Any, **kw: Any) -> None:
+            pass
 
         async def rebuild_fts_index(self, *a: Any, **kw: Any) -> None:
             pass
@@ -4814,18 +4842,25 @@ def test_job_status_enum_values_unchanged() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_store_for_c2() -> MagicMock:
-    """Build a MagicMock store suitable for C2 language detection tests."""
+def _make_mock_store_for_c2(*, plan_b: bool = False) -> MagicMock:
+    """Build a MagicMock store suitable for C2 language detection tests.
+
+    Set ``plan_b=True`` to simulate Plan B (``supports_incremental_fts_delete=False``),
+    which causes ingest_file to call ``rebuild_fts_index`` at batch end instead of
+    ``optimize_fts``.  Under Plan A (default), ``optimize_fts`` is called.
+    """
     store = MagicMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
     store.ingest_chunks = AsyncMock(
         return_value=ChunkIngestResult(chunks_ingested=2, needs_recompute=False)
     )
+    store.optimize_fts = AsyncMock()
     store.rebuild_fts_index = AsyncMock()
     store.get_dominant_language = AsyncMock(return_value="")
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
+    store.supports_incremental_fts_delete = not plan_b
     from archon_search.config import SearchConfig
     store._config = SearchConfig(centroid_incremental_enabled=False)
     return store
@@ -5091,14 +5126,17 @@ async def test_ingest_file_language_detect_uses_configured_threshold(tmp_path) -
 
 
 # ---------------------------------------------------------------------------
-# C2 Task 12.1 — pipeline wiring: get_dominant_language → rebuild_fts_index
+# C2 Task 12.1 — pipeline wiring: get_dominant_language → rebuild_fts_index (Plan B)
+# Under Plan A (C6), ingest_file calls optimize_fts (no language param).
+# Under Plan B (supports_incremental_fts_delete=False), it calls rebuild_fts_index
+# with the dominant language.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_ingest_file_passes_dominant_language_to_rebuild_fts_index(tmp_path) -> None:
-    """ingest_file calls get_dominant_language and passes result to rebuild_fts_index."""
-    store = _make_mock_store_for_c2()
+async def test_ingest_file_passes_dominant_language_to_rebuild_fts_index_plan_b(tmp_path) -> None:
+    """Under Plan B, ingest_file calls get_dominant_language and passes result to rebuild_fts_index."""
+    store = _make_mock_store_for_c2(plan_b=True)
     store.get_dominant_language = AsyncMock(return_value="fr")
 
     pipeline = _make_pipeline_with_detector(store)
@@ -5113,9 +5151,9 @@ async def test_ingest_file_passes_dominant_language_to_rebuild_fts_index(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_ingest_file_passes_empty_dominant_language_when_untagged(tmp_path) -> None:
-    """ingest_file passes language='' to rebuild_fts_index when all chunks are untagged."""
-    store = _make_mock_store_for_c2()
+async def test_ingest_file_passes_empty_dominant_language_when_untagged_plan_b(tmp_path) -> None:
+    """Under Plan B, ingest_file passes language='' to rebuild_fts_index when all chunks are untagged."""
+    store = _make_mock_store_for_c2(plan_b=True)
     store.get_dominant_language = AsyncMock(return_value="")
 
     pipeline = _make_pipeline_with_detector(store)
@@ -5126,6 +5164,21 @@ async def test_ingest_file_passes_empty_dominant_language_when_untagged(tmp_path
     await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
 
     store.rebuild_fts_index.assert_awaited_once_with("test-col", language="")
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_uses_optimize_fts_under_plan_a(tmp_path) -> None:
+    """Under Plan A (default), ingest_file calls optimize_fts and NOT rebuild_fts_index."""
+    store = _make_mock_store_for_c2()  # plan_b=False is the default
+    pipeline = _make_pipeline_with_detector(store)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("Some content. " * 10)
+
+    await pipeline.ingest_file(md_file, "test-col", embedder=pipeline._global_embedder)
+
+    store.optimize_fts.assert_awaited_once_with("test-col")
+    store.rebuild_fts_index.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

@@ -226,7 +226,7 @@ delete_document(skip_fts_optimize=False)  → table.delete()
 > **Releasable**: after this phase, all ingest paths use incremental FTS; the full rebuild is no longer called during normal ingest or sync.
 
 #### Task 3.1 — `pipeline.ingest_file`: replace `rebuild_fts_index` with `optimize_fts`
-- [ ] **File**: `archon_search/pipeline.py`
+- [x] **File**: `archon_search/pipeline.py`
 - **Depends on**: Task 2.2
 - **Description**:
   - At line 331: change `await self.store.delete_document(collection, doc_id, namespace=namespace)` to `await self.store.delete_document(collection, doc_id, namespace=namespace, skip_fts_optimize=True)`.
