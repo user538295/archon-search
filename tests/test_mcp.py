@@ -1442,3 +1442,39 @@ def test_get_collections_meta_schema_drift_returns_schema_validation_error() -> 
 
     assert isinstance(result, dict)
     assert result.get("code") == _ERR_SCHEMA
+
+
+def test_list_collections_pipeline_error_returns_internal_error() -> None:
+    """list_collections outer exception handler returns internal_error on pipeline failure."""
+    import asyncio
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    pipeline = MagicMock()
+    pipeline.get_all_collections_meta = AsyncMock(side_effect=RuntimeError("db down"))
+    app = mcp_mod.create_app(pipeline, "col1")
+    tool_fn = app._tools["list_collections"]
+
+    result = asyncio.run(tool_fn())
+
+    assert isinstance(result, dict)
+    assert result.get("code") == "internal_error"
+
+
+def test_get_collections_meta_pipeline_error_returns_internal_error() -> None:
+    """get_collections_meta outer exception handler returns internal_error on pipeline failure."""
+    import asyncio
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    pipeline = MagicMock()
+    pipeline.get_all_collections_meta = AsyncMock(side_effect=RuntimeError("db down"))
+    app = mcp_mod.create_app(pipeline, "col1")
+    tool_fn = app._tools["get_collections_meta"]
+
+    result = asyncio.run(tool_fn())
+
+    assert isinstance(result, dict)
+    assert result.get("code") == "internal_error"
