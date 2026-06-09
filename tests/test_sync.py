@@ -3429,6 +3429,9 @@ def _make_mock_pipeline_with_ingest_file(tmp_path, existing_collections=None, ma
     pipeline = make_mock_pipeline(tmp_path, existing_collections=existing_collections, manifest=manifest)
     pipeline.ingest_file = AsyncMock(return_value=MagicMock(status="ok"))
     pipeline.store.rebuild_fts_index = AsyncMock()
+    pipeline.store.optimize_fts = AsyncMock()
+    pipeline.store.get_dominant_language = AsyncMock(return_value="en")
+    pipeline.store.supports_incremental_fts_delete = True
     pipeline.store.delete_by_source_path = AsyncMock(return_value=1)
     pipeline.store.get_collection_meta = AsyncMock(return_value=None)
     pipeline.recompute_collection_meta = AsyncMock()
@@ -3539,7 +3542,7 @@ class TestTask46:
         syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
-        pipeline.store.delete_by_source_path.assert_called_once_with("myproject", ghost_path)
+        pipeline.store.delete_by_source_path.assert_called_once_with("myproject", ghost_path, skip_fts_optimize=True)
         assert "myproject" in result.updated
         assert result.errors == []
 
@@ -3708,7 +3711,7 @@ class TestTask46:
 
     @pytest.mark.asyncio
     async def test_sync_apply_changes_fts_rebuilt_once(self, tmp_path):
-        """rebuild_fts_index called exactly once after all file operations."""
+        """optimize_fts called exactly once after all file operations."""
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -3726,7 +3729,7 @@ class TestTask46:
         syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=512)
         await syncer.sync([str(col_dir)])
 
-        pipeline.store.rebuild_fts_index.assert_called_once_with("myproject")
+        pipeline.store.optimize_fts.assert_called_once_with("myproject")
 
     # ------------------------------------------------------------------
     # Test 10: recompute_collection_meta called after FTS rebuild
@@ -4078,7 +4081,7 @@ class TestTask46:
         assert pipeline.ingest_file.call_count == 2
 
         # delete_by_source_path called for deleted file
-        pipeline.store.delete_by_source_path.assert_called_once_with("myproject", deleted_key)
+        pipeline.store.delete_by_source_path.assert_called_once_with("myproject", deleted_key, skip_fts_optimize=True)
 
         # Final state should have correct file_mtimes
         state = state_store.read()
@@ -4100,7 +4103,7 @@ class TestTask46:
 
     @pytest.mark.asyncio
     async def test_sync_apply_changes_deletion_only(self, tmp_path):
-        """Only deletions, no new/changed files → rebuild_fts called once, ingest_file NOT called."""
+        """Only deletions, no new/changed files → optimize_fts called once, ingest_file NOT called."""
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -4119,7 +4122,7 @@ class TestTask46:
         await syncer.sync([str(col_dir)])
 
         pipeline.ingest_file.assert_not_called()
-        pipeline.store.rebuild_fts_index.assert_called_once_with("myproject")
+        pipeline.store.optimize_fts.assert_called_once_with("myproject")
 
     # ------------------------------------------------------------------
     # Test 19: processed_paths consistent with file_mtimes after apply

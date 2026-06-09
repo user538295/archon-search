@@ -296,7 +296,7 @@ delete_document(skip_fts_optimize=False)  → table.delete()
   - Checkpoint: `uv run pytest tests/test_pipeline_ingest_directory_fts.py -v --no-cov`
 
 #### Task 3.3 — `sync.py:719`: replace `rebuild_fts_index` with `optimize_fts`
-- [ ] **File**: `archon_search/sync.py`
+- [x] **File**: `archon_search/sync.py`
 - **Depends on**: Task 2.1, Task 2.2
 - **Description**:
   - At line 718–719: replace:

@@ -650,7 +650,7 @@ class SearchCollectionSync:
             try:
                 # Deletions
                 for path in deleted_paths:
-                    await self._pipeline.store.delete_by_source_path(name, path)
+                    await self._pipeline.store.delete_by_source_path(name, path, skip_fts_optimize=True)
                     file_mtimes.pop(path, None)
                     if path in processed_paths:
                         processed_paths.remove(path)
@@ -716,8 +716,12 @@ class SearchCollectionSync:
                             indexed_chunk_size=self._chunk_size,
                         ))
 
-                # Rebuild FTS once after all file operations
-                await self._pipeline.store.rebuild_fts_index(name)
+                # Optimize FTS once after all file operations
+                if self._pipeline.store.supports_incremental_fts_delete:
+                    await self._pipeline.store.optimize_fts(name)
+                else:
+                    dominant_lang = await self._pipeline.store.get_dominant_language(name)
+                    await self._pipeline.store.rebuild_fts_index(name, language=dominant_lang)
 
                 # Centroid maintenance: incremental path fires only when checkpoint signal raised.
                 # Legacy (flag=False): unconditional full recompute on every sync.
