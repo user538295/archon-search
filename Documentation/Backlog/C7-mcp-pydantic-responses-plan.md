@@ -292,7 +292,7 @@ All annotations keep their `dict[str, Any]` / `list[dict[str, Any]]` form (see F
   - Checkpoint: `uv run pytest tests/test_mcp.py -k "search_with_context" -x --no-cov`
 
 #### Task 2.3 — Migrate `explain` tool (ValidationError catch)
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 2.1 (for `_ERR_SCHEMA`)
 - **Description**:
   - `explain` already uses `ExplainResponse.model_dump(mode="json")` and is the reference implementation; return annotation stays `dict[str, Any]` (post-processing conditional pop of `stage_timings_ms` prevents returning the model directly)

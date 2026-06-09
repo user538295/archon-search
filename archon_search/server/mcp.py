@@ -617,18 +617,21 @@ def create_app(
             except Exception:
                 logger.exception("multi-collection explain failed")
                 return McpErrorResponse(error="explain failed", code="internal_error")
-            response = ExplainResponse.from_pipeline_result(
-                rerank=rerank, collection="", routing=None, result=result, stage_timings_ms=None,
-                hyde_applied=explain_hyde_applied,
-                rag_fusion_applied=result.rag_fusion_applied,
-                rag_fusion_queries_used=result.rag_fusion_queries_used,
-                rag_fusion_attempted=result.rag_fusion_attempted,
-                rag_fusion_failure_reason=result.rag_fusion_failure_reason,
-                rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
-            )
-            result_dict = response.model_dump(mode="json", exclude_none=False)
-            result_dict.pop("stage_timings_ms", None)
-            return result_dict
+            try:
+                response = ExplainResponse.from_pipeline_result(
+                    rerank=rerank, collection="", routing=None, result=result, stage_timings_ms=None,
+                    hyde_applied=explain_hyde_applied,
+                    rag_fusion_applied=result.rag_fusion_applied,
+                    rag_fusion_queries_used=result.rag_fusion_queries_used,
+                    rag_fusion_attempted=result.rag_fusion_attempted,
+                    rag_fusion_failure_reason=result.rag_fusion_failure_reason,
+                    rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
+                )
+                result_dict = response.model_dump(mode="json", exclude_none=False)
+                result_dict.pop("stage_timings_ms", None)
+                return result_dict
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
 
         try:
             req = ExplainRequest(query=query, collection=collection, top_k=top_k, rerank=rerank)
@@ -716,33 +719,36 @@ def create_app(
                     )
 
             stage_timings = recorder.stage_timings_ms if recorder is not None else None
-            response = ExplainResponse.from_pipeline_result(
-                rerank=req.rerank, collection=chosen, routing=routing, result=result,
-                stage_timings_ms=stage_timings, hyde_applied=explain_hyde_applied,
-                rag_fusion_applied=result.rag_fusion_applied,
-                rag_fusion_queries_used=result.rag_fusion_queries_used,
-                rag_fusion_attempted=result.rag_fusion_attempted,
-                rag_fusion_failure_reason=result.rag_fusion_failure_reason,
-                rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
-            )
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_explain_result(
-                            collection=chosen,
-                            result_count=len(response.results),
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                            rag_fusion_applied=result.rag_fusion_applied,
-                            rag_fusion_queries_used=result.rag_fusion_queries_used,
+            try:
+                response = ExplainResponse.from_pipeline_result(
+                    rerank=req.rerank, collection=chosen, routing=routing, result=result,
+                    stage_timings_ms=stage_timings, hyde_applied=explain_hyde_applied,
+                    rag_fusion_applied=result.rag_fusion_applied,
+                    rag_fusion_queries_used=result.rag_fusion_queries_used,
+                    rag_fusion_attempted=result.rag_fusion_attempted,
+                    rag_fusion_failure_reason=result.rag_fusion_failure_reason,
+                    rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
+                )
+                if writer is not None:
+                    try:
+                        writer.enqueue(
+                            TelemetryEntry.from_explain_result(
+                                collection=chosen,
+                                result_count=len(response.results),
+                                latency_ms=(monotonic() - start) * 1000.0,
+                                correlation_id=_correlation_id.get(),
+                                rag_fusion_applied=result.rag_fusion_applied,
+                                rag_fusion_queries_used=result.rag_fusion_queries_used,
+                            )
                         )
-                    )
-                except Exception:
-                    logger.warning("telemetry: explain entry enqueue failed", exc_info=True)
-            result_dict = response.model_dump(mode="json", exclude_none=False)
-            if stage_timings is None:
-                result_dict.pop("stage_timings_ms", None)
-            return result_dict
+                    except Exception:
+                        logger.warning("telemetry: explain entry enqueue failed", exc_info=True)
+                result_dict = response.model_dump(mode="json", exclude_none=False)
+                if stage_timings is None:
+                    result_dict.pop("stage_timings_ms", None)
+                return result_dict
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except RAGFusionDependencyError as exc:
             return McpErrorResponse(error=str(exc), code="validation_error")
         except ExplainStageError as exc:

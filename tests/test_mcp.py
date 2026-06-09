@@ -1082,3 +1082,68 @@ def test_search_with_context_schema_drift_returns_schema_validation_error() -> N
 
     assert isinstance(result, dict)
     assert result.get("code") == _ERR_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3 — Migrate explain tool (ValidationError catch)
+# ---------------------------------------------------------------------------
+
+
+def test_explain_schema_drift_returns_schema_validation_error() -> None:
+    """explain (single-collection path) returns schema_validation_error when ExplainResponse.from_pipeline_result raises ValidationError."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+
+    from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import McpSearchResultSchema
+
+    # Build a real ValidationError using the test helper pattern
+    try:
+        McpSearchResultSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=False)
+    tool_fn = _get_hyde_tool_fn("explain", pipeline, config=config)
+
+    with patch(
+        "archon_search.server.mcp.ExplainResponse.from_pipeline_result",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn(query="test query", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA
+
+
+def test_explain_multi_collection_schema_drift_returns_schema_validation_error() -> None:
+    """explain (multi-collection path) returns schema_validation_error when ExplainResponse.from_pipeline_result raises ValidationError."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+
+    from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import McpSearchResultSchema
+
+    # Build a real ValidationError using the test helper pattern
+    try:
+        McpSearchResultSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=False)
+    tool_fn = _get_hyde_tool_fn("explain", pipeline, config=config)
+
+    with patch(
+        "archon_search.server.mcp.ExplainResponse.from_pipeline_result",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn(query="test query", collections=["col1"]))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA
