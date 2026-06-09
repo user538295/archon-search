@@ -647,7 +647,9 @@ def test_mcp_search_tool_rag_fusion_true_skips_hyde() -> None:
 
 
 def test_mcp_search_with_context_rag_fusion() -> None:
-    """search_with_context tool includes rag_fusion_applied, rag_fusion_queries_used, rag_fusion_attempted."""
+    """search_with_context returns SearchWithContextResponse shape (results + hyde_applied only).
+    rag_fusion_applied / rag_fusion_queries_used / rag_fusion_attempted are intentionally
+    excluded from the MCP response after the Task 2.2 Pydantic migration."""
     import asyncio
 
     pipeline = _make_rag_fusion_pipeline_mock()
@@ -660,12 +662,11 @@ def test_mcp_search_with_context_rag_fusion() -> None:
     result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True))
 
     assert isinstance(result, dict)
-    assert "rag_fusion_applied" in result
-    assert "rag_fusion_queries_used" in result
-    assert "rag_fusion_attempted" in result
-    assert result.get("rag_fusion_applied") is True
-    assert result.get("rag_fusion_queries_used") == 2
-    assert result.get("rag_fusion_attempted") is True
+    # SearchWithContextResponse only exposes results and hyde_applied
+    assert set(result.keys()) == {"results", "hyde_applied"}
+    assert "rag_fusion_applied" not in result
+    assert "rag_fusion_queries_used" not in result
+    assert "rag_fusion_attempted" not in result
 
 
 def test_mcp_search_with_context_telemetry_includes_feature_flags() -> None:
@@ -741,7 +742,8 @@ def test_mcp_search_with_context_rag_fusion_true_skips_hyde() -> None:
     mock_resolve.assert_not_called()
     assert isinstance(result, dict)
     assert result.get("hyde_applied") is False
-    assert result.get("rag_fusion_applied") is True
+    # rag_fusion_applied is excluded from the MCP response (Task 2.2 narrowing)
+    assert "rag_fusion_applied" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -891,6 +893,186 @@ def test_search_schema_drift_returns_schema_validation_error() -> None:
 
     pipeline = _make_search_pipeline_with_result()
     tool_fn = _get_search_tool_fn(pipeline)
+
+    with patch(
+        "archon_search.server.mcp.McpSearchResultSchema.from_result",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn(query="hello", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# Task 2.2 — Migrate search_with_context tool
+# ---------------------------------------------------------------------------
+
+
+def _make_swc_pipeline_with_result(result=None, hyde_applied=False, with_context=True):
+    """Return a pipeline mock whose search_with_context() returns a SearchWithContextResult."""
+    from archon_search._types import ChunkRecord, SearchResult
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+
+    if result is None:
+        result = SearchResult(
+            doc_id="doc1",
+            chunk_id="doc1-000000",
+            text="hello world",
+            score=0.9,
+            source_path="/path/file.md",
+            file_type="md",
+            language="en",
+            indexed_at="2024-01-01T00:00:00.000000Z",
+            updated_at="2024-01-01T00:00:00.000000Z",
+            ingested_by="cli",
+            metadata={"k": "v"},
+            acl=None,
+            collection="col1",
+        )
+
+    def _make_chunk(offset_start=0, offset_end=5):
+        return ChunkRecord(
+            doc_id="doc1",
+            chunk_id=f"doc1-{offset_start:06d}",
+            text=f"context chunk {offset_start}",
+            vector=[0.1, 0.2],
+            source_path="/path/file.md",
+            indexed_at="2024-01-01T00:00:00.000000Z",
+            file_type="md",
+            language="en",
+            metadata={"ck": "cv"},
+            custom_score=0.8,
+            ingested_by="cli",
+            updated_at="2024-01-01T00:00:00.000000Z",
+            acl=None,
+            start_offset=offset_start,
+            end_offset=offset_end,
+        )
+
+    pipeline_result = SearchPipelineResult(
+        results=[result],
+        acl_filtered=False,
+        excluded_collections=[],
+        rag_fusion_applied=False,
+        rag_fusion_queries_used=0,
+        rag_fusion_attempted=False,
+    )
+    context_chunks = [_make_chunk(0, 5)] if with_context else []
+    swc_result = SearchWithContextResult(
+        results=[{"result": result, "context_before": context_chunks, "context_after": context_chunks}],
+        pipeline_result=pipeline_result,
+    )
+
+    pipeline = MagicMock()
+    pipeline._global_embedder = MagicMock()
+    pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
+    pipeline.get_collection_meta = AsyncMock(return_value=None)
+    pipeline.search_with_context = AsyncMock(return_value=swc_result)
+    return pipeline
+
+
+def _get_swc_tool_fn(pipeline, config=None):
+    """Build a stub-backed MCP app and return the search_with_context tool function."""
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    app = mcp_mod.create_app(pipeline, "col1", config=config)
+    return app._tools["search_with_context"]
+
+
+def test_search_with_context_result_shape() -> None:
+    """search_with_context returns dict with results list and hyde_applied bool;
+    context chunks must not contain start_offset, end_offset, custom_score, vector."""
+    import asyncio
+
+    pipeline = _make_swc_pipeline_with_result()
+    tool_fn = _get_swc_tool_fn(pipeline)
+    result = asyncio.run(tool_fn(query="hello", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert "results" in result
+    assert "hyde_applied" in result
+    assert isinstance(result["hyde_applied"], bool)
+
+    # Verify context chunks exclude transient fields
+    for item in result["results"]:
+        for chunk in item.get("context_before", []) + item.get("context_after", []):
+            assert "vector" not in chunk
+            assert "start_offset" not in chunk
+            assert "end_offset" not in chunk
+            assert "custom_score" not in chunk
+
+
+def test_search_with_context_hyde_applied_propagated() -> None:
+    """search_with_context propagates hyde_applied=True when HyDE is active."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=True)
+    gen = _make_hyde_generator_mock(vector=[0.5] * 5)
+    tool_fn = _get_hyde_tool_fn("search_with_context", pipeline, config=config, hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=True))
+
+    assert isinstance(result, dict)
+    assert result.get("hyde_applied") is True
+
+
+def test_search_with_context_hyde_applied_false() -> None:
+    """search_with_context returns hyde_applied=False when HyDE is not used."""
+    import asyncio
+
+    pipeline = _make_swc_pipeline_with_result()
+    tool_fn = _get_swc_tool_fn(pipeline)
+    result = asyncio.run(tool_fn(query="hello", collection="col1", hyde=False))
+
+    assert isinstance(result, dict)
+    assert result.get("hyde_applied") is False
+
+
+def test_search_with_context_include_metadata_false_clears_metadata() -> None:
+    """search_with_context with include_metadata=False clears metadata in results and context chunks."""
+    import asyncio
+
+    pipeline = _make_swc_pipeline_with_result()
+    tool_fn = _get_swc_tool_fn(pipeline)
+    result = asyncio.run(tool_fn(query="hello", collection="col1", include_metadata=False))
+
+    assert isinstance(result, dict)
+    for item in result["results"]:
+        assert item["result"]["metadata"] == {}
+        for chunk in item.get("context_before", []) + item.get("context_after", []):
+            assert chunk["metadata"] == {}
+
+
+def test_chunk_to_context_dict_removed() -> None:
+    """_chunk_to_context_dict helper must not exist in mcp module after migration."""
+    import importlib
+    import archon_search.server.mcp as mcp_module
+
+    importlib.reload(mcp_module)
+    assert not hasattr(mcp_module, "_chunk_to_context_dict")
+
+
+def test_search_with_context_schema_drift_returns_schema_validation_error() -> None:
+    """search_with_context returns schema_validation_error when schema construction raises ValidationError."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+    from archon_search.server.mcp_schemas import McpSearchResultSchema
+    from archon_search.server.mcp import _ERR_SCHEMA
+
+    # Build a real ValidationError using the test helper pattern
+    try:
+        McpSearchResultSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    pipeline = _make_swc_pipeline_with_result()
+    tool_fn = _get_swc_tool_fn(pipeline)
 
     with patch(
         "archon_search.server.mcp.McpSearchResultSchema.from_result",

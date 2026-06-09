@@ -270,7 +270,7 @@ All annotations keep their `dict[str, Any]` / `list[dict[str, Any]]` form (see F
   - Checkpoint: `uv run pytest tests/test_mcp.py -k "search" -x --no-cov`
 
 #### Task 2.2 — Migrate `search_with_context` tool
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Import `SearchWithContextItemSchema`, `ContextChunkSchema`, `SearchWithContextResponse` from `mcp_schemas`

@@ -46,9 +46,12 @@ from archon_search.telemetry.writer import TelemetryWriter
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
 from archon_search.server.mcp_schemas import (
+    ContextChunkSchema,
     ExcludedCollectionMcpSchema,
     McpSearchResponse,
     McpSearchResultSchema,
+    SearchWithContextItemSchema,
+    SearchWithContextResponse,
 )
 from archon_search.types import JobStatus
 
@@ -109,17 +112,6 @@ def _path_unsafe_message(reason: str) -> str:
     """Map a PathUnsafeError reason code to an LLM-readable rejection phrase."""
     return _PATH_UNSAFE_MESSAGES.get(reason, f"path is unsafe: {reason}")
 
-
-def _chunk_to_context_dict(chunk: Any, *, include_metadata: bool = True) -> dict[str, Any]:
-    """Serialize a ChunkRecord for MCP ``search_with_context`` payloads, dropping
-    the ``vector`` field — raw embeddings should not leak over MCP and add no
-    value to context-window consumers.  When ``include_metadata`` is False the
-    ``metadata`` key is set to an empty dict (consistent with the REST surface)."""
-    d = asdict(chunk)
-    d.pop("vector", None)
-    if not include_metadata:
-        d["metadata"] = {}
-    return d
 
 
 async def _resolve_embedder_by_model(
@@ -489,27 +481,35 @@ def create_app(
                     )
                 except Exception:
                     logger.warning("telemetry: search_with_context entry enqueue failed", exc_info=True)
-            output = []
-            for r in swc_result.results:
-                result_dict = asdict(r["result"])
-                result_dict.pop("vector", None)
-                if not include_metadata:
-                    # empty dict not key-absent, consistent with REST surface
-                    result_dict["metadata"] = {}
-                output.append(
-                    {
-                        "result": result_dict,
-                        "context_before": [_chunk_to_context_dict(c, include_metadata=include_metadata) for c in r["context_before"]],
-                        "context_after": [_chunk_to_context_dict(c, include_metadata=include_metadata) for c in r["context_after"]],
-                    }
-                )
-            return {
-                "results": output,
-                "hyde_applied": swc_hyde_applied,
-                "rag_fusion_applied": _swc_pipeline_result.rag_fusion_applied,
-                "rag_fusion_queries_used": _swc_pipeline_result.rag_fusion_queries_used,
-                "rag_fusion_attempted": _swc_pipeline_result.rag_fusion_attempted,
-            }
+            try:
+                items = []
+                for r in swc_result.results:
+                    result_schema = McpSearchResultSchema.from_result(r["result"])
+                    if not include_metadata:
+                        result_schema.metadata = {}
+                    context_before = []
+                    for c in r["context_before"]:
+                        chunk_schema = ContextChunkSchema.from_result(c)
+                        if not include_metadata:
+                            chunk_schema.metadata = {}
+                        context_before.append(chunk_schema)
+                    context_after = []
+                    for c in r["context_after"]:
+                        chunk_schema = ContextChunkSchema.from_result(c)
+                        if not include_metadata:
+                            chunk_schema.metadata = {}
+                        context_after.append(chunk_schema)
+                    items.append(
+                        SearchWithContextItemSchema(
+                            result=result_schema,
+                            context_before=context_before,
+                            context_after=context_after,
+                        )
+                    )
+                response = SearchWithContextResponse(results=items, hyde_applied=swc_hyde_applied)
+                return response.model_dump(mode="json")
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except RAGFusionDependencyError as exc:
             return McpErrorResponse(error=str(exc), code="validation_error")
         except Exception as exc:

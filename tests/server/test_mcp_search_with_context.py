@@ -123,6 +123,9 @@ async def test_search_with_context_strips_vector_from_neighbors() -> None:
 
 @pytest.mark.asyncio
 async def test_search_with_context_preserves_other_chunk_fields_in_neighbors() -> None:
+    """Context chunks expose the ContextChunkSchema public fields.
+    After the Task 2.2 Pydantic migration, custom_score/start_offset/end_offset
+    are intentionally excluded from the MCP contract."""
     pipeline_result = [
         {
             "result": _result(1),
@@ -143,12 +146,14 @@ async def test_search_with_context_preserves_other_chunk_fields_in_neighbors() -
         "metadata",
         "indexed_at",
         "language",
-        "custom_score",
         "acl",
     }
+    excluded_keys = {"custom_score", "start_offset", "end_offset", "vector"}
     for neighbor in entry["context_before"] + entry["context_after"]:
         missing = expected_keys - set(neighbor.keys())
         assert not missing, f"neighbor missing keys {missing}: {neighbor!r}"
+        leaked = excluded_keys & set(neighbor.keys())
+        assert not leaked, f"internal fields leaked into neighbor: {leaked!r}"
 
 
 @pytest.mark.asyncio
