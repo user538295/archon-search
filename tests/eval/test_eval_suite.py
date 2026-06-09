@@ -1243,3 +1243,167 @@ def test_bench_search_rag_fusion_enabled_latency(tmp_path_factory) -> None:  # t
         "RAG Fusion pipeline has regressed significantly over baseline — investigate "
         "hybrid_search_with_trace call count or fuse function overhead."
     )
+
+
+# ---------------------------------------------------------------------------
+# C6 Ingest latency p95 regression guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.eval
+def test_ingest_latency_p95_single_file_on_large_corpus(tmp_path_factory) -> None:  # type: ignore[no-untyped-def]
+    """C6 regression guard: ingest_file p95 on a 1,000-chunk corpus must stay under ceiling.
+
+    Builds a 1,000-chunk corpus (direct LanceDB row insertion + FTS index creation,
+    matching the deterministic eval backend pattern), then times 5 repeated ingest_file
+    calls (each a distinct ~3-chunk document) and asserts p95 wall-clock time is below
+    the threshold from ``[ingest_latency].single_file_p95_ms`` in thresholds.toml.
+
+    This is a HARD gate (not report-only): a regression above the ceiling means C6's
+    O(delta-size) guarantee has been reverted to O(collection-size) ingest cost.
+
+    Uses the deterministic EvalEmbedderBackend — no real model weights needed.
+    Threshold: [ingest_latency].single_file_p95_ms in tests/eval/thresholds.toml.
+    """
+    import asyncio
+    import hashlib
+    import statistics
+    import time
+    import tomllib
+
+    import numpy as np
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.embedder import Embedder
+    from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.reranker import Reranker
+    from archon_search.store import SearchStore
+
+    # EvalEmbedderBackend uses 128-dimensional vectors.
+    _DIM = 128
+    _N_CORPUS_CHUNKS = 1000
+    _N_INGEST_ITERS = 5
+    _WARMUP = 1
+    _THRESHOLDS_PATH = Path(__file__).resolve().parent / "thresholds.toml"
+
+    def _percentile(data: list[float], p: int) -> float:
+        return statistics.quantiles(data, n=100)[p - 1]
+
+    tmp = tmp_path_factory.mktemp("bench_ingest_latency")
+    store = SearchStore(tmp)
+
+    async def _setup() -> None:
+        await store.connect()
+        await store._require_connected().create_table(
+            "bench_ingest_c6",
+            schema=SearchStore._schema(_DIM),
+            exist_ok=True,
+        )
+        db = store._require_connected()
+        table = await db.open_table("bench_ingest_c6")
+
+        rows = []
+        for i in range(_N_CORPUS_CHUNKS):
+            doc_seed = f"corpus-doc-{i // 5}"
+            doc_id = hashlib.sha256(doc_seed.encode()).hexdigest()
+            chunk_id = f"{doc_id}-{(i % 5):06d}"
+            rng = np.random.default_rng(i)
+            vector = rng.random(_DIM, dtype=np.float32).tolist()
+            rows.append({
+                "doc_id": doc_id,
+                "chunk_id": chunk_id,
+                "text": f"corpus document chunk {i} containing some text for search",
+                "vector": vector,
+                "source_path": f"/corpus/file-{i // 5:04d}.md",
+                "indexed_at": "2026-01-01T00:00:00.000000Z",
+                "file_type": "md",
+                "language": "",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "cli",
+                "updated_at": "2026-01-01T00:00:00.000000Z",
+                "acl": None,
+            })
+        await table.add(rows)
+        from lancedb.index import FTS
+        await table.create_index("text", config=FTS(), replace=True)
+        actual_count = await table.count_rows()
+        assert actual_count == _N_CORPUS_CHUNKS, (
+            f"Corpus setup failed: expected {_N_CORPUS_CHUNKS} rows, "
+            f"got {actual_count}. Benchmark would run against wrong corpus size."
+        )
+
+    asyncio.run(_setup())
+
+    eval_backend = EvalEmbedderBackend()
+    embedder = Embedder(eval_backend)
+    reranker = Reranker(EvalRerankerBackend())
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=embedder,
+        reranker=reranker,
+        chunker=DocumentChunker(chunk_size=256),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=10,
+    )
+
+    async def _measure_ingest(n_iters: int, warmup: int) -> list[float]:
+        """Ingest n_iters distinct small documents and return wall-clock times in ms."""
+        doc_dir = tmp / "docs"
+        doc_dir.mkdir(exist_ok=True)
+
+        # Warmup: ingest one doc to warm up LanceDB / OS caches.
+        for w in range(warmup):
+            warmup_file = doc_dir / f"warmup-{w}.md"
+            warmup_file.write_text(
+                f"# Warmup {w}\n\nWarmup chunk one.\n\nWarmup chunk two."
+            )
+            await pipeline.ingest_file(
+                warmup_file, "bench_ingest_c6", rebuild_fts=True, embedder=embedder
+            )
+
+        latencies: list[float] = []
+        for i in range(n_iters):
+            doc_file = doc_dir / f"ingest-doc-{i}.md"
+            doc_file.write_text(
+                f"# Ingest Document {i}\n\n"
+                f"This is the first paragraph of document {i} with unique content.\n\n"
+                f"This is the second paragraph of document {i} with different text.\n\n"
+                f"This is the third paragraph of document {i} for completeness."
+            )
+            t0 = time.perf_counter()
+            result = await pipeline.ingest_file(
+                doc_file, "bench_ingest_c6", rebuild_fts=True, embedder=embedder
+            )
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            assert result.status == "ok", (
+                f"ingest_file failed on iteration {i}: {result.error}"
+            )
+            latencies.append(elapsed_ms)
+        return latencies
+
+    try:
+        latencies = asyncio.run(_measure_ingest(_N_INGEST_ITERS, _WARMUP))
+    finally:
+        asyncio.run(store.disconnect())
+
+    p50 = _percentile(latencies, 50)
+    p95 = _percentile(latencies, 95)
+    print(
+        f"\ningest_latency p50={p50:.1f} ms  p95={p95:.1f} ms  "
+        f"(n={len(latencies)}, corpus={_N_CORPUS_CHUNKS} chunks)"
+    )
+
+    with open(_THRESHOLDS_PATH, "rb") as fh:
+        thresholds = tomllib.load(fh)
+    ceiling = thresholds["ingest_latency"]["single_file_p95_ms"]
+    assert p95 <= ceiling, (
+        f"ingest_file p95 {p95:.1f} ms exceeds ceiling {ceiling} ms on a "
+        f"{_N_CORPUS_CHUNKS}-chunk corpus. "
+        "C6 incremental FTS (optimize_fts) may have regressed to O(collection-size) "
+        "rebuild_fts_index — check that pipeline.ingest_file calls optimize_fts, "
+        "not rebuild_fts_index, at batch end."
+    )

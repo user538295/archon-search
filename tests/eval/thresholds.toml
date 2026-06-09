@@ -123,3 +123,27 @@ p95_ms = 5
 # N+1 hybrid_search calls but deterministic eval backend).
 # ≤3× the [search_rag_fusion_disabled].p95_ms baseline ceiling.
 p95_ms = 15
+
+# ---------------------------------------------------------------------------
+# [ingest_latency] — C6 incremental FTS regression guard
+# Purpose: confirm that ingest_file on a large corpus (≥1,000 chunks) completes
+# in O(delta-size) time, not O(collection-size). A pre-C6 rebuild_fts_index on
+# 1,000 chunks takes materially longer than a post-C6 optimize_fts on 5–10 new chunks.
+#
+# CALIBRATION: measured p95 on darwin/aarch64 with EvalEmbedderBackend, 1,000-chunk
+# corpus, ~3-chunk delta doc:
+#   baseline: ~46 ms p95 (7 iterations, 2026-06-09, Python 3.12)
+#   formula:  ceil(46 * 1.5) = 69 ms (hard cap: 2000 ms)
+#   CI headroom: 500 ms (conservative; GH Actions ubuntu-latest ~2-3× slower for I/O)
+#
+# DECISION (C6 Task 5.1): promoted to a HARD gate — C6's O(delta) guarantee is
+# meaningless if a regression silently reverts to O(collection-size) ingest cost.
+# See Documentation/Backlog/C6-incremental-fts-maintenance-brief.md Open Questions.
+# ---------------------------------------------------------------------------
+
+[ingest_latency]
+# Absolute p95 ceiling (ms) for ingest_file on a 1,000-chunk corpus.
+# Hard gate: a regression above this ceiling fails the eval run.
+# baseline: ~46 ms on darwin/aarch64 (EvalEmbedderBackend, 3-chunk delta, 2026-06-09)
+# formula: ceil(measured_p95_ms * 1.5) = 69 ms; CI ceiling: 500 ms
+single_file_p95_ms = 500

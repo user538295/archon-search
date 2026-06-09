@@ -358,7 +358,7 @@ delete_document(skip_fts_optimize=False)  → table.delete()
 > **Releasable**: after Task 5.1. CI eval run includes a latency regression test distinguishing O(delta) from O(collection) behavior.
 
 #### Task 5.1 — Ingest latency p95 threshold in eval harness
-- [ ] **File**: `tests/eval/test_eval_suite.py`, `tests/eval/thresholds.toml`
+- [x] **File**: `tests/eval/test_eval_suite.py`, `tests/eval/thresholds.toml`
 - **Depends on**: Task 3.1
 - **Description**:
   - Add a large-corpus ingest latency test that ingests 1,000 synthetic chunks into a collection, then times a single additional `ingest_file` call (1 document, ~5–10 chunks) and asserts p95 wall-clock time is below a threshold.
