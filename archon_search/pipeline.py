@@ -510,10 +510,22 @@ class SearchPipeline:
                 if inspect.isawaitable(ret):
                     await ret
 
-        # Rebuild FTS once if at least one successful ingest
+        # Optimize (or rebuild) FTS once if at least one successful ingest
         if any(r.status == "ok" for r in results):
-            dominant_lang = await self.store.get_dominant_language(collection)
-            await self.store.rebuild_fts_index(collection, language=dominant_lang)
+            if self.store.supports_incremental_fts_delete:
+                try:
+                    await self.store.optimize_fts(collection)
+                except Exception:
+                    dominant_lang = await self.store.get_dominant_language(collection)
+                    logger.warning(
+                        "optimize_fts failed for collection %r; falling back to rebuild_fts_index",
+                        collection,
+                        exc_info=True,
+                    )
+                    await self.store.rebuild_fts_index(collection, language=dominant_lang)
+            else:
+                dominant_lang = await self.store.get_dominant_language(collection)
+                await self.store.rebuild_fts_index(collection, language=dominant_lang)
 
         # Compute centroid and (conditionally) regenerate description
         if all_vectors:
