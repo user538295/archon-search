@@ -387,7 +387,7 @@ delete_document(skip_fts_optimize=False)  → table.delete()
 ### Final Phase — Verification & Documentation
 
 #### Task F.1 — Final verification & documentation update
-- [ ] **Files**: documentation updates (see Description); `tests/test_fts_consistency_after_50_operations.py` (new integration test file, see Tests below)
+- [x] **Files**: documentation updates (see Description); `tests/test_fts_consistency_after_50_operations.py` (new integration test file, see Tests below)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, Architecture docs, UserManual, BREAKING.md, roadmap, brief) and update every file whose content is affected by the changes delivered in this plan. Files to check include at minimum:

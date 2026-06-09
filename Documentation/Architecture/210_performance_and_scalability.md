@@ -110,6 +110,23 @@ All values live in `~/.archon-search/archon-search.toml` (see `archon-search.tom
 
 Before changing any of these in a release, re-run `uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py` to confirm `routing_accuracy` does not drop below the floor. Knob changes are eval-gated, not just benchmark-gated.
 
+### FTS maintenance cost (C6)
+
+As of C6, ingest and delete FTS maintenance is O(delta-size), not O(collection-size):
+
+- **`ingest_file`** (add path): calls `store.optimize_fts(collection)` once at batch end. `optimize()` incorporates only the newly added/deleted rows into the FTS index. A 10-chunk update into a 50,000-chunk collection completes in milliseconds.
+- **`delete_document`** (standalone delete): calls `optimize_fts` after the LanceDB `table.delete()` (after lock release). Callers that batch-delete before adding (e.g., `ingest_file` re-ingesting a changed document) pass `skip_fts_optimize=True` to suppress per-file FTS and issue a single batch-end optimize.
+- **`ingest_directory`** and **sync watcher** (`sync.py`): call `optimize_fts` once per batch/cycle, not per file — N files → 1 optimize call.
+- **`reindex_metadata`**: no FTS call at all (metadata-only columns; `text` is unchanged).
+- **`rebuild_fts_index`**: retained for operator-initiated FTS repair, available via `archon-search collection reindex`. Not called from normal ingest paths.
+
+The C6 ingest latency regression guard lives in `tests/eval/thresholds.toml` under `[ingest_latency]` (`single_file_p95_ms`). It is a **hard CI gate** — a regression above the threshold fails the eval run (see `tests/eval/test_eval_suite.py::test_ingest_latency_p95_single_file_on_large_corpus`).
+
+**Trade-offs and limitations (C6)**:
+- BM25 scores after N incremental `optimize()` calls may differ numerically from a freshly rebuilt index. Operators requiring strict score reproducibility should run `archon-search collection reindex` periodically.
+- Concurrent `optimize()` on the same table raises a LanceDB commit conflict; callers must serialize per collection. The production code paths do not issue parallel optimize calls on the same collection.
+- If `optimize_fts` fails, the ingest path falls back to `rebuild_fts_index` and logs a warning. If both fail, the ingest data is persisted but FTS may be inconsistent — repair via `archon-search collection reindex`.
+
 ### Centroid maintenance cost (B5)
 
 As of B5, centroid maintenance cost is no longer O(chunks) on every ingest:

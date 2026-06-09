@@ -201,6 +201,20 @@ Returns the updated `CollectionMeta` dict or `{error, code}` on failure.
 
 When multiple collections use different models, the server keeps a small LRU cache of loaded embedder instances (capacity `[database].embedder_cache_size`, default 3). A frequently-queried collection's embedder stays warm; the least-recently-used is evicted when the cache is full. Set `[database].eager_load_embedders = true` to pre-warm all known collection models at startup.
 
+## FTS index maintenance (C6)
+
+**How ingest updates FTS**: as of C6, `archon-search` uses incremental FTS maintenance (`table.optimize()`) instead of a full index rebuild on every ingest. This means single-document updates into large collections complete in milliseconds rather than seconds.
+
+- **Normal ingest and sync**: FTS is updated automatically via `store.optimize_fts()` at the end of each ingest batch or watcher sync cycle. You do not need to take any action.
+- **Delete path**: `delete_document` also calls `optimize_fts` after removing chunks, so deleted documents are immediately absent from FTS results (no phantom hits).
+- **Manual FTS repair**: if the FTS index becomes inconsistent (e.g., after a crash mid-ingest or an explicit operator request), run a full rebuild:
+  ```bash
+  archon-search collection reindex <collection-name>
+  ```
+  This triggers a full re-ingest, re-embed, and `rebuild_fts_index()`. Use it sparingly on large collections.
+
+**BM25 score note**: after many incremental `optimize()` calls, BM25 scores may differ slightly from a freshly rebuilt index. Search ranking (recall, NDCG) is unaffected — result-set membership is identical. Operators requiring strict score reproducibility should run a periodic reindex.
+
 ## Related documents
 
 - [`02_configuration.md`](./02_configuration.md) — `[collections]` and `[database].chunk_size`.

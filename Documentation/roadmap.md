@@ -60,7 +60,7 @@ Ordered as in the backlog. Items 1 and 8 are shipped (A2 + C2). Remaining items 
 ## Priority 2 — Ingestion and Storage Correctness
 
 - Connector / federation architecture beyond local filesystem.
-- Replace full-collection FTS rebuild as the default update path with incremental / additive FTS maintenance.
+- ~~Replace full-collection FTS rebuild as the default update path with incremental / additive FTS maintenance.~~ **✓ C6 shipped**: `store.optimize_fts()` replaces `rebuild_fts_index()` at all ingest and sync call sites (O(delta) vs. O(collection)). Delete path FTS is maintained via `optimize_fts` after `delete_document`. `reindex_metadata` no longer triggers any FTS call. See `Documentation/Architecture/210_performance_and_scalability.md`.
 - Remove full metadata rescans from incremental sync.
 - Streaming / incremental chunking for very large files.
 - Chunk-level enrichment (heading ancestry, section path, page numbers, code-symbol context):

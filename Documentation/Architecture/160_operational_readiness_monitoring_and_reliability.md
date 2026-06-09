@@ -175,6 +175,20 @@ In order:
 - If `GET /telemetry/stats` returns `{"enabled": false}` despite expecting it on, telemetry is disabled in config — `routes_telemetry.py` short-circuits before touching the log directory.
 - The pruner runs every 24 hours from process start. To force a prune, restart the service. Today's file is intentionally exempt from deletion.
 
+### FTS index inconsistency (phantom hits or missing results)
+
+**Symptom**: after an ingest, search returns stale results for the updated document, or deleted document content still appears in search results.
+
+**Cause**: `optimize_fts` (C6 incremental path) failed mid-ingest, or the process crashed between `ingest_chunks` and the `optimize_fts` call. The log will show `"optimize_fts failed for collection …; falling back to rebuild_fts_index"` if the fallback ran — if you see this, the FTS index should still be consistent. If the process crashed before either completed, the FTS index may lag the vector store.
+
+**Recovery**:
+```bash
+archon-search collection reindex <collection-name>
+```
+This triggers a full re-ingest (re-parse, re-embed, `rebuild_fts_index`). The FTS index will be fully consistent with the vector store after completion. Monitor with `GET /status` or `GET /indexing-state`.
+
+**Note on double-failure**: if both `optimize_fts` AND its `rebuild_fts_index` fallback fail (e.g., disk full, LanceDB corruption), the ingest data is persisted in the vector store but FTS is inconsistent. The ingest API will report `status: "ok"` for the persist step. Run `archon-search collection reindex` to repair.
+
 ### API key rotation
 
 The key is auto-generated on first start at `~/.archon-search/.search.env` with mode `0600` (`key_manager.py`). To rotate:

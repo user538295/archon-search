@@ -276,14 +276,15 @@ def test_delete_document_removes_from_fts(tmp_path: Any) -> None:
         await store.connect()
         try:
             col = f"test-{uuid.uuid4().hex[:8]}"
-            await store.create_collection(col, embedding_dim=_DIM)
+            await store.ensure_collection(col, embedding_dim=_DIM)
 
             doc_id = _doc_id()
             unique_word = f"deleteme{uuid.uuid4().hex[:8]}"
             chunks = [_chunk(doc_id, i, f"{unique_word} content {i}") for i in range(3)]
 
-            # Ingest with FTS rebuild so the document is searchable
-            await store.ingest_chunks(col, chunks, rebuild_fts=True)
+            # Ingest, then rebuild FTS so the document is searchable
+            await store.ingest_chunks(col, chunks)
+            await store.rebuild_fts_index(col)
 
             # Verify the document is searchable before delete
             query_vec = [1.0] * _DIM
@@ -316,9 +317,11 @@ def test_delete_by_source_path_also_removes_from_fts(tmp_path: Any) -> None:
         await store.connect()
         try:
             col = f"test-{uuid.uuid4().hex[:8]}"
-            await store.create_collection(col, embedding_dim=_DIM)
+            await store.ensure_collection(col, embedding_dim=_DIM)
 
-            source_path = f"/tmp/testfile-{uuid.uuid4().hex[:8]}.md"
+            # Use a resolved path so the doc_id matches what delete_by_source_path
+            # computes via Path(source_path).resolve() (on macOS /tmp → /private/tmp).
+            source_path = str((tmp_path / f"testfile-{uuid.uuid4().hex[:8]}.md").resolve())
             doc_id = hashlib.sha256(source_path.encode()).hexdigest()
             unique_word = f"bypath{uuid.uuid4().hex[:8]}"
             chunks = [_chunk(doc_id, i, f"{unique_word} content {i}") for i in range(2)]
@@ -326,7 +329,8 @@ def test_delete_by_source_path_also_removes_from_fts(tmp_path: Any) -> None:
             for c in chunks:
                 object.__setattr__(c, "source_path", source_path)
 
-            await store.ingest_chunks(col, chunks, rebuild_fts=True)
+            await store.ingest_chunks(col, chunks)
+            await store.rebuild_fts_index(col)
 
             query_vec = [1.0] * _DIM
             results_before = await store.hybrid_search(col, query_vec, unique_word, 10)

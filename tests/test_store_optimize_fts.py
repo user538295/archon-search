@@ -150,7 +150,7 @@ def test_optimize_fts_makes_new_chunks_searchable(tmp_path: Any) -> None:
         await store.connect()
         try:
             col = f"test-{uuid.uuid4().hex[:8]}"
-            await store.create_collection(col, embedding_dim=_DIM)
+            await store.ensure_collection(col, embedding_dim=_DIM)
 
             # Build initial FTS index (empty, but present so optimize can run)
             await store.rebuild_fts_index(col)
@@ -158,8 +158,9 @@ def test_optimize_fts_makes_new_chunks_searchable(tmp_path: Any) -> None:
             doc_id = _doc_id()
             chunks = [_chunk(doc_id, i, f"incremental fts test content {i}") for i in range(3)]
 
-            # Ingest without rebuilding FTS
-            await store.ingest_chunks(col, chunks, rebuild_fts=False)
+            # Ingest without rebuilding FTS — store.ingest_chunks always appends
+            # rows; FTS is maintained separately via optimize_fts or rebuild_fts_index.
+            await store.ingest_chunks(col, chunks)
 
             # Optimize to incorporate new rows into FTS
             await store.optimize_fts(col)

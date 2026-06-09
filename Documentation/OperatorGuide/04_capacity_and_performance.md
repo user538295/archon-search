@@ -11,7 +11,7 @@
 ## Principles
 
 1. **No production SLA.** Latency p50/p95 from telemetry and `tests/eval/` are regression guards (`EVL-1`, `Architecture/160…md`). Plan capacity in absolute terms, not against an SLO.
-2. **Ingest dominates write cost; the search path is bounded by reranker + FTS rebuild.** Batch ingest (`SearchPipeline.ingest_directory`, `pipeline.py:258-289`) computes the centroid from vectors accumulated in-memory during the batch; single-file `ingest_file` does not touch the centroid. The full-collection re-read of vectors (`recompute_collection_meta`, `pipeline.py:368-401`) only fires from sync reconciliation, reindex, and the eval runner (`CON-4`). The FTS index is rebuilt once per batch (`pipeline.py:253-255`) or per single-file ingest (`C6`).
+2. **Ingest dominates write cost; the search path is bounded by the reranker.** Batch ingest (`SearchPipeline.ingest_directory`, `pipeline.py:258-289`) computes the centroid from vectors accumulated in-memory during the batch; single-file `ingest_file` does not touch the centroid. The full-collection re-read of vectors (`recompute_collection_meta`, `pipeline.py:368-401`) only fires from sync reconciliation, reindex, and the eval runner (`CON-4`). **C6 (shipped)**: FTS is now maintained incrementally via `optimize_fts()` (O(delta), not O(collection-size)); `rebuild_fts_index` is no longer called from normal ingest or sync paths.
 3. **Router cache is per-request in the FastAPI runtime.** `POST /route` builds a fresh `MultiCollectionRouter` per request (`routes_route._build_router`), so its `_cached_metadata` never outlives a single call — the runtime does not drift as collections evolve. `MultiCollectionRouter` now also exposes `invalidate()` and an `initial_metadata` ctor param for long-lived router consumers (`CON-2`, addressed by A6). Capacity planning need not assume centroid drift on the server path.
 4. **GPU helps embedding throughput, not LanceDB I/O.** ONNX providers are written to config at install time by `install.py::configure_providers` (`install.py:135-165`); `platform/runtime.py` only detects GPU type.
 
@@ -45,12 +45,12 @@ The `top_k_retrieve` (default 15) and `top_k_return` (default 5) caps in `config
 
 ### Ingest (`POST /ingest`, `POST /collections`, `POST /collections/{name}/reindex`)
 
-Per document: parse → chunk → embed (batched) → upsert into LanceDB → **recompute collection centroid** → **rewrite FTS index** → update `.indexing_state.json`.
+Per document: parse → chunk → embed (batched) → upsert into LanceDB → **recompute collection centroid** → **optimize FTS index** (C6: incremental, O(delta)) → update `.indexing_state.json`.
 
 The two highlighted steps are the most expensive at scale and are tracked as separate debt items:
 
 - **Centroid recompute (`CON-4`)**: `SearchPipeline.recompute_collection_meta` (`pipeline.py:368-401`) reads **all** vectors in the collection and recomputes the centroid. It is invoked from sync reconciliation (`sync.py:707`), reindex, and the eval runner (`eval/runner.py:484`) — not from every ingest. Batch `ingest_directory` instead computes the centroid from vectors accumulated in-memory during the batch (`pipeline.py:258-289`); single-file `ingest_file` does not update the centroid. Roadmap fix is `B5` (incremental `(sum, count)` maintenance).
-- **FTS rebuild**: each ingest call rebuilds the FTS index with `replace=True` (`store.py:445-451`); for `ingest_directory` this happens once at the end of the batch (`pipeline.py:253-255`), not per file. Cost scales with collection size, not delta size. Roadmap fix is `C6` (incremental FTS maintenance).
+- **FTS maintenance (C6 — shipped)**: as of C6, ingest calls `store.optimize_fts(collection)` (wrapping `table.optimize()`) at batch end instead of a full `rebuild_fts_index`. Cost is O(delta-size), not O(collection-size). A single-file update into a 50,000-chunk collection completes in milliseconds. `delete_document` also calls `optimize_fts` after removing chunks, preventing phantom hits. `rebuild_fts_index` is retained for operator-initiated full repair (`archon-search collection reindex`). The C6 ingest latency p95 regression guard lives in `tests/eval/thresholds.toml` (`[ingest_latency].single_file_p95_ms`). See `Architecture/210_performance_and_scalability.md` for the full C6 performance model.
 
 Concrete chunk-count thresholds for "imperceptible", "user-visible", and "practical ceiling" are not benchmarked in this repo and should be treated as estimates only. #Unverified — beyond a few tens of thousands of chunks per collection, the `B5`/`C6` paydown becomes increasingly relevant.
 

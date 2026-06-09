@@ -145,6 +145,19 @@ The three B5 columns are additive and populated lazily: rows written by an older
 
 FTS is built per chunk table on the `text` column via `store.py::rebuild_fts_index` using `lancedb.index.FTS`. The hybrid search path (`hybrid_search`) issues a vector search and an FTS search in parallel, fuses results with Reciprocal Rank Fusion (`_RRF_K=60`), and gracefully falls back to vector-only if no FTS index exists.
 
+**C6 — Incremental FTS maintenance**: as of C6, normal ingest and delete operations no longer trigger a full `rebuild_fts_index()`. Instead:
+
+- `store.optimize_fts(collection)` wraps `table.optimize()` to incorporate newly added and deleted rows into the existing FTS index incrementally (O(delta), not O(collection-size)).
+- `store.delete_document(skip_fts_optimize=False)` calls `optimize_fts` after the LanceDB delete; pass `skip_fts_optimize=True` from ingest paths that will call `optimize_fts` separately at batch end.
+- `pipeline.ingest_file` and `pipeline.ingest_directory` call `optimize_fts` at batch end (not per-file) under Plan A (`store.supports_incremental_fts_delete = True`). They fall back to `rebuild_fts_index` per the Plan B branch if that flag is `False`, and also fall back on `optimize_fts` exception.
+- `store.reindex_metadata` does **not** call any FTS method — it only writes `file_type`, `updated_at`, `ingested_by`, and `indexed_at`; the `text` column (the sole FTS-indexed column) is never modified.
+- `rebuild_fts_index` remains available for operator-initiated full FTS repair (not called from ingest paths automatically).
+
+**Known limitations (C6)**:
+- BM25 scores after N incremental `optimize()` calls may differ numerically from a fresh rebuild. Equivalence is defined as result-set membership, not score equality.
+- If `optimize_fts` fails mid-ingest, the fallback is a full `rebuild_fts_index()` — see `pipeline.py`.
+- Concurrent `optimize()` on the same table raises a LanceDB commit conflict; the production code serializes calls per collection via the per-collection lock pattern.
+
 ### Filter execution and over-fetch
 
 A2 adds query-side filtering (`archon_search/filters.py`, `archon_search/store_filters.py`). Filter execution splits into two phases:
@@ -221,7 +234,7 @@ flowchart LR
     C2 --> D[embedder.py: fastembed dense vectors]
     D --> E[ACL resolution<br/>acl.py: front-matter _acl > sidecar]
     E --> F[store.py: ingest_chunks<br/>append to LanceDB chunk table]
-    F --> G[FTS index<br/>rebuild_fts_index on text column]
+    F --> G[FTS index<br/>optimize_fts at batch end; rebuild_fts_index for first-time or fallback]
     F --> H[update_collection_meta<br/>doc_count, chunk_count, centroid, last_indexed]
 ```
 
