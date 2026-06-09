@@ -175,7 +175,7 @@ No production code changes. All changes are in test infrastructure and configura
 > **Releasable**: after Task 2.1. `uv run pytest` runs in parallel by default; `-n0` serial execution remains available.
 
 #### Task 2.1 — Enable parallel addopts
-- [ ] **File**: `pyproject.toml`
+- [x] **File**: `pyproject.toml`
 - **Depends on**: Task 1.1, Task 1.2, Task 1.3
 - **Description**:
   - In `[tool.pytest.ini_options]`, append `-n auto --dist=loadfile` to the existing `addopts` string.

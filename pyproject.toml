@@ -78,7 +78,7 @@ testpaths = ["tests"]
 # only on the combined report run, not on intermediate invocations.
 # `--no-cov` is a local-only override developers can pass on the CLI when
 # iterating; it must never be baked into addopts here.
-addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -m 'not live and not eval and not benchmark and not integration and not live_eval'"
+addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -m 'not live and not eval and not benchmark and not integration and not live_eval' -n auto --dist=loadfile"
 markers = [
     "benchmark: latency benchmark — requires a running archon-search server; skipped automatically when server is unreachable",
     "integration: integration tests requiring live infrastructure",
