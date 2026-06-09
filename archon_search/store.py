@@ -114,6 +114,10 @@ _META_MAX_FIELDS = 50
 _META_MAX_KEY_LEN = 256
 _META_MAX_VAL_LEN = 4096
 
+# Set to False if spike gate (c) failed (optimize() does not remove deleted rows from FTS).
+# This constant is set manually after the spike (Task 1.1) and committed as part of C6.
+FTS_OPTIMIZE_REMOVES_DELETED: bool = True  # Plan A; change to False if Plan B applies
+
 
 # ---------------------------------------------------------------------------
 # SQL fragment helpers — defense-in-depth behind upstream identifier regexes.
@@ -259,6 +263,18 @@ class SearchStore:
             lock = asyncio.Lock()
             self._collection_locks[collection] = lock
         return lock
+
+    @property
+    def supports_incremental_fts_delete(self) -> bool:
+        """True when ``table.optimize()`` removes deleted rows from FTS (Plan A).
+
+        Returns ``False`` when the spike found that deleted rows remain in the FTS
+        index after optimize (Plan B), meaning ``rebuild_fts_index`` must be used
+        on the delete path to avoid phantom hits.
+
+        Controlled by the module-level ``FTS_OPTIMIZE_REMOVES_DELETED`` constant.
+        """
+        return FTS_OPTIMIZE_REMOVES_DELETED
 
     # ------------------------------------------------------------------
     # Connection lifecycle
