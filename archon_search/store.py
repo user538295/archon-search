@@ -1614,8 +1614,31 @@ class SearchStore:
 
 
     async def delete_document(
-        self, collection: str, doc_id: str, namespace: str = DEFAULT_NAMESPACE
+        self,
+        collection: str,
+        doc_id: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        *,
+        skip_fts_optimize: bool = False,
     ) -> int:
+        """Delete all chunks for *doc_id* from *collection*.
+
+        Parameters
+        ----------
+        collection:
+            Name of the collection to delete from.
+        doc_id:
+            64-hex-char document identifier.
+        namespace:
+            Namespace used for centroid bookkeeping (ignored when centroid
+            incremental updates are disabled).
+        skip_fts_optimize:
+            When ``True``, suppress the post-delete FTS maintenance call.
+            Pass ``True`` from ingest paths that will call ``optimize_fts``
+            (or ``rebuild_fts_index`` under Plan B) separately at batch end,
+            to avoid redundant per-file FTS operations.  Default ``False``
+            maintains FTS coherence on standalone deletes.
+        """
         self._validate_collection(collection)
         db = self._require_connected()
         if not _DOC_ID_RE.match(doc_id):
@@ -1625,6 +1648,7 @@ class SearchStore:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
         except asyncio.TimeoutError as e:
             raise StoreBusyError(timeout_s=INGEST_LOCK_TIMEOUT_S) from e
+        count: int = 0
         try:
             try:
                 table = await db.open_table(collection)
@@ -1632,7 +1656,7 @@ class SearchStore:
                 return 0
             del_vectors = await self._do_fetch_doc_vectors_unlocked(db, collection, doc_id)
             # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
-            count: int = await table.count_rows(_where_eq("doc_id", doc_id))
+            count = await table.count_rows(_where_eq("doc_id", doc_id))
             if count == 0:
                 return 0
             # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
@@ -1641,10 +1665,23 @@ class SearchStore:
                 await self._do_subtract_meta_on_delete(db, collection, del_vectors, namespace=namespace)
         finally:
             lock.release()
+        # FTS maintenance is performed AFTER lock release to avoid holding the lock
+        # during a potentially long optimize/rebuild operation.
+        if count > 0 and not skip_fts_optimize:
+            if self.supports_incremental_fts_delete:
+                await self.optimize_fts(collection)
+            else:
+                dominant_lang = await self.get_dominant_language(collection)
+                await self.rebuild_fts_index(collection, language=dominant_lang)
         return count
 
     async def delete_by_source_path(
-        self, collection: str, source_path: str, namespace: str = DEFAULT_NAMESPACE
+        self,
+        collection: str,
+        source_path: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        *,
+        skip_fts_optimize: bool = False,
     ) -> int:
         """Delete all chunks for a source file by computing its doc_id.
 
@@ -1652,9 +1689,15 @@ class SearchStore:
         produced by ``str(path.resolve())`` at ingest time.  Relative paths
         will resolve against the current working directory at call time and
         may not match the stored doc_id.
+
+        ``skip_fts_optimize`` is forwarded to ``delete_document``; pass
+        ``True`` from batch callers (e.g. sync.py delete loop) to suppress
+        per-file FTS maintenance in favour of a single batch-end call.
         """
         doc_id = hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
-        return await self.delete_document(collection, doc_id, namespace=namespace)
+        return await self.delete_document(
+            collection, doc_id, namespace=namespace, skip_fts_optimize=skip_fts_optimize
+        )
 
     # ------------------------------------------------------------------
     # List documents

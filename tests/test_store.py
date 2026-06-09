@@ -1975,7 +1975,9 @@ async def test_delete_by_source_path_computes_doc_id(tmp_path: Path) -> None:
 
     result = await store.delete_by_source_path("my-col", source_path)
 
-    store.delete_document.assert_called_once_with("my-col", expected_doc_id, namespace=DEFAULT_NAMESPACE)
+    store.delete_document.assert_called_once_with(
+        "my-col", expected_doc_id, namespace=DEFAULT_NAMESPACE, skip_fts_optimize=False
+    )
     assert result == 3
 
 
@@ -2005,7 +2007,9 @@ async def test_delete_by_source_path_delegates_to_delete_document(tmp_path: Path
     with patch.object(store, "delete_document", new_callable=AsyncMock, return_value=1) as mock_del:
         await store.delete_by_source_path("my-col", source_path)
 
-        mock_del.assert_called_once_with("my-col", expected_doc_id, namespace=DEFAULT_NAMESPACE)
+        mock_del.assert_called_once_with(
+            "my-col", expected_doc_id, namespace=DEFAULT_NAMESPACE, skip_fts_optimize=False
+        )
 
 
 @pytest.mark.asyncio
@@ -6112,7 +6116,9 @@ def test_delete_by_source_path_forwards_namespace(tmp_path) -> None:
 
         with patch.object(store, "delete_document", new=AsyncMock(return_value=0)) as mock_del:
             asyncio.run(store.delete_by_source_path(col, source, namespace="ns1"))
-            mock_del.assert_awaited_once_with(col, expected_doc_id, namespace="ns1")
+            mock_del.assert_awaited_once_with(
+                col, expected_doc_id, namespace="ns1", skip_fts_optimize=False
+            )
     finally:
         asyncio.run(store.disconnect())
 

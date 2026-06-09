@@ -196,7 +196,7 @@ delete_document(skip_fts_optimize=False)  → table.delete()
   - Checkpoint: `uv run pytest tests/test_store_optimize_fts.py -v --no-cov`
 
 #### Task 2.2 — FTS maintenance hook in `store.delete_document()`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - Add `skip_fts_optimize: bool = False` keyword-only parameter to `delete_document(self, collection, doc_id, namespace, *, skip_fts_optimize: bool = False) -> int`.
