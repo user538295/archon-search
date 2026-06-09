@@ -201,7 +201,7 @@ No production code changes. All changes are in test infrastructure and configura
 > **Releasable**: after Task 3.1. Both CI pipelines are hardened against accidental xdist activation.
 
 #### Task 3.1 — Add `-n0` to both CI workflow pytest commands
-- [ ] **File**: `.github/workflows/archon-search-release.yml`, `.github/workflows/archon-search-pr.yml`
+- [x] **File**: `.github/workflows/archon-search-release.yml`, `.github/workflows/archon-search-pr.yml`
 - **Depends on**: Task 1.1
 - **Description**:
   - Both workflows already blank `addopts` via `-o addopts=`. The `-n0` addition has two purposes: (1) **required for coverage correctness** — CI uses multi-step `--cov-append` across separate pytest invocations, then calls `coverage report` directly on `.coverage` (no `coverage combine` step); with xdist active, each invocation's internal combine step could overwrite `.coverage` with only the current run's worker shards, silently dropping coverage from prior invocations; (2) **defensive** — prevents xdist from activating if the `-o addopts=` override is ever removed.
