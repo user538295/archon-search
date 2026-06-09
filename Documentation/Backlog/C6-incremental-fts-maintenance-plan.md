@@ -178,7 +178,7 @@ delete_document(skip_fts_optimize=False)  → table.delete()
 > **Depends on**: Task 1.2 (Plan B flag must be in place)
 
 #### Task 2.1 — `store.optimize_fts()` method
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.1 (spike gates (a)+(b) must pass)
 - **Description**:
   - Add `async def optimize_fts(self, collection: str) -> None` to `VectorStore`, in the `# FTS index` section after `rebuild_fts_index` (line ~1281).

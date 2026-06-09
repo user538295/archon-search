@@ -1295,6 +1295,25 @@ class SearchStore:
         table = await db.open_table(collection)
         await table.create_index("text", config=FTS(language=tokenizer_name), replace=True)
 
+    async def optimize_fts(self, collection: str) -> None:
+        """Incrementally update the FTS index for *collection* via ``table.optimize()``.
+
+        Incorporates rows added or deleted since the last index creation or
+        optimize call without rebuilding the full index.  The tokenizer language
+        is embedded in the index at creation time and is not reconfigured here.
+
+        **Lock scope**: this method does NOT acquire the per-collection lock.
+        Callers are responsible for concurrency.  In ``delete_document`` the
+        call is placed AFTER ``lock.release()`` to avoid holding the lock during
+        a potentially long optimize operation (matching the existing
+        ``rebuild_fts_index`` convention).
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        logger.debug("optimize_fts: collection=%s", collection)
+        table = await db.open_table(collection)
+        await table.optimize()
+
     # ------------------------------------------------------------------
     # Reindex (metadata backfill for pre-A1 collections)
     # ------------------------------------------------------------------
