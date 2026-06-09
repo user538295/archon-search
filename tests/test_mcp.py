@@ -1147,3 +1147,127 @@ def test_explain_multi_collection_schema_drift_returns_schema_validation_error()
 
     assert isinstance(result, dict)
     assert result.get("code") == _ERR_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4 — Migrate ingest_file and ingest_directory tools
+# ---------------------------------------------------------------------------
+
+
+def _make_ingest_pipeline_with_result(needs_recompute=True):
+    """Return a pipeline mock whose ingest_file returns an IngestResult with needs_recompute set."""
+    from archon_search._types import IngestResult
+
+    result = IngestResult(
+        doc_id="doc1",
+        chunks_created=5,
+        status="ok",
+        error=None,
+        needs_recompute=needs_recompute,
+    )
+    pipeline = MagicMock()
+    pipeline._global_embedder = MagicMock()
+    pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
+    pipeline.get_collection_meta = AsyncMock(return_value=None)
+    pipeline.ingest_file = AsyncMock(return_value=result)
+    pipeline.ingest_directory = AsyncMock(return_value=[result])
+    return pipeline
+
+
+def _get_ingest_tool_fn(tool_name: str, pipeline, config=None):
+    """Build a stub-backed MCP app and return the ingest tool function."""
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    app = mcp_mod.create_app(pipeline, "col1", config=config)
+    return app._tools[tool_name]
+
+
+def test_ingest_file_result_excludes_needs_recompute() -> None:
+    """ingest_file must not include needs_recompute in the return dict."""
+    import asyncio
+
+    pipeline = _make_ingest_pipeline_with_result(needs_recompute=True)
+    tool_fn = _get_ingest_tool_fn("ingest_file", pipeline)
+    result = asyncio.run(tool_fn(path="/tmp/test.md", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert "needs_recompute" not in result
+    assert result.get("doc_id") == "doc1"
+    assert result.get("chunks_created") == 5
+    assert result.get("status") == "ok"
+
+
+def test_ingest_directory_result_excludes_needs_recompute() -> None:
+    """ingest_directory must not include needs_recompute in the return list items."""
+    import asyncio
+
+    pipeline = _make_ingest_pipeline_with_result(needs_recompute=True)
+    tool_fn = _get_ingest_tool_fn("ingest_directory", pipeline)
+    result = asyncio.run(tool_fn(path="/tmp/", collection="col1"))
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    item = result[0]
+    assert "needs_recompute" not in item
+    assert item.get("doc_id") == "doc1"
+    assert item.get("chunks_created") == 5
+
+
+def test_ingest_file_schema_drift_returns_schema_validation_error() -> None:
+    """ingest_file returns schema_validation_error code when schema construction raises ValidationError."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+
+    from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import IngestResultSchema
+
+    # Build a real ValidationError using the test helper pattern
+    try:
+        IngestResultSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    pipeline = _make_ingest_pipeline_with_result()
+    tool_fn = _get_ingest_tool_fn("ingest_file", pipeline)
+
+    with patch(
+        "archon_search.server.mcp.IngestResultSchema.from_result",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn(path="/tmp/test.md", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA
+
+
+def test_ingest_directory_schema_drift_returns_schema_validation_error() -> None:
+    """ingest_directory returns schema_validation_error code when schema construction raises ValidationError."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+
+    from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import IngestResultSchema
+
+    # Build a real ValidationError using the test helper pattern
+    try:
+        IngestResultSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    pipeline = _make_ingest_pipeline_with_result()
+    tool_fn = _get_ingest_tool_fn("ingest_directory", pipeline)
+
+    with patch(
+        "archon_search.server.mcp.IngestResultSchema.from_result",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn(path="/tmp/", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA

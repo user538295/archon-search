@@ -307,7 +307,7 @@ All annotations keep their `dict[str, Any]` / `list[dict[str, Any]]` form (see F
   - Checkpoint: `uv run pytest tests/test_mcp.py -k "explain" -x --no-cov`
 
 #### Task 2.4 — Migrate `ingest_file` and `ingest_directory` tools
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 1.4
 - **Description**:
   - Import `IngestResultSchema` from `mcp_schemas`
@@ -315,10 +315,10 @@ All annotations keep their `dict[str, Any]` / `list[dict[str, Any]]` form (see F
   - `ingest_directory`: replace `[asdict(r) for r in results]` with `[IngestResultSchema.from_result(r).model_dump(mode="json") for r in results]`; add `ValidationError` catch; return annotation stays `-> list[dict[str, Any]]`
 - **Releasable**: both ingest tools exclude `needs_recompute` from responses
 - **Tests (TDD)** — `tests/test_mcp.py`:
-  - Unit: `test_ingest_file_result_excludes_needs_recompute` — mock pipeline returning `IngestResult(needs_recompute=True, ...)`; call `ingest_file()`; assert return value has no `needs_recompute` field
-  - Unit: `test_ingest_directory_result_excludes_needs_recompute` — same for directory ingest returning a list
-  - Integration: `test_ingest_file_schema_drift_returns_schema_validation_error` — patch `IngestResultSchema.from_result` to raise `ValidationError`; assert `code == _ERR_SCHEMA`
-  - Integration: `test_ingest_directory_schema_drift_returns_schema_validation_error` — same for directory ingest
+  - [x] Unit: `test_ingest_file_result_excludes_needs_recompute` — mock pipeline returning `IngestResult(needs_recompute=True, ...)`; call `ingest_file()`; assert return value has no `needs_recompute` field
+  - [x] Unit: `test_ingest_directory_result_excludes_needs_recompute` — same for directory ingest returning a list
+  - [x] Integration: `test_ingest_file_schema_drift_returns_schema_validation_error` — patch `IngestResultSchema.from_result` to raise `ValidationError`; assert `code == _ERR_SCHEMA`
+  - [x] Integration: `test_ingest_directory_schema_drift_returns_schema_validation_error` — same for directory ingest
   - Checkpoint: `uv run pytest tests/test_mcp.py -k "ingest" -x --no-cov`
 
 #### Task 2.5 — Migrate `list_collections` and `get_collections_meta` tools

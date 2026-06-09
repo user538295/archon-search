@@ -48,6 +48,7 @@ from archon_search.model_validation import ModelValidationError, validate_embedd
 from archon_search.server.mcp_schemas import (
     ContextChunkSchema,
     ExcludedCollectionMcpSchema,
+    IngestResultSchema,
     McpSearchResponse,
     McpSearchResultSchema,
     SearchWithContextItemSchema,
@@ -817,7 +818,11 @@ def create_app(
                             "stage_timings_ms": recorder.stage_timings_ms,
                         },
                     )
-            return asdict(result)
+            try:
+                schema = IngestResultSchema.from_result(result)
+                return schema.model_dump(mode="json")
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except StoreBusyError as exc:
             return McpErrorResponse(error=str(exc), code="store_busy")
         except Exception as exc:
@@ -869,7 +874,10 @@ def create_app(
                             "stage_timings_ms": aggregated,
                         },
                     )
-            return [asdict(r) for r in results]
+            try:
+                return [IngestResultSchema.from_result(r).model_dump(mode="json") for r in results]
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except StoreBusyError as exc:
             return McpErrorResponse(error=str(exc), code="store_busy")
         except Exception as exc:
