@@ -46,6 +46,8 @@ from archon_search.telemetry.writer import TelemetryWriter
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
 from archon_search.server.mcp_schemas import (
+    CollectionListItemSchema,
+    CollectionMetaMcpSchema,
     ContextChunkSchema,
     ExcludedCollectionMcpSchema,
     IngestResultSchema,
@@ -886,16 +888,13 @@ def create_app(
 
     @app.tool()
     async def list_collections() -> list[dict[str, Any]]:
-        """List all document collections with doc/chunk counts (centroid omitted)."""
+        """List all document collections with doc/chunk counts (internal fields omitted)."""
         try:
             results = await pipeline.get_all_collections_meta()
-            output = []
-            for r in results:
-                d = asdict(r)
-                d.pop("centroid", None)
-                d.pop("description_embedding", None)
-                output.append(d)
-            return output
+            try:
+                return [CollectionListItemSchema.from_result(r).model_dump(mode="json") for r in results]
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except Exception as exc:
             logger.exception("list_collections failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
@@ -904,21 +903,23 @@ def create_app(
     async def get_collections_meta(
         include_description_embedding: bool = False,
     ) -> list[dict[str, Any]]:
-        """Return full CollectionMeta for all collections, including centroid vectors.
+        """Return public CollectionMeta for all collections.
 
-        ``description_embedding`` is stripped by default because it can significantly
+        ``description_embedding`` is ``null`` by default because it can significantly
         increase payload size at scale (one dense vector per collection). Pass
         ``include_description_embedding=True`` to retain the field.
         """
         try:
             results = await pipeline.get_all_collections_meta()
-            output = []
-            for r in results:
-                d = asdict(r)
-                if not include_description_embedding:
-                    d.pop("description_embedding", None)
-                output.append(d)
-            return output
+            try:
+                return [
+                    CollectionMetaMcpSchema.from_result(
+                        r, include_description_embedding=include_description_embedding
+                    ).model_dump(mode="json")
+                    for r in results
+                ]
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except Exception as exc:
             logger.exception("get_collections_meta failed")
             return McpErrorResponse(error=str(exc), code="internal_error")

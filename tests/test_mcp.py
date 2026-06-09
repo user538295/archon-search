@@ -196,7 +196,7 @@ def test_list_collections_strips_description_embedding() -> None:
 
 
 def test_get_collections_meta_strips_description_embedding_by_default() -> None:
-    """get_collections_meta must strip description_embedding but keep centroid by default."""
+    """get_collections_meta must exclude centroid and have description_embedding=None by default."""
     import asyncio
 
     meta = _make_meta_with_embeddings()
@@ -205,8 +205,11 @@ def test_get_collections_meta_strips_description_embedding_by_default() -> None:
 
     assert isinstance(result, list)
     item = result[0]
-    assert "centroid" in item
-    assert "description_embedding" not in item
+    # centroid is an internal field, excluded after Task 2.5 Pydantic migration
+    assert "centroid" not in item
+    # description_embedding is present but null when include_description_embedding=False
+    assert "description_embedding" in item
+    assert item["description_embedding"] is None
 
 
 def test_get_collections_meta_includes_description_embedding_when_opted_in() -> None:
@@ -1268,6 +1271,174 @@ def test_ingest_directory_schema_drift_returns_schema_validation_error() -> None
         side_effect=_fake_err,
     ):
         result = asyncio.run(tool_fn(path="/tmp/", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# Task 2.5 — Migrate list_collections and get_collections_meta tools
+# ---------------------------------------------------------------------------
+
+
+def _make_full_collection_meta():
+    """Return a CollectionMeta with all internal fields populated."""
+    from archon_search.collection_meta import CollectionMeta
+    from datetime import datetime
+
+    return CollectionMeta(
+        name="col1",
+        description="test collection",
+        centroid=[0.1, 0.2, 0.3],
+        centroid_sum=[0.3, 0.6, 0.9],
+        mutations_since_recompute=5,
+        needs_recompute=True,
+        doc_count=10,
+        chunk_count=50,
+        active_embedding_model="text-embed-v2",
+        pending_embedding_model=None,
+        needs_reindex=False,
+        reindex_job_id=None,
+        last_indexed=datetime(2024, 1, 1, 12, 0, 0),
+        last_described=datetime(2024, 1, 2, 12, 0, 0),
+        described_at_doc_count=10,
+        namespace="default",
+        description_embedding=[0.4, 0.5, 0.6],
+    )
+
+
+def _get_collections_tool_fn(tool_name: str, meta, config=None):
+    """Build a stub-backed MCP app and return the named tool function."""
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    pipeline = MagicMock()
+    pipeline.get_all_collections_meta = AsyncMock(return_value=[meta])
+    app = mcp_mod.create_app(pipeline, "col1", config=config)
+    return app._tools[tool_name]
+
+
+_INTERNAL_FIELDS = {
+    "centroid",
+    "centroid_sum",
+    "namespace",
+    "needs_recompute",
+    "needs_reindex",
+    "reindex_job_id",
+    "mutations_since_recompute",
+    "described_at_doc_count",
+}
+
+
+def test_list_collections_excludes_internal_fields() -> None:
+    """list_collections must exclude all internal CollectionMeta fields."""
+    import asyncio
+
+    meta = _make_full_collection_meta()
+    tool_fn = _get_collections_tool_fn("list_collections", meta)
+    result = asyncio.run(tool_fn())
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    item = result[0]
+    for field in _INTERNAL_FIELDS:
+        assert field not in item, f"internal field {field!r} must not appear in list_collections output"
+
+
+def test_list_collections_renames_active_embedding_model() -> None:
+    """list_collections must return embedding_model (not active_embedding_model)."""
+    import asyncio
+
+    meta = _make_full_collection_meta()
+    tool_fn = _get_collections_tool_fn("list_collections", meta)
+    result = asyncio.run(tool_fn())
+
+    assert isinstance(result, list)
+    item = result[0]
+    assert "embedding_model" in item
+    assert item["embedding_model"] == "text-embed-v2"
+    assert "active_embedding_model" not in item
+
+
+def test_get_collections_meta_without_description_embedding() -> None:
+    """get_collections_meta with include_description_embedding=False returns description_embedding as None."""
+    import asyncio
+
+    meta = _make_full_collection_meta()
+    tool_fn = _get_collections_tool_fn("get_collections_meta", meta)
+    result = asyncio.run(tool_fn(include_description_embedding=False))
+
+    assert isinstance(result, list)
+    item = result[0]
+    assert "description_embedding" in item
+    assert item["description_embedding"] is None
+
+
+def test_get_collections_meta_with_description_embedding() -> None:
+    """get_collections_meta with include_description_embedding=True includes the vector."""
+    import asyncio
+
+    meta = _make_full_collection_meta()
+    tool_fn = _get_collections_tool_fn("get_collections_meta", meta)
+    result = asyncio.run(tool_fn(include_description_embedding=True))
+
+    assert isinstance(result, list)
+    item = result[0]
+    assert item["description_embedding"] == [0.4, 0.5, 0.6]
+
+
+def test_list_collections_schema_drift_returns_schema_validation_error() -> None:
+    """list_collections returns schema_validation_error when from_result raises ValidationError."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+
+    from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import CollectionListItemSchema
+
+    try:
+        CollectionListItemSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    meta = _make_full_collection_meta()
+    tool_fn = _get_collections_tool_fn("list_collections", meta)
+
+    with patch(
+        "archon_search.server.mcp.CollectionListItemSchema.from_result",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn())
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA
+
+
+def test_get_collections_meta_schema_drift_returns_schema_validation_error() -> None:
+    """get_collections_meta returns schema_validation_error when from_result raises ValidationError."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+
+    from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import CollectionMetaMcpSchema
+
+    try:
+        CollectionMetaMcpSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    meta = _make_full_collection_meta()
+    tool_fn = _get_collections_tool_fn("get_collections_meta", meta)
+
+    with patch(
+        "archon_search.server.mcp.CollectionMetaMcpSchema.from_result",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn())
 
     assert isinstance(result, dict)
     assert result.get("code") == _ERR_SCHEMA
