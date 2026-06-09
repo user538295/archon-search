@@ -149,7 +149,7 @@ delete_document(skip_fts_optimize=False)  → table.delete()
   - Checkpoint: `uv run pytest -m integration tests/test_fts_spike_gates.py -v --no-cov`
 
 #### Task 1.2 — Record Plan B outcome as a runtime flag
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 1.1 (spike findings must be documented)
 - **Description**:
   - Add a module-level constant to `store.py`:
