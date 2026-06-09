@@ -226,8 +226,8 @@ def test_get_collections_meta_includes_description_embedding_when_opted_in() -> 
     assert item["description_embedding"] == [0.1, 0.4]
 
 
-def test_get_collection_meta_includes_description_embedding() -> None:
-    """get_collection_meta returns description_embedding by default (bounded payload)."""
+def test_get_collection_meta_excludes_description_embedding() -> None:
+    """get_collection_meta uses CollectionDetailSchema which does not include description_embedding."""
     import asyncio
 
     meta = _make_meta_with_embeddings()
@@ -235,8 +235,8 @@ def test_get_collection_meta_includes_description_embedding() -> None:
     result = asyncio.run(tool_fn(name="col1"))
 
     assert isinstance(result, dict)
-    assert "description_embedding" in result
-    assert result["description_embedding"] == [0.1, 0.4]
+    # CollectionDetailSchema does not expose description_embedding (use get_collections_meta for that)
+    assert "description_embedding" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -1478,3 +1478,242 @@ def test_get_collections_meta_pipeline_error_returns_internal_error() -> None:
 
     assert isinstance(result, dict)
     assert result.get("code") == "internal_error"
+
+
+# ---------------------------------------------------------------------------
+# Task 2.6 — Migrate get_collection_meta and update_collection tools
+# ---------------------------------------------------------------------------
+
+
+def _get_single_collection_tool_fn(tool_name: str, meta, pipeline_override=None, config=None):
+    """Build a stub-backed MCP app for single-collection tools."""
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    if pipeline_override is not None:
+        pipeline = pipeline_override
+    else:
+        pipeline = MagicMock()
+        pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    app = mcp_mod.create_app(pipeline, "col1", config=config)
+    return app._tools[tool_name]
+
+
+def test_get_collection_meta_excludes_internal_fields() -> None:
+    """get_collection_meta must exclude all internal CollectionMeta fields."""
+    import asyncio
+
+    meta = _make_full_collection_meta()
+    tool_fn = _get_single_collection_tool_fn("get_collection_meta", meta)
+    result = asyncio.run(tool_fn(name="col1"))
+
+    assert isinstance(result, dict)
+    for field in _INTERNAL_FIELDS:
+        assert field not in result, f"internal field {field!r} must not appear in get_collection_meta output"
+    assert "description_embedding" not in result
+
+
+def test_get_collection_meta_renames_active_embedding_model() -> None:
+    """get_collection_meta must return embedding_model (not active_embedding_model)."""
+    import asyncio
+
+    meta = _make_full_collection_meta()
+    tool_fn = _get_single_collection_tool_fn("get_collection_meta", meta)
+    result = asyncio.run(tool_fn(name="col1"))
+
+    assert isinstance(result, dict)
+    assert "embedding_model" in result
+    assert result["embedding_model"] == "text-embed-v2"
+    assert "active_embedding_model" not in result
+
+
+def test_get_collection_meta_schema_drift_returns_schema_validation_error() -> None:
+    """get_collection_meta returns schema_validation_error when from_result raises ValidationError."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+
+    from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import CollectionDetailSchema
+
+    try:
+        CollectionDetailSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    meta = _make_full_collection_meta()
+    tool_fn = _get_single_collection_tool_fn("get_collection_meta", meta)
+
+    with patch(
+        "archon_search.server.mcp.CollectionDetailSchema.from_result",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn(name="col1"))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA
+
+
+def test_update_collection_excludes_internal_fields() -> None:
+    """update_collection must exclude all internal CollectionMeta fields on success path."""
+    import asyncio
+    from unittest.mock import patch
+
+    meta = _make_full_collection_meta()
+
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=meta)
+    store.get_stored_vector_dimension = AsyncMock(return_value=None)
+    store.count_chunks = AsyncMock(return_value=0)
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = MagicMock()
+    pipeline.store = store
+
+    tool_fn = _get_single_collection_tool_fn("update_collection", meta, pipeline_override=pipeline)
+
+    ctx = MagicMock()
+    ctx.meta = {"namespace": "default"}
+
+    with patch(
+        "archon_search.server.mcp.validate_embedding_model",
+        new=AsyncMock(return_value=384),
+    ):
+        result = asyncio.run(tool_fn(collection_name="col1", embedding_model="new-model", ctx=ctx))
+
+    assert isinstance(result, dict)
+    for field in _INTERNAL_FIELDS:
+        assert field not in result, f"internal field {field!r} must not appear in update_collection output"
+
+
+def test_update_collection_no_op_same_model() -> None:
+    """update_collection no-op path returns CollectionDetailSchema shape (no internal fields)."""
+    import asyncio
+    from unittest.mock import patch
+
+    meta = _make_full_collection_meta()  # active_embedding_model="text-embed-v2"
+
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=meta)
+    store.get_stored_vector_dimension = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = MagicMock()
+    pipeline.store = store
+
+    tool_fn = _get_single_collection_tool_fn("update_collection", meta, pipeline_override=pipeline)
+
+    ctx = MagicMock()
+    ctx.meta = {"namespace": "default"}
+
+    with patch(
+        "archon_search.server.mcp.validate_embedding_model",
+        new=AsyncMock(return_value=384),
+    ):
+        # Request the same model that is already active -> no-op
+        result = asyncio.run(tool_fn(collection_name="col1", embedding_model="text-embed-v2", ctx=ctx))
+
+    assert isinstance(result, dict)
+    assert "error" not in result
+    # Must contain public fields
+    assert "name" in result
+    assert "embedding_model" in result
+    # Must not contain internal fields
+    for field in _INTERNAL_FIELDS:
+        assert field not in result
+
+
+def test_update_collection_pending_model_path() -> None:
+    """update_collection pending path returns CollectionDetailSchema shape with pending_embedding_model."""
+    import asyncio
+    from unittest.mock import patch
+
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(
+        name="col1",
+        active_embedding_model="old-model",
+        pending_embedding_model=None,
+        needs_reindex=False,
+        reindex_job_id=None,
+        centroid=[0.1, 0.2],
+        centroid_sum=[0.3, 0.4],
+        mutations_since_recompute=2,
+        needs_recompute=False,
+        namespace="default",
+    )
+
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=meta)
+    store.get_stored_vector_dimension = AsyncMock(return_value=None)
+    store.count_chunks = AsyncMock(return_value=10)  # has chunks -> pending path
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = MagicMock()
+    pipeline.store = store
+
+    tool_fn = _get_single_collection_tool_fn("update_collection", meta, pipeline_override=pipeline)
+
+    ctx = MagicMock()
+    ctx.meta = {"namespace": "default"}
+
+    with patch(
+        "archon_search.server.mcp.validate_embedding_model",
+        new=AsyncMock(return_value=384),
+    ):
+        result = asyncio.run(tool_fn(collection_name="col1", embedding_model="new-model", ctx=ctx))
+
+    assert isinstance(result, dict)
+    assert "error" not in result
+    # Schema fields present
+    assert result.get("pending_embedding_model") == "new-model"
+    assert "embedding_model" in result
+    # No internal fields
+    for field in _INTERNAL_FIELDS:
+        assert field not in result
+
+
+def test_update_collection_schema_drift_returns_schema_validation_error() -> None:
+    """update_collection returns schema_validation_error when CollectionDetailSchema.from_result raises."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+
+    from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import CollectionDetailSchema
+
+    try:
+        CollectionDetailSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    meta = _make_full_collection_meta()
+
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=meta)
+    store.get_stored_vector_dimension = AsyncMock(return_value=None)
+    store.count_chunks = AsyncMock(return_value=0)
+    store.update_collection_meta = AsyncMock()
+
+    pipeline = MagicMock()
+    pipeline.store = store
+
+    tool_fn = _get_single_collection_tool_fn("update_collection", meta, pipeline_override=pipeline)
+
+    ctx = MagicMock()
+    ctx.meta = {"namespace": "default"}
+
+    with patch(
+        "archon_search.server.mcp.validate_embedding_model",
+        new=AsyncMock(return_value=384),
+    ), patch(
+        "archon_search.server.mcp.CollectionDetailSchema.from_result",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn(collection_name="col1", embedding_model="new-model", ctx=ctx))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA

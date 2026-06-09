@@ -46,6 +46,7 @@ from archon_search.telemetry.writer import TelemetryWriter
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
 from archon_search.server.mcp_schemas import (
+    CollectionDetailSchema,
     CollectionListItemSchema,
     CollectionMetaMcpSchema,
     ContextChunkSchema,
@@ -926,12 +927,16 @@ def create_app(
 
     @app.tool()
     async def get_collection_meta(name: str) -> dict[str, Any]:
-        """Return full CollectionMeta for one named collection, including centroid."""
+        """Return public CollectionMeta for one named collection (internal fields omitted)."""
         try:
             meta = await pipeline.get_collection_meta(name)
             if meta is None:
                 return McpErrorResponse(error=f"Collection {name!r} not found", code="not_found")
-            return asdict(meta)
+            try:
+                schema = CollectionDetailSchema.from_result(meta)
+                return schema.model_dump(mode="json")
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except Exception as exc:
             logger.exception("get_collection_meta failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
@@ -1064,7 +1069,11 @@ def create_app(
                     meta.reindex_job_id = None
                 await store.update_collection_meta(meta)
 
-            return asdict(meta)
+            try:
+                schema = CollectionDetailSchema.from_result(meta)
+                return schema.model_dump(mode="json")
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except Exception as exc:
             logger.exception("update_collection failed")
             return McpErrorResponse(error=str(exc), code="internal_error")

@@ -340,7 +340,7 @@ All annotations keep their `dict[str, Any]` / `list[dict[str, Any]]` form (see F
   - Checkpoint: `uv run pytest tests/test_mcp.py -k "list_collections or get_collections_meta" -x --no-cov`
 
 #### Task 2.6 — Migrate `get_collection_meta` and `update_collection` tools
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 1.3
 - **Description**:
   - Import `CollectionDetailSchema` from `mcp_schemas`

@@ -161,8 +161,11 @@ async def test_update_collection_returns_updated_meta() -> None:
         )
 
     assert "error" not in result, f"Unexpected error: {result}"
-    assert result.get("needs_reindex") is True
+    # After Task 2.6 migration, update_collection returns CollectionDetailSchema (internal fields excluded).
+    # pending_embedding_model is a public field and must be present.
     assert result.get("pending_embedding_model") == "model-X"
+    # needs_reindex is an internal field and must NOT appear in the response.
+    assert "needs_reindex" not in result
     # Happy path writes meta to store
     store.update_collection_meta.assert_awaited_once()
 
@@ -386,7 +389,8 @@ async def test_update_collection_revert_clears_pending() -> None:
 
     assert "error" not in result
     assert result.get("pending_embedding_model") is None
-    assert result.get("needs_reindex") is False
+    # needs_reindex is an internal field and must NOT appear in the response.
+    assert "needs_reindex" not in result
     store.update_collection_meta.assert_awaited_once()
 
 
@@ -425,9 +429,11 @@ async def test_update_collection_empty_collection_sets_active_model() -> None:
         )
 
     assert "error" not in result
-    assert result.get("active_embedding_model") == "new-model"
+    # After Task 2.6 migration, active_embedding_model is renamed to embedding_model.
+    assert result.get("embedding_model") == "new-model"
     assert result.get("pending_embedding_model") is None
-    assert result.get("needs_reindex") is False
+    # needs_reindex is an internal field and must NOT appear in the response.
+    assert "needs_reindex" not in result
     store.update_collection_meta.assert_awaited_once()
 
 
@@ -555,5 +561,5 @@ async def test_update_collection_stale_job_noop_writes_store() -> None:
     assert "error" not in result
     # stale_cleared=True → store MUST be written even though it's a no-op for the model state
     store.update_collection_meta.assert_awaited_once()
-    # The stale reindex_job_id must be cleared
-    assert result.get("reindex_job_id") is None
+    # reindex_job_id is an internal field and must NOT appear in the response after Task 2.6 migration.
+    assert "reindex_job_id" not in result
