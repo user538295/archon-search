@@ -331,7 +331,7 @@ delete_document(skip_fts_optimize=False)  → table.delete()
 > **Releasable**: after Task 4.1. `reindex_metadata` no longer triggers any FTS operation.
 
 #### Task 4.1 — Remove `rebuild_fts_index` from `store.reindex_metadata`
-- [ ] **File**: `archon_search/store.py`
+- [x] **File**: `archon_search/store.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - At lines 1400–1406: remove the entire `if updates:` block that calls `rebuild_fts_index`:

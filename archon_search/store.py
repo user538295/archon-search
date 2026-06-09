@@ -1447,14 +1447,9 @@ class SearchStore:
                         updates=vals,
                     )
                     result.updated += 1
-                if updates:
-                    try:
-                        await self.rebuild_fts_index(collection)
-                    except Exception:  # noqa: BLE001
-                        logger.warning(
-                            "rebuild_fts_index after reindex failed", exc_info=True
-                        )
-
+            # No FTS maintenance here: only file_type, updated_at, ingested_by, and
+            # indexed_at are written — the text column (the sole FTS-indexed column)
+            # is never modified by reindex_metadata, so the FTS index is unaffected.
             if progress_cb is not None:
                 progress_cb(result.processed, total)
         finally:
