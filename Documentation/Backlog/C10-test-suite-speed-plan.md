@@ -151,7 +151,7 @@ No production code changes. All changes are in test infrastructure and configura
 ---
 
 #### Task 1.3 — Fix `test_update_description_timeout_skips_write` (add monkeypatch)
-- [ ] **File**: `tests/test_store.py`
+- [x] **File**: `tests/test_store.py`
 - **Depends on**: nothing
 - **Description**:
   - Locate `async def test_update_description_timeout_skips_write(tmp_path, caplog) -> None:` (line ~6191).

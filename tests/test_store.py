@@ -6188,10 +6188,13 @@ async def test_update_description_noop_when_no_meta_row(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_description_timeout_skips_write(tmp_path, caplog) -> None:
+async def test_update_description_timeout_skips_write(tmp_path, caplog, monkeypatch) -> None:
     """Lock held externally → update_description returns silently (no StoreBusyError) and logs warning."""
+    import archon_search.store as store_mod
     import logging
     from archon_search.collection_meta import CollectionMeta
+
+    monkeypatch.setattr(store_mod, "INGEST_LOCK_TIMEOUT_S", 0.1)
     store = SearchStore(tmp_path / "db")
     await store.connect()
     try:
