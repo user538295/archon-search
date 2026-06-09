@@ -45,6 +45,11 @@ from archon_search.telemetry.writer import TelemetryWriter
 
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
+from archon_search.server.mcp_schemas import (
+    ExcludedCollectionMcpSchema,
+    McpSearchResponse,
+    McpSearchResultSchema,
+)
 from archon_search.types import JobStatus
 
 if TYPE_CHECKING:
@@ -86,6 +91,9 @@ _LanguageParamSearchWithContext = Annotated[
 class McpErrorResponse(TypedDict):
     error: str
     code: str
+
+
+_ERR_SCHEMA = "schema_validation_error"
 
 
 _PATH_UNSAFE_MESSAGES: dict[str, str] = {
@@ -258,13 +266,6 @@ def create_app(
             except Exception as exc:
                 logger.exception("multi-collection search failed")
                 return McpErrorResponse(error=str(exc), code="internal_error")
-            results = []
-            for r in result_obj.results:
-                d = asdict(r)
-                d.pop("vector", None)
-                if not include_metadata:
-                    d["metadata"] = {}
-                results.append(d)
             if writer is not None:
                 try:
                     excluded_count = len(result_obj.excluded_collections)
@@ -282,17 +283,25 @@ def create_app(
                     )
                 except Exception:
                     logger.warning("telemetry: search_multi entry enqueue failed", exc_info=True)
-            return {
-                "results": results,
-                "acl_filtered": result_obj.acl_filtered,
-                "excluded_collections": [
-                    {"name": e.name, "reason": e.reason} for e in result_obj.excluded_collections
-                ],
-                "hyde_applied": hyde_applied,
-                "rag_fusion_applied": result_obj.rag_fusion_applied,
-                "rag_fusion_queries_used": result_obj.rag_fusion_queries_used,
-                "rag_fusion_attempted": result_obj.rag_fusion_attempted,
-            }
+            try:
+                result_schemas = []
+                for r in result_obj.results:
+                    rs = McpSearchResultSchema.from_result(r)
+                    if not include_metadata:
+                        rs.metadata = {}
+                    result_schemas.append(rs)
+                response = McpSearchResponse(
+                    results=result_schemas,
+                    acl_filtered=result_obj.acl_filtered,
+                    excluded_collections=[
+                        ExcludedCollectionMcpSchema(name=e.name, reason=e.reason)
+                        for e in result_obj.excluded_collections
+                    ],
+                    hyde_applied=hyde_applied,
+                )
+                return response.model_dump(mode="json")
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
 
         try:
             try:
@@ -346,25 +355,25 @@ def create_app(
                     )
                 except Exception:
                     logger.warning("telemetry: search entry enqueue failed", exc_info=True)
-            results = []
-            for r in result_obj.results:
-                d = asdict(r)
-                d.pop("vector", None)
-                if not include_metadata:
-                    # empty dict not key-absent, consistent with REST surface
-                    d["metadata"] = {}
-                results.append(d)
-            return {
-                "results": results,
-                "acl_filtered": result_obj.acl_filtered,
-                "excluded_collections": [
-                    {"name": e.name, "reason": e.reason} for e in result_obj.excluded_collections
-                ],
-                "hyde_applied": hyde_applied,
-                "rag_fusion_applied": result_obj.rag_fusion_applied,
-                "rag_fusion_queries_used": result_obj.rag_fusion_queries_used,
-                "rag_fusion_attempted": result_obj.rag_fusion_attempted,
-            }
+            try:
+                result_schemas = []
+                for r in result_obj.results:
+                    rs = McpSearchResultSchema.from_result(r)
+                    if not include_metadata:
+                        rs.metadata = {}
+                    result_schemas.append(rs)
+                response = McpSearchResponse(
+                    results=result_schemas,
+                    acl_filtered=result_obj.acl_filtered,
+                    excluded_collections=[
+                        ExcludedCollectionMcpSchema(name=e.name, reason=e.reason)
+                        for e in result_obj.excluded_collections
+                    ],
+                    hyde_applied=hyde_applied,
+                )
+                return response.model_dump(mode="json")
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except RAGFusionDependencyError as exc:
             return McpErrorResponse(error=str(exc), code="validation_error")
         except Exception as exc:

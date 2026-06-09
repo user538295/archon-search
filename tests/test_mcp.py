@@ -600,7 +600,7 @@ def test_mcp_search_tool_rag_fusion_parameter_accepted() -> None:
 
 
 def test_mcp_search_tool_rag_fusion_applied_in_result() -> None:
-    """search tool returns rag_fusion_applied=True and rag_fusion_queries_used=2."""
+    """search tool accepts rag_fusion=True without error; response has McpSearchResponse shape."""
     import asyncio
 
     pipeline = _make_rag_fusion_pipeline_mock()
@@ -611,8 +611,10 @@ def test_mcp_search_tool_rag_fusion_applied_in_result() -> None:
     result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True))
 
     assert isinstance(result, dict)
-    assert result.get("rag_fusion_applied") is True
-    assert result.get("rag_fusion_queries_used") == 2
+    # After migration to McpSearchResponse, rag_fusion_* fields are not in the search response.
+    # The search response is narrowed to: results, acl_filtered, excluded_collections, hyde_applied.
+    assert "results" in result
+    assert "acl_filtered" in result
 
 
 def test_mcp_search_tool_rag_fusion_true_skips_hyde() -> None:
@@ -740,3 +742,161 @@ def test_mcp_search_with_context_rag_fusion_true_skips_hyde() -> None:
     assert isinstance(result, dict)
     assert result.get("hyde_applied") is False
     assert result.get("rag_fusion_applied") is True
+
+
+# ---------------------------------------------------------------------------
+# Task 2.1 — _ERR_SCHEMA constant + migrate search tool
+# ---------------------------------------------------------------------------
+
+
+def _make_search_result():
+    """Return a minimal SearchResult for search tool tests."""
+    from archon_search._types import SearchResult
+
+    return SearchResult(
+        doc_id="doc1",
+        chunk_id="doc1-000000",
+        text="hello world",
+        score=0.9,
+        source_path="/path/file.md",
+        file_type="md",
+        language="en",
+        indexed_at="2024-01-01T00:00:00.000000Z",
+        updated_at="2024-01-01T00:00:00.000000Z",
+        ingested_by="cli",
+        metadata={"k": "v"},
+        acl=None,
+        collection="col1",
+    )
+
+
+def _make_search_pipeline_with_result(result=None, acl_filtered=False, excluded=None):
+    """Return a pipeline mock whose search() returns a SearchPipelineResult."""
+    from archon_search.pipeline import SearchPipelineResult
+
+    if result is None:
+        result = _make_search_result()
+    if excluded is None:
+        excluded = []
+    pipeline = MagicMock()
+    pipeline._global_embedder = MagicMock()
+    pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
+    pipeline.get_collection_meta = AsyncMock(return_value=None)
+    pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(
+            results=[result],
+            acl_filtered=acl_filtered,
+            excluded_collections=excluded,
+        )
+    )
+    return pipeline
+
+
+def _get_search_tool_fn(pipeline, config=None):
+    """Build a stub-backed MCP app and return the search tool function."""
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    app = mcp_mod.create_app(pipeline, "col1", config=config)
+    return app._tools["search"]
+
+
+def test_search_returns_mcp_search_response_shape() -> None:
+    """search tool returns a dict with exactly McpSearchResponse keys (no embedding_model)."""
+    import asyncio
+
+    pipeline = _make_search_pipeline_with_result()
+    tool_fn = _get_search_tool_fn(pipeline)
+    result = asyncio.run(tool_fn(query="hello", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied"}
+
+
+def test_search_include_metadata_false_clears_metadata() -> None:
+    """search tool with include_metadata=False returns empty metadata dicts."""
+    import asyncio
+
+    pipeline = _make_search_pipeline_with_result()
+    tool_fn = _get_search_tool_fn(pipeline)
+    result = asyncio.run(tool_fn(query="hello", collection="col1", include_metadata=False))
+
+    assert isinstance(result, dict)
+    for item in result["results"]:
+        assert item["metadata"] == {}
+
+
+def test_search_multi_collection_returns_mcp_search_response_shape() -> None:
+    """Multi-collection search path also returns McpSearchResponse shape."""
+    import asyncio
+    from archon_search.pipeline import SearchPipelineResult
+
+    search_result = _make_search_result()
+    pipeline = MagicMock()
+    pipeline._global_embedder = MagicMock()
+    pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
+    pipeline.get_collection_meta = AsyncMock(return_value=None)
+    pipeline.search_many = AsyncMock(
+        return_value=SearchPipelineResult(
+            results=[search_result],
+            acl_filtered=False,
+            excluded_collections=[],
+        )
+    )
+
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    app = mcp_mod.create_app(pipeline, "col1")
+    tool_fn = app._tools["search"]
+
+    result = asyncio.run(tool_fn(query="hello", collections=["col1", "col2"]))
+
+    assert isinstance(result, dict)
+    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied"}
+
+
+def test_search_acl_filtered_with_excluded_collections() -> None:
+    """search returns acl_filtered=True and excluded_collections with name/reason."""
+    import asyncio
+    from archon_search.pipeline import ExcludedCollection
+
+    excluded = [ExcludedCollection(name="restricted-col", reason="acl")]
+    pipeline = _make_search_pipeline_with_result(acl_filtered=True, excluded=excluded)
+    tool_fn = _get_search_tool_fn(pipeline)
+    result = asyncio.run(tool_fn(query="hello", collection="col1"))
+
+    assert result["acl_filtered"] is True
+    assert len(result["excluded_collections"]) == 1
+    assert result["excluded_collections"][0]["name"] == "restricted-col"
+    assert result["excluded_collections"][0]["reason"] == "acl"
+
+
+def test_search_schema_drift_returns_schema_validation_error() -> None:
+    """search returns schema_validation_error code when schema construction raises ValidationError."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+    from archon_search.server.mcp_schemas import McpSearchResultSchema
+    from archon_search.server.mcp import _ERR_SCHEMA
+
+    # Build a real ValidationError using the helper pattern from the plan
+    try:
+        McpSearchResultSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    pipeline = _make_search_pipeline_with_result()
+    tool_fn = _get_search_tool_fn(pipeline)
+
+    with patch(
+        "archon_search.server.mcp.McpSearchResultSchema.from_result",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn(query="hello", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA

@@ -236,7 +236,7 @@ All annotations keep their `dict[str, Any]` / `list[dict[str, Any]]` form (see F
 > **Releasable**: each task below is independently releasable after Phase 1 is complete; all Phase 1 tasks must be done first
 
 #### Task 2.1 — `_ERR_SCHEMA` constant + migrate `search` tool
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Add `_ERR_SCHEMA = "schema_validation_error"` at module level, near the existing error-code usage pattern
