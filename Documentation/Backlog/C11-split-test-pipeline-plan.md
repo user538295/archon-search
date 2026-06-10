@@ -214,7 +214,7 @@ Edge case to verify: `test_store_has_vector_index_true_for_normal_collection` (l
 > **Releasable**: after Task 3.1, `tests/test_pipeline.py` is gone and the full suite uses the split files exclusively.
 
 #### Task 3.1 — Delete `tests/test_pipeline.py`
-- [ ] **File**: `tests/test_pipeline.py` (deleted)
+- [x] **File**: `tests/test_pipeline.py` (deleted)
 - **Depends on**: Task 2.1, Task 2.2, Task 2.3 (all three files must be complete and passing before deletion)
 - **Description**:
   - Confirm the sum check passed in Task 2.3 (all `BASELINE_COUNT` tests accounted for across the three split files).
