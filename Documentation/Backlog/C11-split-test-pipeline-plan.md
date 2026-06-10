@@ -155,7 +155,7 @@ Edge case to verify: `test_store_has_vector_index_true_for_normal_collection` (l
 > **Note on locally-defined fixtures**: `tests/test_pipeline.py` may contain `@pytest.fixture`-decorated functions that are defined locally (not in `tests/conftest.py`) and used only by tests in that file. These are distinct from the plain helper functions in `conftest.py`. When moving tests, carry any `@pytest.fixture` functions they depend on into the same split file. Run `grep -n '^@pytest.fixture' tests/test_pipeline.py` before splitting to inventory these.
 
 #### Task 2.1 — Create `tests/pipeline/test_pipeline_ingest.py`
-- [ ] **File**: `tests/pipeline/test_pipeline_ingest.py`
+- [x] **File**: `tests/pipeline/test_pipeline_ingest.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Apply the assignment rules to identify all ingest tests. Ingest group covers: `ingest_file`, `ingest_directory`, format handling, chunking, centroid computation, language detection during ingest, PDF/image/markdown format-specific ingest paths, recompute_collection_meta, and tests of the pipeline factory wiring.
