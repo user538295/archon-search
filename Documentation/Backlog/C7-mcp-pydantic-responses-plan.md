@@ -378,7 +378,7 @@ All annotations keep their `dict[str, Any]` / `list[dict[str, Any]]` form (see F
 > **Releasable**: after this phase, the narrowed MCP contracts are recorded and clients are informed
 
 #### Task 3.1 — `BREAKING.md` entries for field-narrowing tools
-- [ ] **File**: `BREAKING.md`
+- [x] **File**: `BREAKING.md`
 - **Depends on**: Tasks 2.5, 2.6, 2.7
 - **Description**:
   - Append entries for the five tools that narrow their response shapes relative to the current `asdict()` output. Format: same as existing BREAKING.md entries (date, tool name, change description, migration path).

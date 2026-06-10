@@ -8,6 +8,64 @@
 
 ## Changelog
 
+### [next release] — C7 MCP Pydantic responses: field-narrowing on collection and context tools
+
+**Surface**: MCP tools `list_collections`, `get_collections_meta`, `get_collection_meta`, `update_collection`, `search_with_context`.
+
+All five tools previously returned raw `dataclasses.asdict()` payloads. They now validate return values through explicit Pydantic schemas before serialization. This removes internal/transient fields that were never part of the public contract and renames one field for consistency.
+
+---
+
+**`list_collections` — removed fields + field rename**:
+- Removed from every item in the returned list: `centroid_sum`, `mutations_since_recompute`, `needs_recompute`, `described_at_doc_count`, `needs_reindex`, `reindex_job_id`, `namespace`.
+- Field **renamed**: `active_embedding_model` → `embedding_model`. Clients that read `active_embedding_model` will receive `undefined`/`null` after this change — update to read `embedding_model`.
+- Fields `centroid` and `description_embedding` were already stripped before C7; that behaviour is unchanged.
+
+**Migration**: remove any references to the seven removed fields from client code. Replace `active_embedding_model` with `embedding_model`.
+
+---
+
+**`get_collections_meta` — removed fields + field rename + `description_embedding` is always present**:
+- Same removals as `list_collections` above (`centroid_sum`, `mutations_since_recompute`, `needs_recompute`, `described_at_doc_count`, `needs_reindex`, `reindex_job_id`, `namespace`).
+- Field **renamed**: `active_embedding_model` → `embedding_model`.
+- `description_embedding` was previously absent when `include_description_embedding=false` (the default). It is now always present in the schema, serialized as `null` when not included. Strict-schema clients that reject unknown or null-valued fields must add `description_embedding: list[float] | null` to their type stubs.
+
+**Migration**: replace `active_embedding_model` with `embedding_model`. Tolerate `description_embedding: null` in the default case, or explicitly request it with `include_description_embedding: true`.
+
+---
+
+**`get_collection_meta` — removed fields + field rename**:
+- Removed: `centroid`, `centroid_sum`, `mutations_since_recompute`, `needs_recompute`, `described_at_doc_count`, `needs_reindex`, `reindex_job_id`, `namespace`.
+- Field **renamed**: `active_embedding_model` → `embedding_model`.
+- Previously `centroid` (a raw float vector) was included in the response. It is now absent entirely.
+- `description_embedding` was added in B4 to this tool's response. It is now **removed**: `get_collection_meta` uses `CollectionDetailSchema`, which does not include this field. Clients that were reading `description_embedding` from `get_collection_meta` must switch to `get_collections_meta` with `include_description_embedding: true`.
+
+**Migration**: replace `active_embedding_model` with `embedding_model`. Remove references to `centroid` and the internal fields listed above. If you need `description_embedding`, use `get_collections_meta` instead.
+
+---
+
+**`update_collection` — removed fields + field rename**:
+- Same removals and rename as `get_collection_meta` above.
+
+**Migration**: same as `get_collection_meta`.
+
+---
+
+**`search_with_context` — context chunk fields removed**:
+- Context chunks in `context_before` and `context_after` previously included `start_offset`, `end_offset`, and `custom_score` (only `vector` was stripped in A1). These three transient fields are now excluded from all context chunk items.
+- `language` is retained — it was present before C7 and remains in the schema. This is NOT a breaking change.
+
+**Migration**: remove any client-side reads of `start_offset`, `end_offset`, and `custom_score` from context chunk items.
+
+---
+
+**New error code for schema drift**:
+- All 11 MCP tools now return `{"error": "<message>", "code": "schema_validation_error"}` when a Pydantic schema validation error is raised during response construction (e.g., a domain dataclass field was added without updating the MCP schema). This replaces a potential silent shape change or unhandled exception.
+
+**Migration**: add handling for `code == "schema_validation_error"` if your client distinguishes error codes.
+
+**Announced in**: this release.
+
 ### [next release] — C5 RAG Fusion: additive fields on MCP tool return dicts
 
 **Surface**: MCP tools `search`, `search_with_context`, and `explain`.
