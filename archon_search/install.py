@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from shutil import rmtree
 from typing import TYPE_CHECKING
@@ -130,6 +131,23 @@ def _acquire_install_lock() -> Iterator[None]:
 
 _SEARCH_PACKAGES = ["lancedb", "fastembed", "docling", "markitdown", "trafilatura", "chonkie", "fastmcp"]
 _WAIT_FOR_SERVICE_TIMEOUT = 60
+
+
+# ---------------------------------------------------------------------------
+# WizardFeatures dataclass (Task C8-1.1)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WizardFeatures:
+    """Carries optional-feature choices from wizard prompt functions to config writer."""
+
+    install_code_extra: bool = False
+    disable_reranker: bool = False
+    enable_watch: bool = False
+    enable_telemetry: bool = False
+    eager_load_embedders: bool = False
+    routing_strategy: str = "centroid"
+    log_format: str = "text"
 
 
 def _write_profile_config(
