@@ -189,7 +189,7 @@ Edge case to verify: `test_store_has_vector_index_true_for_normal_collection` (l
   - Checkpoint: `uv run pytest tests/pipeline/test_pipeline_search.py -n0 --no-cov -x`
 
 #### Task 2.3 — Create `tests/pipeline/test_pipeline_multi.py`
-- [ ] **File**: `tests/pipeline/test_pipeline_multi.py`
+- [x] **File**: `tests/pipeline/test_pipeline_multi.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Identify all multi-collection tests. Multi group covers: `pipeline.search_many()` fanout behaviour, `_fuse_rag_fusion_results` unit tests, RAG fusion integration (search-path), explain multi-collection, and cross-collection assertions.
