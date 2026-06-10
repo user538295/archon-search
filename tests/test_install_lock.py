@@ -12,6 +12,8 @@ import pytest
 
 from archon_search.install import InstallLockError, _acquire_install_lock, _install_lock_path
 
+pytestmark = pytest.mark.xdist_group("install")
+
 
 # ---------------------------------------------------------------------------
 # Helpers

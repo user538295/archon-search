@@ -12,6 +12,8 @@ import pytest
 from archon_search.install import InstallError, SearchInstaller
 from archon_search.platform.types import GpuType
 
+pytestmark = pytest.mark.xdist_group("install")
+
 
 # ---------------------------------------------------------------------------
 # Shared mock helper

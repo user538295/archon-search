@@ -85,6 +85,8 @@ Files requiring the marker (derived from `grep -rl 'sys\.modules.*fastmcp' tests
 - `tests/server/test_mcp_update_collection.py`
 - `tests/server/test_mcp_telemetry.py`
 
+**Corrective addition during Task 2.1 measurement**: `pytestmark = pytest.mark.xdist_group("install")` was also added to `tests/test_install.py`, `tests/test_install_run.py`, and `tests/test_install_lock.py`. These three files compete on the real `~/.archon-search/.install.lock` filesystem lock and caused 4 failures during the first parallel measurement run. This was not identified in the original architecture because the install lock is a real filesystem resource (not a `sys.modules` mutation), but the same grouping fix applies.
+
 No new modules, config keys, or API surface changes.
 
 ---
@@ -137,7 +139,7 @@ No new modules, config keys, or API surface changes.
 > **Releasable**: after Task 2.1, the measured wall time is documented and ready for the final verification task.
 
 #### Task 2.1 — Measure and record wall time
-- [ ] **File**: `Documentation/Backlog/C12-dist-load-session-store-brief.md`
+- [x] **File**: `Documentation/Backlog/C12-dist-load-session-store-brief.md`
 - **Depends on**: Task 1.3 (all three changes applied, suite passing)
 - **Description**:
   - Run `time uv run pytest --no-cov` three times and record the wall times

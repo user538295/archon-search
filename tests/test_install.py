@@ -11,6 +11,8 @@ import pytest
 
 from archon_search.platform.types import GpuType
 
+pytestmark = pytest.mark.xdist_group("install")
+
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
