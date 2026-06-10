@@ -172,7 +172,7 @@ Edge case to verify: `test_store_has_vector_index_true_for_normal_collection` (l
   - Checkpoint: `uv run pytest tests/pipeline/test_pipeline_ingest.py -n0 --no-cov -x`
 
 #### Task 2.2 — Create `tests/pipeline/test_pipeline_search.py`
-- [ ] **File**: `tests/pipeline/test_pipeline_search.py`
+- [x] **File**: `tests/pipeline/test_pipeline_search.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Identify all search tests. Search group covers: single-collection `pipeline.search()`, `pipeline.search_with_context()`, `pipeline.explain()`, eval-trace tests, ACL filtering in single-collection search, filter-plus-ACL warning behaviour, result shape verification, namespace-scoped lookups, document list/delete ops, embedder/reranker warmth checks, and embedding-model awareness tests that call search.
