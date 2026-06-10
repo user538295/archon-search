@@ -9,6 +9,8 @@ from starlette.testclient import TestClient
 
 from archon_search.embedder_cache import EmbedderCache
 
+pytestmark = pytest.mark.xdist_group("mcp")
+
 VALID_KEY = "ab" * 32  # 64-char hex
 
 # Ensure fastmcp resolves to the real mcp.server.fastmcp so mcp.py can be imported

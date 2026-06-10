@@ -28,6 +28,8 @@ from archon_search.telemetry.entry import DOCUMENTED_SCHEMA_FIELDS, TelemetryEnt
 from archon_search.telemetry.pruner import Pruner
 from archon_search.telemetry.writer import TelemetryWriter
 
+pytestmark = pytest.mark.xdist_group("mcp")
+
 # ---------------------------------------------------------------------------
 # Privacy sentinel — hyphens ensure it cannot collide with hex query_id or
 # filesystem-path-derived doc_id values.

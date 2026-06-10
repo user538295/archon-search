@@ -119,7 +119,7 @@ No new modules, config keys, or API surface changes.
   - Checkpoint: `grep 'dist=' pyproject.toml` — confirms `--dist=loadgroup` is present and `--dist=loadfile` is absent
 
 #### Task 1.3 — Add `xdist_group("mcp")` marker to all 16 affected files
-- [ ] **Files**: all 16 listed in the Architecture section above
+- [x] **Files**: all 16 listed in the Architecture section above
 - **Depends on**: Task 1.1, Task 1.2
 - **Description**:
   - Add `pytestmark = pytest.mark.xdist_group("mcp")` as a module-level assignment immediately after the module docstring / existing imports (before the first class or test definition) in each of the 16 files

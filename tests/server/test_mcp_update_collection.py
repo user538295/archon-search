@@ -22,6 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.xdist_group("mcp")
+
 # ---------------------------------------------------------------------------
 # FastMCP stub — same pattern as test_mcp_embedder_dispatch.py
 # ---------------------------------------------------------------------------

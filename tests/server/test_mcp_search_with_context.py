@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.xdist_group("mcp")
+
 # Resolve fastmcp: prefer the real mcp.server.fastmcp (shipped with the
 # mcp package), fall back to a minimal stub. Avoid clobbering an existing
 # entry — test_mcp_auth.py also relies on the real implementation being

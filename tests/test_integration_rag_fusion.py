@@ -33,7 +33,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.store import SearchStore
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
 
 # ---------------------------------------------------------------------------
 # Constants

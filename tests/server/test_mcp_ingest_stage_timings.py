@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.xdist_group("mcp")
+
 # Stub fastmcp so mcp.py can be imported without the real package.
 if "fastmcp" not in sys.modules:
     _fastmcp = types.ModuleType("fastmcp")

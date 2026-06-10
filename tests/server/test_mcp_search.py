@@ -20,6 +20,8 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+pytestmark = pytest.mark.xdist_group("mcp")
+
 # Resolve fastmcp the same way test_mcp_search_with_context.py does.
 if "fastmcp" not in sys.modules:
     try:

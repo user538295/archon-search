@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+pytestmark = pytest.mark.xdist_group("mcp")
+
 
 # ---------------------------------------------------------------------------
 # fastmcp stub — must support tool() decorator and custom_route() so

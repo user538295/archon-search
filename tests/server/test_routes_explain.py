@@ -24,6 +24,8 @@ from archon_search.server.app import create_app
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord
 
+pytestmark = pytest.mark.xdist_group("mcp")
+
 
 # ---------------------------------------------------------------------------
 # Mock backends (copied from tests/test_pipeline_explain.py)
