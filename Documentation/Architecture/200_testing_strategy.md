@@ -1,8 +1,8 @@
 **Purpose**: Define the test pyramid for `archon-search`, the markers that gate each layer, the coverage discipline, and the role of the evaluation harness as the regression gate for retrieval quality.
 **Audience**: Contributors writing tests, reviewers gating PRs, and CI maintainers.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
-**Next review**: 2026-08-20
+**Last reviewed**: 2026-06-10
+**Next review**: 2026-09-10
 
 # Testing Strategy
 
@@ -21,7 +21,7 @@ Tests in `archon-search` are split across four pytest markers plus a default (un
 ```mermaid
 flowchart TB
   subgraph default[Default run — &#40;not live and not eval and not benchmark and not integration and not live_eval&#41;]
-    U[Unit tests<br/>tests/test_*.py<br/>stubs from tests/_search_stubs.py]
+    U[Unit tests<br/>tests/**/test_*.py<br/>stubs from tests/_search_stubs.py]
   end
   subgraph gated[Marker-gated]
     I[integration<br/>real components<br/>local infra]
@@ -42,7 +42,7 @@ flowchart TB
 - Test infra: `tests/conftest.py` installs ML stubs at module import time via `_search_stubs.install_stubs()`. It also injects `ARCHON_SEARCH_API_KEY = "0" * 64` so `create_app()` always sees a known key.
 - Serial escape hatch: `uv run pytest -n0` produces identical results in serial mode. Use `-n0 -x` for fail-fast isolation (xdist workers continue until their current test finishes) and `-n0 -s` for stdout passthrough (suppressed by xdist).
 - Coverage combining: `pytest-cov` natively supports xdist. Workers write `.coverage.workerN` files which the main process combines before applying `--cov-fail-under=85`. This applies to single-invocation runs only; CI requires `-n0` to avoid interference with multi-step `--cov-append` accumulation.
-- Adding a test: place it under `tests/`, do not add a marker — the default selector will pick it up.
+- Adding a test: place it under `tests/`, do not add a marker — the default selector will pick it up. Pipeline tests live under `tests/pipeline/` (`test_pipeline_ingest.py`, `test_pipeline_search.py`, `test_pipeline_multi.py`); shared helpers are in `tests/pipeline/conftest.py`.
 
 ### `integration` — `uv run pytest -m integration`
 

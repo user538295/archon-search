@@ -1,7 +1,7 @@
 # C11 — Split test_pipeline.py into Subfolder
 **Purpose**: Reduce full test suite wall time from ~7–8 min to ≤150s by giving each of three pipeline test files its own xdist worker instead of one monolithic file pinning the critical path.
 **Audience**: Developers iterating locally and local CI pipelines waiting on test feedback.
-**Status**: To Do
+**Status**: Done
 
 ---
 
@@ -234,7 +234,7 @@ Edge case to verify: `test_store_has_vector_index_true_for_normal_collection` (l
 ### Final Phase — Verification & Documentation
 
 #### Task F.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task) + `Documentation/Architecture/200_testing_strategy.md`
+- [x] **File**: N/A (agent task) + `Documentation/Architecture/200_testing_strategy.md`
 - **Depends on**: Task 3.1
 - **Description**:
   - Spawn an agent to discover all documentation in the project that references `tests/test_pipeline.py`, the glob pattern `tests/test_*.py`, or the 'Adding a test' guidance, and update every file whose content is affected. The agent must:
@@ -244,13 +244,13 @@ Edge case to verify: `test_store_has_vector_index_true_for_normal_collection` (l
   - Verify all acceptance criteria below are met before marking this task complete.
 - **Releasable**: after this task, the feature is fully verified and all documentation reflects the delivered implementation.
 - **Acceptance criteria** (must all pass):
-  - [ ] `uv run pytest tests/pipeline/ --collect-only -q | tail -1` shows exactly `BASELINE_COUNT` collected tests (the count recorded in Task 1.1 from `uv run pytest tests/test_pipeline.py --collect-only -q | tail -1`).
-  - [ ] `uv run pytest --no-cov` exits 0 (all tests pass, no failures).
-  - [ ] `uv run pytest` exits 0 (coverage gate ≥85% met).
-  - [ ] `uv run pytest tests/pipeline/ -n0 --no-cov` exits 0 (CI serial mode passes).
-  - [ ] `uv run pytest tests/pipeline/ --collect-only -q | awk -F'::' '{print $NF}' | sort | uniq -d` produces empty output (no cross-file duplicate test function names).
-  - [ ] Per-file serial time check: `time uv run pytest tests/pipeline/test_pipeline_ingest.py -n0 --no-cov` should complete in ≤150s on a ≥4-core local machine. (Full-suite parallel wall time is local-dev only; CI uses `-n0` and is unaffected by this split.)
-  - [ ] `tests/test_pipeline.py` no longer exists on disk.
-  - [ ] `Documentation/Architecture/200_testing_strategy.md` updated: glob pattern and 'Adding a test' section reference `tests/pipeline/`.
+  - [x] `uv run pytest tests/pipeline/ --collect-only -q | tail -1` shows exactly `BASELINE_COUNT` collected tests (the count recorded in Task 1.1 from `uv run pytest tests/test_pipeline.py --collect-only -q | tail -1`).
+  - [x] `uv run pytest --no-cov` exits 0 (all tests pass, no failures).
+  - [x] `uv run pytest` exits 0 (coverage gate ≥85% met).
+  - [x] `uv run pytest tests/pipeline/ -n0 --no-cov` exits 0 (CI serial mode passes).
+  - [x] `uv run pytest tests/pipeline/ --collect-only -q | awk -F'::' '{print $NF}' | sort | uniq -d` produces empty output (no cross-file duplicate test function names).
+  - [x] Per-file serial time check: `time uv run pytest tests/pipeline/test_pipeline_ingest.py -n0 --no-cov` should complete in ≤150s on a ≥4-core local machine. (Full-suite parallel wall time is local-dev only; CI uses `-n0` and is unaffected by this split.)
+  - [x] `tests/test_pipeline.py` no longer exists on disk.
+  - [x] `Documentation/Architecture/200_testing_strategy.md` updated: glob pattern and 'Adding a test' section reference `tests/pipeline/`.
 - **Tests (TDD)**: N/A — this is a verification and documentation task.
 - **Checkpoint**: manually confirm every acceptance criterion above is checked.
