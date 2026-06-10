@@ -1,7 +1,7 @@
 # C7 — MCP Responses Behind Pydantic Models
 **Purpose**: Replace all `asdict()` serialization in MCP tools with Pydantic-validated schemas, making dataclass shape changes fail loudly instead of silently drifting the MCP contract.
 **Audience**: Backend developer implementing the feature.
-**Status**: To Do
+**Status**: Done
 
 ---
 
@@ -396,7 +396,7 @@ All annotations keep their `dict[str, Any]` / `list[dict[str, Any]]` form (see F
 ### Final Phase — Verification & Documentation
 
 #### Task F.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, API docs, architecture docs, user guides, CHANGELOG) and update every file whose content is affected by the changes delivered in this plan. The agent must not update docs that are unrelated.

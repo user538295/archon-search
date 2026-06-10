@@ -13,7 +13,7 @@
 
 1. **Same auth as REST.** Every MCP request carries `Authorization: Bearer <token>`. The `/health` route is registered on the FastMCP app at `mcp.py:230` (via `@app.custom_route`); the exemption from `APIKeyMiddleware` is shared with REST and defined by `_EXEMPT_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}` in `archon_search/server/middleware_auth.py:16`.
 2. **Ten tools, named exactly as in `mcp.py`.** Adding or renaming a tool requires a `BREAKING.md` entry per project policy (see `CLAUDE.md` and `Documentation/Architecture/520_api_design_and_contracts.md`). Tool names are not symmetric with REST routes.
-3. **Responses are dicts, not validated.** Today MCP tools return `dataclasses.asdict(...)` payloads with no Pydantic gate (`mcp.py` uses `asdict(r)` throughout). This is tracked as `API-4` in `Documentation/Architecture/530_technical_debt_refactoring_roadmap.md` and as item C7 in `Documentation/Backlog/03_world_class_roadmap.md`; clients should expect best-effort field stability and watch `BREAKING.md`.
+3. **Responses are Pydantic-validated (C7).** All 11 MCP tools validate return values through explicit Pydantic schemas defined in `archon_search/server/mcp_schemas.py` (`extra='forbid'`) before serializing. Schema drift surfaces as `{"error": "...", "code": "schema_validation_error"}`. Debt item `API-4` is resolved. Internal/transient fields (`vector`, `start_offset`, `end_offset`, `custom_score`, `centroid`, `centroid_sum`, `needs_recompute`, `needs_reindex`, `reindex_job_id`, `namespace`, `mutations_since_recompute`, `described_at_doc_count`) are excluded from all responses. See `BREAKING.md` C7 entries for the five tools that narrowed their shapes.
 4. **Errors are in-band.** Tool errors return `{"error": "...", "code": "..."}` as the tool result at HTTP 200, not an HTTP error. See `06_error_handling.md`.
 
 ## The ten tools
@@ -25,15 +25,15 @@ Verified against `archon_search/server/mcp.py`. The `collection` argument defaul
 | `search` | `query: str`, `collection?: str` | `{"results": [SearchResult dict ...], "acl_filtered": bool}` |
 | `search_with_context` | `query: str`, `collection?: str`, `context_window: int = 1` | `list[{result, context_before, context_after}]` |
 | `explain` | `query: str`, `collection?: str`, `top_k: int = 5`, `rerank: bool = True` | `ExplainResponse` dict (`{rerank, routing, collection, acl_filtered, results, near_misses}`) — same structure as REST `POST /explain` (serialized via `response.model_dump(mode="json", exclude_none=False)`) |
-| `ingest_file` | `path: str`, `collection?: str` | `asdict(IngestResult)` dict. On unsafe `path`: `{"error": <phrase>, "code": "path_unsafe"}`; when a reindex holds the lock: `{"error": ..., "code": "store_busy"}`. |
-| `ingest_directory` | `path: str`, `glob_pattern: str = "**/*"`, `collection?: str` | `list[dict]` (`asdict(IngestResult)` per entry); progress reported via `ctx.report_progress`. On unsafe `path`: `{"error": <phrase>, "code": "path_unsafe"}`; when a reindex holds the lock: `{"error": ..., "code": "store_busy"}`. |
-| `list_collections` | — | `list[dict]` (per-collection `asdict(CollectionMeta)` with the `centroid` field popped) |
-| `get_collections_meta` | — | `list[dict]` (full `asdict(CollectionMeta)`, including `centroid`) |
-| `get_collection_meta` | `name: str` | `asdict(CollectionMeta)` dict, or `{"error": "Collection 'X' not found", "code": "not_found"}` (the literal uses `name!r`, so quote style follows `repr`) |
-| `list_documents` | `collection?: str`, `limit: int = 100` | `list[doc dict]` |
-| `delete_document` | `doc_id: str`, `collection?: str` | `{"deleted": int}` |
+| `ingest_file` | `path: str`, `collection?: str` | `IngestResultSchema dict` — fields: `doc_id`, `chunks_created`, `status`, `error` (`needs_recompute` excluded). On unsafe `path`: `{"error": <phrase>, "code": "path_unsafe"}`; when a reindex holds the lock: `{"error": ..., "code": "store_busy"}`. |
+| `ingest_directory` | `path: str`, `glob_pattern: str = "**/*"`, `collection?: str` | `list[IngestResultSchema dict]`; progress reported via `ctx.report_progress`. On unsafe `path`: `{"error": <phrase>, "code": "path_unsafe"}`; when a reindex holds the lock: `{"error": ..., "code": "store_busy"}`. |
+| `list_collections` | — | `list[CollectionListItemSchema dict]` — public fields: `name`, `description`, `doc_count`, `chunk_count`, `last_indexed`, `last_described`, `embedding_model`, `pending_embedding_model`. All internal fields stripped. See `BREAKING.md` C7 entry. |
+| `get_collections_meta` | `include_description_embedding: bool = False` | `list[CollectionMetaMcpSchema dict]` — same as `list_collections` plus `description_embedding: list[float] \| null` (always present; `null` when not requested). See `BREAKING.md` C7 entry. |
+| `get_collection_meta` | `name: str` | `CollectionDetailSchema dict` — same public fields as `list_collections` (no `description_embedding`). Or `{"error": "Collection 'X' not found", "code": "not_found"}`. See `BREAKING.md` C7 entry. |
+| `list_documents` | `collection?: str`, `limit: int = 100` | `list[DocumentInfoSchema dict]` — fields: `doc_id`, `source_path`, `chunk_count`, `indexed_at` |
+| `delete_document` | `doc_id: str`, `collection?: str` | `DeleteDocumentSchema dict` — `{"deleted": int}` |
 
-Each `SearchResult` dict has the shape `{doc_id, chunk_id, text, score, source_path, acl}` — six fields, mirroring the dataclass at `archon_search/_types.py:25`. The REST `SearchResultSchema` (`routes_search.py:39`) drops the `acl` field in `from_result`; MCP returns it unfiltered because it calls `asdict(r)` directly (`mcp.py:59`).
+Each `McpSearchResultSchema` dict has the fields `{doc_id, chunk_id, text, score, source_path, file_type, language, indexed_at, updated_at, ingested_by, metadata, acl, collection}` — mirroring the `SearchResult` dataclass but validated and serialized via Pydantic (`mcp_schemas.py`). The REST `SearchResultSchema` (`routes_search.py`) drops the `acl` and `collection` fields; MCP retains them in the schema. Context chunks in `search_with_context` use `ContextChunkSchema`, which excludes `start_offset`, `end_offset`, and `custom_score` (see `BREAKING.md` C7 entry).
 
 ## Difference vs REST
 
@@ -117,5 +117,5 @@ A `200` response with a `result.tools` array of ten entries confirms the MCP sur
 - [`06_error_handling.md`](./06_error_handling.md) — `McpErrorResponse` shape and error codes.
 - [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) — full surface.
 - [`../Architecture/520_api_design_and_contracts.md`](../Architecture/520_api_design_and_contracts.md) — design rules for both surfaces.
-- [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) — `API-4` (MCP responses not Pydantic-validated).
-- [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) — roadmap item C7 (planned fix).
+- [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) — `API-4` (resolved in C7; MCP responses now Pydantic-validated).
+- [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) — roadmap item C7 (completed).
