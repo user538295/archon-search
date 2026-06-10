@@ -1717,3 +1717,133 @@ def test_update_collection_schema_drift_returns_schema_validation_error() -> Non
 
     assert isinstance(result, dict)
     assert result.get("code") == _ERR_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# Task 2.7 — Migrate list_documents and delete_document tools
+# ---------------------------------------------------------------------------
+
+
+def _make_document_info():
+    """Return a minimal DocumentInfo for list_documents tests."""
+    from archon_search._types import DocumentInfo
+
+    return DocumentInfo(
+        doc_id="doc1",
+        source_path="/path/file.md",
+        chunk_count=5,
+        indexed_at="2024-01-01T00:00:00.000000Z",
+    )
+
+
+def _get_list_documents_tool_fn(doc_infos):
+    """Build a stub-backed MCP app and return the list_documents tool function."""
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    pipeline = MagicMock()
+    pipeline.list_documents = AsyncMock(return_value=doc_infos)
+    app = mcp_mod.create_app(pipeline, "col1")
+    return app._tools["list_documents"]
+
+
+def _get_delete_document_tool_fn_v2(delete_return=1, delete_side_effect=None):
+    """Build a stub-backed MCP app and return the delete_document tool function."""
+    import importlib
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    pipeline = MagicMock()
+    pipeline.delete_document = AsyncMock(
+        return_value=delete_return if delete_side_effect is None else None,
+        side_effect=delete_side_effect,
+    )
+    app = mcp_mod.create_app(pipeline, "col1")
+    return app._tools["delete_document"]
+
+
+def test_list_documents_returns_document_info_schema_shape() -> None:
+    """list_documents returns list of dicts with DocumentInfoSchema fields."""
+    import asyncio
+
+    doc = _make_document_info()
+    tool_fn = _get_list_documents_tool_fn([doc])
+
+    result = asyncio.run(tool_fn(collection="col1"))
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    item = result[0]
+    assert item["doc_id"] == "doc1"
+    assert item["source_path"] == "/path/file.md"
+    assert item["chunk_count"] == 5
+    assert item["indexed_at"] == "2024-01-01T00:00:00.000000Z"
+
+
+def test_delete_document_returns_delete_schema_shape() -> None:
+    """delete_document returns a dict with a 'deleted' key."""
+    import asyncio
+
+    tool_fn = _get_delete_document_tool_fn_v2(delete_return=3)
+
+    result = asyncio.run(tool_fn(doc_id="doc1", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert "deleted" in result
+    assert result["deleted"] == 3
+
+
+def test_list_documents_schema_drift_returns_schema_validation_error() -> None:
+    """list_documents returns schema_validation_error when from_result raises ValidationError."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+
+    from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import DocumentInfoSchema
+
+    try:
+        DocumentInfoSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    doc = _make_document_info()
+    tool_fn = _get_list_documents_tool_fn([doc])
+
+    with patch(
+        "archon_search.server.mcp.DocumentInfoSchema.from_result",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn(collection="col1"))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA
+
+
+def test_delete_document_schema_drift_returns_schema_validation_error() -> None:
+    """delete_document returns schema_validation_error when DeleteDocumentSchema raises ValidationError."""
+    import asyncio
+    from unittest.mock import patch
+
+    from pydantic import ValidationError
+
+    from archon_search.server.mcp import _ERR_SCHEMA
+    from archon_search.server.mcp_schemas import DeleteDocumentSchema
+
+    try:
+        DeleteDocumentSchema.model_validate({"bad": 1})
+    except ValidationError as e:
+        _fake_err = e
+
+    tool_fn = _get_delete_document_tool_fn_v2(delete_return=1)
+
+    with patch(
+        "archon_search.server.mcp.DeleteDocumentSchema",
+        side_effect=_fake_err,
+    ):
+        result = asyncio.run(tool_fn(doc_id="doc1", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == _ERR_SCHEMA

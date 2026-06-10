@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import ExitStack
-from dataclasses import asdict
 from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Annotated, Any, TypedDict
@@ -50,6 +49,8 @@ from archon_search.server.mcp_schemas import (
     CollectionListItemSchema,
     CollectionMetaMcpSchema,
     ContextChunkSchema,
+    DeleteDocumentSchema,
+    DocumentInfoSchema,
     ExcludedCollectionMcpSchema,
     IngestResultSchema,
     McpSearchResponse,
@@ -951,7 +952,10 @@ def create_app(
             results = await pipeline.list_documents(
                 collection or default_collection, limit
             )
-            return [asdict(r) for r in results]
+            try:
+                return [DocumentInfoSchema.from_result(r).model_dump(mode="json") for r in results]
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except Exception as exc:
             logger.exception("list_documents failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
@@ -969,7 +973,11 @@ def create_app(
                 doc_id, collection or default_collection,
                 namespace=namespace or DEFAULT_NAMESPACE,
             )
-            return {"deleted": count}
+            try:
+                schema = DeleteDocumentSchema(deleted=count)
+                return schema.model_dump(mode="json")
+            except ValidationError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except StoreBusyError as exc:
             logger.warning("delete_document store busy: %s", exc)
             return McpErrorResponse(error=str(exc), code="store_busy")
