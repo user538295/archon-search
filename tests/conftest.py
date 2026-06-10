@@ -37,14 +37,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Module-scoped store fixture — one LanceDB connection per test module to
-# avoid spawning a new Tokio thread pool for every test.
+# Session-scoped store fixture — one LanceDB connection per xdist worker session
+# to avoid spawning a new Tokio thread pool for every test module.
+# Under --dist=loadgroup each worker shares one SearchStore for its entire session.
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def connected_store(tmp_path_factory: pytest.TempPathFactory):  # type: ignore[no-untyped-def]
-    """One shared SearchStore per test module (sync connect/disconnect via asyncio.run).
+    """One shared SearchStore per xdist worker session (sync connect/disconnect via asyncio.run).
 
     LanceDB's Rust/Tokio runtime is independent of the Python asyncio event loop,
     so the connected store is safely reusable across test-function event loops.
