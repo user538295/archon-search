@@ -252,6 +252,45 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         _ensure_section("logging")
         doc["logging"]["format"] = features.log_format
 
+    # C15 Tier 1 deployment flags
+    if features.host is not None:
+        _ensure_section("server")
+        doc["server"]["host"] = features.host
+
+    if features.port is not None:
+        _ensure_section("server")
+        doc["server"]["port"] = features.port
+
+    if features.db_path is not None:
+        _ensure_section("database")
+        doc["database"]["db_path"] = features.db_path
+
+    if features.log_level is not None:
+        _ensure_section("logging")
+        doc["logging"]["level"] = features.log_level
+
+    if features.log_to_stderr:
+        _ensure_section("logging")
+        doc["logging"]["log_file"] = ""
+
+    if features.top_k is not None:
+        _ensure_section("database")
+        doc["database"]["top_k_return"] = features.top_k
+        doc["database"]["top_k_retrieve"] = max(15, 3 * features.top_k)
+
+    if features.telemetry_retention_days is not None and features.enable_telemetry:
+        _ensure_section("telemetry")
+        doc["telemetry"]["retention_days"] = features.telemetry_retention_days
+
+    # C15 Tier 2 AI query expansion flags
+    if features.enable_hyde:
+        _ensure_section("hyde")
+        doc["hyde"]["enabled"] = True
+
+    if features.enable_rag_fusion:
+        _ensure_section("rag_fusion")
+        doc["rag_fusion"]["enabled"] = True
+
 
 # ---------------------------------------------------------------------------
 # Hand-edit detection (Task C14-5.4)

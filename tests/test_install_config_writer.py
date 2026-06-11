@@ -318,6 +318,161 @@ class TestApplyWizardFeaturesToToml:
         doc_str = tomlkit.dumps(doc)
         assert "install_code_extra" not in doc_str
 
+    # --- Task C15-1.2 tests ---
+
+    def test_apply_host_writes_server_section(self) -> None:
+        """host='0.0.0.0' writes doc['server']['host'] = '0.0.0.0'."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(host="0.0.0.0"))
+        assert doc["server"]["host"] == "0.0.0.0"
+
+    def test_apply_port_writes_server_section(self) -> None:
+        """port=9000 writes doc['server']['port'] = 9000."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(port=9000))
+        assert doc["server"]["port"] == 9000
+
+    def test_apply_db_path_writes_database_section(self) -> None:
+        """db_path='~/custom' writes doc['database']['db_path'] = '~/custom'."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(db_path="~/custom"))
+        assert doc["database"]["db_path"] == "~/custom"
+
+    def test_apply_log_level_writes_logging_section(self) -> None:
+        """log_level='DEBUG' writes doc['logging']['level'] = 'DEBUG'."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(log_level="DEBUG"))
+        assert doc["logging"]["level"] == "DEBUG"
+
+    def test_apply_log_to_stderr_writes_log_file_empty(self) -> None:
+        """log_to_stderr=True writes doc['logging']['log_file'] = ''."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(log_to_stderr=True))
+        assert doc["logging"]["log_file"] == ""
+
+    def test_apply_log_to_stderr_false_does_not_write_log_file(self) -> None:
+        """log_to_stderr=False does not write log_file key."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(log_to_stderr=False))
+        # logging section may not exist, or if it does, log_file must not be in it
+        if "logging" in doc:
+            assert "log_file" not in doc["logging"]
+
+    def test_apply_top_k_writes_both_keys(self) -> None:
+        """top_k=10 writes top_k_return=10 and top_k_retrieve=30."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(top_k=10))
+        assert doc["database"]["top_k_return"] == 10
+        assert doc["database"]["top_k_retrieve"] == 30
+
+    def test_apply_top_k_1_sets_retrieve_to_15(self) -> None:
+        """top_k=1 writes top_k_retrieve=15 (max guard: max(15, 3*1)=15)."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(top_k=1))
+        assert doc["database"]["top_k_return"] == 1
+        assert doc["database"]["top_k_retrieve"] == 15
+
+    def test_apply_top_k_33_sets_retrieve_to_99(self) -> None:
+        """top_k=33 writes top_k_retrieve=99 (max(15, 3*33)=99)."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(top_k=33))
+        assert doc["database"]["top_k_return"] == 33
+        assert doc["database"]["top_k_retrieve"] == 99
+
+    def test_apply_top_k_none_does_not_write(self) -> None:
+        """top_k=None does not write any top_k keys."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(top_k=None))
+        if "database" in doc:
+            assert "top_k_return" not in doc["database"]
+            assert "top_k_retrieve" not in doc["database"]
+
+    def test_apply_telemetry_retention_with_telemetry_enabled(self) -> None:
+        """enable_telemetry=True + telemetry_retention_days=7 writes [telemetry].retention_days=7."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(
+            doc, WizardFeatures(enable_telemetry=True, telemetry_retention_days=7)
+        )
+        assert doc["telemetry"]["retention_days"] == 7
+
+    def test_apply_telemetry_retention_without_telemetry_skipped(self) -> None:
+        """telemetry_retention_days=7 without enable_telemetry does NOT write retention_days."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(
+            doc, WizardFeatures(enable_telemetry=False, telemetry_retention_days=7)
+        )
+        if "telemetry" in doc:
+            assert "retention_days" not in doc["telemetry"]
+
+    def test_apply_enable_hyde(self) -> None:
+        """enable_hyde=True writes doc['hyde']['enabled'] = True."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(enable_hyde=True))
+        assert doc["hyde"]["enabled"] is True
+
+    def test_apply_enable_rag_fusion(self) -> None:
+        """enable_rag_fusion=True writes doc['rag_fusion']['enabled'] = True."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(enable_rag_fusion=True))
+        assert doc["rag_fusion"]["enabled"] is True
+
+    def test_apply_all_new_fields_together(self) -> None:
+        """All new non-default fields set; assert all expected keys present in doc."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        features = WizardFeatures(
+            host="0.0.0.0",
+            port=9000,
+            db_path="~/custom",
+            log_level="WARNING",
+            log_to_stderr=True,
+            top_k=20,
+            enable_telemetry=True,
+            telemetry_retention_days=14,
+            enable_hyde=True,
+            enable_rag_fusion=True,
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["server"]["host"] == "0.0.0.0"
+        assert doc["server"]["port"] == 9000
+        assert doc["database"]["db_path"] == "~/custom"
+        assert doc["database"]["top_k_return"] == 20
+        assert doc["database"]["top_k_retrieve"] == 60
+        assert doc["logging"]["level"] == "WARNING"
+        assert doc["logging"]["log_file"] == ""
+        assert doc["telemetry"]["retention_days"] == 14
+        assert doc["hyde"]["enabled"] is True
+        assert doc["rag_fusion"]["enabled"] is True
+
 
 # ---------------------------------------------------------------------------
 # Task C8-2.2: extend _write_profile_config() and _profile_toml() with features

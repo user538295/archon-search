@@ -620,7 +620,9 @@ def test_run_prompts_multilingual_question(tmp_path: Path) -> None:
         patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
             install_code_extra=False, disable_reranker=False, enable_watch=False,
             enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy="centroid", log_format="text"
+            routing_strategy="centroid", log_format="text",
+            host=None, port=None, db_path=None, log_level=None, log_to_stderr=False,
+            top_k=None, telemetry_retention_days=None, enable_hyde=False, enable_rag_fusion=False,
         )),
         patch("archon_search.install._prompt_gpu_confirm", return_value=True),
         patch("builtins.input", return_value="y"),  # "Proceed?" prompt
@@ -655,7 +657,9 @@ def test_run_multilingual_flag_skips_prompt(tmp_path: Path) -> None:
         patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
             install_code_extra=False, disable_reranker=False, enable_watch=False,
             enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy="centroid", log_format="text"
+            routing_strategy="centroid", log_format="text",
+            host=None, port=None, db_path=None, log_level=None, log_to_stderr=False,
+            top_k=None, telemetry_retention_days=None, enable_hyde=False, enable_rag_fusion=False,
         )),
         patch("archon_search.install._prompt_gpu_confirm", return_value=True),
         patch("archon_search.install._prompt_fasttext_license"),

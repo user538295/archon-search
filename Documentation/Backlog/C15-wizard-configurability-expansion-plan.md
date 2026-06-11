@@ -161,7 +161,7 @@ else:  # source.startswith("file:")
   - Checkpoint: `uv run pytest tests/test_install_wizard_features.py -v --no-cov`
 
 #### Task 1.2 — `_apply_wizard_features_to_toml()` — write logic for 9 new fields
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - `host` (not None): `_ensure_section("server")`, `doc["server"]["host"] = features.host`
