@@ -10,9 +10,33 @@ import click
 
 from archon_search.cli._helpers import _get_service
 from archon_search.install import SearchInstaller
+from archon_search.key_manager import _HEX_RE
 
 _TOP_K_MAX = 100
 _TOP_K_MIN = 1
+_SERVER_KEY_MIN_LEN = 32
+
+
+class _HexKeyParamType(click.ParamType):
+    """Click param type that validates a lowercase hex string of minimum 32 chars."""
+
+    name = "HEX_KEY"
+
+    def convert(self, value: str, param: click.Parameter | None, ctx: click.Context | None) -> str:
+        if not value or not _HEX_RE.fullmatch(value):
+            self.fail(
+                '--server-key must be a lowercase hex string '
+                '(e.g., generated with: python -c "import secrets; print(secrets.token_hex(32))")',
+                param,
+                ctx,
+            )
+        if len(value) < _SERVER_KEY_MIN_LEN:
+            self.fail(
+                f"--server-key must be at least {_SERVER_KEY_MIN_LEN} hex characters for adequate security.",
+                param,
+                ctx,
+            )
+        return value
 
 
 def _get_db_path(config_path: Path | None = None) -> Path:
@@ -96,6 +120,8 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
               help="Enable HyDE query expansion (requires ANTHROPIC_API_KEY)")
 @click.option("--enable-rag-fusion", is_flag=True, default=False,
               help="Enable RAG Fusion query expansion (requires ANTHROPIC_API_KEY)")
+@click.option("--server-key", type=_HexKeyParamType(), default=None,
+              help="Custom server API key (lowercase hex, min 32 chars). Sets the archon-search Bearer token.")
 def wizard(
     profile: str | None,
     multilingual: bool | None,
@@ -124,6 +150,7 @@ def wizard(
     telemetry_retention_days: int | None,
     enable_hyde: bool,
     enable_rag_fusion: bool,
+    server_key: str | None,
 ) -> None:
     """Interactive setup wizard: choose a profile, download models, start service."""
     # Warn if --telemetry-retention-days is given without --telemetry
@@ -172,6 +199,7 @@ def wizard(
             telemetry_retention_days=telemetry_retention_days,
             enable_hyde=enable_hyde,
             enable_rag_fusion=enable_rag_fusion,
+            server_key=server_key,
         )
     )
 

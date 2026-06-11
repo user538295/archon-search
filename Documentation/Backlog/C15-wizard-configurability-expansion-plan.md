@@ -364,7 +364,7 @@ else:  # source.startswith("file:")
 > **Releasable**: after Task 5.2 — `--server-key` fully functional
 
 #### Task 5.1 — `--server-key` custom Click param type with hex + length validation
-- [ ] **File**: `archon_search/cli/install_cmd.py`
+- [x] **File**: `archon_search/cli/install_cmd.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `class _HexKeyParamType(click.ParamType)` in `install_cmd.py`:

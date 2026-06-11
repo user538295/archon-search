@@ -241,6 +241,74 @@ def test_wizard_help_contains_enable_rag_fusion(runner: CliRunner) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task 5.1 — --server-key custom Click param type with hex + length validation
+# ---------------------------------------------------------------------------
+
+_VALID_SERVER_KEY_32 = "a" * 32  # 32 lowercase hex chars
+_VALID_SERVER_KEY_64 = "deadbeef" * 8  # 64 lowercase hex chars
+
+
+def test_server_key_valid_hex_32_chars_accepted(runner: CliRunner) -> None:
+    """A valid 32-char lowercase hex key passes Click validation and reaches run()."""
+    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+        result = runner.invoke(
+            main,
+            ["wizard", "--server-key", _VALID_SERVER_KEY_32, "--non-interactive", "--dry-run"],
+        )
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs.get("server_key") == _VALID_SERVER_KEY_32
+
+
+def test_server_key_non_hex_rejected_at_parse(runner: CliRunner) -> None:
+    """Non-hex characters (like 'sk-abc123') cause a non-zero exit at parse time."""
+    result = runner.invoke(main, ["wizard", "--server-key", "sk-abc123", "--non-interactive"])
+    assert result.exit_code != 0
+    assert "hex" in result.output.lower() or "hex" in (result.stderr or "").lower()
+
+
+def test_server_key_empty_string_rejected(runner: CliRunner) -> None:
+    """An empty string is rejected by the param type."""
+    result = runner.invoke(main, ["wizard", "--server-key", "", "--non-interactive"])
+    assert result.exit_code != 0
+
+
+def test_server_key_31_chars_rejected(runner: CliRunner) -> None:
+    """A 31-char hex string is rejected (minimum is 32)."""
+    result = runner.invoke(main, ["wizard", "--server-key", "a" * 31, "--non-interactive"])
+    assert result.exit_code != 0
+    # Should mention length in the error
+    combined = result.output + (result.stderr or "")
+    assert "32" in combined or "length" in combined.lower() or "least" in combined.lower()
+
+
+def test_server_key_32_chars_accepted(runner: CliRunner) -> None:
+    """A 32-char hex string passes parse-time validation."""
+    with patch("archon_search.install.SearchInstaller.run", return_value=0):
+        result = runner.invoke(
+            main,
+            ["wizard", "--server-key", _VALID_SERVER_KEY_32, "--non-interactive", "--dry-run"],
+        )
+    assert result.exit_code == 0, result.output
+
+
+def test_server_key_uppercase_rejected(runner: CliRunner) -> None:
+    """Uppercase hex ('ABCD' * 8) is rejected — lowercase only."""
+    result = runner.invoke(main, ["wizard", "--server-key", "ABCD" * 8, "--non-interactive"])
+    assert result.exit_code != 0
+    combined = result.output + (result.stderr or "")
+    assert "hex" in combined.lower()
+
+
+def test_wizard_help_contains_server_key(runner: CliRunner) -> None:
+    """--server-key must appear in `wizard --help` output."""
+    result = runner.invoke(main, ["wizard", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--server-key" in result.output
+
+
+# ---------------------------------------------------------------------------
 # uninstall command — stop and unregister are called
 # ---------------------------------------------------------------------------
 
