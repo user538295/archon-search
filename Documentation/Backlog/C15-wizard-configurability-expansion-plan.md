@@ -300,7 +300,7 @@ else:  # source.startswith("file:")
 > **Releasable**: after Task 4.3 — HyDE/RAG Fusion can be enabled interactively and via flags
 
 #### Task 4.1 — `_install_extra()` helper extracted from `_install_code_extra()`
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: nothing
 - **Description**:
   - Extract the subprocess install logic from `_install_code_extra()` into `_install_extra(package: str, label: str, dry_run: bool = False) -> None`
@@ -309,11 +309,11 @@ else:  # source.startswith("file:")
   - Public interface of `_install_code_extra` unchanged (backward compatible)
 - **Releasable**: after this task, `_install_extra()` is callable for any extra package
 - **Tests (TDD)** — `tests/test_install_code_extra.py`:
-  - Unit: `test_install_extra_dry_run_echoes_package` — `dry_run=True`; assert echo message contains package name; no subprocess call
-  - Unit: `test_install_extra_calls_uv_pip_install` — mock subprocess; assert uv command called with correct package
-  - Unit: `test_install_extra_falls_back_to_pip_when_uv_absent` — mock uv to raise `FileNotFoundError`; assert pip fallback called
-  - Unit: `test_install_extra_raises_install_error_on_pip_failure` — both uv and pip fail; assert `InstallError` raised with package name
-  - Unit: `test_install_code_extra_delegates_to_install_extra` — patch `_install_extra`; call `_install_code_extra()`; assert called with `"archon-search[code]"` and `"code enrichment"`
+  - [x] Unit: `test_install_extra_dry_run_echoes_package` — `dry_run=True`; assert echo message contains package name; no subprocess call
+  - [x] Unit: `test_install_extra_calls_uv_pip_install` — mock subprocess; assert uv command called with correct package
+  - [x] Unit: `test_install_extra_falls_back_to_pip_when_uv_absent` — mock uv to raise `FileNotFoundError`; assert pip fallback called
+  - [x] Unit: `test_install_extra_raises_install_error_on_pip_failure` — both uv and pip fail; assert `InstallError` raised with package name
+  - [x] Unit: `test_install_code_extra_delegates_to_install_extra` — patch `_install_extra`; call `_install_code_extra()`; assert called with `"archon-search[code]"` and `"code enrichment"`
   - Checkpoint: `uv run pytest tests/test_install_code_extra.py -v --no-cov`
 
 #### Task 4.2 — HyDE/RAG Fusion `WizardFeatures` fields are already in Task 1.1. TOML writer for `enable_hyde`/`enable_rag_fusion` is already in Task 1.2. This task: add HyDE/RAG Fusion to `_prompt_optional_features()`.

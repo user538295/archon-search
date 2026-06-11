@@ -1120,22 +1120,23 @@ def _prompt_gpu_confirm(non_interactive: bool, gpu: GpuType) -> bool:
 # Code enrichment package install (Task C8-2.3)
 # ---------------------------------------------------------------------------
 
-def _install_code_extra(dry_run: bool = False) -> None:
-    """Install ``archon-search[code]`` (tree-sitter enrichment packages).
+def _install_extra(package: str, label: str, dry_run: bool = False) -> None:
+    """Install an arbitrary pip *package* via uv (with pip fallback).
 
-    Primary path: ``uv pip install --python <sys.executable> archon-search[code]``.
-    Falls back to ``sys.executable -m pip install archon-search[code]`` when uv
-    is absent or fails.
+    Prints ``[dry-run] Would install {package}`` and returns early when
+    *dry_run* is True.
+
+    Primary path: ``uv pip install --python <sys.executable> {package}``.
+    Falls back to ``sys.executable -m pip install {package}`` when uv is
+    absent or fails.
 
     Raises ``InstallError`` if both paths fail.
-    No-op (with an informational print) when *dry_run* is True.
     """
-    package = "archon-search[code]"
     if dry_run:
         click.echo(f"[dry-run] Would install {package}")
         return
 
-    click.echo("Installing code enrichment packages...")
+    click.echo(f"Installing {label}...")
     python = sys.executable
     try:
         subprocess.run(
@@ -1155,7 +1156,15 @@ def _install_code_extra(dry_run: bool = False) -> None:
             stderr = (pip_exc.stderr or b"").decode(errors="replace")
             raise InstallError(f"Failed to install {package}: {stderr}") from pip_exc
 
-    click.echo("Code enrichment packages installed.")
+    click.echo(f"{label.capitalize()} installed.")
+
+
+def _install_code_extra(dry_run: bool = False) -> None:
+    """Install ``archon-search[code]`` (tree-sitter enrichment packages).
+
+    Thin wrapper around :func:`_install_extra`.  Public interface unchanged.
+    """
+    _install_extra("archon-search[code]", "code enrichment", dry_run)
 
 
 # ---------------------------------------------------------------------------

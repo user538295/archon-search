@@ -1,13 +1,13 @@
-"""Tests for _install_code_extra() — Task C8-2.3."""
+"""Tests for _install_code_extra() — Task C8-2.3; _install_extra() — Task C15-4.1."""
 from __future__ import annotations
 
 import subprocess
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from archon_search.install import InstallError, _install_code_extra
+from archon_search.install import InstallError, _install_code_extra, _install_extra
 
 
 class TestInstallCodeExtra:
@@ -112,3 +112,63 @@ class TestInstallCodeExtra:
             pip_call_args = mock_run.call_args_list[1][0][0]
             assert "archon-search[code]" in pip_call_args
             assert "install" in pip_call_args
+
+
+class TestInstallExtra:
+    """Unit tests for _install_extra() — Task C15-4.1."""
+
+    def test_install_extra_dry_run_echoes_package(self, capsys):
+        """dry_run=True must not call subprocess but print a message containing the package name."""
+        with patch("subprocess.run") as mock_run:
+            _install_extra("my-package[extra]", "my label", dry_run=True)
+            mock_run.assert_not_called()
+        captured = capsys.readouterr()
+        assert "my-package[extra]" in captured.out
+
+    def test_install_extra_calls_uv_pip_install(self):
+        """Successful uv call should invoke uv pip install with the given package."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _install_extra("some-pkg", "some label")
+            assert mock_run.call_count == 1
+            cmd = mock_run.call_args_list[0][0][0]
+            assert cmd[0] == "uv"
+            assert "pip" in cmd
+            assert "install" in cmd
+            assert "some-pkg" in cmd
+
+    def test_install_extra_falls_back_to_pip_when_uv_absent(self):
+        """FileNotFoundError from uv must trigger pip fallback with correct package."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                FileNotFoundError("uv not on PATH"),
+                MagicMock(returncode=0),
+            ]
+            _install_extra("my-pkg", "my label")
+            assert mock_run.call_count == 2
+            pip_cmd = mock_run.call_args_list[1][0][0]
+            assert pip_cmd[0] == sys.executable
+            assert "-m" in pip_cmd
+            assert "pip" in pip_cmd
+            assert "my-pkg" in pip_cmd
+
+    def test_install_extra_raises_install_error_on_pip_failure(self):
+        """Both uv and pip failing must raise InstallError containing the package name."""
+        uv_err = subprocess.CalledProcessError(1, "uv", stderr=b"uv fail")
+        pip_err = subprocess.CalledProcessError(1, "pip", stderr=b"pip fail for my-pkg")
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [uv_err, pip_err]
+            with pytest.raises(InstallError, match="my-pkg"):
+                _install_extra("my-pkg", "my label")
+
+    def test_install_code_extra_delegates_to_install_extra(self):
+        """_install_code_extra() must delegate to _install_extra with the code package and label."""
+        with patch("archon_search.install._install_extra") as mock_extra:
+            _install_code_extra(dry_run=False)
+            mock_extra.assert_called_once_with("archon-search[code]", "code enrichment", False)
+
+    def test_install_code_extra_delegates_dry_run_to_install_extra(self):
+        """_install_code_extra(dry_run=True) must delegate dry_run=True to _install_extra."""
+        with patch("archon_search.install._install_extra") as mock_extra:
+            _install_code_extra(dry_run=True)
+            mock_extra.assert_called_once_with("archon-search[code]", "code enrichment", True)
