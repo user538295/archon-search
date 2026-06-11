@@ -427,7 +427,7 @@ After this plan ships: `--dry-run` makes zero filesystem writes across all three
 ### Phase 6 — Final Verification & Documentation
 
 #### Task 6.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: Tasks 1.1, 1.2, 1.3, 2.1, 3.1, 4.1, 5.1, 5.2, 5.3, 5.4, 5.5
 - **Description**:
   - Spawn an agent to discover and update every affected documentation file:

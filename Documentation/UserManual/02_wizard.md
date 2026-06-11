@@ -55,17 +55,17 @@ Will your corpus include non-English documents? [y/N]:
 
 If you are unsure, answer `n`. You can always reinstall with `--multilingual` later (but this requires `--force --delete-db` to re-index all your documents, since it changes the embedding model).
 
-If you pass `--multilingual` on the command line, this prompt is skipped.
+If you pass `--multilingual` or `--no-multilingual` on the command line, this prompt is skipped entirely.
 
 ### Step 2 — Profile selection
 
-The wizard prints a comparison table:
+The wizard prints a comparison table. The `balanced` profile is annotated as the recommended choice for most users:
 
 ```
   Profile      Download    Quality       Speed (CPU / Apple Silicon)
   ─────────    ────────    ───────       ───────────────────────────
   1) Minimal   ~147 MB     ★★☆☆☆         ~40 ms/query  / ~15 ms
-  2) Balanced  ~330 MB     ★★★☆☆         ~150 ms/query / ~50 ms
+  2) Balanced  ~330 MB     ★★★☆☆         ~150 ms/query / ~50 ms   ← Recommended
   3) Max       ~2.3 GB     ★★★★☆         ~400 ms/query / ~130 ms
 
   Models (all sizes from fastembed registry, verified):
@@ -99,91 +99,30 @@ The multilingual Balanced and Max profiles use the Jina reranker (`jinaai/jina-r
 
 If you pass `--profile minimal`, `--profile balanced`, or `--profile max`, this prompt is skipped.
 
-### Step 3 — Optional features
+### Step 3 — GPU detection and confirmation
 
-After profile selection, the wizard asks seven questions about optional features. Each has a default that is applied if you press Enter without typing anything.
+Immediately after profile selection, the wizard detects your GPU hardware and confirms whether to use it:
 
-#### 3a. Code enrichment
+- **Apple Silicon (M-series Mac):**
+  ```
+  Apple Silicon detected — enable Metal acceleration? [Y/n]:
+  ```
+  Default: Yes. Press Enter to enable Metal (CoreML) acceleration. Type `n` to use CPU only.
 
+- **NVIDIA GPU (Linux/Windows with CUDA):**
+  ```
+  NVIDIA GPU detected — enable CUDA acceleration? [Y/n]:
+  ```
+  Default: Yes. Press Enter to enable CUDA. Type `n` to use CPU only.
+
+- **No GPU detected:** No prompt is shown; CPU is used automatically.
+
+If Metal is selected but CoreML validation fails (e.g., the installed ONNX Runtime build does not support it), the wizard falls back to CPU with a warning:
 ```
-Index code files (installs tree-sitter enrichment)? [y/N]:
-```
-
-**Default**: No.
-
-If you answer `y`, the wizard installs the `archon-search[code]` extra packages (tree-sitter grammars for Python, TypeScript, JavaScript, Go, Rust, Java, and Bash). Once installed, ingesting code files automatically extracts symbol-level metadata (`_symbol_type`, `_containing_function`, `_containing_class`, etc.) from each chunk. This makes code search significantly more precise.
-
-You can install this separately at any time with `pip install archon-search[code]`.
-
-#### 3b. Reranker toggle
-
-```
-Disable reranker for lower latency? [y/N]:
-```
-
-**Default**: No (reranker stays enabled).
-
-**This question is only shown when your selected profile includes a reranker.** The Minimal multilingual profile has no reranker, so this question is skipped for that combination.
-
-The reranker is a second-stage cross-encoder that re-scores retrieved results for higher precision. Disabling it reduces search latency (no second model pass) at the cost of result quality. Useful for interactive UIs or real-time search where latency matters more than perfect recall.
-
-#### 3c. Filesystem watcher
-
-```
-Auto-watch directories and re-index on file changes? [y/N]:
+Warning: CoreML validation failed — falling back to CPU.
 ```
 
-**Default**: No.
-
-If you answer `y`, archon-search monitors your collection source directories with a watchdog and automatically re-indexes files when they are created, modified, or deleted. Useful for corpora that change frequently (e.g., a notes folder, a code repository).
-
-#### 3d. Telemetry
-
-```
-Enable local query telemetry? [y/N]:
-```
-
-**Default**: No.
-
-If you answer `y`, archon-search appends one JSON line per search request to daily files under `~/.archon-search/search-logs/`. Only structural metadata is recorded — collection names, latency, result counts — **raw query text is never written**. Files older than 30 days are pruned automatically. Telemetry is entirely local; no data is sent anywhere.
-
-#### 3e. Eager load
-
-```
-Pre-load embedding models at startup (eliminates first-query latency)? [y/N]:
-```
-
-**Default**: No.
-
-By default, embedding models are loaded lazily on the first search request, which causes a ~5–15 second delay for that request. If you answer `y`, models are loaded when the server starts instead. This increases startup time but makes every query fast from the first one. Recommended for automated workflows or production use where predictable latency matters.
-
-#### 3f. Routing strategy
-
-```
-Routing strategy (centroid/hybrid) [centroid]:
-```
-
-**Default**: `centroid`.
-
-This setting only matters if you have multiple collections. The router decides which collections to search for a given query.
-
-- `centroid` — routes using pure vector centroid similarity between the query and each collection's document centroids. Fast and works well for most setups.
-- `hybrid` — blends centroid similarity with description-embedding cosine similarity. More precise for corpora where collections have distinct domain boundaries and clear descriptions.
-
-Type `centroid` or `hybrid`, or press Enter to keep the default.
-
-#### 3g. Log format
-
-```
-Log format (text/json) [text]:
-```
-
-**Default**: `text`.
-
-- `text` — human-readable log lines. Best for local development and direct log reading.
-- `json` — structured JSON log lines. Best for container deployments (Docker, Kubernetes) or log aggregation pipelines (Datadog, Loki, Splunk).
-
-Type `text` or `json`, or press Enter to keep the default.
+To skip GPU detection entirely and force CPU, pass `--disable-gpu`.
 
 ### Step 4 — License gates
 
@@ -214,30 +153,120 @@ Type 'accept' to confirm license acceptance and continue, or anything else to ab
 
 Type `accept` to proceed. For non-interactive installs, pass `--accept-fasttext-license`.
 
-### Step 5 — GPU detection and confirmation
+### Step 5 — Optional features
 
-The wizard detects your GPU hardware:
+After the license gates, the wizard asks seven questions about optional features. Each question is preceded by a short plain-text explanation so you can make an informed choice. Each has a default that is applied if you press Enter without typing anything.
 
-- **Apple Silicon (M-series Mac):**
-  ```
-  Apple Silicon detected — enable Metal acceleration? [Y/n]:
-  ```
-  Default: Yes. Press Enter to enable Metal (CoreML) acceleration. Type `n` to use CPU only.
+#### 5a. Code enrichment
 
-- **NVIDIA GPU (Linux/Windows with CUDA):**
-  ```
-  NVIDIA GPU detected — enable CUDA acceleration? [Y/n]:
-  ```
-  Default: Yes. Press Enter to enable CUDA. Type `n` to use CPU only.
-
-- **No GPU detected:** No prompt is shown; CPU is used automatically.
-
-If Metal is selected but CoreML validation fails (e.g., the installed ONNX Runtime build does not support it), the wizard falls back to CPU with a warning:
 ```
-Warning: CoreML validation failed — falling back to CPU.
+Code enrichment (tree-sitter):
+  Parses and indexes code files structurally — functions, classes, docstrings.
+  Installs tree-sitter and language parsers (~50 MB). Recommended if your corpus
+  includes source code. Default: disabled.
+Index code files (installs tree-sitter enrichment)? [y/N]:
 ```
 
-To skip GPU detection entirely and force CPU, pass `--disable-gpu`.
+**Default**: No.
+
+If you answer `y`, the wizard installs the `archon-search[code]` extra packages (tree-sitter grammars for Python, TypeScript, JavaScript, Go, Rust, Java, and Bash). Once installed, ingesting code files automatically extracts symbol-level metadata (`_symbol_type`, `_containing_function`, `_containing_class`, etc.) from each chunk. This makes code search significantly more precise.
+
+You can install this separately at any time with `pip install archon-search[code]`.
+
+#### 5b. Reranker toggle
+
+```
+Reranker:
+  A second-stage cross-encoder model that re-scores results for better precision.
+  Disabling it reduces latency and RAM but lowers recall quality.
+  Default: enabled (for profiles that include a reranker).
+Disable reranker for lower latency? [y/N]:
+```
+
+**Default**: No (reranker stays enabled).
+
+**This question is only shown when your selected profile includes a reranker.** The Minimal multilingual profile has no reranker, so this question is skipped for that combination.
+
+The reranker is a second-stage cross-encoder that re-scores retrieved results for higher precision. Disabling it reduces search latency (no second model pass) at the cost of result quality. Useful for interactive UIs or real-time search where latency matters more than perfect recall.
+
+#### 5c. Filesystem watcher
+
+```
+Filesystem watcher:
+  Monitors watched directories and automatically re-indexes files when they change.
+  Uses watchdog. Increases background CPU usage slightly.
+  Default: disabled.
+Auto-watch directories and re-index on file changes? [y/N]:
+```
+
+**Default**: No.
+
+If you answer `y`, archon-search monitors your collection source directories with a watchdog and automatically re-indexes files when they are created, modified, or deleted. Useful for corpora that change frequently (e.g., a notes folder, a code repository).
+
+#### 5d. Telemetry
+
+```
+Local telemetry:
+  Logs per-query metadata (collection, result count, latency) to
+  ~/.archon-search/search-logs/. No query text is stored. Opt-in.
+  Default: disabled.
+Enable local query telemetry? [y/N]:
+```
+
+**Default**: No.
+
+If you answer `y`, archon-search appends one JSON line per search request to daily files under `~/.archon-search/search-logs/`. Only structural metadata is recorded — collection names, latency, result counts — **raw query text is never written**. Files older than 30 days are pruned automatically. Telemetry is entirely local; no data is sent anywhere.
+
+#### 5e. Eager load
+
+```
+Eager embedder loading:
+  Pre-loads the embedding model at server startup instead of on the first query.
+  Eliminates first-query latency (~5-15s on first search without this).
+  Default: disabled.
+Pre-load embedding models at startup (eliminates first-query latency)? [y/N]:
+```
+
+**Default**: No.
+
+By default, embedding models are loaded lazily on the first search request, which causes a ~5–15 second delay for that request. If you answer `y`, models are loaded when the server starts instead. This increases startup time but makes every query fast from the first one. Recommended for automated workflows or production use where predictable latency matters.
+
+#### 5f. Routing strategy
+
+```
+Routing strategy:
+  centroid: routes queries to collections using centroid similarity (fast, default).
+  hybrid: combines centroid with keyword scoring (slightly slower, more accurate
+  for mixed corpora with distinct topic clusters).
+  Default: centroid.
+Routing strategy (centroid/hybrid) [centroid]:
+```
+
+**Default**: `centroid`.
+
+This setting only matters if you have multiple collections. The router decides which collections to search for a given query.
+
+- `centroid` — routes using pure vector centroid similarity between the query and each collection's document centroids. Fast and works well for most setups.
+- `hybrid` — blends centroid similarity with description-embedding cosine similarity. More precise for corpora where collections have distinct domain boundaries and clear descriptions.
+
+Type `centroid` or `hybrid`, or press Enter to keep the default.
+
+#### 5g. Log format
+
+```
+Log format:
+  text: human-readable log lines (default).
+  json: structured JSON logs, suitable for log aggregation pipelines.
+  Default: text.
+Log format (text/json) [text]:
+```
+
+**Default**: `text`.
+
+- `text` — human-readable log lines. Best for local development and direct log reading.
+- `json` — structured JSON log lines. Best for container deployments (Docker, Kubernetes) or log aggregation pipelines (Datadog, Loki, Splunk).
+
+Type `text` or `json`, or press Enter to keep the default.
 
 ### Step 6 — Summary screen
 
@@ -249,6 +278,10 @@ Before downloading anything, the wizard prints a summary of what it is about to 
   Reranker:   Xenova/ms-marco-MiniLM-L-12-v2
   Chunk size: 512 tokens
   Providers:  (CPU default)
+  Database:   /Users/you/.archon-search/search
+  Server:     http://127.0.0.1:8765
+  API key:    abcdefgh…nopqrstu  (full key: /Users/you/.archon-search/.search.env)
+  Download:   ~330 MB
 
   Note: Model files are downloaded now. ONNX session initialization happens in the
   server process on first query — expect ~5–15s latency on first search.
@@ -258,7 +291,7 @@ Before downloading anything, the wizard prints a summary of what it is about to 
     • Watch directories (auto-reindex)
 ```
 
-Only non-default optional features are listed. Then:
+Only non-default optional features are listed. The `API key` line shows a masked preview and the path to the env file that holds the full key. If the key file does not exist yet (first install, server not yet started), `(not yet generated)` is shown instead. Then:
 
 ```
 Proceed? [Y/n]:
@@ -268,7 +301,7 @@ Press Enter or type `y` to continue. Type `n` to abort without making any change
 
 ### Step 7 — Code enrichment package install (if requested)
 
-If you enabled code enrichment (Step 3a), the wizard installs the packages now:
+If you enabled code enrichment (Step 5a), the wizard installs the packages now:
 
 ```
 Installing code enrichment packages...
@@ -289,15 +322,29 @@ Depending on your chosen profile and connection speed this can take from a few s
 
 To skip this step and download on the first search request instead, pass `--skip-preload`.
 
-### Step 9 — Service registration and startup
+### Step 9 — Service registration, startup, and next steps
 
 ```
 [5/5] Starting search service...
 Waiting for search service......... ready.
+
+archon-search is running on http://127.0.0.1:8765
+
+Next steps:
+  archon-search ingest <path>           # add documents to search
+  archon-search status                  # check service health
+  archon-search sync                    # sync watched directories
+  archon-search stop                    # stop the service
+
+API key: (full key: /Users/you/.archon-search/.search.env)
+Config:  /Users/you/.archon-search/archon-search.toml
+
 archon-search installed and running. Profile: Balanced · English.
 ```
 
 The wizard registers the service with your OS (launchd on macOS, systemd user unit on Linux) and starts it. It then polls `GET /health` for up to 60 seconds. If the service does not become ready within that window, the wizard exits with an error.
+
+After startup, the wizard prints a "Next steps" block with the four most common follow-up commands and the paths to your API key file and config. The "Next steps" block is suppressed in `--dry-run` mode.
 
 ---
 
@@ -308,7 +355,7 @@ All flags for the `wizard` command:
 | Flag | Default | Description |
 |---|---|---|
 | `--profile {minimal,balanced,max}` | Interactive | Select the install profile, skipping the interactive prompt. |
-| `--multilingual` | False | Use multilingual model stack. Skips the "non-English documents?" prompt. |
+| `--multilingual` / `--no-multilingual` | Not set (interactive) | `--multilingual`: use multilingual model stack. `--no-multilingual`: force English models explicitly. Both skip the "non-English documents?" prompt. |
 | `--skip-preload` | False | Skip model weight pre-download. Models download on first query instead. |
 | `--force` | False | Force reinstall of an existing install. **Must be combined with `--delete-db`.** |
 | `--delete-db` | False | Delete the existing database on reinstall. All indexed data will be lost. Use only with `--force`. |
@@ -338,7 +385,7 @@ Pass `--non-interactive` to run the wizard without any prompts. Combined with fe
 
 | Question | Non-interactive default |
 |---|---|
-| Multilingual corpus | No (English models) |
+| Multilingual corpus | No (English models). Pass `--multilingual` to force multilingual; `--no-multilingual` to explicitly force English (same outcome as the default, but logs the explicit choice). |
 | Profile | `minimal` |
 | Code enrichment | Disabled |
 | Reranker | Enabled (profile default) |
@@ -526,12 +573,21 @@ You can re-run the wizard at any time. What happens depends on whether anything 
 
 If you re-run with the same profile and multilingual setting, the wizard:
 
-1. Backs up your existing config to `archon-search.toml.bak`
-2. Overwrites the profile-related keys in `archon-search.toml` with the new values (including any optional feature changes you make in the prompts)
-3. Downloads any missing model weights
-4. Re-registers and restarts the service
+1. Checks whether you have hand-edited any wizard-managed keys in `archon-search.toml` since the last run. If hand-edits are detected, an overwrite warning is shown:
+   ```
+   Existing config has custom values. Overwrite with profile defaults? [y/N]:
+   ```
+   - Answer `y` to proceed (the wizard continues normally).
+   - Answer `n` (or press Enter, since the default is No) to abort. The config is left unchanged and no `.bak` file is created.
+   - In `--non-interactive` mode, the wizard auto-accepts with a logged warning and proceeds.
+2. Backs up your existing config to `archon-search.toml.bak` (only if proceeding past the overwrite check).
+3. Overwrites the profile-related keys in `archon-search.toml` with the new values (including any optional feature changes you make in the prompts).
+4. Downloads any missing model weights.
+5. Re-registers and restarts the service.
 
 Your indexed data is **preserved**. Changing optional features (telemetry, watcher, etc.) without changing the profile is safe.
+
+The overwrite detection compares wizard-written keys only (`[database]` profile fields and optional-feature keys). Keys in `[server]` and other sections are never compared. If a config was written by an older version of the wizard, the detection may produce a false positive — answer `y` to overwrite safely.
 
 ### Different profile (requires `--force --delete-db`)
 
