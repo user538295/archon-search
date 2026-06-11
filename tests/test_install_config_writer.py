@@ -317,3 +317,175 @@ class TestApplyWizardFeaturesToToml:
         assert len(doc) == 0
         doc_str = tomlkit.dumps(doc)
         assert "install_code_extra" not in doc_str
+
+
+# ---------------------------------------------------------------------------
+# Task C8-2.2: extend _write_profile_config() and _profile_toml() with features
+# ---------------------------------------------------------------------------
+
+
+class TestWriteProfileConfigWithFeatures:
+    def test_write_profile_with_features_telemetry(self, tmp_path: Path) -> None:
+        """_write_profile_config with enable_telemetry=True writes [telemetry].enabled = true."""
+        from archon_search.install import _write_profile_config
+
+        config_path = tmp_path / "archon-search.toml"
+        profile = ENGLISH_PROFILES["minimal"]
+        features = WizardFeatures(enable_telemetry=True)
+        _write_profile_config(config_path, profile, "minimal", False, features=features)
+
+        cfg = load_config(config_path)
+        assert cfg.telemetry.enabled is True
+        # Profile fields preserved
+        assert cfg.embedding_model == profile.embedder
+        assert cfg.profile == "minimal"
+
+    def test_write_profile_no_features(self, tmp_path: Path) -> None:
+        """Backward-compatible: existing test_write_profile_config_fresh_file still passes."""
+        from archon_search.install import _write_profile_config
+
+        config_path = tmp_path / "archon-search.toml"
+        profile = ENGLISH_PROFILES["minimal"]
+        _write_profile_config(config_path, profile, "minimal", False)
+
+        assert config_path.exists()
+        cfg = load_config(config_path)
+        assert cfg.embedding_model == profile.embedder
+        assert cfg.chunk_size == profile.chunk_size
+        assert cfg.profile == "minimal"
+        assert cfg.multilingual is False
+
+    def test_write_profile_with_features_watch(self, tmp_path: Path) -> None:
+        """_write_profile_config with enable_watch=True writes [collections].watch = true."""
+        from archon_search.install import _write_profile_config
+
+        config_path = tmp_path / "archon-search.toml"
+        profile = ENGLISH_PROFILES["balanced"]
+        features = WizardFeatures(enable_watch=True)
+        _write_profile_config(config_path, profile, "balanced", False, features=features)
+
+        cfg = load_config(config_path)
+        assert cfg.watch is True
+
+    def test_write_profile_with_multiple_features(self, tmp_path: Path) -> None:
+        """Multiple features are all written correctly."""
+        from archon_search.install import _write_profile_config
+
+        config_path = tmp_path / "archon-search.toml"
+        profile = ENGLISH_PROFILES["minimal"]
+        features = WizardFeatures(
+            disable_reranker=True,
+            enable_watch=True,
+            enable_telemetry=True,
+            routing_strategy="hybrid",
+            log_format="json",
+        )
+        _write_profile_config(config_path, profile, "minimal", False, features=features)
+
+        cfg = load_config(config_path)
+        assert cfg.reranker_model == ""
+        assert cfg.watch is True
+        assert cfg.telemetry.enabled is True
+        assert cfg.routing_strategy == "hybrid"
+        assert cfg.log_format == "json"
+
+    def test_write_profile_features_none_leaves_no_optional_keys(self, tmp_path: Path) -> None:
+        """features=None (default) does not write optional feature keys to TOML."""
+        from archon_search.install import _write_profile_config
+
+        config_path = tmp_path / "archon-search.toml"
+        profile = ENGLISH_PROFILES["minimal"]
+        _write_profile_config(config_path, profile, "minimal", False, features=None)
+
+        doc = tomlkit.parse(config_path.read_text())
+        # Optional sections should not be present (no telemetry, collections, routing, logging from features)
+        assert "telemetry" not in doc
+        assert "routing" not in doc
+
+
+class TestProfileTomlWithFeatures:
+    def test_profile_toml_with_features_watch(self, tmp_path: Path) -> None:
+        """_profile_toml('minimal', False, WizardFeatures(enable_watch=True)) contains [collections].watch = true."""
+        from archon_search.install import _profile_toml
+
+        features = WizardFeatures(enable_watch=True)
+        toml_str = _profile_toml("minimal", False, features=features)
+
+        doc = tomlkit.parse(toml_str)
+        assert doc["collections"]["watch"] is True
+
+    def test_profile_toml_no_features_backward_compatible(self, tmp_path: Path) -> None:
+        """_profile_toml without features argument is backward-compatible."""
+        from archon_search.install import _profile_toml
+
+        toml_str = _profile_toml("minimal", False)
+        doc = tomlkit.parse(toml_str)
+        assert {"server", "database", "routing", "collections", "logging"} <= set(doc.keys())
+
+        config_path = tmp_path / "archon-search.toml"
+        config_path.write_text(toml_str)
+        cfg = load_config(config_path)
+        assert cfg.profile == "minimal"
+
+    def test_profile_toml_with_features_telemetry(self, tmp_path: Path) -> None:
+        """_profile_toml with enable_telemetry=True produces TOML that loads with telemetry.enabled=True."""
+        from archon_search.install import _profile_toml
+
+        features = WizardFeatures(enable_telemetry=True)
+        toml_str = _profile_toml("minimal", False, features=features)
+
+        config_path = tmp_path / "archon-search.toml"
+        config_path.write_text(toml_str)
+        cfg = load_config(config_path)
+        assert cfg.telemetry.enabled is True
+
+    def test_profile_toml_with_all_features(self, tmp_path: Path) -> None:
+        """_profile_toml with all features enabled returns correct config after load."""
+        from archon_search.install import _profile_toml
+
+        features = WizardFeatures(
+            disable_reranker=True,
+            enable_watch=True,
+            enable_telemetry=True,
+            eager_load_embedders=True,
+            routing_strategy="hybrid",
+            log_format="json",
+        )
+        toml_str = _profile_toml("balanced", False, features=features)
+
+        config_path = tmp_path / "archon-search.toml"
+        config_path.write_text(toml_str)
+        cfg = load_config(config_path)
+        assert cfg.reranker_model == ""
+        assert cfg.watch is True
+        assert cfg.telemetry.enabled is True
+        assert cfg.eager_load_embedders is True
+        assert cfg.routing_strategy == "hybrid"
+        assert cfg.log_format == "json"
+
+
+class TestLoadConfigAfterWriteWithFeatures:
+    def test_load_config_after_write_with_features(self, tmp_path: Path) -> None:
+        """Round-trip: write config with features via _write_profile_config, load_config returns correct values."""
+        from archon_search.install import _write_profile_config
+
+        config_path = tmp_path / "archon-search.toml"
+        profile = ENGLISH_PROFILES["balanced"]
+        features = WizardFeatures(
+            enable_watch=True,
+            enable_telemetry=True,
+            eager_load_embedders=True,
+            routing_strategy="hybrid",
+            log_format="json",
+        )
+        _write_profile_config(config_path, profile, "balanced", False, features=features)
+
+        cfg = load_config(config_path)
+        assert cfg.watch is True
+        assert cfg.telemetry.enabled is True
+        assert cfg.eager_load_embedders is True
+        assert cfg.routing_strategy == "hybrid"
+        assert cfg.log_format == "json"
+        # Profile fields still correct
+        assert cfg.embedding_model == profile.embedder
+        assert cfg.profile == "balanced"

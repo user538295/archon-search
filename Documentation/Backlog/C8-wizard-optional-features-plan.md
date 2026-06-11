@@ -289,7 +289,7 @@ All keys are already defined in `SearchConfig` / `archon-search.toml.example`. T
   - Checkpoint: `uv run pytest tests/test_install_config_writer.py -v`
 
 #### Task 2.2 — Extend `_write_profile_config()` and `_profile_toml()`
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - Add `features: WizardFeatures | None = None` parameter to both `_write_profile_config()` and `_profile_toml()`
