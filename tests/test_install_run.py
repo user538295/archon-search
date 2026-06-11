@@ -1608,3 +1608,119 @@ def test_overwrite_bak_location_printed_on_success(tmp_path: Path, capsys) -> No
     assert str(bak_path) in captured.out, (
         f"Expected .bak path {bak_path} in stdout. Got: {captured.out}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 3.1 — Success output: full API key + source + "keep this key private"
+# ---------------------------------------------------------------------------
+
+_FAKE_KEY = "a" * 64  # 64-char lowercase hex (valid token_hex(32) output)
+
+
+def _run_with_key_source(
+    tmp_path: Path,
+    key: str,
+    source: str,
+    dry_run: bool = False,
+    capsys=None,
+) -> tuple[int, str]:
+    """Run installer with load_or_generate_key patched to return (key, source).
+
+    Returns (rc, stdout_text).
+    """
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+    key_file = tmp_path / ".search.env"
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install.KEY_FILE", key_file),
+        patch("archon_search.key_manager.load_or_generate_key", return_value=(key, source)),
+        patch("archon_search.install.load_or_generate_key", return_value=(key, source)),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path), dry_run=dry_run)
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+        )
+
+    captured = capsys.readouterr() if capsys else None
+    stdout = captured.out if captured else ""
+    return rc, stdout
+
+
+def test_run_success_prints_full_key_env_var(tmp_path: Path, capsys) -> None:
+    """Success output includes full key + env var source label + 'keep this key private'."""
+    rc, stdout = _run_with_key_source(
+        tmp_path,
+        _FAKE_KEY,
+        "env var",
+        capsys=capsys,
+    )
+
+    assert rc == 0
+    assert _FAKE_KEY in stdout
+    assert "$ARCHON_SEARCH_API_KEY" in stdout
+    assert "keep this key private" in stdout
+
+
+def test_run_success_prints_full_key_auto_generated(tmp_path: Path, capsys) -> None:
+    """Success output includes full key + 'generated fresh' + key file path."""
+    key_file = tmp_path / ".search.env"
+
+    rc, stdout = _run_with_key_source(
+        tmp_path,
+        _FAKE_KEY,
+        "auto-generated",
+        capsys=capsys,
+    )
+
+    assert rc == 0
+    assert _FAKE_KEY in stdout
+    assert "generated fresh" in stdout
+    assert "keep this key private" in stdout
+
+
+def test_run_success_prints_full_key_file(tmp_path: Path, capsys) -> None:
+    """Success output for file source: full key + 'also stored at' + no env var reference."""
+    key_file = tmp_path / ".search.env"
+    source = f"file: {key_file}"
+
+    rc, stdout = _run_with_key_source(
+        tmp_path,
+        _FAKE_KEY,
+        source,
+        capsys=capsys,
+    )
+
+    assert rc == 0
+    assert _FAKE_KEY in stdout
+    assert "keep this key private" in stdout
+    assert "also stored at" in stdout
+    assert "$ARCHON_SEARCH_API_KEY" not in stdout
+
+
+def test_run_success_key_not_printed_in_dry_run(tmp_path: Path, capsys) -> None:
+    """In dry-run mode, API key is NOT printed in success output."""
+    rc, stdout = _run_with_key_source(
+        tmp_path,
+        _FAKE_KEY,
+        "auto-generated",
+        dry_run=True,
+        capsys=capsys,
+    )
+
+    # dry_run returns before success block; key must not appear
+    assert _FAKE_KEY not in stdout

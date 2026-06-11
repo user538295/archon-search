@@ -24,7 +24,7 @@ import tomlkit
 
 from archon_search._durable_io import atomic_write_bytes
 from archon_search.config import SearchConfig, get_default_config_path, load_config
-from archon_search.key_manager import KEY_FILE
+from archon_search.key_manager import KEY_FILE, load_or_generate_key
 from archon_search.pipeline import create_pipeline
 from archon_search.platform.runtime import get_runtime, get_search_service
 from archon_search.platform.types import GpuType
@@ -1781,6 +1781,23 @@ class SearchInstaller:
                 _print_next_steps(cfg.host, cfg.port, str(_key_manager.KEY_FILE))
 
             # Step 17: completion message
+            if not self.dry_run:
+                _api_key, _key_source = load_or_generate_key()
+                if _key_source == "env var":
+                    print(
+                        f"  API key: {_api_key}"
+                        "  (source: $ARCHON_SEARCH_API_KEY env var — keep this key private)"
+                    )
+                elif _key_source == "auto-generated":
+                    print(
+                        f"  API key: {_api_key}"
+                        f"  (generated fresh — keep this key private; also stored at: {KEY_FILE})"
+                    )
+                else:
+                    print(
+                        f"  API key: {_api_key}"
+                        f"  (keep this key private; also stored at: {KEY_FILE})"
+                    )
             lang = "Multilingual" if is_multilingual else "English"
             print(f"archon-search installed and running. Profile: {profile_name.capitalize()} · {lang}.")
             return 0

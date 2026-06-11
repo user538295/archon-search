@@ -275,7 +275,7 @@ else:  # source.startswith("file:")
 > **Releasable**: after this task — success block always shows full API key + source + "keep private" note
 
 #### Task 3.1 — `SearchInstaller.run()` success output — full API key + source
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: nothing (independent output change)
 - **Description**:
   - In `SearchInstaller.run()` Step 17 (completion message), call `load_or_generate_key()` to get `(key, source)`
