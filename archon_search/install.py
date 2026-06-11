@@ -24,6 +24,7 @@ import tomlkit
 
 from archon_search._durable_io import atomic_write_bytes
 from archon_search.config import SearchConfig, get_default_config_path, load_config
+from archon_search.key_manager import KEY_FILE
 from archon_search.pipeline import create_pipeline
 from archon_search.platform.runtime import get_runtime, get_search_service
 from archon_search.platform.types import GpuType
@@ -1415,6 +1416,19 @@ class SearchInstaller:
         routing_strategy: str | None = None,
         log_format: str | None = None,
         disable_gpu: bool = False,
+        # C15 Tier 1 deployment flags
+        host: str | None = None,
+        port: int | None = None,
+        db_path: str | None = None,
+        log_level: str | None = None,
+        log_to_stderr: bool = False,
+        top_k: int | None = None,
+        telemetry_retention_days: int | None = None,
+        # C15 Tier 2 AI query expansion flags
+        enable_hyde: bool = False,
+        enable_rag_fusion: bool = False,
+        # C15 Tier 2 custom server key
+        server_key: str | None = None,
     ) -> int:
         """Execute the full install flow. Returns 0 on success."""
         # Validate --force requires --delete-db
@@ -1484,6 +1498,45 @@ class SearchInstaller:
                 log_format=log_format,
             )
 
+            # Step 3d: overlay C15 Tier 1 flag values onto features
+            # These are flags-only (no interactive prompts), so they override
+            # whatever _prompt_optional_features() may have set.
+            if host is not None:
+                features.host = host
+            if port is not None:
+                features.port = port
+            if log_level is not None:
+                features.log_level = log_level
+            if log_to_stderr:
+                features.log_to_stderr = log_to_stderr
+            if top_k is not None:
+                features.top_k = top_k
+            if telemetry_retention_days is not None:
+                features.telemetry_retention_days = telemetry_retention_days
+            if enable_hyde:
+                features.enable_hyde = enable_hyde
+            if enable_rag_fusion:
+                features.enable_rag_fusion = enable_rag_fusion
+
+            # Step 3e: db_path special handling — validate and record for use below
+            # We handle db_path separately because it requires filesystem operations.
+            _db_path_override: str | None = db_path
+            if _db_path_override is not None:
+                features.db_path = _db_path_override
+                _expanded_db_path = Path(_db_path_override).expanduser()
+                try:
+                    _expanded_db_path.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    print(f"Error: could not create db_path directory {_expanded_db_path}: {exc}", file=sys.stderr)
+                    return 1
+                if not os.access(_expanded_db_path, os.W_OK):
+                    print(
+                        f"Error: db_path {_expanded_db_path} is not writable. "
+                        "Choose a writable directory.",
+                        file=sys.stderr,
+                    )
+                    return 1
+
             # Step 4: config path
             config_path = Path(self.config_file) if self.config_file else get_default_config_path()
 
@@ -1498,6 +1551,16 @@ class SearchInstaller:
                     if not (force and delete_db):
                         print(str(exc))
                         return 1
+
+                # db_path migration note: warn when --db-path differs from existing config
+                if _db_path_override is not None:
+                    existing_db_path_str = str(Path(existing_cfg.db_path).expanduser())
+                    new_db_path_str = str(Path(_db_path_override).expanduser())
+                    if existing_db_path_str != new_db_path_str:
+                        print(
+                            f"Note: changing db_path from {existing_db_path_str} to {new_db_path_str}. "
+                            "Existing indexed data remains at the old location and will not be migrated automatically."
+                        )
 
             # Step 6/7/8: config write branches
             branch: str
@@ -1634,6 +1697,22 @@ class SearchInstaller:
                 except InstallError as exc:
                     print(f"Warning: code enrichment install failed: {exc}", file=sys.stderr)
                     # Non-fatal — continue
+
+            # Before Step 14b: write custom server key if provided
+            if server_key is not None and not self.dry_run:
+                atomic_write_bytes(KEY_FILE, f"ARCHON_SEARCH_API_KEY={server_key}\n".encode())
+                os.chmod(KEY_FILE, 0o600)
+                print(
+                    "Note: your server key may appear in shell history. "
+                    "Consider using ARCHON_SEARCH_API_KEY env var instead."
+                )
+                if os.environ.get("ARCHON_SEARCH_API_KEY"):
+                    print(
+                        "Warning: ARCHON_SEARCH_API_KEY env var is set and takes priority over the key file. "
+                        "Your --server-key value was written to disk but will not be used while "
+                        "ARCHON_SEARCH_API_KEY is set."
+                    )
+                print("Server key updated. Restart the service to apply: archon-search restart.")
 
             # Step 14: pre-warm
             if not skip_preload:

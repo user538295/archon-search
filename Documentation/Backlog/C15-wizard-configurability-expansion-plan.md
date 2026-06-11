@@ -195,7 +195,7 @@ else:  # source.startswith("file:")
   - Checkpoint: `uv run pytest tests/test_install_config_writer.py -v --no-cov`
 
 #### Task 1.3 — `SearchInstaller.run()` — 9 new keyword params
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Add to `SearchInstaller.run()` signature (keyword-only, all default to None/False): `host: str | None = None`, `port: int | None = None`, `db_path: str | None = None`, `log_level: str | None = None`, `log_to_stderr: bool = False`, `top_k: int | None = None`, `telemetry_retention_days: int | None = None`, `enable_hyde: bool = False`, `enable_rag_fusion: bool = False`, `server_key: str | None = None`
