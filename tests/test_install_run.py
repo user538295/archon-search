@@ -597,3 +597,397 @@ def test_run_register_and_start_dry_run_skips_wait(tmp_path: Path) -> None:
 
     assert rc == 0
     wait_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Task 3.1 — New wiring tests
+# ---------------------------------------------------------------------------
+
+
+def test_run_prompts_multilingual_question(tmp_path: Path) -> None:
+    """Wizard in interactive mode without --multilingual receives multilingual prompt."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    prompt_multilingual_mock = MagicMock(return_value=False)
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", prompt_multilingual_mock),
+        patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
+            install_code_extra=False, disable_reranker=False, enable_watch=False,
+            enable_telemetry=False, eager_load_embedders=False,
+            routing_strategy="centroid", log_format="text"
+        )),
+        patch("archon_search.install._prompt_gpu_confirm", return_value=True),
+        patch("builtins.input", return_value="y"),  # "Proceed?" prompt
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(non_interactive=False, profile="minimal", multilingual=False, skip_preload=True)
+
+    assert rc == 0
+    prompt_multilingual_mock.assert_called_once_with(False, False)
+
+
+def test_run_multilingual_flag_skips_prompt(tmp_path: Path) -> None:
+    """multilingual=True is passed to _prompt_multilingual; the flag still takes precedence."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    prompt_multilingual_mock = MagicMock(return_value=True)
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", prompt_multilingual_mock),
+        patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
+            install_code_extra=False, disable_reranker=False, enable_watch=False,
+            enable_telemetry=False, eager_load_embedders=False,
+            routing_strategy="centroid", log_format="text"
+        )),
+        patch("archon_search.install._prompt_gpu_confirm", return_value=True),
+        patch("archon_search.install._prompt_fasttext_license"),
+        patch("archon_search.install._download_fasttext_model"),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        # multilingual=True should be forwarded to _prompt_multilingual as flag_value=True
+        rc = installer.run(non_interactive=True, profile="minimal", multilingual=True, skip_preload=True)
+
+    assert rc == 0
+    prompt_multilingual_mock.assert_called_once_with(True, True)
+
+
+def test_run_optional_features_prompted(tmp_path: Path) -> None:
+    """wizard calls _prompt_optional_features after profile selection."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import WizardFeatures
+    features = WizardFeatures()
+    prompt_features_mock = MagicMock(return_value=features)
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", return_value=False),
+        patch("archon_search.install._prompt_optional_features", prompt_features_mock),
+        patch("archon_search.install._prompt_gpu_confirm", return_value=True),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
+
+    assert rc == 0
+    prompt_features_mock.assert_called_once()
+
+
+def test_run_code_extra_installed_when_requested(tmp_path: Path) -> None:
+    """install_code=True triggers _install_code_extra()."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import WizardFeatures
+    features = WizardFeatures(install_code_extra=True)
+    install_code_mock = MagicMock()
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", return_value=False),
+        patch("archon_search.install._prompt_optional_features", return_value=features),
+        patch("archon_search.install._prompt_gpu_confirm", return_value=True),
+        patch("archon_search.install._install_code_extra", install_code_mock),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True, install_code=True)
+
+    assert rc == 0
+    install_code_mock.assert_called_once()
+
+
+def test_run_code_install_failure_is_non_fatal(tmp_path: Path) -> None:
+    """_install_code_extra raising InstallError → run() continues and returns 0."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import WizardFeatures
+    features = WizardFeatures(install_code_extra=True)
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", return_value=False),
+        patch("archon_search.install._prompt_optional_features", return_value=features),
+        patch("archon_search.install._prompt_gpu_confirm", return_value=True),
+        patch("archon_search.install._install_code_extra", side_effect=InstallError("pip failed")),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True, install_code=True)
+
+    assert rc == 0
+
+
+def test_run_gpu_confirm_decline_writes_cpu(tmp_path: Path) -> None:
+    """disable_gpu=True → providers written as [] in config."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import WizardFeatures
+    features = WizardFeatures()
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", return_value=False),
+        patch("archon_search.install._prompt_optional_features", return_value=features),
+        patch("archon_search.install._prompt_gpu_confirm", return_value=False),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.METAL),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True, disable_gpu=True)
+
+    assert rc == 0
+    import tomlkit
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["providers"] == []
+
+
+def test_run_non_interactive_uses_defaults(tmp_path: Path) -> None:
+    """non_interactive=True skips all prompts; uses default WizardFeatures."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import WizardFeatures
+    features = WizardFeatures()
+    prompt_features_mock = MagicMock(return_value=features)
+    prompt_multilingual_mock = MagicMock(return_value=False)
+    prompt_gpu_mock = MagicMock(return_value=True)
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", prompt_multilingual_mock),
+        patch("archon_search.install._prompt_optional_features", prompt_features_mock),
+        patch("archon_search.install._prompt_gpu_confirm", prompt_gpu_mock),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
+
+    assert rc == 0
+    # _prompt_multilingual receives non_interactive=True
+    prompt_multilingual_mock.assert_called_once_with(True, False)
+    # _prompt_optional_features receives non_interactive=True
+    args, kwargs = prompt_features_mock.call_args
+    assert args[0] is True  # non_interactive
+    # _prompt_gpu_confirm receives non_interactive=True
+    prompt_gpu_mock.assert_called_once_with(True, GpuType.NONE)
+
+
+def test_run_disable_reranker_writes_empty_string(tmp_path: Path) -> None:
+    """disable_reranker=True → load_config() shows reranker_model == ''."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import WizardFeatures
+    from archon_search.config import load_config
+    features = WizardFeatures(disable_reranker=True)
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", return_value=False),
+        patch("archon_search.install._prompt_optional_features", return_value=features),
+        patch("archon_search.install._prompt_gpu_confirm", return_value=True),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(non_interactive=True, profile="balanced", skip_preload=True, disable_reranker=True)
+
+    assert rc == 0
+    cfg = load_config(config_path)
+    assert cfg.reranker_model == ""
+
+
+def test_run_watch_written_to_config(tmp_path: Path) -> None:
+    """enable_watch=True → load_config() shows watch == True."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import WizardFeatures
+    from archon_search.config import load_config
+    features = WizardFeatures(enable_watch=True)
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", return_value=False),
+        patch("archon_search.install._prompt_optional_features", return_value=features),
+        patch("archon_search.install._prompt_gpu_confirm", return_value=True),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True, enable_watch=True)
+
+    assert rc == 0
+    cfg = load_config(config_path)
+    assert cfg.watch is True
+
+
+def test_run_force_reinstall_preserves_features(tmp_path: Path) -> None:
+    """force=True, delete_db=True, enable_watch=True → config has [collections].watch = true."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import WizardFeatures, _profile_toml
+    from archon_search.config import load_config
+    features = WizardFeatures(enable_watch=True)
+    config_path.write_text(_profile_toml("minimal", False))
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", return_value=False),
+        patch("archon_search.install._prompt_optional_features", return_value=features),
+        patch("archon_search.install._prompt_gpu_confirm", return_value=True),
+        patch("archon_search.install.get_search_service", return_value=MagicMock()),
+        patch("archon_search.install.shutil.rmtree", MagicMock()),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True, profile="minimal", skip_preload=True,
+            force=True, delete_db=True, enable_watch=True
+        )
+
+    assert rc == 0
+    cfg = load_config(config_path)
+    assert cfg.watch is True
+
+
+def test_run_interactive_gpu_decline_writes_cpu(tmp_path: Path) -> None:
+    """Interactive mode, detect_gpu() returns METAL, user declines → config has database.providers = []."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import WizardFeatures
+    features = WizardFeatures()
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", return_value=False),
+        patch("archon_search.install._prompt_optional_features", return_value=features),
+        patch("archon_search.install._prompt_gpu_confirm", return_value=False),  # user declines GPU
+        patch("builtins.input", return_value="y"),  # "Proceed?" prompt
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.METAL),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(non_interactive=False, profile="minimal", skip_preload=True)
+
+    assert rc == 0
+    import tomlkit
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["providers"] == []

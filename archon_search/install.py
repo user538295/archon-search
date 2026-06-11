@@ -361,6 +361,7 @@ def _execute_force_reinstall(
     multilingual: bool,
     non_interactive: bool,
     dry_run: bool = False,
+    features: WizardFeatures | None = None,
 ) -> None:
     """Execute the force-delete-db rollback sequence."""
     # Step 1: Backup config
@@ -415,7 +416,7 @@ def _execute_force_reinstall(
         tmp = config_path.with_suffix(".toml.tmp")
         tmp.unlink(missing_ok=True)
         try:
-            _write_profile_config(config_path, profile, profile_name, multilingual)
+            _write_profile_config(config_path, profile, profile_name, multilingual, features=features)
         except Exception:
             print(
                 f"Install failed after database deletion. Your previous config has been preserved at "
@@ -1179,6 +1180,15 @@ class SearchInstaller:
         delete_db: bool = False,
         accept_jina_license: bool = False,
         accept_fasttext_license: bool = False,
+        *,
+        install_code: bool | None = None,
+        disable_reranker: bool | None = None,
+        enable_watch: bool | None = None,
+        enable_telemetry: bool | None = None,
+        eager_load: bool | None = None,
+        routing_strategy: str | None = None,
+        log_format: str | None = None,
+        disable_gpu: bool = False,
     ) -> int:
         """Execute the full install flow. Returns 0 on success."""
         # Validate --force requires --delete-db
@@ -1194,9 +1204,12 @@ class SearchInstaller:
             log_dir = Path.home() / ".archon-search" / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
 
+            # Before Step 1: resolve multilingual via interactive prompt
+            is_multilingual = _prompt_multilingual(non_interactive, multilingual)
+
             # Step 1: profile selection
             try:
-                profile_name, is_multilingual = _select_profile(profile, multilingual, non_interactive)
+                profile_name, is_multilingual = _select_profile(profile, is_multilingual, non_interactive)
             except SystemExit as e:
                 return int(e.code) if e.code is not None else 1
             except click.BadParameter as e:
@@ -1205,6 +1218,19 @@ class SearchInstaller:
 
             # Step 2: get profile data
             prof = get_profile(profile_name, is_multilingual)
+
+            # After Step 2: collect optional-feature choices
+            features = _prompt_optional_features(
+                non_interactive,
+                prof,
+                install_code=install_code,
+                disable_reranker=disable_reranker,
+                enable_watch=enable_watch,
+                enable_telemetry=enable_telemetry,
+                eager_load=eager_load,
+                routing_strategy=routing_strategy,
+                log_format=log_format,
+            )
 
             # Step 3: Jina license gate
             if _requires_jina_license(prof):
@@ -1248,7 +1274,7 @@ class SearchInstaller:
                 try:
                     _execute_force_reinstall(
                         config_path, db_path, prof, profile_name, is_multilingual,
-                        non_interactive, dry_run=self.dry_run
+                        non_interactive, dry_run=self.dry_run, features=features
                     )
                 except SystemExit as e:
                     return int(e.code) if e.code is not None else 1
@@ -1258,21 +1284,31 @@ class SearchInstaller:
                 tmp = config_path.with_suffix(config_path.suffix + ".tmp")
                 tmp.unlink(missing_ok=True)
                 config_path.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_bytes(config_path, _profile_toml(profile_name, is_multilingual).encode())
+                atomic_write_bytes(config_path, _profile_toml(profile_name, is_multilingual, features).encode())
                 shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
             else:
                 # Branch C: idempotent reinstall (same profile)
                 branch = "idempotent"
                 shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
-                _write_profile_config(config_path, prof, profile_name, is_multilingual)
+                _write_profile_config(config_path, prof, profile_name, is_multilingual, features=features)
 
             # Step 8b: reload config with freshly-written values
             self.cfg = cfg = load_config(config_path)
 
-            # Step 9: GPU detection and provider configuration
+            # Step 9: GPU detection, user confirmation, and provider configuration
             gpu = self.detect_gpu()
+            enable_gpu = not disable_gpu and _prompt_gpu_confirm(non_interactive, gpu)
             providers: list[str] = []
-            if not self.dry_run and gpu == GpuType.METAL:
+            if not enable_gpu:
+                # User declined GPU — write providers = [] explicitly to override any previous setting
+                gpu_config_path = Path(self.config_file) if self.config_file else get_default_config_path()
+                if gpu_config_path.exists() and not self.dry_run:
+                    gpu_doc = tomlkit.parse(gpu_config_path.read_text())
+                    if "database" not in gpu_doc:
+                        gpu_doc.add("database", tomlkit.table())
+                    gpu_doc["database"]["providers"] = tomlkit.array()
+                    atomic_write_bytes(gpu_config_path, tomlkit.dumps(gpu_doc).encode())
+            elif not self.dry_run and gpu == GpuType.METAL:
                 if self.validate_providers(["CoreMLExecutionProvider"]):
                     self.configure_providers(gpu=gpu)
                     providers = ["CoreML (Apple Silicon)"]
@@ -1295,7 +1331,7 @@ class SearchInstaller:
                 return 1
 
             # Step 12: summary display
-            print(_render_summary(profile_name, prof, is_multilingual, providers))
+            print(_render_summary(profile_name, prof, is_multilingual, providers, features))
 
             # Step 13: confirmation
             if not non_interactive:
@@ -1303,6 +1339,14 @@ class SearchInstaller:
                 if answer not in ("y", ""):
                     print("Installation aborted.")
                     return 1
+
+            # Before Step 14: install code enrichment packages if requested
+            if features.install_code_extra:
+                try:
+                    _install_code_extra(dry_run=self.dry_run)
+                except InstallError as exc:
+                    print(f"Warning: code enrichment install failed: {exc}", file=sys.stderr)
+                    # Non-fatal — continue
 
             # Step 14: pre-warm
             if not skip_preload:

@@ -352,7 +352,7 @@ All keys are already defined in `SearchConfig` / `archon-search.toml.example`. T
 > **Releasable**: after Task 3.2, `archon-search wizard` surfaces all optional feature questions to end-users.
 
 #### Task 3.1 — Extend `SearchInstaller.run()` with new parameters and wiring
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Tasks 1.1, 1.2, 1.3, 1.4, 2.2, 2.3, 2.4
 - **Description**:
   - Add 8 new keyword-only parameters to `SearchInstaller.run()`:
