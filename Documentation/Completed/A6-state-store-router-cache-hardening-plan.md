@@ -1,7 +1,7 @@
 # A6 — State-Store + Router Cache Hardening
 **Purpose**: Close two concurrency bugs — CON-3 (active: concurrent sync writers lose updates to `.indexing_state.json`) and CON-2 (latent: long-lived `MultiCollectionRouter` consumers bypass the cache invalidation API via direct field assignment).
 **Audience**: Internal — no user-facing changes. Affects operators running concurrent ingest, reindex, delete-document, or drop-collection against a multi-collection deployment.
-**Status**: To Do
+**Status**: Done
 
 ---
 

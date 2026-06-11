@@ -2,7 +2,7 @@
 
 **Purpose**: Blend a second routing signal — the embedding of each collection's generated description — with the centroid baseline under an opt-in `"hybrid"` strategy, and fix the routing eval gate to be rank-sensitive so any ranking change is observable.
 **Audience**: archon-search contributors implementing B4; eval-harness maintainers.
-**Status**: To Do
+**Status**: Done
 
 ---
 

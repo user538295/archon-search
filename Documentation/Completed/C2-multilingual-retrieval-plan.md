@@ -1,7 +1,7 @@
 # C2 — Multilingual Retrieval
 **Purpose**: Unlock language detection, the blocked `language` filter, and multilingual embedding support so operators on non-English corpora get filterable, quality-ranked results.
 **Audience**: archon-search contributors implementing C2; reviewers of the resulting PRs.
-**Status**: To Do
+**Status**: Done
 
 ---
 

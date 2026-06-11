@@ -1,7 +1,7 @@
 # B7 — Structured Logs + Log Rotation
 **Purpose**: Wire the dead `[logging]` config section — attach a `TimedRotatingFileHandler`, enforce the configured log level, add optional JSON output, inject `correlation_id`, and normalize all logger names to the `archon_search.*` hierarchy.
 **Audience**: archon-search contributors implementing B7; reviewers of the resulting PRs.
-**Status**: To Do
+**Status**: Done
 
 ---
 

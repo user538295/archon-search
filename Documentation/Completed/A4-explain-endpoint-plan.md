@@ -1,7 +1,7 @@
 # A4 — Explain / Debug Endpoint (Roadmap Item 12)
 **Purpose**: Ship `POST /explain` (REST) and a parallel `explain` MCP tool that return the full per-stage score breakdown for a query (vector / FTS / RRF / reranker) plus the routing decision when no collection is pinned — turning today's opaque single `score` into a debuggable provenance object without leaking telemetry-grade information.
 **Audience**: archon-search contributors implementing A4 and reviewers of the resulting PRs.
-**Status**: Draft (revised after code-grounded review)
+**Status**: Done
 
 > **Order**: Ships AFTER A3 (search failure semantics). Pipeline-stage failures on `/explain` return HTTP **500** (was: 503). Aligns with A3's `/search` taxonomy — 503 is reserved for meta-lookup failures only. Supersedes the earlier "intentional divergence from `/search`'s silent swallow" framing in this plan: post-A3 `/search` no longer swallows pipeline-stage failures, so `/explain` is simply consistent, not divergent.
 

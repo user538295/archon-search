@@ -2,7 +2,7 @@
 
 **Purpose**: Implement the durability contract from `Documentation/Backlog/a7-fsync-hardening-brief.md` — every durable state write in archon-search survives a kernel crash or power loss.
 **Audience**: archon-search contributors implementing A7; reviewers of the resulting PRs.
-**Status**: Draft
+**Status**: Done
 
 ---
 

@@ -1,7 +1,7 @@
 # C3a — Markdown Structural Enrichment
 **Purpose**: Enrich every text-format chunk at ingest time with `_heading` and `_section_path` metadata fields derived from the document's heading structure, so operators can locate chunks by section.
 **Audience**: archon-search contributors implementing C3a; reviewers of the resulting PRs.
-**Status**: Shipped
+**Status**: Done
 
 ---
 

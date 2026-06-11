@@ -2,7 +2,7 @@
 
 **Purpose**: Present first-time users with a clear profile selection (Minimal / Balanced / Max) at install time, pre-warm model files before the first query, and guard against accidental index corruption on reinstall with different models.
 **Audience**: archon-search contributors implementing C1; reviewers of the resulting PRs.
-**Status**: Draft
+**Status**: Done
 
 ---
 

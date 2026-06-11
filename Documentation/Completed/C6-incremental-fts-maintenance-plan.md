@@ -1,7 +1,7 @@
 # C6 — Incremental FTS Maintenance
 **Purpose**: Replace O(collection-size) full FTS rebuilds on every ingest/delete with O(delta-size) incremental updates via `table.optimize()`, so ingest latency scales with changed chunks, not total collection size.
 **Audience**: archon-search contributors implementing C6; reviewers of the resulting PRs.
-**Status**: To Do
+**Status**: Done
 
 ---
 

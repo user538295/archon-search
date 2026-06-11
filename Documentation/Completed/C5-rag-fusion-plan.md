@@ -2,7 +2,7 @@
 
 **Purpose**: Improve recall on multi-faceted queries by decomposing them into N semantic variants via LLM, searching with each variant in parallel, and fusing the ranked results via a second-pass RRF — measured by the eval harness before merge.
 **Audience**: archon-search contributors implementing C5; operators who opt in via `rag_fusion=true`.
-**Status**: To Do
+**Status**: Done
 
 ---
 

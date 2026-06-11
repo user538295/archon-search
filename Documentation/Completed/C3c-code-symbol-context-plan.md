@@ -1,7 +1,7 @@
 # C3c — Code Symbol Context Enrichment
 **Purpose**: Enrich every code-file chunk with symbol-level metadata (`_symbol_type`, `_containing_function`, `_containing_class`, `_module_path`, `_symbol_subtype`) derived from tree-sitter AST parse trees at ingest time.
 **Audience**: Backend developer implementing the feature.
-**Status**: To Do
+**Status**: Done
 
 ---
 

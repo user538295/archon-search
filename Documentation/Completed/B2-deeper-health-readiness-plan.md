@@ -2,7 +2,7 @@
 
 **Purpose**: Replace the single dependency-blind `/health` probe with a proper liveness/readiness split: keep `/health` as the unchanged liveness signal and add `GET /ready` as a storage-gated readiness probe, enriching authenticated `/status` with a `readiness` sub-object covering storage connectivity, model warm-status, job queue depth, index-build state, and watcher state.
 **Audience**: archon-search contributors implementing B2 and operators/orchestrators consuming the new endpoints.
-**Status**: To Do
+**Status**: Done
 
 ---
 

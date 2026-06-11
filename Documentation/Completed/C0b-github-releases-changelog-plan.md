@@ -2,7 +2,7 @@
 
 **Purpose**: Every `bash release.sh` run produces a CHANGELOG.md commit and, after PyPI publishes, a GitHub Release with structured release notes — giving operators and contributors a discoverable, formatted history without any manual step.
 **Audience**: archon-search contributors implementing C1; reviewers of the resulting PRs.
-**Status**: To Do
+**Status**: Done
 
 ---
 

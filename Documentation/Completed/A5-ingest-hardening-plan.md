@@ -3,7 +3,7 @@
 
 **Purpose**: Decompose `Documentation/Backlog/a5-ingest-hardening-brief.md` into implementable tasks. Two independent half-features (A5a path safety, A5b SQL builder cleanup) ship as two independent PRs against `main`.
 **Audience**: archon-search contributors implementing A5 and reviewers of the resulting PRs.
-**Status**: Draft
+**Status**: Done
 
 ---
 

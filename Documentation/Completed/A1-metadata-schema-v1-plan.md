@@ -4,7 +4,7 @@
 
 **Purpose**: Ship a typed, populated, end-to-end metadata schema slice that unblocks A2 (filters) and C1 (per-collection embedding model). Wire `file_type`, `updated_at`, `ingested_by` from parser through chunker into the store; surface them in REST + MCP responses; add an opt-in `reindex-metadata` backfill CLI; audit type import paths; document the partition map in code.
 **Audience**: archon-search contributors implementing A1; reviewers of the resulting PRs.
-**Status**: Draft
+**Status**: Done
 
 ---
 

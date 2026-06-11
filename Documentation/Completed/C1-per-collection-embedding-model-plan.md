@@ -2,7 +2,7 @@
 
 **Purpose**: Allow operators to assign a distinct fastembed model to each collection, lazy-load embedders on demand via an LRU cache, and keep searches coherent during model-change transitions via an explicit reindex lifecycle.
 **Audience**: archon-search contributors implementing C1; reviewers; operators who will use the new PATCH endpoint and reindex flow.
-**Status**: To Do
+**Status**: Done
 
 ---
 

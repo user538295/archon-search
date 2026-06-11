@@ -2,7 +2,7 @@
 
 **Purpose**: Fix three concrete defects in centroid maintenance — batch-only overwrite on ingest, no update on delete, O(chunks) full rescan on the watcher-sync hot path — by replacing them with a single `(centroid_sum, chunk_count)` running-pair maintained at the store layer.
 **Audience**: archon-search contributors implementing B5; reviewers; B4 teams depending on a correct centroid baseline.
-**Status**: To Do
+**Status**: Done
 
 ---
 

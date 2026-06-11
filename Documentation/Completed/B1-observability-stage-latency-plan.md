@@ -2,7 +2,7 @@
 
 **Purpose**: Add per-request correlation IDs and per-stage wall-clock timings to the retrieval and ingest pipelines, surfaced via structured log records, the `/explain` response, and a new `X-Request-ID` header. Resolves `ARCH-3`.
 **Audience**: archon-search contributors implementing B1; reviewers of the resulting PRs.
-**Status**: To Do
+**Status**: Done
 
 ---
 

@@ -3,7 +3,7 @@
 
 **Purpose**: Replace the silent `except: return empty` block in `archon_search/server/routes_search.py:76-84` with a re-raise-plus-telemetry pattern patterned after `routes_route.py:152-166` (with two deliberate additions: `exc_info=True` for traceback capture and `extra={"event_type": ...}` for structured filtering), so `/search` pipeline failures surface as HTTP 500 with structured logs and a telemetry entry.
 **Audience**: archon-search contributors implementing A3/CON-5 and reviewers of the resulting PR.
-**Status**: Implemented (2026-05-24)
+**Status**: Done
 
 > **⚠️ Post-implementation deviation:** This plan originally stated that bare `raise` yields FastAPI's default `{"detail": "Internal Server Error"}` JSON envelope. During implementation it was discovered that bare `raise` in a FastAPI handler is caught by Starlette's `ServerErrorMiddleware` (not FastAPI's exception handler), which returns a **plain-text** body `Internal Server Error` with `Content-Type: text/plain` — not a JSON envelope. The bare re-raise is still the correct implementation. All operational docs were updated to describe the actual plain-text body. The inline references in this plan to `{"detail": "Internal Server Error"}` are stale planning text — see `BREAKING.md` and `Documentation/Architecture/140_error_handling_strategy.md` for the authoritative contract.
 

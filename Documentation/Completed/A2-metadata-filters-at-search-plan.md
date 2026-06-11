@@ -1,7 +1,7 @@
 # A2 — Metadata Filters at Search (minimum slice)
 **Purpose**: Push metadata filters (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`-reserved, `include_metadata`) into `/search` (REST) and `search` / `search_with_context` (MCP). Filters compile to a single safe-quoted SQL predicate string, are pushed into LanceDB via `.where(pred)` on both vector and FTS branches (async API's default prefiltering behavior), then `fnmatch.fnmatchcase` post-RRF applies the glob branch. A shared `SearchFilters` Pydantic model lives in `archon_search/filters.py` (kept out of core `_types.py` to avoid leaking Pydantic into every core consumer) and prevents REST↔MCP drift.
 **Audience**: archon-search contributors implementing A2 and reviewers of the resulting PRs.
-**Status**: Draft
+**Status**: Done
 
 > **Depends on A1**: `SearchResult` already carries `file_type, indexed_at, updated_at, ingested_by: IngestedBy, metadata`. A2 adds `language` + all filter logic. A2 must NOT re-declare A1's fields.
 

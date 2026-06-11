@@ -1,7 +1,7 @@
 # C10 — Test Suite Speed Optimization
 **Purpose**: Reduce the default `uv run pytest` wall time from ~600s to ≤200s by enabling pytest-xdist parallelism and eliminating a 30s serial wait in one test.
 **Audience**: Developers iterating locally; CI cost.
-**Status**: To Do
+**Status**: Done
 
 ## Baseline Measurement
 <!-- Recorded during Task 1.1 pre-step: `time uv run pytest --no-cov --durations=20` (xdist not yet installed, -n0 unavailable) -->
