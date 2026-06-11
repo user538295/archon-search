@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -1284,8 +1285,12 @@ class SearchInstaller:
                 tmp = config_path.with_suffix(config_path.suffix + ".tmp")
                 tmp.unlink(missing_ok=True)
                 config_path.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_bytes(config_path, _profile_toml(profile_name, is_multilingual, features).encode())
-                shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
+                if not self.dry_run:
+                    atomic_write_bytes(config_path, _profile_toml(profile_name, is_multilingual, features).encode())
+                    shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
+                else:
+                    print(f"[DRY RUN] Would write config: {config_path}")
+                    print(f"[DRY RUN] Would write .bak: {config_path.with_suffix('.toml.bak')}")
             else:
                 # Branch C: idempotent reinstall (same profile)
                 branch = "idempotent"
@@ -1293,7 +1298,19 @@ class SearchInstaller:
                 _write_profile_config(config_path, prof, profile_name, is_multilingual, features=features)
 
             # Step 8b: reload config with freshly-written values
-            self.cfg = cfg = load_config(config_path)
+            if self.dry_run and branch == "fresh":
+                fd, tmp_path_str = tempfile.mkstemp(suffix=".toml")
+                try:
+                    os.write(fd, _profile_toml(profile_name, is_multilingual, features).encode())
+                    os.close(fd)
+                    fd = -1
+                    self.cfg = cfg = load_config(Path(tmp_path_str))
+                finally:
+                    if fd != -1:
+                        os.close(fd)
+                    os.unlink(tmp_path_str)
+            else:
+                self.cfg = cfg = load_config(config_path)
 
             # Step 9: GPU detection, user confirmation, and provider configuration
             gpu = self.detect_gpu()
