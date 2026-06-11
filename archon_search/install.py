@@ -369,8 +369,11 @@ def _execute_force_reinstall(
     bak_path = config_path.with_suffix(".toml.bak")
     has_backup = False
     if config_path.exists():
-        shutil.copy2(config_path, bak_path)
-        has_backup = True
+        if dry_run:
+            print(f"[dry-run] Would create backup at {bak_path}.")
+        else:
+            shutil.copy2(config_path, bak_path)
+            has_backup = True
 
     # Step 2: Confirmation gate
     if not non_interactive:
@@ -1246,11 +1249,14 @@ class SearchInstaller:
                     _prompt_fasttext_license(non_interactive, accept_fasttext_license=accept_fasttext_license)
                 except SystemExit as e:
                     return int(e.code) if e.code is not None else 1
-                try:
-                    _download_fasttext_model(Path.home() / ".archon-search" / "models")
-                except InstallError as exc:
-                    print(f"fasttext model download failed: {exc}", file=sys.stderr)
-                    return 1
+                if self.dry_run:
+                    print("[DRY RUN] Would download fasttext model.")
+                else:
+                    try:
+                        _download_fasttext_model(Path.home() / ".archon-search" / "models")
+                    except InstallError as exc:
+                        print(f"fasttext model download failed: {exc}", file=sys.stderr)
+                        return 1
 
             # Step 4: config path
             config_path = Path(self.config_file) if self.config_file else get_default_config_path()
@@ -1371,20 +1377,23 @@ class SearchInstaller:
 
             # Step 14: pre-warm
             if not skip_preload:
-                print("[4/5] Downloading models...")
-                try:
-                    _prewarm_models(prof)
-                except InstallError as exc:
-                    print(f"Model download failed: {exc}", file=sys.stderr)
-                    if branch == "fresh":
-                        config_path.unlink(missing_ok=True)
-                        config_path.with_suffix(".toml.bak").unlink(missing_ok=True)
-                    elif branch == "idempotent":
-                        bak = config_path.with_suffix(".toml.bak")
-                        if bak.exists():
-                            shutil.copy2(bak, config_path)
-                    # branch == "force": leave backup, new config stays
-                    return 1
+                if self.dry_run:
+                    print(f"[DRY RUN] Would download models (~{prof.download_mb} MB).")
+                else:
+                    print("[4/5] Downloading models...")
+                    try:
+                        _prewarm_models(prof)
+                    except InstallError as exc:
+                        print(f"Model download failed: {exc}", file=sys.stderr)
+                        if branch == "fresh":
+                            config_path.unlink(missing_ok=True)
+                            config_path.with_suffix(".toml.bak").unlink(missing_ok=True)
+                        elif branch == "idempotent":
+                            bak = config_path.with_suffix(".toml.bak")
+                            if bak.exists():
+                                shutil.copy2(bak, config_path)
+                        # branch == "force": leave backup, new config stays
+                        return 1
 
             # Step 15: register and start service
             print("[5/5] Starting search service...")

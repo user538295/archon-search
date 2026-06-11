@@ -166,7 +166,7 @@ After this plan ships: `--dry-run` makes zero filesystem writes across all three
   - Checkpoint: `uv run pytest tests/test_install_dry_run.py -n0 -x`
 
 #### Task 1.3 — Gate `_download_fasttext_model`, `_prewarm_models`, and `_execute_force_reinstall` `.bak`
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - In `run()`, at the `_download_fasttext_model` call site (~line 1249, inside the `if is_multilingual and not skip_preload:` block): add `and not self.dry_run` to the outer condition, or wrap the call with `if not self.dry_run:` inside. Print `[DRY RUN] Would download fasttext model.` when gated.
