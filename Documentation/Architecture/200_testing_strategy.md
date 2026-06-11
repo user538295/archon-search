@@ -48,6 +48,8 @@ flowchart TB
 
 Integration tests exercise real components against local infrastructure. They are excluded from the default run because they are slower and may require local setup. Use this marker when a test needs a real `SearchStore`, real LanceDB index on disk, or real OS service interactions — anything that the stubs in `conftest.py` deliberately replace.
 
+- CI triggers: `archon-search-pr.yml` runs the integration suite on every PR, and `archon-search-release.yml` re-runs it on every tag push (both with a disk-backed `--basetemp=/var/tmp/archon-search-it` because the GitHub-hosted runner's `/tmp` is tmpfs and crash-injection tests skip on tmpfs). Both workflows pass `-m integration tests/` with `--cov-append`, so integration coverage rolls into the same `.coverage` file as the default + eval steps before the `--fail-under=85` gate runs.
+
 ### `eval` — `uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/`
 
 The eval marker runs the offline retrieval-quality harness. It is the **authoritative regression gate** for the retrieval, reranking, and routing pipelines.
