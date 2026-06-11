@@ -143,9 +143,9 @@ class TestPromptOptionalFeatures:
 
     def test_interactive_all_yes(self) -> None:
         """All 'y' inputs (and valid choices) produce all-enabled features."""
-        # 7 questions: code(y), reranker(y), watch(y), telemetry(y), eager_load(y),
-        # routing_strategy("hybrid"), log_format("json")
-        responses = iter(["y", "y", "y", "y", "y", "hybrid", "json"])
+        # 8 questions: code(y), reranker(y), watch(y), telemetry(y), eager_load(y),
+        # routing_strategy("hybrid"), log_format("json"), log_to_stderr(y)
+        responses = iter(["y", "y", "y", "y", "y", "hybrid", "json", "y"])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -158,6 +158,7 @@ class TestPromptOptionalFeatures:
         assert features.eager_load_embedders is True
         assert features.routing_strategy == "hybrid"
         assert features.log_format == "json"
+        assert features.log_to_stderr is True
 
     def test_reranker_question_skipped_when_no_reranker(self) -> None:
         """When profile.reranker is None, disable_reranker stays False without prompting."""
@@ -202,8 +203,10 @@ class TestPromptOptionalFeatures:
         assert features == WizardFeatures()
 
     def test_invalid_log_format_retries(self) -> None:
-        """First 'bad' then 'json' → log_format='json'."""
-        responses = iter(["n", "n", "n", "n", "n", "", "bad", "json"])
+        """First 'bad' then 'json' → log_format='json'. The json format triggers the stderr follow-up."""
+        # n(code), n(reranker), n(watch), n(telemetry), n(eager), ""(routing), "bad"(log retry 1),
+        # "json"(log retry 2), "n"(log_to_stderr follow-up triggered by json)
+        responses = iter(["n", "n", "n", "n", "n", "", "bad", "json", "n"])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,

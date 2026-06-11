@@ -711,6 +711,7 @@ def _print_next_steps(host: str, port: int, api_key_file: str) -> None:
     print("  archon-search status                  # check service health")
     print("  archon-search sync                    # sync watched directories")
     print("  archon-search stop                    # stop the service")
+    print("  archon-search wizard --top-k 20       # increase results per query (default: 5)")
     print(f"\nAPI key: (full key: {key_path})")
     print(f"Config:  {get_default_config_path()}")
 
@@ -903,6 +904,7 @@ def _prompt_optional_features(
     eager_load: bool | None = None,
     routing_strategy: str | None = None,
     log_format: str | None = None,
+    log_to_stderr: bool | None = None,
 ) -> WizardFeatures:
     """Ask seven optional-feature questions after profile selection.
 
@@ -1045,6 +1047,21 @@ def _prompt_optional_features(
             default="text",
         )
 
+    # --- log_to_stderr conditional follow-up ---
+    # Only prompt when: json format chosen interactively AND not already answered by flag.
+    if log_to_stderr is not None:
+        # Flag pre-answered — use it directly
+        _log_to_stderr_val = log_to_stderr
+    elif _log_format_val == "json" and not non_interactive:
+        print(
+            "\nLog to stderr only?\n"
+            "  Routes all log output to stderr instead of a file.\n"
+            "  Canonical container combo: --log-format json --log-to-stderr."
+        )
+        _log_to_stderr_val = _ask_yn("Log to stderr only? [y/N]: ")
+    else:
+        _log_to_stderr_val = False
+
     return WizardFeatures(
         install_code_extra=_install_code_extra_val,
         disable_reranker=_disable_reranker_val,
@@ -1053,6 +1070,7 @@ def _prompt_optional_features(
         eager_load_embedders=_eager_load_val,
         routing_strategy=_routing_val,
         log_format=_log_format_val,
+        log_to_stderr=_log_to_stderr_val,
     )
 
 
@@ -1496,6 +1514,7 @@ class SearchInstaller:
                 eager_load=eager_load,
                 routing_strategy=routing_strategy,
                 log_format=log_format,
+                log_to_stderr=log_to_stderr if log_to_stderr else None,
             )
 
             # Step 3d: overlay C15 Tier 1 flag values onto features
@@ -1517,6 +1536,14 @@ class SearchInstaller:
                 features.enable_hyde = enable_hyde
             if enable_rag_fusion:
                 features.enable_rag_fusion = enable_rag_fusion
+
+            # Step 3d-ii: non-loopback host security note
+            _effective_host = features.host
+            if _effective_host is not None and _effective_host != "127.0.0.1":
+                print(
+                    f"Note: binding to {_effective_host} exposes the service on all interfaces. "
+                    "Ensure a firewall or reverse proxy is in place if this host is reachable externally."
+                )
 
             # Step 3e: db_path special handling — validate and record for use below
             # We handle db_path separately because it requires filesystem operations.

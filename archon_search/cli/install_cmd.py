@@ -10,12 +10,42 @@ import click
 from archon_search.cli._helpers import _get_service
 from archon_search.install import SearchInstaller
 
+_TOP_K_MAX = 100
+_TOP_K_MIN = 1
+
 
 def _get_db_path(config_path: Path | None = None) -> Path:
     """Return the expanded database path from config."""
     from archon_search.config import load_config
     cfg = load_config(config_path)
     return Path(cfg.db_path).expanduser()
+
+
+def _validate_host(ctx: click.Context, param: click.Parameter, value: str | None) -> str | None:
+    """Reject empty string for --host."""
+    if value is not None and value == "":
+        raise click.BadParameter("--host must not be empty.", param=param, ctx=ctx)
+    return value
+
+
+def _validate_top_k(ctx: click.Context, param: click.Parameter, value: int | None) -> int | None:
+    """Reject values outside 1–100 for --top-k."""
+    if value is None:
+        return value
+    if value < _TOP_K_MIN:
+        raise click.BadParameter(
+            f"--top-k must be at least {_TOP_K_MIN}.",
+            param=param,
+            ctx=ctx,
+        )
+    if value > _TOP_K_MAX:
+        raise click.BadParameter(
+            f"top_k > {_TOP_K_MAX} is likely to cause performance problems; "
+            "edit archon-search.toml directly if you need a higher value.",
+            param=param,
+            ctx=ctx,
+        )
+    return value
 
 
 def _install_options(f: click.decorators.FC) -> click.decorators.FC:
@@ -46,6 +76,21 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
 @click.option("--routing-strategy", type=click.Choice(["centroid", "hybrid"]), default=None, help="Routing strategy")
 @click.option("--log-format", type=click.Choice(["text", "json"]), default=None, help="Log format")
 @click.option("--disable-gpu", is_flag=True, default=False, help="Force CPU execution; skip GPU acceleration")
+@click.option("--host", default=None, callback=_validate_host, is_eager=False,
+              help="Bind address (default: 127.0.0.1); use 0.0.0.0 for remote access")
+@click.option("--port", type=click.IntRange(1, 65535), default=None,
+              help="HTTP port (default: 8765; valid: 1–65535)")
+@click.option("--db-path", "db_path", type=click.Path(), default=None,
+              help="Database directory (default: ~/.archon-search/search); write path as-is")
+@click.option("--log-level",
+              type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=True),
+              default=None, help="Log level")
+@click.option("--log-to-stderr", is_flag=True, default=False,
+              help="Log to stderr only (sets log_file=''); canonical container combo: --log-format json --log-to-stderr")
+@click.option("--top-k", type=int, default=None, callback=_validate_top_k, is_eager=False,
+              help="Number of results to return per query (default: 5; valid: 1–100)")
+@click.option("--telemetry-retention-days", type=click.IntRange(min=1), default=None,
+              help="Number of days to retain telemetry logs (requires --telemetry)")
 def wizard(
     profile: str | None,
     multilingual: bool | None,
@@ -65,8 +110,25 @@ def wizard(
     routing_strategy: str | None,
     log_format: str | None,
     disable_gpu: bool,
+    host: str | None,
+    port: int | None,
+    db_path: str | None,
+    log_level: str | None,
+    log_to_stderr: bool,
+    top_k: int | None,
+    telemetry_retention_days: int | None,
 ) -> None:
     """Interactive setup wizard: choose a profile, download models, start service."""
+    # Warn if --telemetry-retention-days is given without --telemetry
+    if telemetry_retention_days is not None and not telemetry:
+        click.echo(
+            "Warning: --telemetry-retention-days has no effect because telemetry is not enabled. "
+            "Pass --telemetry to enable it.",
+            err=True,
+        )
+        # Clear retention_days so it is not written to TOML
+        telemetry_retention_days = None
+
     sys.exit(
         SearchInstaller(
             config_file=str(config_path) if config_path else None,
@@ -88,6 +150,13 @@ def wizard(
             routing_strategy=routing_strategy,
             log_format=log_format,
             disable_gpu=disable_gpu,
+            host=host,
+            port=port,
+            db_path=db_path,
+            log_level=log_level,
+            log_to_stderr=log_to_stderr,
+            top_k=top_k,
+            telemetry_retention_days=telemetry_retention_days,
         )
     )
 

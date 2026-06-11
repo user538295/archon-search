@@ -1,4 +1,4 @@
-"""End-to-end tests for wizard CLI optional features (Task C8-3.3).
+"""End-to-end tests for wizard CLI optional features (Task C8-3.3, C15-2.1).
 
 These tests invoke the real `wizard` Click command via CliRunner, then parse
 the written TOML with tomlkit to assert on config values.  All tests run
@@ -469,3 +469,329 @@ def test_e2e_rerun_with_hand_edited_config(runner: CliRunner, tmp_path: Path) ->
     assert "[warn] Existing config has custom values" in result2.output, (
         f"Expected overwrite warning in output. Got: {result2.output}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 2.1 — C15 Tier 1 Click options
+# ---------------------------------------------------------------------------
+
+
+def _wizard_args(config_path: Path, *extra: str) -> list[str]:
+    """Build a non-interactive wizard invocation with skip-preload."""
+    return [
+        "wizard",
+        "--non-interactive",
+        "--profile", "minimal",
+        "--config", str(config_path),
+        "--skip-preload",
+        *extra,
+    ]
+
+
+@pytest.mark.integration
+def test_wizard_host_writes_toml(runner: CliRunner, tmp_path: Path) -> None:
+    """--host 0.0.0.0 writes [server].host = '0.0.0.0' to TOML."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--host", "0.0.0.0"))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["server"]["host"] == "0.0.0.0"
+
+
+@pytest.mark.integration
+def test_wizard_host_non_loopback_prints_security_note(runner: CliRunner, tmp_path: Path) -> None:
+    """--host 0.0.0.0 prints security note in stdout."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--host", "0.0.0.0"))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert "firewall" in result.output or "exposes" in result.output, (
+        f"Security note not in output: {result.output}"
+    )
+
+
+@pytest.mark.integration
+def test_wizard_host_lan_ip_prints_security_note(runner: CliRunner, tmp_path: Path) -> None:
+    """--host 192.168.1.100 prints security note in stdout."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--host", "192.168.1.100"))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert "firewall" in result.output or "exposes" in result.output, (
+        f"Security note not in output for LAN IP: {result.output}"
+    )
+
+
+@pytest.mark.integration
+def test_wizard_host_loopback_no_security_note(runner: CliRunner, tmp_path: Path) -> None:
+    """--host 127.0.0.1 does NOT print security note."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--host", "127.0.0.1"))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert "exposes the service" not in result.output
+
+
+@pytest.mark.integration
+def test_wizard_port_writes_toml(runner: CliRunner, tmp_path: Path) -> None:
+    """--port 9000 writes [server].port = 9000 to TOML."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--port", "9000"))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["server"]["port"] == 9000
+
+
+@pytest.mark.integration
+def test_wizard_port_invalid_rejects(runner: CliRunner, tmp_path: Path) -> None:
+    """--port 0 is rejected (below valid range)."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--port", "0"))
+    assert result.exit_code != 0, f"Expected non-zero exit for --port 0, got: {result.output}"
+
+
+@pytest.mark.integration
+def test_wizard_port_65536_rejects(runner: CliRunner, tmp_path: Path) -> None:
+    """--port 65536 is rejected (above valid range)."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--port", "65536"))
+    assert result.exit_code != 0, f"Expected non-zero exit for --port 65536, got: {result.output}"
+
+
+@pytest.mark.integration
+def test_wizard_db_path_writes_toml(runner: CliRunner, tmp_path: Path) -> None:
+    """--db-path ~/custom writes [database].db_path = '~/custom' (tilde preserved)."""
+    config_path = tmp_path / "archon-search.toml"
+    db_path_dir = tmp_path / "custom_db"
+    db_path_dir.mkdir()
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--db-path", str(db_path_dir)))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert "db_path" in doc["database"]
+    assert doc["database"]["db_path"] == str(db_path_dir)
+
+
+@pytest.mark.integration
+def test_wizard_log_level_writes_toml(runner: CliRunner, tmp_path: Path) -> None:
+    """--log-level DEBUG writes [logging].level = 'DEBUG'."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--log-level", "DEBUG"))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["logging"]["level"] == "DEBUG"
+
+
+@pytest.mark.integration
+def test_wizard_log_level_invalid_rejects(runner: CliRunner, tmp_path: Path) -> None:
+    """--log-level VERBOSE is rejected."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--log-level", "VERBOSE"))
+    assert result.exit_code != 0, f"Expected non-zero exit for invalid log level"
+
+
+@pytest.mark.integration
+def test_wizard_log_to_stderr_writes_empty_log_file(runner: CliRunner, tmp_path: Path) -> None:
+    """--log-to-stderr writes [logging].log_file = ''."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--log-to-stderr"))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["logging"]["log_file"] == ""
+
+
+@pytest.mark.integration
+def test_wizard_top_k_writes_both_keys(runner: CliRunner, tmp_path: Path) -> None:
+    """--top-k 20 writes top_k_return=20 and top_k_retrieve=60."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--top-k", "20"))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["top_k_return"] == 20
+    assert doc["database"]["top_k_retrieve"] == 60
+
+
+@pytest.mark.integration
+def test_wizard_top_k_1_sets_retrieve_to_15(runner: CliRunner, tmp_path: Path) -> None:
+    """--top-k 1 sets top_k_retrieve=15 (max guard)."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--top-k", "1"))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["top_k_return"] == 1
+    assert doc["database"]["top_k_retrieve"] == 15
+
+
+@pytest.mark.integration
+def test_wizard_top_k_0_rejects(runner: CliRunner, tmp_path: Path) -> None:
+    """--top-k 0 is rejected."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--top-k", "0"))
+    assert result.exit_code != 0, f"Expected non-zero exit for --top-k 0"
+
+
+@pytest.mark.integration
+def test_wizard_top_k_101_rejects(runner: CliRunner, tmp_path: Path) -> None:
+    """--top-k 101 is rejected with performance message."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--top-k", "101"))
+    assert result.exit_code != 0, f"Expected non-zero exit for --top-k 101"
+    assert "performance" in result.output.lower() or "performance" in (result.stderr or "").lower(), (
+        f"Expected performance message, got: {result.output}"
+    )
+
+
+@pytest.mark.integration
+def test_wizard_telemetry_retention_without_telemetry_warns(runner: CliRunner, tmp_path: Path) -> None:
+    """--telemetry-retention-days 7 without --telemetry prints warning and does NOT write retention_days."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--telemetry-retention-days", "7"))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    # Warning should be in output (stdout or stderr)
+    combined = result.output + (result.stderr or "")
+    assert "telemetry" in combined.lower() and (
+        "no effect" in combined.lower() or "warning" in combined.lower() or "not enabled" in combined.lower()
+    ), f"Warning not found in output: {combined}"
+    # retention_days should NOT be written
+    doc = tomlkit.parse(config_path.read_text())
+    assert "retention_days" not in doc.get("telemetry", {}), "retention_days should not be in TOML"
+
+
+@pytest.mark.integration
+def test_wizard_telemetry_retention_with_telemetry_writes_toml(runner: CliRunner, tmp_path: Path) -> None:
+    """--telemetry --telemetry-retention-days 7 writes [telemetry].retention_days = 7."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(
+            main, _wizard_args(config_path, "--telemetry", "--telemetry-retention-days", "7")
+        )
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["telemetry"]["retention_days"] == 7
+
+
+@pytest.mark.integration
+def test_wizard_host_empty_string_rejects(runner: CliRunner, tmp_path: Path) -> None:
+    """--host '' is rejected."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--host", ""))
+    assert result.exit_code != 0, f"Expected non-zero exit for empty --host"
+
+
+@pytest.mark.integration
+def test_wizard_not_passed_flags_do_not_write_toml(runner: CliRunner, tmp_path: Path) -> None:
+    """Running without --host does not override [server].host beyond the profile template default."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    # The profile template always writes [server].host = "127.0.0.1".
+    # Without --host, it must remain at the default; no user value is injected.
+    assert doc.get("server", {}).get("host") == "127.0.0.1", (
+        f"Expected default host '127.0.0.1', got: {doc.get('server', {}).get('host')}"
+    )
+
+
+@pytest.mark.integration
+def test_wizard_explicit_default_value_writes_to_toml(runner: CliRunner, tmp_path: Path) -> None:
+    """--port 8765 (same as default) IS written to TOML (idempotency behavior)."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--port", "8765"))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["server"]["port"] == 8765
+
+
+@pytest.mark.integration
+def test_wizard_log_format_json_prompts_log_to_stderr(runner: CliRunner, tmp_path: Path) -> None:
+    """Interactive mode: log-format json triggers 'Log to stderr only?' follow-up prompt; y → log_file=''."""
+    config_path = tmp_path / "archon-search.toml"
+    # Input order: multilingual, code, reranker, watch, telemetry, eager, routing, log-format=json, stderr=y, proceed
+    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "json", "y", "y"]) + "\n"
+    with _patched_wizard():
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["logging"]["log_file"] == "", f"log_file should be '' when stderr prompt answered y"
+
+
+@pytest.mark.integration
+def test_wizard_log_format_text_does_not_prompt_log_to_stderr(runner: CliRunner, tmp_path: Path) -> None:
+    """Interactive mode: log-format text does NOT show stderr follow-up prompt."""
+    config_path = tmp_path / "archon-search.toml"
+    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "text", "y"]) + "\n"
+    with _patched_wizard():
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--config", str(config_path),
+                "--skip-preload",
+            ],
+            input=stdin_responses,
+        )
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert "stderr" not in result.output.lower() or "Log to stderr" not in result.output, (
+        f"Stderr prompt should not appear for text log format. Output: {result.output}"
+    )
+
+
+@pytest.mark.integration
+def test_wizard_non_interactive_json_does_not_prompt_log_to_stderr(runner: CliRunner, tmp_path: Path) -> None:
+    """--log-format json --non-interactive: no stderr prompt, log_file not written (flag not passed)."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(
+            main, _wizard_args(config_path, "--log-format", "json")
+        )
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert "log_file" not in doc.get("logging", {}), "log_file should not be written in non-interactive mode"
+
+
+@pytest.mark.integration
+def test_wizard_log_to_stderr_flag_bypasses_conditional_prompt(runner: CliRunner, tmp_path: Path) -> None:
+    """--log-format json --log-to-stderr --non-interactive: log_file='' written."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(
+            main, _wizard_args(config_path, "--log-format", "json", "--log-to-stderr")
+        )
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["logging"]["log_file"] == ""
+
+
+@pytest.mark.integration
+def test_wizard_success_output_contains_top_k_hint(runner: CliRunner, tmp_path: Path) -> None:
+    """Success output next-steps block contains '--top-k' hint."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert "--top-k" in result.output, f"--top-k hint not in output: {result.output}"

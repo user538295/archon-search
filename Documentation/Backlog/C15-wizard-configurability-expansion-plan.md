@@ -223,7 +223,7 @@ else:  # source.startswith("file:")
 > **Releasable**: after this phase — all 7 Tier 1 flags are fully functional from the CLI
 
 #### Task 2.1 — `install_cmd.py wizard` — 7 new Click options with validation
-- [ ] **File**: `archon_search/cli/install_cmd.py`
+- [x] **File**: `archon_search/cli/install_cmd.py`
 - **Depends on**: Task 1.3
 - **Description**:
   - Add to `_install_options()` decorator list (or directly to `wizard` via `@click.option`):
