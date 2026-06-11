@@ -397,7 +397,7 @@ After this plan ships: `--dry-run` makes zero filesystem writes across all three
   - Checkpoint: `uv run pytest tests/test_install_overwrite_detection.py -n0 -x`
 
 #### Task 5.5 — Integrate overwrite warning into Branch C
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 5.4
 - **Description**:
   - In `run()`, Branch C (idempotent re-run), before the `.bak` and config write:

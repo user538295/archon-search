@@ -1204,3 +1204,403 @@ def test_reorder_non_interactive_still_succeeds(tmp_path: Path) -> None:
         )
 
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 5.5 — Overwrite warning integration into Branch C
+# ---------------------------------------------------------------------------
+
+
+def _make_idempotent_config(tmp_path: Path, profile_name: str = "minimal") -> Path:
+    """Write a wizard-default config for Branch C (idempotent re-run) tests."""
+    from archon_search.install import _profile_toml
+    config_path = tmp_path / "archon-search.toml"
+    config_path.write_text(_profile_toml(profile_name, False))
+    return config_path
+
+
+def test_overwrite_warning_triggers_on_hand_edit(tmp_path: Path) -> None:
+    """Branch C, hand-edit detected (via mock), interactive mode, user confirms → _write_profile_config called.
+
+    Uses non_interactive=False to trigger the interactive overwrite prompt.
+    _detect_config_hand_edits is mocked to return True (simulating a detected edit).
+    multilingual=False is passed explicitly to avoid the multilingual prompt triggering
+    the reinstall guard (English vs multilingual profile mismatch).
+    _prompt_optional_features is also mocked to avoid complex input sequencing.
+    """
+    config_path = _make_idempotent_config(tmp_path)
+
+    write_mock = MagicMock()
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=tmp_path / "fake.plist"),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._write_profile_config", write_mock),
+        patch("archon_search.install._detect_config_hand_edits", return_value=True),
+        patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
+            install_code_extra=False, disable_reranker=False, enable_watch=False,
+            enable_telemetry=False, eager_load_embedders=False,
+            routing_strategy="centroid", log_format="text"
+        )),
+        # input() used for: overwrite prompt ("y") and Proceed? ("y")
+        patch("builtins.input", return_value="y"),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=False,
+            profile="minimal",
+            multilingual=False,  # explicit to avoid reinstall guard mismatch
+            skip_preload=True,
+        )
+
+    assert rc == 0
+    write_mock.assert_called_once()
+
+
+def test_overwrite_warning_aborts_on_n(tmp_path: Path) -> None:
+    """Branch C, hand-edit detected, user answers 'n' to overwrite prompt → return code 1."""
+    config_path = _make_idempotent_config(tmp_path)
+
+    write_mock = MagicMock()
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=tmp_path / "fake.plist"),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._write_profile_config", write_mock),
+        patch("archon_search.install._detect_config_hand_edits", return_value=True),
+        patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
+            install_code_extra=False, disable_reranker=False, enable_watch=False,
+            enable_telemetry=False, eager_load_embedders=False,
+            routing_strategy="centroid", log_format="text"
+        )),
+        # "n" causes the overwrite prompt to abort
+        patch("builtins.input", return_value="n"),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=False,
+            profile="minimal",
+            multilingual=False,
+            skip_preload=True,
+        )
+
+    assert rc == 1
+    write_mock.assert_not_called()
+
+
+def test_overwrite_warning_bak_not_created_on_n(tmp_path: Path) -> None:
+    """Branch C, hand-edit detected, user answers 'n' → .toml.bak not created."""
+    config_path = _make_idempotent_config(tmp_path)
+    bak_path = config_path.with_suffix(".toml.bak")
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=tmp_path / "fake.plist"),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._detect_config_hand_edits", return_value=True),
+        patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
+            install_code_extra=False, disable_reranker=False, enable_watch=False,
+            enable_telemetry=False, eager_load_embedders=False,
+            routing_strategy="centroid", log_format="text"
+        )),
+        patch("builtins.input", return_value="n"),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        installer.run(
+            non_interactive=False,
+            profile="minimal",
+            multilingual=False,
+            skip_preload=True,
+        )
+
+    assert not bak_path.exists()
+
+
+def test_overwrite_no_warning_on_clean_config(tmp_path: Path) -> None:
+    """Branch C, no hand-edits detected → overwrite prompt NOT shown."""
+    config_path = _make_idempotent_config(tmp_path)
+    # No hand-edit — config is wizard defaults
+
+    input_mock = MagicMock()
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=tmp_path / "fake.plist"),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        # _detect_config_hand_edits returns False = no edits
+        patch("archon_search.install._detect_config_hand_edits", return_value=False),
+        patch("builtins.input", input_mock),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,  # non-interactive → no optional-feature prompts either
+            profile="minimal",
+            skip_preload=True,
+        )
+
+    assert rc == 0
+    # No overwrite prompt (input should not be called)
+    for call_args in input_mock.call_args_list:
+        prompt_text = call_args.args[0] if call_args.args else ""
+        assert "custom values" not in prompt_text, (
+            f"Overwrite prompt shown unexpectedly: {prompt_text}"
+        )
+
+
+def test_overwrite_non_interactive_auto_accepts(tmp_path: Path) -> None:
+    """Branch C, hand-edit detected, --non-interactive → auto-accepts without prompt."""
+    config_path = _make_idempotent_config(tmp_path)
+    # Do NOT call _hand_edit_config — that changes chunk_size triggering reinstall guard.
+    # Mock _detect_config_hand_edits to simulate a soft hand-edit.
+
+    write_mock = MagicMock()
+    input_mock = MagicMock()
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=tmp_path / "fake.plist"),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._write_profile_config", write_mock),
+        patch("archon_search.install._detect_config_hand_edits", return_value=True),
+        patch("builtins.input", input_mock),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+        )
+
+    assert rc == 0
+    write_mock.assert_called_once()
+    # No overwrite prompt in non-interactive mode
+    for call_args in input_mock.call_args_list:
+        prompt_text = call_args.args[0] if call_args.args else ""
+        assert "custom values" not in prompt_text
+
+
+def test_overwrite_non_interactive_bak_still_created(tmp_path: Path) -> None:
+    """Branch C, hand-edit detected, non-interactive auto-accept → .bak still created."""
+    config_path = _make_idempotent_config(tmp_path)
+    bak_path = config_path.with_suffix(".toml.bak")
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=tmp_path / "fake.plist"),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._detect_config_hand_edits", return_value=True),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+        )
+
+    assert rc == 0
+    assert bak_path.exists()
+
+
+def test_overwrite_dry_run_no_prompt_no_writes(tmp_path: Path) -> None:
+    """--dry-run + hand-edit detected → no overwrite prompt shown, no writes made."""
+    config_path = _make_idempotent_config(tmp_path)
+    original_content = config_path.read_text()
+    bak_path = config_path.with_suffix(".toml.bak")
+
+    input_mock = MagicMock()
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=tmp_path / "fake.plist"),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._detect_config_hand_edits", return_value=True),
+        patch("builtins.input", input_mock),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+        rc = installer.run(
+            non_interactive=True,  # non-interactive + dry-run
+            profile="minimal",
+            skip_preload=True,
+        )
+
+    assert rc == 0
+    # No overwrite prompt
+    for call_args in input_mock.call_args_list:
+        prompt_text = call_args.args[0] if call_args.args else ""
+        assert "custom values" not in prompt_text
+    # Config unchanged
+    assert config_path.read_text() == original_content
+    # No .bak created
+    assert not bak_path.exists()
+
+
+def test_bak_content_integrity(tmp_path: Path) -> None:
+    """Branch C with overwrite accepted (non-interactive) → .bak contains original config."""
+    config_path = _make_idempotent_config(tmp_path)
+    original_content = config_path.read_text()
+    bak_path = config_path.with_suffix(".toml.bak")
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=tmp_path / "fake.plist"),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._detect_config_hand_edits", return_value=True),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+        )
+
+    assert rc == 0
+    assert bak_path.exists()
+    assert bak_path.read_text() == original_content
+
+
+def test_overwrite_eof_on_prompt_aborts(tmp_path: Path, capsys) -> None:
+    """Branch C, interactive mode, EOFError on overwrite prompt → aborts cleanly (return 1)."""
+    config_path = _make_idempotent_config(tmp_path)
+
+    write_mock = MagicMock()
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=tmp_path / "fake.plist"),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._write_profile_config", write_mock),
+        patch("archon_search.install._detect_config_hand_edits", return_value=True),
+        patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
+            install_code_extra=False, disable_reranker=False, enable_watch=False,
+            enable_telemetry=False, eager_load_embedders=False,
+            routing_strategy="centroid", log_format="text"
+        )),
+        # EOFError on the overwrite prompt (piped/non-tty stdin)
+        patch("builtins.input", side_effect=EOFError),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=False,
+            profile="minimal",
+            multilingual=False,
+            skip_preload=True,
+        )
+
+    assert rc == 1
+    write_mock.assert_not_called()
+    captured = capsys.readouterr()
+    assert "Installation aborted" in captured.out
+
+
+def test_overwrite_bak_location_printed_on_success(tmp_path: Path, capsys) -> None:
+    """Branch C non-interactive overwrite → .bak file path is printed to stdout."""
+    config_path = _make_idempotent_config(tmp_path)
+    bak_path = config_path.with_suffix(".toml.bak")
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=tmp_path / "fake.plist"),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._detect_config_hand_edits", return_value=True),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+        )
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert str(bak_path) in captured.out, (
+        f"Expected .bak path {bak_path} in stdout. Got: {captured.out}"
+    )

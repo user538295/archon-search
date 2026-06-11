@@ -1476,10 +1476,38 @@ class SearchInstaller:
             else:
                 # Branch C: idempotent reinstall (same profile)
                 branch = "idempotent"
+
+                # Overwrite warning: detect hand-edits before writing
+                prev_profile_name = existing_cfg.profile
+                prev_multilingual = existing_cfg.multilingual
+                has_edits = _detect_config_hand_edits(config_path, prev_profile_name, prev_multilingual)
+
+                if has_edits and not self.dry_run:
+                    if non_interactive:
+                        print(
+                            "[warn] Existing config has custom values; overwriting with profile defaults."
+                        )
+                    else:
+                        try:
+                            answer = input(
+                                "Existing config has custom values. Overwrite with profile defaults? [y/N]: "
+                            ).strip().lower()
+                        except EOFError:
+                            answer = ""
+                        if answer not in ("y", "yes"):
+                            print("Installation aborted.")
+                            return 1
+
                 if not self.dry_run:
                     shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
                     _write_profile_config(config_path, prof, profile_name, is_multilingual, features=features)
+                    print(f"  Backup:     {config_path.with_suffix('.toml.bak')}")
                 else:
+                    if has_edits:
+                        print(
+                            "[DRY RUN] Would prompt: Existing config has custom values."
+                            " Overwrite with profile defaults?"
+                        )
                     print(f"[DRY RUN] Would write .bak: {config_path.with_suffix('.toml.bak')}")
                     print(f"[DRY RUN] Would overwrite config: {config_path}")
 

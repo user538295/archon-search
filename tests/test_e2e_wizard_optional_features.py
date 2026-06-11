@@ -399,3 +399,73 @@ def test_e2e_rerun_adds_features_to_existing_config(runner: CliRunner, tmp_path:
     doc2 = tomlkit.parse(config_path.read_text())
     assert doc2["collections"]["watch"] is True, "watch should be true after second run"
     assert doc2["database"]["embedding_model"] == original_embedder, "embedding_model should be preserved"
+
+
+# ---------------------------------------------------------------------------
+# Task 5.5 — e2e: overwrite warning on re-run with hand-edited config
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_e2e_rerun_with_hand_edited_config(runner: CliRunner, tmp_path: Path) -> None:
+    """Full e2e: install, hand-edit config (non-destructive), re-run wizard → wizard completes.
+
+    Uses a non-destructive hand-edit (telemetry.enabled) that does NOT trigger the
+    reinstall guard (which only fires on model/chunk_size mismatches). Both runs use
+    --no-multilingual and --profile minimal to avoid model mismatch on re-run.
+    """
+    config_path = tmp_path / "archon-search.toml"
+
+    # Step 1: initial install (non-interactive, minimal profile, English)
+    with _patched_wizard():
+        result1 = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--no-multilingual",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+        ])
+    assert result1.exit_code == 0, f"First run failed: {result1.output}"
+    assert config_path.exists()
+
+    # Step 2: hand-edit the config (add telemetry.enabled — non-destructive, no reinstall guard)
+    doc = tomlkit.parse(config_path.read_text())
+    if "telemetry" not in doc:
+        doc.add("telemetry", tomlkit.table())
+    doc["telemetry"]["enabled"] = True
+    config_path.write_text(tomlkit.dumps(doc))
+
+    # Verify the hand-edit is actually detected by _detect_config_hand_edits
+    from archon_search.install import _detect_config_hand_edits
+    assert _detect_config_hand_edits(config_path, "minimal", False) is True, (
+        "Hand-edit detection should return True after adding telemetry.enabled=True"
+    )
+
+    # Step 3: re-run wizard non-interactively (non-interactive auto-accepts overwrite)
+    with _patched_wizard():
+        result2 = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--no-multilingual",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+        ])
+
+    assert result2.exit_code == 0, f"Second run failed: {result2.output}"
+    # After the wizard re-run, the profile-specific database keys should be at profile defaults.
+    # Note: _write_profile_config overlays profile keys on top of existing config; it does NOT
+    # clear hand-edited optional sections (that's by design). The overwrite warning is about
+    # overwriting wizard-profile keys, not clearing all custom sections.
+    final_doc = tomlkit.parse(config_path.read_text())
+    from archon_search.profiles import get_profile
+    expected_embedder = get_profile("minimal", False).embedder
+    assert final_doc["database"]["embedding_model"] == expected_embedder, (
+        f"embedding_model should be minimal profile default {expected_embedder}, "
+        f"got {final_doc['database']['embedding_model']}"
+    )
+    # The overwrite warning message should appear in the second run's output
+    assert "[warn] Existing config has custom values" in result2.output, (
+        f"Expected overwrite warning in output. Got: {result2.output}"
+    )
