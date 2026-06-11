@@ -1,6 +1,7 @@
 """archon-search install and uninstall subcommands."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from shutil import rmtree
@@ -91,6 +92,10 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
               help="Number of results to return per query (default: 5; valid: 1–100)")
 @click.option("--telemetry-retention-days", type=click.IntRange(min=1), default=None,
               help="Number of days to retain telemetry logs (requires --telemetry)")
+@click.option("--enable-hyde", is_flag=True, default=False,
+              help="Enable HyDE query expansion (requires ANTHROPIC_API_KEY)")
+@click.option("--enable-rag-fusion", is_flag=True, default=False,
+              help="Enable RAG Fusion query expansion (requires ANTHROPIC_API_KEY)")
 def wizard(
     profile: str | None,
     multilingual: bool | None,
@@ -117,6 +122,8 @@ def wizard(
     log_to_stderr: bool,
     top_k: int | None,
     telemetry_retention_days: int | None,
+    enable_hyde: bool,
+    enable_rag_fusion: bool,
 ) -> None:
     """Interactive setup wizard: choose a profile, download models, start service."""
     # Warn if --telemetry-retention-days is given without --telemetry
@@ -128,6 +135,12 @@ def wizard(
         )
         # Clear retention_days so it is not written to TOML
         telemetry_retention_days = None
+
+    # Validate --enable-hyde / --enable-rag-fusion require ANTHROPIC_API_KEY
+    if (enable_hyde or enable_rag_fusion) and not os.environ.get("ANTHROPIC_API_KEY"):
+        raise click.UsageError(
+            "--enable-hyde/--enable-rag-fusion requires ANTHROPIC_API_KEY to be set in the environment"
+        )
 
     sys.exit(
         SearchInstaller(
@@ -157,6 +170,8 @@ def wizard(
             log_to_stderr=log_to_stderr,
             top_k=top_k,
             telemetry_retention_days=telemetry_retention_days,
+            enable_hyde=enable_hyde,
+            enable_rag_fusion=enable_rag_fusion,
         )
     )
 

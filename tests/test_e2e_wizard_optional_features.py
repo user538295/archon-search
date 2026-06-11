@@ -11,6 +11,7 @@ Run:
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -24,6 +25,19 @@ from click.testing import CliRunner
 from archon_search.cli.main import main
 from archon_search.install import InstallError, SearchInstaller
 from archon_search.platform.types import GpuType
+
+
+@contextmanager
+def _no_anthropic_key() -> Generator[None, None, None]:
+    """Clear ANTHROPIC_API_KEY from the env for the duration of the test.
+
+    The interactive HyDE/RAG Fusion prompt fires when ANTHROPIC_API_KEY is set.
+    Tests that were written before this prompt was added must clear the key so
+    they don't unexpectedly receive an extra input() call.
+    """
+    env_without_key = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    with patch.dict("os.environ", env_without_key, clear=True):
+        yield
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("install")]
 
@@ -199,19 +213,21 @@ def test_e2e_interactive_watch_and_telemetry(runner: CliRunner, tmp_path: Path) 
     #  7. routing strategy: "" (default=centroid)
     #  8. log format: "" (default=text)
     #  9. "Proceed?": "y"
+    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
     stdin_responses = "\n".join(["n", "n", "n", "y", "y", "n", "", "", "y"]) + "\n"
 
-    with _patched_wizard():
-        result = runner.invoke(
-            main,
-            [
-                "wizard",
-                "--profile", "balanced",
-                "--config", str(config_path),
-                "--skip-preload",
-            ],
-            input=stdin_responses,
-        )
+    with _no_anthropic_key():
+        with _patched_wizard():
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "balanced",
+                    "--config", str(config_path),
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     assert config_path.exists()
@@ -242,23 +258,25 @@ def test_e2e_interactive_multilingual_yes(runner: CliRunner, tmp_path: Path) -> 
     #  1. multilingual: "y"
     #  All optional features: defaults (n / "" for choices)
     #  confirmation: "y"
+    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
     stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "y"]) + "\n"
 
-    with _patched_wizard(
-        **{"archon_search.install._select_profile": select_profile_spy,
-           "archon_search.install._prompt_fasttext_license": MagicMock(),
-           "archon_search.install._download_fasttext_model": MagicMock()}
-    ):
-        result = runner.invoke(
-            main,
-            [
-                "wizard",
-                "--profile", "minimal",
-                "--config", str(config_path),
-                "--skip-preload",
-            ],
-            input=stdin_responses,
-        )
+    with _no_anthropic_key():
+        with _patched_wizard(
+            **{"archon_search.install._select_profile": select_profile_spy,
+               "archon_search.install._prompt_fasttext_license": MagicMock(),
+               "archon_search.install._download_fasttext_model": MagicMock()}
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     # _select_profile should have been called with multilingual=True
@@ -289,19 +307,21 @@ def test_e2e_interactive_invalid_routing_retries(runner: CliRunner, tmp_path: Pa
     #  8. routing (retry, valid): "hybrid"
     #  9. log format: ""
     # 10. "Proceed?": "y"
+    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
     stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "badval", "hybrid", "", "y"]) + "\n"
 
-    with _patched_wizard():
-        result = runner.invoke(
-            main,
-            [
-                "wizard",
-                "--profile", "minimal",
-                "--config", str(config_path),
-                "--skip-preload",
-            ],
-            input=stdin_responses,
-        )
+    with _no_anthropic_key():
+        with _patched_wizard():
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
     assert config_path.exists()
@@ -722,18 +742,20 @@ def test_wizard_log_format_json_prompts_log_to_stderr(runner: CliRunner, tmp_pat
     """Interactive mode: log-format json triggers 'Log to stderr only?' follow-up prompt; y → log_file=''."""
     config_path = tmp_path / "archon-search.toml"
     # Input order: multilingual, code, reranker, watch, telemetry, eager, routing, log-format=json, stderr=y, proceed
+    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire between log-format and proceed.
     stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "json", "y", "y"]) + "\n"
-    with _patched_wizard():
-        result = runner.invoke(
-            main,
-            [
-                "wizard",
-                "--profile", "minimal",
-                "--config", str(config_path),
-                "--skip-preload",
-            ],
-            input=stdin_responses,
-        )
+    with _no_anthropic_key():
+        with _patched_wizard():
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
     assert doc["logging"]["log_file"] == "", f"log_file should be '' when stderr prompt answered y"
@@ -743,18 +765,20 @@ def test_wizard_log_format_json_prompts_log_to_stderr(runner: CliRunner, tmp_pat
 def test_wizard_log_format_text_does_not_prompt_log_to_stderr(runner: CliRunner, tmp_path: Path) -> None:
     """Interactive mode: log-format text does NOT show stderr follow-up prompt."""
     config_path = tmp_path / "archon-search.toml"
+    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
     stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "text", "y"]) + "\n"
-    with _patched_wizard():
-        result = runner.invoke(
-            main,
-            [
-                "wizard",
-                "--profile", "minimal",
-                "--config", str(config_path),
-                "--skip-preload",
-            ],
-            input=stdin_responses,
-        )
+    with _no_anthropic_key():
+        with _patched_wizard():
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     assert "stderr" not in result.output.lower() or "Log to stderr" not in result.output, (
         f"Stderr prompt should not appear for text log format. Output: {result.output}"
@@ -763,7 +787,7 @@ def test_wizard_log_format_text_does_not_prompt_log_to_stderr(runner: CliRunner,
 
 @pytest.mark.integration
 def test_wizard_non_interactive_json_does_not_prompt_log_to_stderr(runner: CliRunner, tmp_path: Path) -> None:
-    """--log-format json --non-interactive: no stderr prompt, log_file not written (flag not passed)."""
+    """--log-format json --non-interactive: no stderr prompt, log_file NOT set to '' (flag not passed)."""
     config_path = tmp_path / "archon-search.toml"
     with _patched_wizard():
         result = runner.invoke(
@@ -771,7 +795,13 @@ def test_wizard_non_interactive_json_does_not_prompt_log_to_stderr(runner: CliRu
         )
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
-    assert "log_file" not in doc.get("logging", {}), "log_file should not be written in non-interactive mode"
+    # The profile template includes a default log_file path; what must NOT happen is
+    # log_file being set to "" (which only occurs when --log-to-stderr is enabled).
+    log_file_val = doc.get("logging", {}).get("log_file")
+    assert log_file_val != "", (
+        "log_file should not be '' in non-interactive mode without --log-to-stderr; "
+        f"got: {log_file_val!r}"
+    )
 
 
 @pytest.mark.integration
@@ -795,3 +825,67 @@ def test_wizard_success_output_contains_top_k_hint(runner: CliRunner, tmp_path: 
         result = runner.invoke(main, _wizard_args(config_path))
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     assert "--top-k" in result.output, f"--top-k hint not in output: {result.output}"
+
+
+# ---------------------------------------------------------------------------
+# Task 4.2 — C15 HyDE/RAG Fusion interactive prompt in _prompt_optional_features
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_wizard_enable_hyde_requires_anthropic_key(runner: CliRunner, tmp_path: Path) -> None:
+    """--enable-hyde without ANTHROPIC_API_KEY exits non-zero with error message."""
+    config_path = tmp_path / "archon-search.toml"
+    import os
+    env_without_key = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    with _patched_wizard():
+        with patch.dict("os.environ", env_without_key, clear=True):
+            result = runner.invoke(main, _wizard_args(config_path, "--enable-hyde"))
+    assert result.exit_code != 0, f"Expected non-zero exit, got: {result.output}"
+    assert "ANTHROPIC_API_KEY" in result.output, (
+        f"Expected ANTHROPIC_API_KEY mention in output: {result.output}"
+    )
+
+
+@pytest.mark.integration
+def test_wizard_enable_rag_fusion_requires_anthropic_key(runner: CliRunner, tmp_path: Path) -> None:
+    """--enable-rag-fusion without ANTHROPIC_API_KEY exits non-zero with error message."""
+    config_path = tmp_path / "archon-search.toml"
+    import os
+    env_without_key = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    with _patched_wizard():
+        with patch.dict("os.environ", env_without_key, clear=True):
+            result = runner.invoke(main, _wizard_args(config_path, "--enable-rag-fusion"))
+    assert result.exit_code != 0, f"Expected non-zero exit, got: {result.output}"
+    assert "ANTHROPIC_API_KEY" in result.output, (
+        f"Expected ANTHROPIC_API_KEY mention in output: {result.output}"
+    )
+
+
+@pytest.mark.integration
+def test_wizard_non_interactive_skips_hyde_prompt_even_with_key(runner: CliRunner, tmp_path: Path) -> None:
+    """--non-interactive with ANTHROPIC_API_KEY set: neither [hyde] nor [rag_fusion] in TOML."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
+            result = runner.invoke(main, _wizard_args(config_path))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert "enabled" not in doc.get("hyde", {}), "hyde.enabled should not be written in non-interactive mode"
+    assert "enabled" not in doc.get("rag_fusion", {}), "rag_fusion.enabled should not be written"
+
+
+@pytest.mark.integration
+def test_wizard_enable_hyde_and_rag_fusion_writes_toml(runner: CliRunner, tmp_path: Path) -> None:
+    """--enable-hyde --enable-rag-fusion with ANTHROPIC_API_KEY writes both to TOML."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
+            result = runner.invoke(
+                main,
+                _wizard_args(config_path, "--enable-hyde", "--enable-rag-fusion"),
+            )
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["hyde"]["enabled"] is True, "hyde.enabled should be True"
+    assert doc["rag_fusion"]["enabled"] is True, "rag_fusion.enabled should be True"

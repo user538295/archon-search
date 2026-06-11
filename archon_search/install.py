@@ -905,6 +905,8 @@ def _prompt_optional_features(
     routing_strategy: str | None = None,
     log_format: str | None = None,
     log_to_stderr: bool | None = None,
+    enable_hyde: bool | None = None,
+    enable_rag_fusion: bool | None = None,
 ) -> WizardFeatures:
     """Ask seven optional-feature questions after profile selection.
 
@@ -1062,6 +1064,33 @@ def _prompt_optional_features(
     else:
         _log_to_stderr_val = False
 
+    # --- HyDE / RAG Fusion (C15 Tier 2) ---
+    # Prompt only when ANTHROPIC_API_KEY is set and interactive and not pre-answered.
+    if enable_hyde is not None or enable_rag_fusion is not None:
+        # One or both flags pre-answered — use them directly; no prompt.
+        _enable_hyde_val = enable_hyde if enable_hyde is not None else False
+        _enable_rag_fusion_val = enable_rag_fusion if enable_rag_fusion is not None else False
+    elif non_interactive:
+        _enable_hyde_val = False
+        _enable_rag_fusion_val = False
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        print(
+            "\nAI query expansion (HyDE + RAG Fusion):\n"
+            "  HyDE generates hypothetical answers to improve embedding recall.\n"
+            "  RAG Fusion runs multiple query reformulations and merges results.\n"
+            "  Both require $ANTHROPIC_API_KEY and add per-query latency.\n"
+            "  Default: disabled."
+        )
+        if _ask_yn("Enable AI query expansion (HyDE + RAG Fusion)? [y/N]: "):
+            _enable_hyde_val = True
+            _enable_rag_fusion_val = True
+        else:
+            _enable_hyde_val = False
+            _enable_rag_fusion_val = False
+    else:
+        _enable_hyde_val = False
+        _enable_rag_fusion_val = False
+
     return WizardFeatures(
         install_code_extra=_install_code_extra_val,
         disable_reranker=_disable_reranker_val,
@@ -1071,6 +1100,8 @@ def _prompt_optional_features(
         routing_strategy=_routing_val,
         log_format=_log_format_val,
         log_to_stderr=_log_to_stderr_val,
+        enable_hyde=_enable_hyde_val,
+        enable_rag_fusion=_enable_rag_fusion_val,
     )
 
 
@@ -1524,6 +1555,8 @@ class SearchInstaller:
                 routing_strategy=routing_strategy,
                 log_format=log_format,
                 log_to_stderr=log_to_stderr if log_to_stderr else None,
+                enable_hyde=enable_hyde if enable_hyde else None,
+                enable_rag_fusion=enable_rag_fusion if enable_rag_fusion else None,
             )
 
             # Step 3d: overlay C15 Tier 1 flag values onto features
@@ -1807,6 +1840,14 @@ class SearchInstaller:
                         f"  API key: {_api_key}"
                         f"  (keep this key private; also stored at: {KEY_FILE})"
                     )
+            # Post-install hint: if ANTHROPIC_API_KEY not set and HyDE/RAG Fusion not requested
+            if not self.dry_run and not features.enable_hyde and not features.enable_rag_fusion:
+                if not os.environ.get("ANTHROPIC_API_KEY"):
+                    print(
+                        "Tip: Set $ANTHROPIC_API_KEY to enable AI query expansion "
+                        "(HyDE + RAG Fusion) next run."
+                    )
+
             lang = "Multilingual" if is_multilingual else "English"
             print(f"archon-search installed and running. Profile: {profile_name.capitalize()} · {lang}.")
             return 0

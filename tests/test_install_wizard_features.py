@@ -1,10 +1,23 @@
 """Tests for WizardFeatures dataclass (Task 1.1) and prompt functions (Tasks 1.2+)."""
 from __future__ import annotations
+
+import contextlib
+from contextlib import contextmanager
+from collections.abc import Generator
 from unittest.mock import patch
 
 from archon_search.install import WizardFeatures, _prompt_gpu_confirm, _prompt_multilingual, _prompt_optional_features
 from archon_search.platform.types import GpuType
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
+
+
+@contextmanager
+def _no_anthropic_key() -> Generator[None, None, None]:
+    """Clear ANTHROPIC_API_KEY from env so HyDE/RAG Fusion prompt does not fire."""
+    import os
+    env_without_key = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    with patch.dict("os.environ", env_without_key, clear=True):
+        yield
 
 
 class TestWizardFeaturesDefaults:
@@ -145,12 +158,14 @@ class TestPromptOptionalFeatures:
         """All 'y' inputs (and valid choices) produce all-enabled features."""
         # 8 questions: code(y), reranker(y), watch(y), telemetry(y), eager_load(y),
         # routing_strategy("hybrid"), log_format("json"), log_to_stderr(y)
+        # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
         responses = iter(["y", "y", "y", "y", "y", "hybrid", "json", "y"])
-        with patch("builtins.input", side_effect=responses):
-            features = _prompt_optional_features(
-                non_interactive=False,
-                profile=self._profile_with_reranker,
-            )
+        with _no_anthropic_key():
+            with patch("builtins.input", side_effect=responses):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_with_reranker,
+                )
         assert features.install_code_extra is True
         assert features.disable_reranker is True
         assert features.enable_watch is True
@@ -165,41 +180,45 @@ class TestPromptOptionalFeatures:
         # 6 questions (no reranker question): code, watch, telemetry, eager_load,
         # routing_strategy, log_format
         responses = iter(["y", "y", "y", "y", "centroid", "text"])
-        with patch("builtins.input", side_effect=responses):
-            features = _prompt_optional_features(
-                non_interactive=False,
-                profile=self._profile_no_reranker,
-            )
+        with _no_anthropic_key():
+            with patch("builtins.input", side_effect=responses):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_no_reranker,
+                )
         assert features.disable_reranker is False
 
     def test_invalid_routing_strategy_retries(self) -> None:
         """First 'bad' then 'hybrid' → routing_strategy='hybrid'."""
         # questions: code(n), reranker(n), watch(n), telemetry(n), eager(n), routing("bad","hybrid"), log("")
         responses = iter(["n", "n", "n", "n", "n", "bad", "hybrid", ""])
-        with patch("builtins.input", side_effect=responses):
-            features = _prompt_optional_features(
-                non_interactive=False,
-                profile=self._profile_with_reranker,
-            )
+        with _no_anthropic_key():
+            with patch("builtins.input", side_effect=responses):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_with_reranker,
+                )
         assert features.routing_strategy == "hybrid"
 
     def test_invalid_routing_strategy_twice_uses_default(self) -> None:
         """Two bad routing values → routing_strategy='centroid' (default)."""
         responses = iter(["n", "n", "n", "n", "n", "bad", "worse", ""])
-        with patch("builtins.input", side_effect=responses):
-            features = _prompt_optional_features(
-                non_interactive=False,
-                profile=self._profile_with_reranker,
-            )
+        with _no_anthropic_key():
+            with patch("builtins.input", side_effect=responses):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_with_reranker,
+                )
         assert features.routing_strategy == "centroid"
 
     def test_eof_uses_defaults(self) -> None:
         """EOFError on any question uses defaults for remaining questions; no raise."""
-        with patch("builtins.input", side_effect=EOFError):
-            features = _prompt_optional_features(
-                non_interactive=False,
-                profile=self._profile_with_reranker,
-            )
+        with _no_anthropic_key():
+            with patch("builtins.input", side_effect=EOFError):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_with_reranker,
+                )
         assert features == WizardFeatures()
 
     def test_invalid_log_format_retries(self) -> None:
@@ -207,36 +226,39 @@ class TestPromptOptionalFeatures:
         # n(code), n(reranker), n(watch), n(telemetry), n(eager), ""(routing), "bad"(log retry 1),
         # "json"(log retry 2), "n"(log_to_stderr follow-up triggered by json)
         responses = iter(["n", "n", "n", "n", "n", "", "bad", "json", "n"])
-        with patch("builtins.input", side_effect=responses):
-            features = _prompt_optional_features(
-                non_interactive=False,
-                profile=self._profile_with_reranker,
-            )
+        with _no_anthropic_key():
+            with patch("builtins.input", side_effect=responses):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_with_reranker,
+                )
         assert features.log_format == "json"
 
     def test_invalid_log_format_twice_uses_default(self) -> None:
         """Two bad log_format values → log_format='text' (default)."""
         responses = iter(["n", "n", "n", "n", "n", "", "bad", "worse"])
-        with patch("builtins.input", side_effect=responses):
-            features = _prompt_optional_features(
-                non_interactive=False,
-                profile=self._profile_with_reranker,
-            )
+        with _no_anthropic_key():
+            with patch("builtins.input", side_effect=responses):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_with_reranker,
+                )
         assert features.log_format == "text"
 
     def test_partial_flag_override_interactive_rest(self) -> None:
         """Some flags pre-answered; stdin only called for non-overridden questions."""
         # install_code=True and enable_watch=True are pre-answered (non-None).
-        # Remaining interactive questions (with reranker profile):
+        # Remaining interactive questions (with reranker profile, no ANTHROPIC_API_KEY):
         #   reranker(n), telemetry(y), eager(n), routing(""), log("")
         responses = iter(["n", "y", "n", "", ""])
-        with patch("builtins.input", side_effect=responses) as mock_input:
-            features = _prompt_optional_features(
-                non_interactive=False,
-                profile=self._profile_with_reranker,
-                install_code=True,
-                enable_watch=True,
-            )
+        with _no_anthropic_key():
+            with patch("builtins.input", side_effect=responses) as mock_input:
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_with_reranker,
+                    install_code=True,
+                    enable_watch=True,
+                )
         assert features.install_code_extra is True
         assert features.enable_watch is True
         assert features.enable_telemetry is True
@@ -295,11 +317,12 @@ class TestPromptOptionalFeaturesExplanations:
     def test_explanation_printed_in_interactive_mode(self, capsys) -> None:
         """interactive run prints explanation text for at least 3 prompts."""
         responses = iter(["n", "n", "n", "n", "n", "", ""])
-        with patch("builtins.input", side_effect=responses):
-            _prompt_optional_features(
-                non_interactive=False,
-                profile=self._profile_with_reranker,
-            )
+        with _no_anthropic_key():
+            with patch("builtins.input", side_effect=responses):
+                _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_with_reranker,
+                )
         captured = capsys.readouterr()
         out = captured.out
         assert "Code enrichment" in out
@@ -353,24 +376,38 @@ class TestPromptOptionalFeaturesExplanations:
         assert "cross-encoder" not in out.lower()
 
     def test_prompt_count_7_with_reranker(self, capsys) -> None:
-        """Interactive mode with reranker profile: exactly 7 input() calls."""
+        """Interactive mode with reranker profile (no ANTHROPIC_API_KEY): exactly 7 input() calls."""
         responses = iter(["n", "n", "n", "n", "n", "", ""])
-        with patch("builtins.input", side_effect=responses) as mock_input:
-            _prompt_optional_features(
-                non_interactive=False,
-                profile=self._profile_with_reranker,
-            )
+        with _no_anthropic_key():
+            with patch("builtins.input", side_effect=responses) as mock_input:
+                _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_with_reranker,
+                )
         assert mock_input.call_count == 7
 
     def test_prompt_count_6_without_reranker(self, capsys) -> None:
-        """Interactive mode without reranker profile: exactly 6 input() calls."""
+        """Interactive mode without reranker profile (no ANTHROPIC_API_KEY): exactly 6 input() calls."""
         responses = iter(["n", "n", "n", "n", "", ""])
-        with patch("builtins.input", side_effect=responses) as mock_input:
-            _prompt_optional_features(
-                non_interactive=False,
-                profile=self._profile_no_reranker,
-            )
+        with _no_anthropic_key():
+            with patch("builtins.input", side_effect=responses) as mock_input:
+                _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_no_reranker,
+                )
         assert mock_input.call_count == 6
+
+    def test_prompt_count_8_with_reranker_and_api_key(self, capsys) -> None:
+        """Interactive mode with reranker profile and ANTHROPIC_API_KEY: 8 input() calls (7 + hyde/rag_fusion)."""
+        # 7 standard questions + 1 HyDE/RAG Fusion question
+        responses = iter(["n", "n", "n", "n", "n", "", "", "n"])
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
+            with patch("builtins.input", side_effect=responses) as mock_input:
+                _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_with_reranker,
+                )
+        assert mock_input.call_count == 8
 
 
 class TestWizardFeaturesC15NewFields:
@@ -433,6 +470,133 @@ class TestWizardFeaturesC15NewFields:
         # New fields still default
         assert f.host is None
         assert f.port is None
+
+
+class TestPromptOptionalFeaturesHydeRagFusion:
+    """Tests for C15 Task 4.2 — HyDE/RAG Fusion in _prompt_optional_features()."""
+
+    _profile = ENGLISH_PROFILES["minimal"]  # reranker is not None
+
+    def test_hyde_rag_fusion_skipped_when_no_api_key(self) -> None:
+        """No ANTHROPIC_API_KEY in env → enable_hyde and enable_rag_fusion remain False."""
+        env_without_key = {k: v for k, v in __import__("os").environ.items() if k != "ANTHROPIC_API_KEY"}
+        with patch("builtins.input", side_effect=AssertionError("should not prompt for hyde/rag_fusion")):
+            with patch.dict("os.environ", env_without_key, clear=True):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile,
+                    install_code=False,
+                    disable_reranker=False,
+                    enable_watch=False,
+                    enable_telemetry=False,
+                    eager_load=False,
+                    routing_strategy="centroid",
+                    log_format="text",
+                )
+        assert features.enable_hyde is False
+        assert features.enable_rag_fusion is False
+
+    def test_hyde_rag_fusion_prompted_when_api_key_present(self) -> None:
+        """ANTHROPIC_API_KEY set + interactive + answer 'y' → both enabled."""
+        # 1 extra input: the HyDE/RAG Fusion prompt
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
+            with patch("builtins.input", side_effect=["y"]):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile,
+                    install_code=False,
+                    disable_reranker=False,
+                    enable_watch=False,
+                    enable_telemetry=False,
+                    eager_load=False,
+                    routing_strategy="centroid",
+                    log_format="text",
+                )
+        assert features.enable_hyde is True
+        assert features.enable_rag_fusion is True
+
+    def test_hyde_rag_fusion_declined(self) -> None:
+        """ANTHROPIC_API_KEY set + interactive + answer 'n' → both remain False."""
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
+            with patch("builtins.input", side_effect=["n"]):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile,
+                    install_code=False,
+                    disable_reranker=False,
+                    enable_watch=False,
+                    enable_telemetry=False,
+                    eager_load=False,
+                    routing_strategy="centroid",
+                    log_format="text",
+                )
+        assert features.enable_hyde is False
+        assert features.enable_rag_fusion is False
+
+    def test_hyde_rag_fusion_skipped_non_interactive_even_with_key(self) -> None:
+        """non_interactive=True with ANTHROPIC_API_KEY → no prompt, both remain False."""
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
+            with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+                features = _prompt_optional_features(
+                    non_interactive=True,
+                    profile=self._profile,
+                )
+        assert features.enable_hyde is False
+        assert features.enable_rag_fusion is False
+
+    def test_enable_hyde_flag_bypasses_prompt(self) -> None:
+        """enable_hyde=True flag pre-answers the prompt; no input() call for it."""
+        with patch("builtins.input", side_effect=AssertionError("should not prompt for hyde")):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+                enable_hyde=True,
+            )
+        assert features.enable_hyde is True
+
+    def test_enable_rag_fusion_flag_bypasses_prompt(self) -> None:
+        """enable_rag_fusion=True flag pre-answers the prompt; no input() call for it."""
+        with patch("builtins.input", side_effect=AssertionError("should not prompt for rag_fusion")):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+                enable_rag_fusion=True,
+            )
+        assert features.enable_rag_fusion is True
+
+    def test_enable_hyde_false_flag_bypasses_prompt(self) -> None:
+        """enable_hyde=False flag pre-answers even when ANTHROPIC_API_KEY is set."""
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
+            with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile,
+                    install_code=False,
+                    disable_reranker=False,
+                    enable_watch=False,
+                    enable_telemetry=False,
+                    eager_load=False,
+                    routing_strategy="centroid",
+                    log_format="text",
+                    enable_hyde=False,
+                    enable_rag_fusion=False,
+                )
+        assert features.enable_hyde is False
+        assert features.enable_rag_fusion is False
 
 
 class TestPromptGpuConfirm:

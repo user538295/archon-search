@@ -317,7 +317,7 @@ else:  # source.startswith("file:")
   - Checkpoint: `uv run pytest tests/test_install_code_extra.py -v --no-cov`
 
 #### Task 4.2 — HyDE/RAG Fusion `WizardFeatures` fields are already in Task 1.1. TOML writer for `enable_hyde`/`enable_rag_fusion` is already in Task 1.2. This task: add HyDE/RAG Fusion to `_prompt_optional_features()`.
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 4.1, Task 1.1
 - **Description**:
   - Add keyword params to `_prompt_optional_features()`: `enable_hyde: bool | None = None`, `enable_rag_fusion: bool | None = None`
@@ -330,16 +330,16 @@ else:  # source.startswith("file:")
   - Return updated `WizardFeatures` with `enable_hyde` and `enable_rag_fusion` set
 - **Releasable**: after this task, interactive HyDE/RAG Fusion prompt works with `ANTHROPIC_API_KEY` detection
 - **Tests (TDD)** — `tests/test_install_wizard_features.py`:
-  - Unit: `test_prompt_optional_features_hyde_rag_fusion_skipped_when_no_api_key` — no `ANTHROPIC_API_KEY` in env; `non_interactive=False`; assert `features.enable_hyde is False` and `features.enable_rag_fusion is False` without prompting
-  - Unit: `test_prompt_optional_features_hyde_rag_fusion_prompted_when_api_key_present` — set `ANTHROPIC_API_KEY`; mock input to return `"y"`; assert `features.enable_hyde is True` and `features.enable_rag_fusion is True`
-  - Unit: `test_prompt_optional_features_hyde_rag_fusion_declined` — set `ANTHROPIC_API_KEY`; mock input to return `"n"`; assert both False
-  - Unit: `test_prompt_optional_features_hyde_skipped_non_interactive_even_with_key` — `non_interactive=True`, `ANTHROPIC_API_KEY` set; assert both False (no prompt)
-  - Unit: `test_prompt_optional_features_enable_hyde_flag_bypasses_prompt` — `enable_hyde=True`; no `ANTHROPIC_API_KEY`; but since these flags are validated at CLI layer before reaching this, just assert `features.enable_hyde is True`
+  - [x] Unit: `test_prompt_optional_features_hyde_rag_fusion_skipped_when_no_api_key` — no `ANTHROPIC_API_KEY` in env; `non_interactive=False`; assert `features.enable_hyde is False` and `features.enable_rag_fusion is False` without prompting
+  - [x] Unit: `test_prompt_optional_features_hyde_rag_fusion_prompted_when_api_key_present` — set `ANTHROPIC_API_KEY`; mock input to return `"y"`; assert `features.enable_hyde is True` and `features.enable_rag_fusion is True`
+  - [x] Unit: `test_prompt_optional_features_hyde_rag_fusion_declined` — set `ANTHROPIC_API_KEY`; mock input to return `"n"`; assert both False
+  - [x] Unit: `test_prompt_optional_features_hyde_skipped_non_interactive_even_with_key` — `non_interactive=True`, `ANTHROPIC_API_KEY` set; assert both False (no prompt)
+  - [x] Unit: `test_prompt_optional_features_enable_hyde_flag_bypasses_prompt` — `enable_hyde=True`; no `ANTHROPIC_API_KEY`; but since these flags are validated at CLI layer before reaching this, just assert `features.enable_hyde is True`
 - **Tests (TDD)** — `tests/test_e2e_wizard_optional_features.py`:
-  - Integration: `test_wizard_enable_hyde_requires_anthropic_key` — `--enable-hyde` without `ANTHROPIC_API_KEY`; assert non-zero exit with error message
-  - Integration: `test_wizard_enable_rag_fusion_requires_anthropic_key` — `--enable-rag-fusion` without `ANTHROPIC_API_KEY`; assert non-zero exit
-  - Integration: `test_wizard_non_interactive_skips_hyde_prompt_even_with_key` — set `ANTHROPIC_API_KEY`, `--non-interactive`; assert neither `[hyde]` nor `[rag_fusion]` in TOML
-  - Integration: `test_wizard_enable_hyde_and_rag_fusion_writes_toml` — set `ANTHROPIC_API_KEY`, `--enable-hyde --enable-rag-fusion --non-interactive`; assert both `[hyde].enabled = true` and `[rag_fusion].enabled = true` in TOML
+  - [x] Integration: `test_wizard_enable_hyde_requires_anthropic_key` — `--enable-hyde` without `ANTHROPIC_API_KEY`; assert non-zero exit with error message
+  - [x] Integration: `test_wizard_enable_rag_fusion_requires_anthropic_key` — `--enable-rag-fusion` without `ANTHROPIC_API_KEY`; assert non-zero exit
+  - [x] Integration: `test_wizard_non_interactive_skips_hyde_prompt_even_with_key` — set `ANTHROPIC_API_KEY`, `--non-interactive`; assert neither `[hyde]` nor `[rag_fusion]` in TOML
+  - [x] Integration: `test_wizard_enable_hyde_and_rag_fusion_writes_toml` — set `ANTHROPIC_API_KEY`, `--enable-hyde --enable-rag-fusion --non-interactive`; assert both `[hyde].enabled = true` and `[rag_fusion].enabled = true` in TOML
   - Checkpoint: `uv run pytest tests/test_e2e_wizard_optional_features.py -m integration -v --no-cov -k "test_wizard_enable_hyde or test_wizard_enable_rag or test_wizard_non_interactive_skips_hyde"`
 
 #### Task 4.3 — `install_cmd.py wizard` — `--enable-hyde` and `--enable-rag-fusion` Click flags
