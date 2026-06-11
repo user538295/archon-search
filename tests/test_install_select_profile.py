@@ -104,3 +104,47 @@ def test_interactive_choice_returns_multilingual_flag_as_given():
     ):
         result = _select_profile(profile_flag=None, multilingual_flag=True, non_interactive=False)
     assert result == ("balanced", True)
+
+
+# ---------------------------------------------------------------------------
+# Task 5.1 — "Recommended" annotation on balanced profile row
+# ---------------------------------------------------------------------------
+
+def test_profile_table_balanced_recommended_annotation():
+    from archon_search.install import _render_profile_table
+    table = _render_profile_table(multilingual=False, width=80)
+    # "Recommended" must appear somewhere in the balanced row area
+    assert "Recommended" in table
+    # More specifically, the balanced row (containing "Balanced") should come
+    # before the "Recommended" annotation in the same row (both on the same line)
+    lines = table.splitlines()
+    balanced_lines = [l for l in lines if "Balanced" in l]
+    assert len(balanced_lines) >= 1
+    assert any("Recommended" in l for l in balanced_lines)
+
+
+def test_profile_table_minimal_no_recommended():
+    from archon_search.install import _render_profile_table
+    table = _render_profile_table(multilingual=False, width=80)
+    lines = table.splitlines()
+    minimal_lines = [l for l in lines if "Minimal" in l and "Recommended" not in l]
+    # Minimal lines exist and do NOT contain "Recommended"
+    assert any("Minimal" in l for l in lines)
+    assert not any("Minimal" in l and "Recommended" in l for l in lines)
+
+
+def test_profile_table_narrow_has_footnote():
+    from archon_search.install import _render_profile_table
+    table = _render_profile_table(multilingual=False, width=60)
+    # In narrow mode, the balanced row must have a "*" marker on the row itself
+    lines = table.splitlines()
+    balanced_lines = [l for l in lines if "Balanced" in l]
+    assert len(balanced_lines) >= 1
+    # The balanced row line must contain the "*" marker directly
+    assert any("*" in l for l in balanced_lines), (
+        "Expected '*' marker on balanced row in narrow mode"
+    )
+    # And there must be a footnote explaining the marker
+    assert any("Recommended" in l for l in lines), (
+        "Expected footnote with 'Recommended' in narrow mode output"
+    )

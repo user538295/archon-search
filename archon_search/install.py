@@ -451,9 +451,10 @@ def _render_profile_table(multilingual: bool, width: int = 80) -> str:
             else:
                 size_str = f"~{p.download_mb} MB"
             cap = _PROFILE_CAPS[name]
+            recommended = "  ← Recommended" if name == "balanced" else ""
             lines.append(
                 f"  {n}) {cap:<9}  {size_str:<10}  {p.quality_stars:<12}  "
-                f"~{p.cpu_ms} ms/query  / ~{p.metal_ms} ms"
+                f"~{p.cpu_ms} ms/query  / ~{p.metal_ms} ms{recommended}"
             )
         lines.append("")
         # Models section
@@ -477,10 +478,12 @@ def _render_profile_table(multilingual: bool, width: int = 80) -> str:
             else:
                 size_str = f"~{p.download_mb} MB"
             cap = _PROFILE_CAPS[name]
+            star = "*" if name == "balanced" else ""
             if p.reranker is not None:
-                lines.append(f"  {n}) {cap}: {p.embedder} + {p.reranker} ({size_str})")
+                lines.append(f"  {n}) {cap}{star}: {p.embedder} + {p.reranker} ({size_str})")
             else:
-                lines.append(f"  {n}) {cap}: {p.embedder} (no reranker) ({size_str})")
+                lines.append(f"  {n}) {cap}{star}: {p.embedder} (no reranker) ({size_str})")
+        lines.append("  * Recommended for most users")
 
     lines.append("")
     if not multilingual:

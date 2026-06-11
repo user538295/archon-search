@@ -275,7 +275,7 @@ After this plan ships: `--dry-run` makes zero filesystem writes across all three
 > **Releasable**: after Task 5.4; summary is expanded, Next steps block appears, profile table has annotations. After Task 5.6, overwrite warning is active.
 
 #### Task 5.1 — Add 1-line context to profile selection prompt
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: nothing
 - **Description**:
   - In `_render_profile_table()`, add a "Recommended" annotation to the `balanced` profile row. Per the brief's resolved open question: `balanced` is the "Recommended for most users" profile.
