@@ -212,7 +212,7 @@ After this plan ships: `--dry-run` makes zero filesystem writes across all three
 > **Releasable**: after Task 3.1; wizard prompts appear in the correct coherent order.
 
 #### Task 3.1 — Reorder prompts in `SearchInstaller.run()`
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 2.1 (multilingual flag tri-state must be in place before reorder)
 - **Description**:
   - Move `gpu = self.detect_gpu()` and `enable_gpu = not disable_gpu and _prompt_gpu_confirm(non_interactive, gpu)` from Step 9 (post-config-write) to immediately after `get_profile()` (after line 1220, before the license gates). Store `gpu` and `enable_gpu` as locals for later use.

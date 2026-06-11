@@ -1223,18 +1223,9 @@ class SearchInstaller:
             # Step 2: get profile data
             prof = get_profile(profile_name, is_multilingual)
 
-            # After Step 2: collect optional-feature choices
-            features = _prompt_optional_features(
-                non_interactive,
-                prof,
-                install_code=install_code,
-                disable_reranker=disable_reranker,
-                enable_watch=enable_watch,
-                enable_telemetry=enable_telemetry,
-                eager_load=eager_load,
-                routing_strategy=routing_strategy,
-                log_format=log_format,
-            )
+            # Step 2b: GPU detection + user confirmation (prompt only — writes stay in Step 9)
+            gpu = self.detect_gpu()
+            enable_gpu = not disable_gpu and _prompt_gpu_confirm(non_interactive, gpu)
 
             # Step 3: Jina license gate
             if _requires_jina_license(prof):
@@ -1257,6 +1248,19 @@ class SearchInstaller:
                     except InstallError as exc:
                         print(f"fasttext model download failed: {exc}", file=sys.stderr)
                         return 1
+
+            # Step 3c: collect optional-feature choices (after all license gates)
+            features = _prompt_optional_features(
+                non_interactive,
+                prof,
+                install_code=install_code,
+                disable_reranker=disable_reranker,
+                enable_watch=enable_watch,
+                enable_telemetry=enable_telemetry,
+                eager_load=eager_load,
+                routing_strategy=routing_strategy,
+                log_format=log_format,
+            )
 
             # Step 4: config path
             config_path = Path(self.config_file) if self.config_file else get_default_config_path()
@@ -1322,9 +1326,7 @@ class SearchInstaller:
             else:
                 self.cfg = cfg = load_config(config_path)
 
-            # Step 9: GPU detection, user confirmation, and provider configuration
-            gpu = self.detect_gpu()
-            enable_gpu = not disable_gpu and _prompt_gpu_confirm(non_interactive, gpu)
+            # Step 9: GPU provider configuration (detection + user confirm already done in Step 2b)
             providers: list[str] = []
             if not enable_gpu:
                 # User declined GPU — write providers = [] explicitly to override any previous setting

@@ -988,6 +988,219 @@ def test_run_interactive_gpu_decline_writes_cpu(tmp_path: Path) -> None:
         rc = installer.run(non_interactive=False, profile="minimal", skip_preload=True)
 
     assert rc == 0
-    import tomlkit
-    doc = tomlkit.parse(config_path.read_text())
+    import tomlkit as _tomlkit
+    doc = _tomlkit.parse(config_path.read_text())
     assert doc["database"]["providers"] == []
+
+
+# ---------------------------------------------------------------------------
+# Task 3.1 — Prompt reordering tests
+# ---------------------------------------------------------------------------
+
+def _make_ordered_installer(tmp_path: Path):
+    """Return (config_path, call_order_log, patches, method_patches) for ordering tests.
+
+    Records the order in which _prompt_gpu_confirm, _prompt_jina_license,
+    _prompt_fasttext_license, _prompt_optional_features, _write_profile_config,
+    and configure_providers are called into a shared list.
+    """
+    from archon_search.install import WizardFeatures
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+    call_log: list[str] = []
+
+    def _log_side_effect(name: str, return_value=None):
+        def side_effect(*args, **kwargs):
+            call_log.append(name)
+            return return_value
+        return side_effect
+
+    features = WizardFeatures()
+
+    patches = {
+        "archon_search.install.get_default_config_path": MagicMock(return_value=config_path),
+        "archon_search.install._legacy_service_path": MagicMock(return_value=fake_legacy),
+        "archon_search.install._remove_legacy_service": MagicMock(),
+        "archon_search.install._prewarm_models": MagicMock(),
+        "archon_search.install._check_disk_space": MagicMock(),
+        "archon_search.install._prompt_multilingual": MagicMock(return_value=False),
+        "archon_search.install._prompt_jina_license": MagicMock(
+            side_effect=_log_side_effect("jina_license")
+        ),
+        "archon_search.install._prompt_fasttext_license": MagicMock(
+            side_effect=_log_side_effect("fasttext_license")
+        ),
+        "archon_search.install._prompt_optional_features": MagicMock(
+            side_effect=_log_side_effect("optional_features", features)
+        ),
+        "archon_search.install._prompt_gpu_confirm": MagicMock(
+            side_effect=_log_side_effect("gpu_confirm", True)
+        ),
+        "archon_search.install._write_profile_config": MagicMock(
+            side_effect=_log_side_effect("write_profile_config")
+        ),
+    }
+
+    method_patches = {
+        "detect_gpu": MagicMock(return_value=GpuType.NONE),
+        "validate_providers": MagicMock(return_value=False),
+        "configure_providers": MagicMock(side_effect=_log_side_effect("configure_providers")),
+        "write_service_file": MagicMock(),
+        "load_service": MagicMock(return_value=0),
+        "_wait_for_service": MagicMock(return_value=True),
+        "_is_service_running": MagicMock(return_value=False),
+    }
+
+    return config_path, call_log, patches, method_patches
+
+
+def test_prompt_order_gpu_before_license(tmp_path: Path) -> None:
+    """GPU confirmation must appear before Jina license gate in execution order."""
+    config_path, call_log, patches, method_patches = _make_ordered_installer(tmp_path)
+
+    with patch.multiple("archon_search.install", **{
+        k.replace("archon_search.install.", ""): v for k, v in patches.items()
+    }):
+        with patch.multiple(SearchInstaller, **method_patches):
+            installer = SearchInstaller(config_file=str(config_path))
+            with patch("archon_search.install._requires_jina_license", return_value=True):
+                rc = installer.run(
+                    non_interactive=True,
+                    profile="minimal",
+                    skip_preload=True,
+                    accept_jina_license=True,
+                )
+
+    assert rc == 0
+    assert "gpu_confirm" in call_log
+    assert "jina_license" in call_log
+    assert call_log.index("gpu_confirm") < call_log.index("jina_license"), (
+        f"Expected gpu_confirm before jina_license, got: {call_log}"
+    )
+
+
+def test_prompt_order_optional_features_after_license(tmp_path: Path) -> None:
+    """Optional features prompt must appear after license gates in execution order."""
+    config_path, call_log, patches, method_patches = _make_ordered_installer(tmp_path)
+
+    with patch.multiple("archon_search.install", **{
+        k.replace("archon_search.install.", ""): v for k, v in patches.items()
+    }):
+        with patch.multiple(SearchInstaller, **method_patches):
+            installer = SearchInstaller(config_file=str(config_path))
+            with patch("archon_search.install._requires_jina_license", return_value=True):
+                rc = installer.run(
+                    non_interactive=True,
+                    profile="minimal",
+                    skip_preload=True,
+                    accept_jina_license=True,
+                )
+
+    assert rc == 0
+    assert "optional_features" in call_log
+    assert "jina_license" in call_log
+    assert call_log.index("jina_license") < call_log.index("optional_features"), (
+        f"Expected jina_license before optional_features, got: {call_log}"
+    )
+
+
+def test_gpu_prompt_before_config_write(tmp_path: Path) -> None:
+    """GPU confirmation must happen before the profile config is written (idempotent branch)."""
+    config_path, call_log, patches, method_patches = _make_ordered_installer(tmp_path)
+
+    # Write existing config so idempotent (Branch C) path is taken,
+    # which calls _write_profile_config (which we've patched to log)
+    from archon_search.install import _profile_toml
+    config_path.write_text(_profile_toml("minimal", False))
+
+    with patch.multiple("archon_search.install", **{
+        k.replace("archon_search.install.", ""): v for k, v in patches.items()
+    }):
+        with patch.multiple(SearchInstaller, **method_patches):
+            installer = SearchInstaller(config_file=str(config_path))
+            rc = installer.run(
+                non_interactive=True,
+                profile="minimal",
+                skip_preload=True,
+            )
+
+    assert rc == 0
+    assert "gpu_confirm" in call_log
+    assert "write_profile_config" in call_log
+    assert call_log.index("gpu_confirm") < call_log.index("write_profile_config"), (
+        f"Expected gpu_confirm before write_profile_config, got: {call_log}"
+    )
+
+
+def test_configure_providers_after_config_write(tmp_path: Path) -> None:
+    """configure_providers must be called after _write_profile_config (idempotent branch)."""
+    config_path, call_log, patches, method_patches = _make_ordered_installer(tmp_path)
+
+    # Write existing config so idempotent (Branch C) path is taken
+    from archon_search.install import _profile_toml
+    config_path.write_text(_profile_toml("minimal", False))
+
+    # Use CUDA GPU so configure_providers actually fires
+    method_patches["detect_gpu"] = MagicMock(return_value=GpuType.CUDA)
+
+    with patch.multiple("archon_search.install", **{
+        k.replace("archon_search.install.", ""): v for k, v in patches.items()
+    }):
+        with patch.multiple(SearchInstaller, **method_patches):
+            installer = SearchInstaller(config_file=str(config_path))
+            rc = installer.run(
+                non_interactive=True,
+                profile="minimal",
+                skip_preload=True,
+            )
+
+    assert rc == 0
+    assert "write_profile_config" in call_log
+    assert "configure_providers" in call_log
+    assert call_log.index("write_profile_config") < call_log.index("configure_providers"), (
+        f"Expected write_profile_config before configure_providers, got: {call_log}"
+    )
+
+
+def test_reorder_non_interactive_still_succeeds(tmp_path: Path) -> None:
+    """Full non-interactive run with all wizard flags returns exit code 0."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import WizardFeatures
+    features = WizardFeatures()
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install._prompt_multilingual", return_value=False),
+        patch("archon_search.install._prompt_optional_features", return_value=features),
+        patch("archon_search.install._prompt_gpu_confirm", return_value=True),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            multilingual=False,
+            skip_preload=True,
+            install_code=False,
+            disable_reranker=False,
+            enable_watch=False,
+            enable_telemetry=False,
+            eager_load=False,
+            routing_strategy="centroid",
+            log_format="text",
+            disable_gpu=False,
+        )
+
+    assert rc == 0
