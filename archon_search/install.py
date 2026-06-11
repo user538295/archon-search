@@ -500,6 +500,12 @@ def _render_summary(
     multilingual: bool,
     providers: list[str],
     features: WizardFeatures | None = None,
+    *,
+    db_path: str = "",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    api_key_file: str = "",
+    download_mb: int = 0,
 ) -> str:
     """Return an install summary block string. Does NOT print."""
     cap = _PROFILE_CAPS.get(profile_name, profile_name.capitalize())
@@ -512,6 +518,16 @@ def _render_summary(
         f"  Reranker:   {reranker_str}",
         f"  Chunk size: {profile.chunk_size} tokens",
         f"  Providers:  {providers_str}",
+    ]
+    if db_path:
+        lines.append(f"  Database:   {db_path}")
+    lines.append(f"  Server:     http://{host}:{port}")
+    # API key display: mask first-8...last-4; show path for reference
+    api_key_display = _mask_api_key(api_key_file)
+    lines.append(f"  API key:    {api_key_display}  (full key: {api_key_file or _KEY_FILE_PLACEHOLDER})")
+    if download_mb:
+        lines.append(f"  Download:   ~{download_mb} MB")
+    lines += [
         "",
         "  Note: Model files are downloaded now. ONNX session initialization happens in the",
         "  server process on first query — expect ~5–15s latency on first search.",
@@ -537,6 +553,45 @@ def _render_summary(
             lines.append("  Optional features:")
             lines.extend(f"    {b}" for b in feature_bullets)
     return "\n".join(lines)
+
+
+_KEY_FILE_PLACEHOLDER = "~/.archon-search/.search.env"
+
+
+def _mask_api_key(api_key_file: str) -> str:
+    """Read the API key from file and return a masked representation.
+
+    Returns 'first-8...last-4' if the key is long enough, or
+    '(not yet generated)' if the file doesn't exist or key can't be read.
+    """
+    if not api_key_file:
+        return "(not yet generated)"
+    key_path = Path(api_key_file)
+    try:
+        content = key_path.read_text()
+    except OSError:
+        return "(not yet generated)"
+    for line in content.splitlines():
+        if line.startswith("ARCHON_SEARCH_API_KEY="):
+            key = line.split("=", 1)[1].strip()
+            if len(key) >= 12:
+                return f"{key[:8]}…{key[-4:]}"
+            return "(not yet generated)"
+    return "(not yet generated)"
+
+
+def _print_next_steps(host: str, port: int, api_key_file: str) -> None:
+    """Print post-install guidance to stdout."""
+    from archon_search import key_manager
+    key_path = Path(api_key_file) if api_key_file else key_manager.KEY_FILE
+    print(f"\narchon-search is running on http://{host}:{port}\n")
+    print("Next steps:")
+    print("  archon-search ingest <path>           # add documents to search")
+    print("  archon-search status                  # check service health")
+    print("  archon-search sync                    # sync watched directories")
+    print("  archon-search stop                    # stop the service")
+    print(f"\nAPI key: (full key: {key_path})")
+    print(f"Config:  {get_default_config_path()}")
 
 
 # ---------------------------------------------------------------------------
@@ -1407,7 +1462,15 @@ class SearchInstaller:
                 return 1
 
             # Step 12: summary display
-            print(_render_summary(profile_name, prof, is_multilingual, providers, features))
+            from archon_search import key_manager as _key_manager
+            print(_render_summary(
+                profile_name, prof, is_multilingual, providers, features,
+                db_path=str(Path(cfg.db_path).expanduser()),
+                host=cfg.host,
+                port=cfg.port,
+                api_key_file=str(_key_manager.KEY_FILE),
+                download_mb=prof.download_mb,
+            ))
 
             # Step 13: confirmation
             if not non_interactive:
@@ -1458,6 +1521,10 @@ class SearchInstaller:
                 if not ready:
                     print(f"Warning: Search service did not become ready within {_WAIT_FOR_SERVICE_TIMEOUT} seconds.")
                     return 1
+
+            # Step 16b: next steps guidance (non-dry-run only)
+            if not self.dry_run:
+                _print_next_steps(cfg.host, cfg.port, str(_key_manager.KEY_FILE))
 
             # Step 17: completion message
             lang = "Multilingual" if is_multilingual else "English"

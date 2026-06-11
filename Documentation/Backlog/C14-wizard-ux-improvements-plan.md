@@ -290,7 +290,7 @@ After this plan ships: `--dry-run` makes zero filesystem writes across all three
   - Checkpoint: `uv run pytest tests/test_install_select_profile.py -n0 -x -k recommended`
 
 #### Task 5.2 — Expand `_render_summary` with new fields
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: nothing
 - **Description**:
   - Add keyword-only parameters to `_render_summary`:
@@ -328,7 +328,7 @@ After this plan ships: `--dry-run` makes zero filesystem writes across all three
   - Checkpoint: `uv run pytest tests/test_install_ui.py -n0 -x -k summary`
 
 #### Task 5.3 — Add "Next steps" block on successful install
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 5.2 (so `key_manager.KEY_FILE` and cfg are in scope)
 - **Description**:
   - In `run()`, between the "Step 16: wait for readiness" block and "Step 17: completion message", add a `_print_next_steps(host: str, port: int, api_key_file: str) -> None` helper function call.

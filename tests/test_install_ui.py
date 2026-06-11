@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from archon_search.install import _render_profile_table, _render_summary, WizardFeatures
+from archon_search.install import _render_profile_table, _render_summary, WizardFeatures, _print_next_steps
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES, InstallProfile, get_profile
 
 
@@ -238,3 +238,198 @@ def test_render_summary_base_content_preserved_with_features():
     # Optional section also present
     assert "Optional features" in output
     assert "Telemetry" in output
+
+
+# ---------------------------------------------------------------------------
+# Task 5.2: Expanded _render_summary with new fields
+# ---------------------------------------------------------------------------
+
+
+def test_summary_contains_db_path():
+    """_render_summary with db_path shows the db path in output."""
+    profile = get_profile("balanced", multilingual=False)
+    output = _render_summary(
+        "balanced",
+        profile,
+        multilingual=False,
+        providers=[],
+        db_path="/home/user/.archon-search/lancedb",
+    )
+    assert "lancedb" in output
+    assert "Database:" in output
+
+
+def test_summary_contains_server_url():
+    """_render_summary with host/port shows http://host:port in output."""
+    profile = get_profile("balanced", multilingual=False)
+    output = _render_summary(
+        "balanced",
+        profile,
+        multilingual=False,
+        providers=[],
+        host="127.0.0.1",
+        port=8765,
+    )
+    assert "http://127.0.0.1:8765" in output
+    assert "Server:" in output
+
+
+def test_summary_contains_download_size():
+    """_render_summary with download_mb shows the size in output."""
+    profile = get_profile("balanced", multilingual=False)
+    output = _render_summary(
+        "balanced",
+        profile,
+        multilingual=False,
+        providers=[],
+        download_mb=300,
+    )
+    assert "300 MB" in output
+    assert "Download:" in output
+
+
+def test_summary_api_key_masked(tmp_path):
+    """_render_summary with a valid key file shows a masked key."""
+    key_file = tmp_path / ".search.env"
+    key_file.write_text("ARCHON_SEARCH_API_KEY=abcdefghijklmnopqrst\n")
+    profile = get_profile("balanced", multilingual=False)
+    output = _render_summary(
+        "balanced",
+        profile,
+        multilingual=False,
+        providers=[],
+        api_key_file=str(key_file),
+    )
+    assert "abcdefgh" in output
+    assert "qrst" in output
+    assert "API key:" in output
+
+
+def test_summary_api_key_file_missing():
+    """_render_summary with a non-existent key file shows 'not yet generated'."""
+    profile = get_profile("balanced", multilingual=False)
+    output = _render_summary(
+        "balanced",
+        profile,
+        multilingual=False,
+        providers=[],
+        api_key_file="/nonexistent/path/.search.env",
+    )
+    assert "not yet generated" in output
+    assert "API key:" in output
+
+
+# ---------------------------------------------------------------------------
+# Task 5.3: _print_next_steps
+# ---------------------------------------------------------------------------
+
+
+def test_next_steps_all_commands_present(capsys):
+    """_print_next_steps prints all four follow-up commands."""
+    _print_next_steps("127.0.0.1", 8765, "/tmp/test.env")
+    out = capsys.readouterr().out
+    assert "ingest" in out
+    assert "status" in out
+    assert "sync" in out
+    assert "stop" in out
+
+
+def test_next_steps_shows_correct_host_port(capsys):
+    """_print_next_steps uses the supplied host and port."""
+    _print_next_steps("0.0.0.0", 9000, "/tmp/test.env")
+    out = capsys.readouterr().out
+    assert "http://0.0.0.0:9000" in out
+
+
+def test_next_steps_shows_key_file_path(capsys):
+    """_print_next_steps shows the api_key_file path."""
+    _print_next_steps("127.0.0.1", 8765, "/tmp/mykey.env")
+    out = capsys.readouterr().out
+    assert "/tmp/mykey.env" in out
+
+
+def test_next_steps_key_file_from_key_manager(capsys):
+    """_print_next_steps with empty api_key_file falls back to key_manager.KEY_FILE."""
+    from archon_search import key_manager
+    _print_next_steps("127.0.0.1", 8765, "")
+    out = capsys.readouterr().out
+    assert str(key_manager.KEY_FILE) in out
+
+
+def test_next_steps_shows_next_steps_header(capsys):
+    """_print_next_steps output contains 'Next steps:' header."""
+    _print_next_steps("127.0.0.1", 8765, "/tmp/test.env")
+    out = capsys.readouterr().out
+    assert "Next steps:" in out
+
+
+# ---------------------------------------------------------------------------
+# Additional edge case and coverage tests (DA review cycle 1)
+# ---------------------------------------------------------------------------
+
+
+def test_summary_db_path_absent_when_empty():
+    """_render_summary with default db_path='' must NOT emit a Database: line."""
+    profile = get_profile("balanced", multilingual=False)
+    output = _render_summary("balanced", profile, multilingual=False, providers=[])
+    assert "Database:" not in output
+
+
+def test_summary_server_custom_host_port():
+    """_render_summary emits the correct Server URL for a non-default host:port."""
+    profile = get_profile("minimal", multilingual=False)
+    output = _render_summary(
+        "minimal", profile, multilingual=False, providers=[],
+        host="0.0.0.0", port=9999,
+    )
+    assert "http://0.0.0.0:9999" in output
+
+
+def test_mask_api_key_no_matching_line(tmp_path):
+    """Key file exists but has no ARCHON_SEARCH_API_KEY= line → '(not yet generated)'."""
+    from archon_search.install import _mask_api_key
+    key_file = tmp_path / ".search.env"
+    key_file.write_text("# no key here\nSOME_OTHER_VAR=value\n")
+    assert _mask_api_key(str(key_file)) == "(not yet generated)"
+
+
+def test_mask_api_key_with_equals_in_value(tmp_path):
+    """Key value containing '=' is parsed correctly (split on first '=' only)."""
+    from archon_search.install import _mask_api_key
+    key_file = tmp_path / ".search.env"
+    # Simulate a base64-like key with = padding
+    key = "abcdefghijklmnopqrst==extra"
+    key_file.write_text(f"ARCHON_SEARCH_API_KEY={key}\n")
+    result = _mask_api_key(str(key_file))
+    assert result == f"{key[:8]}…{key[-4:]}"
+
+
+def test_next_steps_not_printed_in_dry_run(tmp_path, capsys):
+    """_print_next_steps must NOT be called during a dry-run wizard run."""
+    from unittest.mock import patch, MagicMock
+    from archon_search.install import SearchInstaller
+    from archon_search.platform.types import GpuType
+
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        rc = installer.run(non_interactive=True, profile="balanced", skip_preload=True)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Next steps:" not in out, "Next steps must NOT appear in dry-run output"
