@@ -642,6 +642,126 @@ def _select_profile(
     raise SystemExit(1)  # unreachable, satisfies type checker
 
 
+def _prompt_optional_features(
+    non_interactive: bool,
+    profile: InstallProfile,
+    *,
+    install_code: bool | None = None,
+    disable_reranker: bool | None = None,
+    enable_watch: bool | None = None,
+    enable_telemetry: bool | None = None,
+    eager_load: bool | None = None,
+    routing_strategy: str | None = None,
+    log_format: str | None = None,
+) -> WizardFeatures:
+    """Ask seven optional-feature questions after profile selection.
+
+    Each keyword argument pre-answers its question when not None; None triggers
+    an interactive prompt (or the default in non-interactive mode).
+    """
+
+    def _ask_yn(prompt_text: str, default: bool = False) -> bool:
+        """Ask a yes/no question; return ``default`` on EOFError or empty input."""
+        try:
+            raw = input(prompt_text).strip().lower()
+        except EOFError:
+            return default
+        return raw in {"y", "yes"}
+
+    def _ask_choice(prompt_text: str, valid: set[str], default: str) -> str:
+        """Ask a choice question with one retry; fall back to default on second invalid."""
+        for attempt in range(2):
+            try:
+                raw = input(prompt_text).strip().lower()
+            except EOFError:
+                return default
+            if not raw:
+                return default
+            if raw in valid:
+                return raw
+            if attempt == 0:
+                print(f"Invalid value {raw!r}. Valid options: {sorted(valid)}")
+        return default
+
+    # --- install_code_extra ---
+    if install_code is not None:
+        _install_code_extra_val = install_code
+    elif non_interactive:
+        _install_code_extra_val = False
+    else:
+        _install_code_extra_val = _ask_yn("Index code files (installs tree-sitter enrichment)? [y/N]: ")
+
+    # --- disable_reranker (skipped when profile has no reranker) ---
+    if profile.reranker is None:
+        _disable_reranker_val = False
+    elif disable_reranker is not None:
+        _disable_reranker_val = disable_reranker
+    elif non_interactive:
+        _disable_reranker_val = False
+    else:
+        _disable_reranker_val = _ask_yn("Disable reranker for lower latency? [y/N]: ")
+
+    # --- enable_watch ---
+    if enable_watch is not None:
+        _enable_watch_val = enable_watch
+    elif non_interactive:
+        _enable_watch_val = False
+    else:
+        _enable_watch_val = _ask_yn("Auto-watch directories and re-index on file changes? [y/N]: ")
+
+    # --- enable_telemetry ---
+    if enable_telemetry is not None:
+        _enable_telemetry_val = enable_telemetry
+    elif non_interactive:
+        _enable_telemetry_val = False
+    else:
+        _enable_telemetry_val = _ask_yn("Enable local query telemetry? [y/N]: ")
+
+    # --- eager_load_embedders ---
+    if eager_load is not None:
+        _eager_load_val = eager_load
+    elif non_interactive:
+        _eager_load_val = False
+    else:
+        _eager_load_val = _ask_yn(
+            "Pre-load embedding models at startup (eliminates first-query latency)? [y/N]: "
+        )
+
+    # --- routing_strategy ---
+    if routing_strategy is not None:
+        _routing_val = routing_strategy
+    elif non_interactive:
+        _routing_val = "centroid"
+    else:
+        _routing_val = _ask_choice(
+            "Routing strategy (centroid/hybrid) [centroid]: ",
+            valid={"centroid", "hybrid"},
+            default="centroid",
+        )
+
+    # --- log_format ---
+    if log_format is not None:
+        _log_format_val = log_format
+    elif non_interactive:
+        _log_format_val = "text"
+    else:
+        _log_format_val = _ask_choice(
+            "Log format (text/json) [text]: ",
+            valid={"text", "json"},
+            default="text",
+        )
+
+    return WizardFeatures(
+        install_code_extra=_install_code_extra_val,
+        disable_reranker=_disable_reranker_val,
+        enable_watch=_enable_watch_val,
+        enable_telemetry=_enable_telemetry_val,
+        eager_load_embedders=_eager_load_val,
+        routing_strategy=_routing_val,
+        log_format=_log_format_val,
+    )
+
+
 def _prompt_multilingual(non_interactive: bool, flag_value: bool) -> bool:
     """Ask whether the corpus includes non-English documents.
 

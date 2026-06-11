@@ -188,7 +188,7 @@ All keys are already defined in `SearchConfig` / `archon-search.toml.example`. T
   - Checkpoint: `uv run pytest tests/test_install_wizard_features.py -v`
 
 #### Task 1.3 — `_prompt_optional_features()`
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - ```python
