@@ -271,6 +271,105 @@ class TestPromptOptionalFeatures:
         assert features.log_format == "text"
 
 
+class TestPromptOptionalFeaturesExplanations:
+    """Tests for Task 4.1 — explanation print blocks in _prompt_optional_features."""
+
+    _profile_with_reranker = ENGLISH_PROFILES["minimal"]   # reranker is not None
+    _profile_no_reranker = MULTILINGUAL_PROFILES["minimal"]  # reranker is None
+
+    def _run_non_interactive(self, profile, capsys) -> str:
+        _prompt_optional_features(non_interactive=True, profile=profile)
+        captured = capsys.readouterr()
+        return captured.out
+
+    def test_explanation_printed_in_non_interactive_mode(self, capsys) -> None:
+        """non-interactive run still prints explanation text for at least 3 prompts."""
+        out = self._run_non_interactive(self._profile_with_reranker, capsys)
+        assert "Code enrichment" in out
+        assert "Filesystem watcher" in out
+        assert "Local telemetry" in out
+
+    def test_explanation_printed_in_interactive_mode(self, capsys) -> None:
+        """interactive run prints explanation text for at least 3 prompts."""
+        responses = iter(["n", "n", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses):
+            _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+            )
+        captured = capsys.readouterr()
+        out = captured.out
+        assert "Code enrichment" in out
+        assert "Reranker" in out
+        assert "Filesystem watcher" in out
+
+    def test_no_markdown_in_explanation_output(self, capsys) -> None:
+        """Explanation output must not contain raw Markdown markers."""
+        out = self._run_non_interactive(self._profile_with_reranker, capsys)
+        assert "**" not in out
+        assert "``" not in out
+        assert "](http" not in out
+
+    def test_reranker_explanation_skipped_when_no_reranker(self, capsys) -> None:
+        """Profile with reranker=None: reranker explanation text does NOT appear."""
+        out = self._run_non_interactive(self._profile_no_reranker, capsys)
+        assert "cross-encoder" not in out.lower()
+        assert "second-stage" not in out.lower()
+
+    def test_reranker_explanation_shown_when_reranker_present(self, capsys) -> None:
+        """Profile with reranker set: reranker explanation text appears."""
+        out = self._run_non_interactive(self._profile_with_reranker, capsys)
+        assert "Reranker" in out
+
+    def test_all_7_explanation_blocks_with_reranker(self, capsys) -> None:
+        """All 7 feature sections are explained when profile has a reranker."""
+        out = self._run_non_interactive(self._profile_with_reranker, capsys)
+        for keyword in [
+            "Code enrichment",
+            "Reranker",
+            "Filesystem watcher",
+            "Local telemetry",
+            "Eager embedder",
+            "Routing strategy",
+            "Log format",
+        ]:
+            assert keyword in out, f"Missing explanation block for: {keyword!r}"
+
+    def test_6_explanation_blocks_without_reranker(self, capsys) -> None:
+        """Only 6 feature sections explained when profile has no reranker."""
+        out = self._run_non_interactive(self._profile_no_reranker, capsys)
+        for keyword in [
+            "Code enrichment",
+            "Filesystem watcher",
+            "Local telemetry",
+            "Eager embedder",
+            "Routing strategy",
+            "Log format",
+        ]:
+            assert keyword in out, f"Missing explanation block for: {keyword!r}"
+        assert "cross-encoder" not in out.lower()
+
+    def test_prompt_count_7_with_reranker(self, capsys) -> None:
+        """Interactive mode with reranker profile: exactly 7 input() calls."""
+        responses = iter(["n", "n", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses) as mock_input:
+            _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+            )
+        assert mock_input.call_count == 7
+
+    def test_prompt_count_6_without_reranker(self, capsys) -> None:
+        """Interactive mode without reranker profile: exactly 6 input() calls."""
+        responses = iter(["n", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses) as mock_input:
+            _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_no_reranker,
+            )
+        assert mock_input.call_count == 6
+
+
 class TestPromptGpuConfirm:
     """Tests for _prompt_gpu_confirm() — Task 1.4."""
 

@@ -755,6 +755,12 @@ def _prompt_optional_features(
         return default
 
     # --- install_code_extra ---
+    print(
+        "\nCode enrichment (tree-sitter):\n"
+        "  Parses and indexes code files structurally — functions, classes, docstrings.\n"
+        "  Installs tree-sitter and language parsers (~50 MB). Recommended if your corpus\n"
+        "  includes source code. Default: disabled."
+    )
     if install_code is not None:
         _install_code_extra_val = install_code
     elif non_interactive:
@@ -763,6 +769,13 @@ def _prompt_optional_features(
         _install_code_extra_val = _ask_yn("Index code files (installs tree-sitter enrichment)? [y/N]: ")
 
     # --- disable_reranker (skipped when profile has no reranker) ---
+    if profile.reranker is not None:
+        print(
+            "\nReranker:\n"
+            "  A second-stage cross-encoder model that re-scores results for better precision.\n"
+            "  Disabling it reduces latency and RAM but lowers recall quality.\n"
+            "  Default: enabled (for profiles that include a reranker)."
+        )
     if profile.reranker is None:
         _disable_reranker_val = False
     elif disable_reranker is not None:
@@ -773,6 +786,12 @@ def _prompt_optional_features(
         _disable_reranker_val = _ask_yn("Disable reranker for lower latency? [y/N]: ")
 
     # --- enable_watch ---
+    print(
+        "\nFilesystem watcher:\n"
+        "  Monitors watched directories and automatically re-indexes files when they change.\n"
+        "  Uses watchdog. Increases background CPU usage slightly.\n"
+        "  Default: disabled."
+    )
     if enable_watch is not None:
         _enable_watch_val = enable_watch
     elif non_interactive:
@@ -781,6 +800,12 @@ def _prompt_optional_features(
         _enable_watch_val = _ask_yn("Auto-watch directories and re-index on file changes? [y/N]: ")
 
     # --- enable_telemetry ---
+    print(
+        "\nLocal telemetry:\n"
+        "  Logs per-query metadata (collection, result count, latency) to\n"
+        "  ~/.archon-search/search-logs/. No query text is stored. Opt-in.\n"
+        "  Default: disabled."
+    )
     if enable_telemetry is not None:
         _enable_telemetry_val = enable_telemetry
     elif non_interactive:
@@ -789,6 +814,12 @@ def _prompt_optional_features(
         _enable_telemetry_val = _ask_yn("Enable local query telemetry? [y/N]: ")
 
     # --- eager_load_embedders ---
+    print(
+        "\nEager embedder loading:\n"
+        "  Pre-loads the embedding model at server startup instead of on the first query.\n"
+        "  Eliminates first-query latency (~5-15s on first search without this).\n"
+        "  Default: disabled."
+    )
     if eager_load is not None:
         _eager_load_val = eager_load
     elif non_interactive:
@@ -799,6 +830,13 @@ def _prompt_optional_features(
         )
 
     # --- routing_strategy ---
+    print(
+        "\nRouting strategy:\n"
+        "  centroid: routes queries to collections using centroid similarity (fast, default).\n"
+        "  hybrid: combines centroid with keyword scoring (slightly slower, more accurate\n"
+        "  for mixed corpora with distinct topic clusters).\n"
+        "  Default: centroid."
+    )
     if routing_strategy is not None:
         _routing_val = routing_strategy
     elif non_interactive:
@@ -811,6 +849,12 @@ def _prompt_optional_features(
         )
 
     # --- log_format ---
+    print(
+        "\nLog format:\n"
+        "  text: human-readable log lines (default).\n"
+        "  json: structured JSON logs, suitable for log aggregation pipelines.\n"
+        "  Default: text."
+    )
     if log_format is not None:
         _log_format_val = log_format
     elif non_interactive:

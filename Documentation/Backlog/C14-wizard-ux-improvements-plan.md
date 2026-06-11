@@ -244,7 +244,7 @@ After this plan ships: `--dry-run` makes zero filesystem writes across all three
 > **Releasable**: after Task 4.1; every optional-feature prompt is preceded by a plain-text explanation block.
 
 #### Task 4.1 — Add explanation print blocks to `_prompt_optional_features`
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: nothing (independent; can be done in parallel with Phase 2/3)
 - **Description**:
   - For each of the 7 prompts in `_prompt_optional_features`, add a `print()` block unconditionally **before** the `if install_code is not None:` / `elif non_interactive:` check. This ensures the explanation prints even in non-interactive mode (audit trail per the brief).
