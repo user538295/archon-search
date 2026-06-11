@@ -385,7 +385,7 @@ else:  # source.startswith("file:")
   - Checkpoint: `uv run pytest tests/test_install_cmd.py -v --no-cov -k "server_key"`
 
 #### Task 5.2 — `SearchInstaller.run()` — `--server-key` write logic (already scaffolded in Task 1.3; this task adds the key file write)
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 5.1, Task 1.3
 - **Description**:
   - The `server_key` param is already on `run()` from Task 1.3. This task implements the actual write:
