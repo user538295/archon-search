@@ -392,7 +392,7 @@ All keys are already defined in `SearchConfig` / `archon-search.toml.example`. T
   - Checkpoint: `uv run pytest tests/test_install_run.py -v`
 
 #### Task 3.2 — New CLI flags in `install_cmd.py`
-- [ ] **File**: `archon_search/cli/install_cmd.py`
+- [x] **File**: `archon_search/cli/install_cmd.py`
 - **Depends on**: Task 3.1
 - **Description**:
   - Add 8 new options to the `wizard` command. These flags are wizard-only and must NOT be added to `_install_options` if that decorator is shared with `install`. The `install` command is register-and-start only; add these flags directly to the `wizard` command group:

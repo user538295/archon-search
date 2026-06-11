@@ -115,6 +115,67 @@ def test_install_without_fasttext_flag_passes_false(runner: CliRunner) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Task 3.2 — New CLI flags on wizard command
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_help_contains_new_flags(runner: CliRunner) -> None:
+    """All 8 new flags must appear in `wizard --help` output."""
+    result = runner.invoke(main, ["wizard", "--help"])
+    assert result.exit_code == 0, result.output
+    for flag in [
+        "--code",
+        "--no-code",
+        "--watch",
+        "--no-watch",
+        "--telemetry",
+        "--no-telemetry",
+        "--eager-load",
+        "--no-eager-load",
+        "--no-reranker",
+        "--routing-strategy",
+        "--log-format",
+        "--disable-gpu",
+    ]:
+        assert flag in result.output, f"Missing flag {flag!r} in wizard --help"
+
+
+def test_wizard_non_interactive_with_code_flag(runner: CliRunner) -> None:
+    """--code passes install_code=True to run()."""
+    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+        runner.invoke(main, ["wizard", "--non-interactive", "--code", "--profile", "minimal"])
+    mock_run.assert_called_once()
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs.get("install_code") is True, f"install_code not True: {mock_run.call_args}"
+
+
+def test_wizard_routing_strategy_hybrid(runner: CliRunner) -> None:
+    """--routing-strategy hybrid passes routing_strategy='hybrid' to run()."""
+    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+        runner.invoke(
+            main,
+            ["wizard", "--non-interactive", "--routing-strategy", "hybrid", "--profile", "minimal"],
+        )
+    mock_run.assert_called_once()
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs.get("routing_strategy") == "hybrid", f"routing_strategy not hybrid: {mock_run.call_args}"
+
+
+def test_install_command_does_not_have_new_flags(runner: CliRunner) -> None:
+    """The `install` subcommand must NOT expose wizard-only flags."""
+    result = runner.invoke(main, ["install", "--help"])
+    assert result.exit_code == 0, result.output
+    for flag in ["--code", "--watch", "--telemetry", "--eager-load", "--no-reranker",
+                 "--routing-strategy", "--log-format", "--disable-gpu"]:
+        assert flag not in result.output, f"Flag {flag!r} should not appear in install --help"
+
+
+# ---------------------------------------------------------------------------
+# uninstall command — stop and unregister are called
+# ---------------------------------------------------------------------------
+
+
 def test_uninstall_cmd_unchanged(runner: CliRunner, tmp_path: Path) -> None:
     mock_service = MagicMock()
     db_dir = tmp_path / "db"

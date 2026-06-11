@@ -35,7 +35,18 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
     return f
 
 
-def _run_installer(
+
+@click.command()
+@_install_options
+@click.option("--code/--no-code", default=None, help="Install tree-sitter code enrichment packages")
+@click.option("--watch/--no-watch", default=None, help="Enable filesystem watcher for auto-reindex")
+@click.option("--telemetry/--no-telemetry", default=None, help="Enable local query telemetry")
+@click.option("--eager-load/--no-eager-load", default=None, help="Pre-load embedding models at startup")
+@click.option("--no-reranker", is_flag=True, default=False, help="Disable reranker (lower latency, less precision)")
+@click.option("--routing-strategy", type=click.Choice(["centroid", "hybrid"]), default=None, help="Routing strategy")
+@click.option("--log-format", type=click.Choice(["text", "json"]), default=None, help="Log format")
+@click.option("--disable-gpu", is_flag=True, default=False, help="Force CPU execution; skip GPU acceleration")
+def wizard(
     profile: str | None,
     multilingual: bool,
     skip_preload: bool,
@@ -46,7 +57,16 @@ def _run_installer(
     accept_jina_license: bool,
     accept_fasttext_license: bool,
     config_path: Path | None,
+    code: bool | None,
+    watch: bool | None,
+    telemetry: bool | None,
+    eager_load: bool | None,
+    no_reranker: bool,
+    routing_strategy: str | None,
+    log_format: str | None,
+    disable_gpu: bool,
 ) -> None:
+    """Interactive setup wizard: choose a profile, download models, start service."""
     sys.exit(
         SearchInstaller(
             config_file=str(config_path) if config_path else None,
@@ -60,26 +80,16 @@ def _run_installer(
             delete_db=delete_db,
             accept_jina_license=accept_jina_license,
             accept_fasttext_license=accept_fasttext_license,
+            install_code=code,
+            disable_reranker=no_reranker if no_reranker else None,
+            enable_watch=watch,
+            enable_telemetry=telemetry,
+            eager_load=eager_load,
+            routing_strategy=routing_strategy,
+            log_format=log_format,
+            disable_gpu=disable_gpu,
         )
     )
-
-
-@click.command()
-@_install_options
-def wizard(
-    profile: str | None,
-    multilingual: bool,
-    skip_preload: bool,
-    force: bool,
-    delete_db: bool,
-    dry_run: bool,
-    non_interactive: bool,
-    accept_jina_license: bool,
-    accept_fasttext_license: bool,
-    config_path: Path | None,
-) -> None:
-    """Interactive setup wizard: choose a profile, download models, start service."""
-    _run_installer(profile, multilingual, skip_preload, force, delete_db, dry_run, non_interactive, accept_jina_license, accept_fasttext_license, config_path)
 
 
 @click.command()
