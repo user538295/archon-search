@@ -21,7 +21,7 @@ def _get_db_path(config_path: Path | None = None) -> Path:
 def _install_options(f: click.decorators.FC) -> click.decorators.FC:
     for decorator in reversed([
         click.option("--profile", type=click.Choice(["minimal", "balanced", "max"]), default=None, help="Install profile"),
-        click.option("--multilingual", is_flag=True, default=False, help="Use multilingual models"),
+        click.option("--multilingual/--no-multilingual", default=None, help="Use multilingual models (--no-multilingual forces English)"),
         click.option("--skip-preload", is_flag=True, default=False, help="Skip model pre-download"),
         click.option("--force", is_flag=True, default=False, help="Force reinstall"),
         click.option("--delete-db", is_flag=True, default=False, help="Delete database on reinstall"),
@@ -48,7 +48,7 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
 @click.option("--disable-gpu", is_flag=True, default=False, help="Force CPU execution; skip GPU acceleration")
 def wizard(
     profile: str | None,
-    multilingual: bool,
+    multilingual: bool | None,
     skip_preload: bool,
     force: bool,
     delete_db: bool,

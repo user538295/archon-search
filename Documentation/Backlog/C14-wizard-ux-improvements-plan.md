@@ -187,7 +187,7 @@ After this plan ships: `--dry-run` makes zero filesystem writes across all three
 > **Releasable**: after Task 2.1; `--no-multilingual` is a usable CLI flag.
 
 #### Task 2.1 — Convert `--multilingual` to flag-pair and update `_prompt_multilingual`
-- [ ] **File**: `archon_search/cli/install_cmd.py`, `archon_search/install.py`
+- [x] **File**: `archon_search/cli/install_cmd.py`, `archon_search/install.py`
 - **Depends on**: nothing (independent of Phase 1)
 - **Description**:
   - In `install_cmd.py` line 24: change `click.option("--multilingual", is_flag=True, default=False, ...)` to `click.option("--multilingual/--no-multilingual", default=None, help="Use multilingual models (--no-multilingual forces English)")`.

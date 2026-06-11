@@ -45,34 +45,62 @@ class TestPromptMultilingual:
         assert result is True
 
     def test_non_interactive_returns_false(self) -> None:
-        """non_interactive=True, flag_value=False returns False without prompt."""
+        """non_interactive=True, flag_value=None returns False without prompt."""
         with patch("builtins.input", side_effect=AssertionError("should not call input")):
-            result = _prompt_multilingual(non_interactive=True, flag_value=False)
+            result = _prompt_multilingual(non_interactive=True, flag_value=None)
         assert result is False
 
     def test_interactive_yes(self) -> None:
-        """Input 'y' returns True."""
+        """Input 'y' returns True (flag_value=None → interactive)."""
         with patch("builtins.input", return_value="y"):
-            result = _prompt_multilingual(non_interactive=False, flag_value=False)
+            result = _prompt_multilingual(non_interactive=False, flag_value=None)
         assert result is True
 
     def test_interactive_no(self) -> None:
-        """Empty input returns False."""
+        """Empty input returns False (flag_value=None → interactive)."""
         with patch("builtins.input", return_value=""):
-            result = _prompt_multilingual(non_interactive=False, flag_value=False)
+            result = _prompt_multilingual(non_interactive=False, flag_value=None)
         assert result is False
 
     def test_interactive_eof(self) -> None:
-        """EOFError returns False without raising."""
+        """EOFError returns False without raising (flag_value=None → interactive)."""
         with patch("builtins.input", side_effect=EOFError):
-            result = _prompt_multilingual(non_interactive=False, flag_value=False)
+            result = _prompt_multilingual(non_interactive=False, flag_value=None)
         assert result is False
 
     def test_interactive_yes_uppercase(self) -> None:
-        """Input 'YES' (case-insensitive) returns True."""
+        """Input 'YES' (case-insensitive) returns True (flag_value=None → interactive)."""
         with patch("builtins.input", return_value="YES"):
-            result = _prompt_multilingual(non_interactive=False, flag_value=False)
+            result = _prompt_multilingual(non_interactive=False, flag_value=None)
         assert result is True
+
+    # ------------------------------------------------------------------
+    # Task 2.1 — tri-state (bool | None) tests
+    # ------------------------------------------------------------------
+
+    def test_prompt_multilingual_flag_true(self) -> None:
+        """flag_value=True returns True without calling input()."""
+        with patch("builtins.input", side_effect=AssertionError("should not call input")):
+            result = _prompt_multilingual(non_interactive=False, flag_value=True)
+        assert result is True
+
+    def test_prompt_multilingual_flag_false(self) -> None:
+        """flag_value=False (explicit --no-multilingual) returns False without calling input()."""
+        with patch("builtins.input", side_effect=AssertionError("should not call input")):
+            result = _prompt_multilingual(non_interactive=False, flag_value=False)
+        assert result is False
+
+    def test_prompt_multilingual_flag_none_interactive(self) -> None:
+        """flag_value=None in interactive mode asks the user; 'y' → True."""
+        with patch("builtins.input", return_value="y"):
+            result = _prompt_multilingual(non_interactive=False, flag_value=None)
+        assert result is True
+
+    def test_prompt_multilingual_flag_none_non_interactive(self) -> None:
+        """flag_value=None in non-interactive mode returns False without calling input()."""
+        with patch("builtins.input", side_effect=AssertionError("should not call input")):
+            result = _prompt_multilingual(non_interactive=True, flag_value=None)
+        assert result is False
 
 
 class TestPromptOptionalFeatures:

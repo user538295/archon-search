@@ -605,7 +605,7 @@ def test_run_register_and_start_dry_run_skips_wait(tmp_path: Path) -> None:
 
 
 def test_run_prompts_multilingual_question(tmp_path: Path) -> None:
-    """Wizard in interactive mode without --multilingual receives multilingual prompt."""
+    """Wizard in interactive mode without --multilingual/--no-multilingual passes None to _prompt_multilingual."""
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
 
@@ -633,10 +633,10 @@ def test_run_prompts_multilingual_question(tmp_path: Path) -> None:
         patch.object(SearchInstaller, "_is_service_running", return_value=False),
     ):
         installer = SearchInstaller(config_file=str(config_path))
-        rc = installer.run(non_interactive=False, profile="minimal", multilingual=False, skip_preload=True)
+        rc = installer.run(non_interactive=False, profile="minimal", multilingual=None, skip_preload=True)
 
     assert rc == 0
-    prompt_multilingual_mock.assert_called_once_with(False, False)
+    prompt_multilingual_mock.assert_called_once_with(False, None)
 
 
 def test_run_multilingual_flag_skips_prompt(tmp_path: Path) -> None:
@@ -841,8 +841,8 @@ def test_run_non_interactive_uses_defaults(tmp_path: Path) -> None:
         rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
     assert rc == 0
-    # _prompt_multilingual receives non_interactive=True
-    prompt_multilingual_mock.assert_called_once_with(True, False)
+    # _prompt_multilingual receives non_interactive=True and flag_value=None (default)
+    prompt_multilingual_mock.assert_called_once_with(True, None)
     # _prompt_optional_features receives non_interactive=True
     args, kwargs = prompt_features_mock.call_args
     assert args[0] is True  # non_interactive

@@ -172,6 +172,56 @@ def test_install_command_does_not_have_new_flags(runner: CliRunner) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task 2.1 — --multilingual/--no-multilingual flag-pair
+# ---------------------------------------------------------------------------
+
+
+def test_no_multilingual_cli_flag(runner: CliRunner) -> None:
+    """--no-multilingual passes multilingual=False to run()."""
+    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+        runner.invoke(
+            main,
+            ["wizard", "--no-multilingual", "--non-interactive", "--dry-run"],
+        )
+    mock_run.assert_called_once()
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs.get("multilingual") is False, f"Expected False, got {kwargs.get('multilingual')}"
+
+
+def test_multilingual_cli_flag(runner: CliRunner) -> None:
+    """--multilingual passes multilingual=True to run()."""
+    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+        runner.invoke(
+            main,
+            ["wizard", "--multilingual", "--non-interactive", "--dry-run"],
+        )
+    mock_run.assert_called_once()
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs.get("multilingual") is True, f"Expected True, got {kwargs.get('multilingual')}"
+
+
+def test_no_multilingual_flag_no_prompt_shown(runner: CliRunner) -> None:
+    """--no-multilingual + interactive mode: multilingual prompt text absent from stdout."""
+    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+        result = runner.invoke(
+            main,
+            ["wizard", "--no-multilingual", "--dry-run"],
+        )
+    # Whether run() was called or not, the CLI must pass multilingual=False
+    if mock_run.called:
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("multilingual") is False
+    assert "non-English" not in result.output
+
+
+def test_no_multilingual_flag_in_help(runner: CliRunner) -> None:
+    """--no-multilingual must appear in wizard --help output."""
+    result = runner.invoke(main, ["wizard", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--no-multilingual" in result.output
+
+
+# ---------------------------------------------------------------------------
 # uninstall command — stop and unregister are called
 # ---------------------------------------------------------------------------
 

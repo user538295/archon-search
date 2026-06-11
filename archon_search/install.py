@@ -833,15 +833,15 @@ def _prompt_optional_features(
     )
 
 
-def _prompt_multilingual(non_interactive: bool, flag_value: bool) -> bool:
+def _prompt_multilingual(non_interactive: bool, flag_value: bool | None) -> bool:
     """Ask whether the corpus includes non-English documents.
 
-    Returns ``flag_value`` unchanged when it is True (flag takes precedence).
+    Returns ``flag_value`` unchanged when it is not None (flag takes precedence).
     Returns False in non-interactive mode (default: English).
     Otherwise prints a yes/no prompt and returns the user's answer.
     """
-    if flag_value:
-        return True
+    if flag_value is not None:
+        return flag_value
     if non_interactive:
         return False
     try:
@@ -1178,7 +1178,7 @@ class SearchInstaller:
         self,
         non_interactive: bool = False,
         profile: str | None = None,
-        multilingual: bool = False,
+        multilingual: bool | None = None,
         skip_preload: bool = False,
         force: bool = False,
         delete_db: bool = False,
