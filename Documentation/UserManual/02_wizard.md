@@ -155,7 +155,7 @@ Type `accept` to proceed. For non-interactive installs, pass `--accept-fasttext-
 
 ### Step 5 — Optional features
 
-After the license gates, the wizard asks seven questions about optional features. Each question is preceded by a short plain-text explanation so you can make an informed choice. Each has a default that is applied if you press Enter without typing anything.
+After the license gates, the wizard asks about optional features. Each question is preceded by a short plain-text explanation so you can make an informed choice. Each has a default that is applied if you press Enter without typing anything.
 
 #### 5a. Code enrichment
 
@@ -268,6 +268,37 @@ Log format (text/json) [text]:
 
 Type `text` or `json`, or press Enter to keep the default.
 
+**Conditional follow-up when you select `json`:**
+
+```
+Log to stderr only? [y/N]:
+  Routes all log output to stderr instead of a file.
+  Canonical container combo: --log-format json --log-to-stderr.
+```
+
+If you answer `y`, archon-search sets `log_file = ""` in the config, which routes all log output to stderr only (no log file written). This is the canonical container logging pattern. The follow-up is skipped if you pass `--log-to-stderr` (or `--log-format json --non-interactive`).
+
+#### 5h. AI query expansion (HyDE + RAG Fusion)
+
+This prompt is shown **only when `ANTHROPIC_API_KEY` is set in your environment**.
+
+```
+AI query expansion (HyDE + RAG Fusion):
+  Uses Claude to generate a hypothetical answer passage (HyDE) and multiple
+  query variants (RAG Fusion) before searching. Improves recall for ambiguous
+  or short queries. Requires an Anthropic API key and sends query text to
+  Anthropic's API on every search request.
+  WARNING: do not enable in air-gapped deployments or where data residency
+  requirements apply.
+Enable AI query expansion? [y/N]:
+```
+
+**Default**: No.
+
+If you answer `y`, the wizard enables both `[hyde].enabled = true` and `[rag_fusion].enabled = true` in your config, and installs the `archon-search[hyde,rag_fusion]` optional packages if not already present.
+
+If `ANTHROPIC_API_KEY` is not set, this prompt is skipped entirely. You can enable HyDE and RAG Fusion later by passing `--enable-hyde --enable-rag-fusion` to the wizard (with the key set), or by editing `archon-search.toml` manually.
+
 ### Step 6 — Summary screen
 
 Before downloading anything, the wizard prints a summary of what it is about to install:
@@ -291,7 +322,7 @@ Before downloading anything, the wizard prints a summary of what it is about to 
     • Watch directories (auto-reindex)
 ```
 
-Only non-default optional features are listed. The `API key` line shows a masked preview and the path to the env file that holds the full key. If the key file does not exist yet (first install, server not yet started), `(not yet generated)` is shown instead. Then:
+Only non-default optional features are listed. The `API key` line shows a masked preview and the path to the env file that holds the full key. If the key file does not exist yet (first install, server not yet started), `(not yet generated)` is shown instead. The summary also reflects any deployment flags you passed (custom host, port, db path, top-k, etc.). Then:
 
 ```
 Proceed? [Y/n]:
@@ -335,8 +366,9 @@ Next steps:
   archon-search status                  # check service health
   archon-search sync                    # sync watched directories
   archon-search stop                    # stop the service
+  archon-search wizard --top-k 20       # increase results per query (default: 5)
 
-API key: (full key: /Users/you/.archon-search/.search.env)
+  API key: <full-key-here>  (generated fresh — keep this key private; also stored at: /Users/you/.archon-search/.search.env)
 Config:  /Users/you/.archon-search/archon-search.toml
 
 archon-search installed and running. Profile: Balanced · English.
@@ -344,7 +376,12 @@ archon-search installed and running. Profile: Balanced · English.
 
 The wizard registers the service with your OS (launchd on macOS, systemd user unit on Linux) and starts it. It then polls `GET /health` for up to 60 seconds. If the service does not become ready within that window, the wizard exits with an error.
 
-After startup, the wizard prints a "Next steps" block with the four most common follow-up commands and the paths to your API key file and config. The "Next steps" block is suppressed in `--dry-run` mode.
+After startup, the wizard prints a "Next steps" block with common follow-up commands, the full API key with its source label and a "keep this key private" note, and the paths to your API key file and config. The key is always shown in full — it already lives in a plaintext file you own, so terminal masking adds no security. The "Next steps" block is suppressed in `--dry-run` mode.
+
+The API key line format depends on how the key was sourced:
+- Auto-generated on first install: `API key: <key>  (generated fresh — keep this key private; also stored at: <KEY_FILE>)`
+- Read from the key file: `API key: <key>  (keep this key private; also stored at: <KEY_FILE>)`
+- Set via `ARCHON_SEARCH_API_KEY` env var: `API key: <key>  (source: $ARCHON_SEARCH_API_KEY env var — keep this key private)`
 
 ---
 
@@ -372,6 +409,19 @@ All flags for the `wizard` command:
 | `--routing-strategy {centroid,hybrid}` | Not set (interactive) | Set the routing strategy directly, skipping the interactive prompt. |
 | `--log-format {text,json}` | Not set (interactive) | Set the log format directly, skipping the interactive prompt. |
 | `--disable-gpu` | False | Force CPU execution; skip GPU detection and confirmation entirely. |
+| **Tier 1 deployment flags** | | |
+| `--host TEXT` | Not set (uses `127.0.0.1`) | Bind address for the HTTP API. Use `0.0.0.0` for remote or Docker access. Non-loopback values print a security note reminding you to add a firewall or reverse proxy. Cannot be an empty string. |
+| `--port INTEGER` | Not set (uses `8765`) | HTTP port. Valid range: 1–65535. Port conflicts are not detected at wizard time; the OS will report an error at service start. |
+| `--db-path PATH` | Not set (uses `~/.archon-search/search`) | Database directory. The tilde is written as-is to the config file; `config.py` expands it at use sites. The wizard creates the directory (including parent dirs) and checks writability. If the existing config uses a different path, a migration note is printed. |
+| `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}` | Not set (uses `INFO`) | Server log level. Case-sensitive. |
+| `--log-to-stderr` | False (flag) | Set `log_file = ""` in config, routing all logs to stderr only. Canonical container combo with `--log-format json`. |
+| `--top-k INTEGER` | Not set (uses `5`) | Number of results returned per query (`top_k_return`). Valid range: 1–100. Values > 100 are rejected with a message to edit TOML directly. The wizard also sets `top_k_retrieve = max(15, 3 × top_k)` automatically. This flag is flags-only; no interactive prompt. A hint appears in the "Next steps" block. |
+| `--telemetry-retention-days INTEGER` | Not set (uses `30`) | Days before telemetry log files are pruned. Must be ≥ 1. Only written to TOML when `--telemetry` is also passed; passing it without `--telemetry` prints a warning on stderr and writes nothing. |
+| **Tier 2 AI flags** | | |
+| `--enable-hyde` | False (flag) | Enable HyDE (Hypothetical Document Embeddings) query expansion. Requires `ANTHROPIC_API_KEY` to be set; fails with an error otherwise. Sends query text to Anthropic's API on every request — do not enable in air-gapped deployments. |
+| `--enable-rag-fusion` | False (flag) | Enable RAG Fusion multi-query expansion. Same requirements and privacy caution as `--enable-hyde`. |
+| **Tier 2 security** | | |
+| `--server-key HEX_KEY` | Not set | Set a custom Bearer token for the server. Must be a lowercase hex string of at least 32 characters (e.g., generated with `python -c "import secrets; print(secrets.token_hex(32))"`). Writes `ARCHON_SEARCH_API_KEY=<key>` to `~/.archon-search/.search.env` (mode 600). A shell-history warning and restart note are always printed. If `ARCHON_SEARCH_API_KEY` env var is set, it takes priority over the file; an additional warning is printed in that case. |
 
 **Note on `--force` and `--delete-db`:** These flags must always be used together. `--force` alone is rejected with an error. This requirement exists because changing profiles requires a different embedding model, which invalidates the existing vector index. Deleting the database is irreversible.
 
@@ -394,6 +444,8 @@ Pass `--non-interactive` to run the wizard without any prompts. Combined with fe
 | Eager load | Disabled |
 | Routing strategy | `centroid` |
 | Log format | `text` |
+| Log to stderr follow-up | Skipped (use `--log-to-stderr` flag) |
+| AI query expansion (HyDE/RAG Fusion) | Skipped even if `ANTHROPIC_API_KEY` is set (use `--enable-hyde --enable-rag-fusion`) |
 | GPU acceleration | Auto-enabled if detected |
 | Jina license | Declined (install aborts for multilingual balanced/max unless `--accept-jina-license` is passed) |
 | fasttext license | Declined (install aborts for multilingual installs unless `--accept-fasttext-license` is passed) |
@@ -431,15 +483,73 @@ archon-search wizard \
   --disable-gpu
 ```
 
+**Example: container deployment with full logging and remote access**
+
+```bash
+archon-search wizard \
+  --profile balanced \
+  --non-interactive \
+  --skip-preload \
+  --host 0.0.0.0 \
+  --port 9000 \
+  --db-path /data/archon-search \
+  --log-format json \
+  --log-to-stderr \
+  --log-level INFO \
+  --disable-gpu
+```
+
+Note: `--host 0.0.0.0` prints a security note reminding you to add a firewall or reverse proxy.
+
+**Example: homelab server with custom port, database location, and more search results**
+
+```bash
+archon-search wizard \
+  --profile balanced \
+  --non-interactive \
+  --host 0.0.0.0 \
+  --port 9000 \
+  --db-path ~/data/archon-search \
+  --top-k 20 \
+  --telemetry \
+  --telemetry-retention-days 90
+```
+
+**Example: install with AI query expansion (requires Anthropic API key)**
+
+```bash
+ANTHROPIC_API_KEY=sk-... archon-search wizard \
+  --profile balanced \
+  --non-interactive \
+  --enable-hyde \
+  --enable-rag-fusion
+```
+
+**Example: set a custom server API key**
+
+```bash
+archon-search wizard \
+  --profile minimal \
+  --non-interactive \
+  --server-key "$(python -c 'import secrets; print(secrets.token_hex(32))')"
+```
+
 ---
 
 ## What Gets Configured
 
 The wizard writes to `~/.archon-search/archon-search.toml`. The following table maps each wizard choice to its TOML key:
 
+### `[server]` section
+
+| Wizard choice / flag | TOML key | Example value |
+|---|---|---|
+| `--host TEXT` | `host` | `"0.0.0.0"` |
+| `--port INTEGER` | `port` | `9000` |
+
 ### `[database]` section
 
-| Wizard choice | TOML key | Example value |
+| Wizard choice / flag | TOML key | Example value |
 |---|---|---|
 | Profile | `profile` | `"balanced"` |
 | Multilingual | `multilingual` | `true` |
@@ -451,32 +561,50 @@ The wizard writes to `~/.archon-search/archon-search.toml`. The following table 
 | GPU declined | `providers` | `[]` |
 | Reranker disabled (`--no-reranker`) | `reranker_model` | `""` |
 | Eager load | `eager_load_embedders` | `true` |
+| `--db-path PATH` | `db_path` | `"~/data/archon-search"` |
+| `--top-k INTEGER` | `top_k_return` | `20` |
+| `--top-k INTEGER` (derived) | `top_k_retrieve` | `60` (= max(15, 3 × top_k)) |
 
 ### `[collections]` section
 
-| Wizard choice | TOML key | Example value |
+| Wizard choice / flag | TOML key | Example value |
 |---|---|---|
 | Filesystem watcher enabled | `watch` | `true` |
 
 ### `[telemetry]` section
 
-| Wizard choice | TOML key | Example value |
+| Wizard choice / flag | TOML key | Example value |
 |---|---|---|
 | Telemetry enabled | `enabled` | `true` |
+| `--telemetry-retention-days` (only when `--telemetry` also passed) | `retention_days` | `90` |
 
 ### `[routing]` section
 
-| Wizard choice | TOML key | Example value |
+| Wizard choice / flag | TOML key | Example value |
 |---|---|---|
 | Routing strategy (hybrid only) | `routing_strategy` | `"hybrid"` |
 
 ### `[logging]` section
 
-| Wizard choice | TOML key | Example value |
+| Wizard choice / flag | TOML key | Example value |
 |---|---|---|
 | Log format (json only) | `format` | `"json"` |
+| `--log-level TEXT` | `level` | `"DEBUG"` |
+| `--log-to-stderr` | `log_file` | `""` (empty = stderr only) |
 
-**Only non-default values are written.** If you accept the default for a question (e.g., keep `centroid` routing or `text` log format), that key is not written to the file. All other keys in `archon-search.toml` remain at their defaults.
+### `[hyde]` section
+
+| Wizard choice / flag | TOML key | Example value |
+|---|---|---|
+| `--enable-hyde` | `enabled` | `true` |
+
+### `[rag_fusion]` section
+
+| Wizard choice / flag | TOML key | Example value |
+|---|---|---|
+| `--enable-rag-fusion` | `enabled` | `true` |
+
+**Only non-default values are written.** If you accept the default for a question (e.g., keep `centroid` routing or `text` log format), that key is not written to the file. Passing an explicit flag value (even if it matches the default, e.g., `--port 8765`) always writes the key. All other keys in `archon-search.toml` remain at their defaults.
 
 The wizard also backs up your existing config to `~/.archon-search/archon-search.toml.bak` before making any changes.
 
@@ -484,30 +612,13 @@ The wizard also backs up your existing config to `~/.archon-search/archon-search
 
 ## What the Wizard Does NOT Configure
 
-The following settings exist in `archon-search.toml` but are not touched by the wizard. You must edit the file manually to change them.
+The following settings exist in `archon-search.toml` but are not exposed in the wizard. You must edit the file manually (or use `archon-search config set`) to change them.
 
-### Server bind address and port
+### API key (auto-generated; override via env var or `--server-key`)
 
-```toml
-[server]
-host = "127.0.0.1"   # Change to "0.0.0.0" to expose on all interfaces
-port = 8765
-```
+The API key is stored in `~/.archon-search/.search.env` (file mode 600, auto-generated on first server start). The full key is printed in the success output every time the wizard runs.
 
-To expose archon-search to other machines on your network (or within Docker), change `host` to `"0.0.0.0"`. The wizard always installs with the default loopback address.
-
-### API key
-
-The API key is stored in `~/.archon-search/.search.env` (file mode 600, auto-generated on first server start). It is not set through the wizard. To use a custom key, set the `ARCHON_SEARCH_API_KEY` environment variable or write a custom key to the file. To move the key file, set `ARCHON_SEARCH_KEY_FILE`.
-
-### Database path
-
-```toml
-[database]
-db_path = "~/.archon-search/search"
-```
-
-To store the index on a different volume or path, edit this key manually before running the wizard (or before the first server start).
+To set a custom key, use `--server-key <32-char-hex>` (writes the key file) or set the `ARCHON_SEARCH_API_KEY` environment variable (takes precedence over the file). To redirect the key file path, set `ARCHON_SEARCH_KEY_FILE`.
 
 ### Collection definitions
 
@@ -519,20 +630,19 @@ pinned_collections = []    # Collections always searched, bypassing the router
 
 Collections are normally managed through the HTTP API or the `archon-search ingest` CLI command. The wizard does not configure them.
 
-### Telemetry retention and log directory
+### Telemetry log directory
 
-The wizard can enable telemetry but does not configure `retention_days` (default: 30) or `log_dir` (default: `~/.archon-search/search-logs/`). Edit `[telemetry]` in the config file to change these.
+The wizard can enable telemetry and set `retention_days` (via `--telemetry-retention-days`), but does not configure `log_dir` (default: `~/.archon-search/search-logs/`). Edit `[telemetry]` in the config file to change the log directory.
 
-### Log level, file path, rotation, and backup count
+### Log file path, rotation, and backup count
 
 ```toml
 [logging]
-level = "INFO"
 log_file = "~/.archon-search/logs/archon-search.log"
 backup_count = 7
 ```
 
-The wizard sets the log format but not the level, file path, or rotation policy. Set `log_file = ""` to disable file logging (stderr only — useful in containers).
+The wizard can set `level` (via `--log-level`), `format` (via `--log-format`), and `log_file = ""` (via `--log-to-stderr`), but not the explicit file path or rotation policy. To use a custom log file location, edit `[logging].log_file` directly.
 
 ### Routing tuning parameters
 
@@ -554,14 +664,32 @@ fanout_leg_trim = 40
 fanout_timeout_seconds = 30.0
 ```
 
-### Advanced features requiring manual setup
+### `top_k_retrieve` (set automatically by `--top-k`)
 
-The following features are **not configured by the wizard** and require both manual package installation and config file edits:
+When you pass `--top-k N`, the wizard sets both `top_k_return = N` and `top_k_retrieve = max(15, 3 × N)`. You can adjust `top_k_retrieve` independently (e.g., for tuning recall vs. latency) by editing `[database]` directly. Values > 100 for `top_k_return` and the coupling ratio are TOML-only.
 
-- **HyDE query expansion** — requires `pip install archon-search[hyde]`, setting `ANTHROPIC_API_KEY`, and enabling `[hyde].enabled = true` in config. Sends query text to Anthropic's API on every request — do not enable in air-gapped deployments.
-- **RAG Fusion** — requires `pip install archon-search[rag_fusion]`, setting `ANTHROPIC_API_KEY`, and enabling `[rag_fusion].enabled = true`. Same privacy caution as HyDE.
-- **Custom ONNX providers** — the wizard auto-detects Metal and CUDA, but if you want a custom provider chain or need to override what was configured, edit `[database].providers` directly.
-- **Language detection tuning** — the `language_detection_confidence_threshold` (default: 0.7) controls when a language code is recorded vs. stored as `"unknown"`. Adjust in `[database]` if you see too many `"unknown"` tags.
+### HyDE and RAG Fusion sub-knobs
+
+The wizard enables/disables HyDE and RAG Fusion (via `--enable-hyde`/`--enable-rag-fusion`), but does not configure the per-feature sub-knobs:
+
+```toml
+[hyde]
+model = "claude-haiku-4-5-20251001"
+timeout_seconds = 5.0
+max_requests_per_minute = 60
+
+[rag_fusion]
+model = "claude-haiku-4-5-20251001"
+timeout_seconds = 5.0
+max_requests_per_minute = 60
+num_queries = 2
+```
+
+Edit these keys in `archon-search.toml` to tune model choice, timeouts, and rate limits.
+
+### Custom ONNX providers and language detection
+
+The wizard auto-detects Metal and CUDA, but if you want a custom provider chain or need to override what was configured, edit `[database].providers` directly. The `language_detection_confidence_threshold` (default: 0.7) controls when a language code is recorded vs. stored as `"unknown"` — adjust in `[database]` if you see too many `"unknown"` tags.
 
 ---
 

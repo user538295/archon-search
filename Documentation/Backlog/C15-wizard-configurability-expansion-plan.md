@@ -408,7 +408,7 @@ else:  # source.startswith("file:")
 ### Phase 6 — Verification & Documentation
 
 #### Task 6.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, Architecture docs, user guides, UserManual, `02_wizard.md`, `Documentation/UserManual/`, `Documentation/Architecture/`, CLAUDE.md, `archon-search.toml.example`) and update every file whose content is affected by the changes delivered in this plan. The agent must not update docs that are unrelated.
