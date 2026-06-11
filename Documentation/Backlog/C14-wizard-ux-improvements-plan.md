@@ -361,7 +361,7 @@ After this plan ships: `--dry-run` makes zero filesystem writes across all three
   - Checkpoint: `uv run pytest tests/test_install_ui.py -n0 -x -k next_steps`
 
 #### Task 5.4 — `_detect_config_hand_edits` — hand-edit detection function
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: nothing
 - **Description**:
   - New module-level function:

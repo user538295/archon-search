@@ -243,6 +243,76 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
 
 
 # ---------------------------------------------------------------------------
+# Hand-edit detection (Task C14-5.4)
+# ---------------------------------------------------------------------------
+
+def _detect_config_hand_edits(
+    config_path: Path,
+    prev_profile_name: str,
+    prev_multilingual: bool,
+) -> bool:
+    """Return True if the on-disk config has values that differ from wizard defaults.
+
+    Compares only wizard-written keys (union of _write_profile_config and
+    _apply_wizard_features_to_toml output). Returns True (always warn) if
+    prev_profile_name is not a recognized profile name.
+    """
+    # Unknown profile — always warn
+    try:
+        profile = get_profile(prev_profile_name, prev_multilingual)
+    except ValueError:
+        return True
+
+    # Read the on-disk config
+    doc = tomlkit.parse(config_path.read_text())
+    db = doc.get("database", {})
+
+    # Compare [database] wizard-written keys against profile defaults
+    expected_reranker = profile.reranker if profile.reranker is not None else ""
+    if db.get("embedding_model") != profile.embedder:
+        return True
+    if db.get("reranker_model") != expected_reranker:
+        return True
+    if db.get("chunk_size") != profile.chunk_size:
+        return True
+    if db.get("profile") != prev_profile_name:
+        return True
+    if db.get("multilingual") != prev_multilingual:
+        return True
+
+    # Compare optional-feature keys against WizardFeatures() static defaults
+    # Absent key = static default in effect — NOT a hand-edit.
+    # Only a key that is PRESENT and DIFFERENT from the static default counts.
+    defaults = WizardFeatures()
+
+    # eager_load_embedders (in [database])
+    if "eager_load_embedders" in db and db["eager_load_embedders"] != defaults.eager_load_embedders:
+        return True
+
+    # collections.watch
+    collections = doc.get("collections", {})
+    if "watch" in collections and collections["watch"] != defaults.enable_watch:
+        return True
+
+    # telemetry.enabled
+    telemetry = doc.get("telemetry", {})
+    if "enabled" in telemetry and telemetry["enabled"] != defaults.enable_telemetry:
+        return True
+
+    # routing.routing_strategy
+    routing = doc.get("routing", {})
+    if "routing_strategy" in routing and routing["routing_strategy"] != defaults.routing_strategy:
+        return True
+
+    # logging.format
+    logging_section = doc.get("logging", {})
+    if "format" in logging_section and logging_section["format"] != defaults.log_format:
+        return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Disk space guard (Task C0-2.2)
 # ---------------------------------------------------------------------------
 
