@@ -12,6 +12,16 @@ import sys
 import uuid
 from pathlib import Path
 
+# Cap native-runtime thread counts BEFORE ML libs / Tokio runtimes initialize.
+# onnxruntime, OpenMP, OpenBLAS and LanceDB's Tokio runtime each default to
+# spawning cpu_count() threads per process; with `-n auto` workers that yields
+# 14×N threads competing for ~14 cores. Measured impact: −33% wall time.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("ORT_NUM_THREADS", "1")
+os.environ.setdefault("TOKIO_WORKER_THREADS", "2")
+
 _tests_dir = os.path.dirname(os.path.abspath(__file__))
 if _tests_dir not in sys.path:
     sys.path.insert(0, _tests_dir)
