@@ -1,7 +1,7 @@
 **Purpose**: Priority-ordered, checkable roadmap for evolving `archon-search` into a standalone world-class retrieval product.
 **Audience**: Maintainers planning architecture and feature work.
 **Status**: Draft
-**Last reviewed**: 2026-06-07 / **Next review**: 2026-09-07
+**Last reviewed**: 2026-06-11 / **Next review**: 2026-09-07
 
 > Source of truth: current code under `archon_search/` verified against comparison docs `01_competitive_analysis_field.md` and `02_competitive_analysis_marveen.md`.
 
@@ -46,42 +46,57 @@ Pure foundation-first sequencing pushes user-visible value too far out and lets 
 
 Goal: make the existing pipeline safe to extend, and ship two cheap features that operators and end users notice immediately.
 
-- [x] **A1. Metadata schema v1 (item 3, minimum slice)** — add typed per-chunk and per-document metadata fields to the LanceDB schema, with system / filterable / ranking / audit partitions documented. Scope is intentionally narrow: only the fields needed for `A2` and item 13. Surfaced in search responses.
-- [x] **A2. Metadata filters at search (item 7, minimum slice)** — source-path prefix/glob, `indexed-after`/`indexed-before`, file-type. Exposed on REST `/search`, MCP `search`, and the explain output (A4). Bounds-validated; uses the LanceDB `where()` API (no f-string SQL). A1 ships filterable fields populated; A2 only adds query-side wiring. **Language filtering deferred to C2** (real language detection) — A1's `language` field stays storage-only and is not exposed as a filter dimension here.
-- [x] **A3. Hardening: search-failure semantics (`CON-5`)** ✅ — `/search` now returns HTTP 500 on pipeline stage failure (bare re-raise) and HTTP 504 on timeout; telemetry is emitted on both paths. See `BREAKING.md` `[next release]` — `POST /search` pipeline-exception behavior.
-- [x] **A4. Explain / debug endpoint (item 12)** — `POST /explain` (REST) + `explain` MCP tool (10th tool) returning vector rank, FTS rank, fused (RRF) score, reranker score, and routing path. Shipped in A4. Two roadmap sub-fields deferred: `matched_filters` → A4.1 (additive, after A2 ships); `expansion-feature usage` → A4.2 (additive, after Phase B/C HyDE / RAG Fusion ships). Unlocks every later ranking change.
-- [x] **A5. Hardening: input safety on ingest paths** ✅ — reject `..`-containing/empty/whitespace/NUL/non-absolute paths in `/collections` and `/jobs/ingest` (and MCP `ingest_file`/`ingest_directory`); replace all f-string `where()`/`delete()`/`count_rows()` builders in `store.py` with quoted helpers behind a CI guard.
+- [x] **A1. Metadata schema v1 (item 3, minimum slice)** — add typed per-chunk and per-document metadata fields to the LanceDB schema, with system / filterable / ranking / audit partitions documented. Scope is intentionally narrow: only the fields needed for `A2` and item 13. Surfaced in search responses. [[brief](../Completed/A1-metadata-schema-v1-brief.md), [plan](../Completed/A1-metadata-schema-v1-plan.md)]
+- [x] **A2. Metadata filters at search (item 7, minimum slice)** — source-path prefix/glob, `indexed-after`/`indexed-before`, file-type. Exposed on REST `/search`, MCP `search`, and the explain output (A4). Bounds-validated; uses the LanceDB `where()` API (no f-string SQL). A1 ships filterable fields populated; A2 only adds query-side wiring. **Language filtering deferred to C2** (real language detection) — A1's `language` field stays storage-only and is not exposed as a filter dimension here. [[brief](../Completed/A2-metadata-filters-at-search-brief.md), [plan](../Completed/A2-metadata-filters-at-search-plan.md)]
+- [x] **A3. Hardening: search-failure semantics (`CON-5`)** — `/search` now returns HTTP 500 on pipeline stage failure (bare re-raise) and HTTP 504 on timeout; telemetry is emitted on both paths. See `BREAKING.md` `[next release]` — `POST /search` pipeline-exception behavior. [[brief](../Completed/A3-search-failure-semantics-brief.md), [plan](../Completed/A3-search-failure-semantics-plan.md)]
+- [x] **A4. Explain / debug endpoint (item 12)** — `POST /explain` (REST) + `explain` MCP tool (10th tool) returning vector rank, FTS rank, fused (RRF) score, reranker score, and routing path. Two roadmap sub-fields deferred: `matched_filters` → A4.1 (additive, after A2 ships); `expansion-feature usage` → A4.2 (additive, after Phase B/C HyDE / RAG Fusion ships). Unlocks every later ranking change. [[brief](../Completed/A4-explain-endpoint-brief.md), [plan](../Completed/A4-explain-endpoint-plan.md)]
+- [x] **A5. Hardening: input safety on ingest paths** — reject `..`-containing/empty/whitespace/NUL/non-absolute paths in `/collections` and `/jobs/ingest` (and MCP `ingest_file`/`ingest_directory`); replace all f-string `where()`/`delete()`/`count_rows()` builders in `store.py` with quoted helpers behind a CI guard. [[brief](../Completed/A5-ingest-hardening-brief.md), [plan](../Completed/A5-ingest-hardening-plan.md)]
   - [x] A5a — ingest path safety (`validate_ingest_path`). Note: narrowed from "symlink-escape" to `..`-traversal + trivial-junk rejection; symlink scope deferred to a future `allowed_dirs` feature.
   - [x] A5b — SQL builder defense-in-depth (`_where_eq`/`_where_in` + `tests/test_no_fstring_sql.py` guard).
   - [x] A5c — synchronous `StoreBusyError` → HTTP 503 (`Retry-After: 30`) on `/ingest` and `/collections`; MCP `code="store_busy"`.
-- [x] **A6. Hardening: state-store + router cache locks (`CON-2`, `CON-3`)** — `asyncio.Lock` around `IndexingStateStore` mutations; router cache invalidates on ingest/reindex/description-regen. One PR, both bugs.
-- [x] **A7. Hardening: stop writing without fsync (`PROG-1`, `TEL-2`, `SYN-1`)** — `IndexingStateStore`, telemetry writer, and sync manifest all `flush + fsync` before `os.replace`. Cheap durability win.
+- [x] **A6. Hardening: state-store + router cache locks (`CON-2`, `CON-3`)** — `asyncio.Lock` around `IndexingStateStore` mutations; router cache invalidates on ingest/reindex/description-regen. One PR, both bugs. [[brief](../Completed/A6-hardening-locks-brief.md), [plan](../Completed/A6-state-store-router-cache-hardening-plan.md)]
+- [x] **A7. Hardening: stop writing without fsync (`PROG-1`, `TEL-2`, `SYN-1`)** — `IndexingStateStore`, telemetry writer, and sync manifest all `flush + fsync` before `os.replace`. Cheap durability win. [[brief](../Completed/A7-fsync-hardening-brief.md), [plan](../Completed/A7-fsync-hardening-plan.md)]
 
 ## Phase B — Make changes measurable (observability + retrieval seams)
 
 Goal: stand up the measurement surface before adding ranking features, and ship the highest-leverage retrieval refactor.
 
-- [x] **B1. Observability and stage-level latency (item 24)** — per-stage timings (parse, embed, route, vector, FTS, fuse, rerank, end-to-end); correlation IDs from middleware → pipeline → telemetry (`ARCH-3`). Emitted as structured logs and surfaced on `/explain`.
-- [x] **B2. Deeper health and readiness (item 22)** — distinguish `live` vs. `ready`; cover storage connectivity, model warm-status, index build state, watcher state, queue depth. Operators need this before scaling load.
-- [x] **B3. Server-side multi-collection search primitive (item 8)** — embed the query once; one merge + rerank pass across collections. Co-designed with `/explain` (A4) so the routing path is debuggable.
-- [x] **B4. Stronger collection routing (item 9)** — description-embedding + centroid hybrid blend shipped; centroid remains the default (`routing_strategy = "centroid"`), hybrid is opt-in via `routing_strategy = "hybrid"` + `routing_description_weight`. One new artifact: `CollectionMeta.description_embedding` stored per-collection and used by the router in hybrid mode. Multi-centroid routing (per-cluster centroids for diffuse corpora) deferred to a future item; roadmap item 9's multi-centroid scope is narrowed to this single-artifact implementation. Gated by the eval harness (`routing_mrr_hybrid ≥ routing_mrr_centroid` baseline).
-- [x] **B5. Hardening: incremental centroid update (`CON-4`, item 17)** — incremental `(centroid_sum, chunk_count)` maintenance at store layer — three concrete defects fixed (batch-only overwrite, delete-ignores-centroid, O(chunks) sync-path rescan). Ingest is O(batch); delete is O(chunks-in-document); O(chunks) full scan retained only for explicit `recompute_collection_meta` (reindex, crash recovery, drift reset). Controlled by `centroid_incremental_enabled` flag (default `True`).
-- [x] **B6. Hardening: production-model eval lane (`EVL-1`, item 4 follow-up)** — `live`-marker job on tag pushes that runs the eval harness against the real embedder/reranker (not the deterministic stubs). Gated by `tests/eval/thresholds.toml`.
-- [x] **B7. Hardening: structured logs + log rotation (item 25)** — JSON log option, telemetry JSONL rotation policy beyond retention-day pruning.
+- [x] **B1. Observability and stage-level latency (item 24)** — per-stage timings (parse, embed, route, vector, FTS, fuse, rerank, end-to-end); correlation IDs from middleware → pipeline → telemetry (`ARCH-3`). Emitted as structured logs and surfaced on `/explain`. [[brief](../Completed/B1-observability-stage-latency-brief.md), [plan](../Completed/B1-observability-stage-latency-plan.md)]
+- [x] **B2. Deeper health and readiness (item 22)** — distinguish `live` vs. `ready`; cover storage connectivity, model warm-status, index build state, watcher state, queue depth. Operators need this before scaling load. [[brief](../Completed/B2-deeper-health-readiness-brief.md), [plan](../Completed/B2-deeper-health-readiness-plan.md)]
+- [x] **B3. Server-side multi-collection search primitive (item 8)** — embed the query once; one merge + rerank pass across collections. Co-designed with `/explain` (A4) so the routing path is debuggable. [[brief](../Completed/B3-server-side-multi-collection-search-brief.md), [plan](../Completed/B3-server-side-multi-collection-search-plan.md)]
+- [x] **B4. Stronger collection routing (item 9)** — description-embedding + centroid hybrid blend shipped; centroid remains the default (`routing_strategy = "centroid"`), hybrid is opt-in via `routing_strategy = "hybrid"` + `routing_description_weight`. One new artifact: `CollectionMeta.description_embedding` stored per-collection and used by the router in hybrid mode. Multi-centroid routing (per-cluster centroids for diffuse corpora) deferred to a future item; roadmap item 9's multi-centroid scope is narrowed to this single-artifact implementation. Gated by the eval harness (`routing_mrr_hybrid ≥ routing_mrr_centroid` baseline). [[brief](../Completed/B4-stronger-collection-routing-brief.md), [plan](../Completed/B4-stronger-collection-routing-plan.md)]
+- [x] **B5. Hardening: incremental centroid update (`CON-4`, item 17)** — incremental `(centroid_sum, chunk_count)` maintenance at store layer — three concrete defects fixed (batch-only overwrite, delete-ignores-centroid, O(chunks) sync-path rescan). Ingest is O(batch); delete is O(chunks-in-document); O(chunks) full scan retained only for explicit `recompute_collection_meta` (reindex, crash recovery, drift reset). Controlled by `centroid_incremental_enabled` flag (default `True`). [[brief](../Completed/B5-incremental-centroid-brief.md), [plan](../Completed/B5-incremental-centroid-plan.md)]
+- [x] **B6. Hardening: production-model eval lane (`EVL-1`, item 4 follow-up)** — `live`-marker job on tag pushes that runs the eval harness against the real embedder/reranker (not the deterministic stubs). Gated by `tests/eval/thresholds.toml`. [[brief](../Completed/B6-production-model-eval-lane-brief.md), [plan](../Completed/B6-production-model-eval-lane-plan.md)]
+- [x] **B7. Hardening: structured logs + log rotation (item 25)** — JSON log option, telemetry JSONL rotation policy beyond retention-day pruning. [[brief](../Completed/B7-structured-logs-rotation-brief.md), [plan](../Completed/B7-structured-logs-rotation-plan.md)]
 
 ## Phase C — Quality features (ranking leaps, gated by the eval harness)
 
 Goal: ship the features users actually came for. Each item must show a measurable eval lift to land.
 
-- [x] **C1. Per-collection embedding model (item 13)** — honour `CollectionMeta.embedding_model` at ingest and query; reject or downgrade cross-model routing explicitly; collection-level reindex workflow.
-- [ ] **C2. Multilingual retrieval (item 14)** — multilingual embedding option, language metadata on chunks, language-aware FTS/tokenisation where the backend supports it.
-- [ ] **C3. Chunk-level enrichment at ingest (item 19)** — local title / section path / heading ancestry / page / source-subtype / code-symbol context. Drives both ranking and filter quality.
-  - [x] **C3a** — Heading enrichment (`_heading`, `_section_path`) for text-format sources (`.md`, `.txt`, `.rst`, `.html`). Shipped.
-  - [x] **C3b** — Page-number extraction (`_page_start`, `_page_end`) for PDF and image sources via docling page-break markers. Shipped 2026-06-07.
-- [ ] **C4. HyDE / query expansion (item 10)** — optional, opt-in; must clear the eval-harness bar before becoming default.
-- [ ] **C5. RAG Fusion / multi-query decomposition (item 11)** — parallel sub-queries with fused ranking; benchmarked, not assumed.
-- [ ] **C6. Hardening: incremental FTS maintenance (item 16)** — per-document add/update/delete against the existing FTS index instead of `replace=True` on every change set.
-- [ ] **C7. Hardening: MCP responses behind Pydantic models (`API-4`)** — reuse REST `response_model` schemas in MCP so dataclass shape changes can't break MCP silently.
+- [x] **C0. Tiered install profiles** — three profiles (`minimal`/`balanced`/`max`) for English and multilingual; `[database].profile`/`[database].multilingual` in `archon-search.toml`; disk-space checks, Jina CC-BY-NC-4.0 license gate for multilingual `balanced`/`max`, model pre-warming, reinstall guard with rollback, `--force --delete-db` escape hatch. [[brief](../Completed/C0-tiered-install-profiles-brief.md), [plan](../Completed/C0-tiered-install-profiles-plan.md)]
+- [x] **C0b. GitHub Releases via git-cliff changelog** — `release.sh` requires `git-cliff >= 2.4`, prepends release notes to `CHANGELOG.md`, verifies commit count vs. provisional tag; `github-release` job in `archon-search-release.yml` creates the GitHub Release via REST API on every tag push. [[brief](../Completed/C0b-github-releases-changelog-brief.md), [plan](../Completed/C0b-github-releases-changelog-plan.md)]
+- [x] **C1. Per-collection embedding model (item 13)** — `CollectionMeta.active_embedding_model` is the per-collection model tag; ingest/search/sync paths consult it; `validate_embedding_model()` raises `ModelValidationError` on cross-model mismatch; `SearchResponse.embedding_model` echoes the resolved model. [[brief](../Completed/C1-per-collection-embedding-model-brief.md), [plan](../Completed/C1-per-collection-embedding-model-plan.md)]
+- [x] **C2. Multilingual retrieval (item 14)** — fasttext `lid.176.ftz` language detection at ingest; `language=<code>` single-collection filter; three-state contract (`""`/`"unknown"`/`"<code>"`); CC-BY-SA-3.0 license gate; language-aware FTS tokenization; `FilterFlags.language_filter_used` telemetry; `/status` warning for untagged collections. [[brief](../Completed/C2-multilingual-retrieval-brief.md), [plan](../Completed/C2-multilingual-retrieval-plan.md)]
+- [x] **C3. Chunk-level enrichment at ingest (item 19)** — local title / section path / heading ancestry / page / source-subtype / code-symbol context. Drives both ranking and filter quality.
+  - [x] **C3a** — Heading enrichment (`_heading`, `_section_path`) for text-format sources (`.md`, `.txt`, `.rst`, `.html`). [[brief](../Completed/C3a-markdown-structural-enrichment-brief.md), [plan](../Completed/C3a-markdown-structural-enrichment-plan.md)]
+  - [x] **C3b** — Page-number extraction (`_page_start`, `_page_end`) for PDF and image sources via docling page-break markers. Shipped 2026-06-07. [[brief](../Completed/C3b-page-number-extraction-brief.md), [plan](../Completed/C3b-page-number-extraction-plan.md)]
+  - [x] **C3c** — Code-symbol context (`_symbol_type`, `_symbol_subtype`, `_containing_function`, `_containing_class`, `_module_path`) for source-code chunks (`.py`, `.ts`, `.js`, `.go`, `.rs`, `.java`, `.sh`) via tree-sitter (optional `[code]` extra). [[brief](../Completed/C3c-code-symbol-context-brief.md), [plan](../Completed/C3c-code-symbol-context-plan.md)]
+- [x] **C4. HyDE / query expansion (item 10)** — optional `archon-search[hyde]` extra; `hyde=true` on `/search`, `/explain`, or MCP tools generates a hypothetical doc via Anthropic API and uses its embedding for vector retrieval; off by default; silent fallback on every failure path. Mutually exclusive with RAG Fusion (C5). [[brief](../Completed/C4-hyde-query-expansion-brief.md), [plan](../Completed/C4-hyde-query-expansion-plan.md)]
+- [x] **C5. RAG Fusion / multi-query decomposition (item 11)** — `rag_fusion=true` decomposes the query into N variants via Anthropic API, searches in parallel, fuses via second-pass RRF; optional `archon-search[rag_fusion]` extra; mutually exclusive with HyDE (C4). [[brief](../Completed/C5-rag-fusion-brief.md), [plan](../Completed/C5-rag-fusion-plan.md)]
+- [x] **C6. Hardening: incremental FTS maintenance (item 16)** — `store.optimize_fts()` replaces `rebuild_fts_index()` at all ingest and sync sites (O(delta) vs. O(collection)); delete-path FTS maintained via `optimize_fts` after `delete_document`; `reindex_metadata` no longer triggers any FTS call. [[brief](../Completed/C6-incremental-fts-maintenance-brief.md), [plan](../Completed/C6-incremental-fts-maintenance-plan.md), [spike-findings](../Completed/C6-spike-findings.md)]
+- [x] **C7. Hardening: MCP responses behind Pydantic models (`API-4`)** — all ten MCP tools return validated Pydantic schemas (`McpSearchResponse`, `IngestResultSchema`, `CollectionDetailSchema`, …) with `extra="forbid"`; `ValidationError` is caught and surfaced as a structured error; field-narrowing breakages recorded in `BREAKING.md`. [[brief](../Completed/C7-mcp-pydantic-responses-brief.md), [plan](../Completed/C7-mcp-pydantic-responses-plan.md)]
+
+### Test-suite infrastructure (parallel work, shipped during Phase C)
+
+- [x] **C10. Test-suite speed — pytest-xdist + `--dist=loadfile`** — `pytest-xdist` dev-dep, parallel `addopts`, `-n0` in CI for `--cov-append` correctness; baseline test wall-time win. [[brief](../Completed/C10-test-suite-speed-brief.md), [plan](../Completed/C10-test-suite-speed-plan.md)]
+- [x] **C11. Split `test_pipeline.py`** — break the monolithic 4 000-line `test_pipeline.py` into `tests/pipeline/{test_pipeline_ingest,test_pipeline_search,test_pipeline_multi}.py` with shared helpers in `tests/pipeline/conftest.py`. [[brief](../Completed/C11-split-test-pipeline-brief.md), [plan](../Completed/C11-split-test-pipeline-plan.md)]
+- [x] **C12. Switch xdist to `--dist=loadgroup` with session-scoped store** — session-scoped `connected_store`, `xdist_group("mcp")` on 16 MCP-stub files, `xdist_group("install")` on 3 install-lock files; median wall time on a 14-core machine ≈ 127s with thread caps (from 6.5 min before C10). [[brief](../Completed/C12-dist-load-session-store-brief.md), [plan](../Completed/C12-dist-load-session-store-plan.md)]
+
+### Active backlog (post-Phase C, not yet sequenced into D/E/F)
+
+- [ ] **C8. Extended setup wizard with optional feature selection** — adds an interactive feature-selection step to the wizard so users can enable any optional feature at install time (including automatic `pip install archon-search[<extra>]` invocation). Task 1.1 (`WizardFeatures` dataclass) shipped; 11 tasks remain. [[investigation](./C8-wizard-optional-features-investigation.md), [plan](./C8-wizard-optional-features-plan.md)]
+- [ ] **C9. Container support (Docker + GHCR)** — `docker run` and `docker compose up` start `archon-search` configured purely via env vars; all runtime state on one mounted volume; CPU (`:latest`) and NVIDIA GPU (`:gpu`) images published to GHCR on tag push. [[brief](./C9-container-support-brief.md), [plan](./C9-container-support-plan.md)]
+- [ ] **C13. Test perf: bypass FTS rebuild in tests that don't query FTS** — adds `rebuild_fts: bool = True` to `SearchPipeline.ingest_directory()` (mirroring `ingest_file`); estimated 127s → 90–100s default-suite median wall time. Proposed (not yet scheduled). [[brief](./C13-fts-rebuild-test-bypass-brief.md)]
 
 ## Phase D — Operability and portability (becomes serious to run)
 
@@ -222,56 +237,69 @@ If only one ordering is used for planning, use this — each phase is a coherent
 14. ✅ B7. Structured logs + log rotation (item 25).
 
 **Phase C — Quality features**
-15. ✅ C1. Per-collection embedding model (item 13).
-16. ⬜ C2. Multilingual retrieval (item 14).
-17. ⬜ C3. Chunk-level enrichment (item 19). [C3a heading enrichment ✅ shipped; C3b page-number extraction ✅ shipped 2026-06-07; C3c code-symbol context ⬜]
-18. ⬜ C4. HyDE / query expansion (item 10).
-19. ⬜ C5. RAG Fusion / multi-query (item 11).
-20. ⬜ C6. Incremental FTS maintenance (item 16).
-21. ⬜ C7. MCP responses behind Pydantic models (`API-4`).
+15. ✅ C0. Tiered install profiles.
+16. ✅ C0b. GitHub Releases via git-cliff changelog.
+17. ✅ C1. Per-collection embedding model (item 13).
+18. ✅ C2. Multilingual retrieval (item 14).
+19. ✅ C3. Chunk-level enrichment (item 19). [C3a ✅, C3b ✅, C3c ✅]
+20. ✅ C4. HyDE / query expansion (item 10).
+21. ✅ C5. RAG Fusion / multi-query (item 11).
+22. ✅ C6. Incremental FTS maintenance (item 16).
+23. ✅ C7. MCP responses behind Pydantic models (`API-4`).
+
+**Active backlog**
+24. ⬜ C8. Extended setup wizard with optional feature selection (Task 1.1 shipped; 11 tasks remain).
+25. ⬜ C9. Container support (Docker + GHCR).
+26. ⬜ C13. Test perf: bypass FTS rebuild in tests that don't query FTS (proposed).
+
+**Test-suite infrastructure (parallel to Phase C)**
+- ✅ C10. Test-suite speed — pytest-xdist + `--dist=loadfile`.
+- ✅ C11. Split `test_pipeline.py` into focused files.
+- ✅ C12. Switch xdist to `--dist=loadgroup` with session-scoped store (median wall time ≈ 127s).
 
 **Phase D — Operability and portability**
-22. ⬜ D1. Job contract completion (item 2).
-23. ⬜ D2. Export / import / backup / restore (item 20).
-24. ⬜ D3. Schema migration tooling (item 21).
-25. ⬜ D4. Streaming / incremental chunking (item 18).
-26. ⬜ D5. Maintenance jobs and policies (item 26).
-27. ⬜ D6. Install-time / background provider validation (item 23).
-28. ⬜ D7. Multi-key auth with rotation (`SEC-1`).
-29. ⬜ D8. Hashed `doc_id` for telemetry (`SEC-2`).
+27. ⬜ D1. Job contract completion (item 2).
+28. ⬜ D2. Export / import / backup / restore (item 20).
+29. ⬜ D3. Schema migration tooling (item 21).
+30. ⬜ D4. Streaming / incremental chunking (item 18).
+31. ⬜ D5. Maintenance jobs and policies (item 26).
+32. ⬜ D6. Install-time / background provider validation (item 23).
+33. ⬜ D7. Multi-key auth with rotation (`SEC-1`).
+34. ⬜ D8. Hashed `doc_id` for telemetry (`SEC-2`).
 
 **Phase E — Surface and integrations**
-30. ⬜ E1. Streaming search results (item 27).
-31. ⬜ E2. Python SDK.
-32. ⬜ E3. TypeScript SDK.
-33. ⬜ E4. Per-collection access-control policies (item 30).
-34. ⬜ E5. Connector and federation architecture (item 15).
-35. ⬜ E6. Admin / debug UI (item 29).
+35. ⬜ E1. Streaming search results (item 27).
+36. ⬜ E2. Python SDK.
+37. ⬜ E3. TypeScript SDK.
+38. ⬜ E4. Per-collection access-control policies (item 30).
+39. ⬜ E5. Connector and federation architecture (item 15).
+40. ⬜ E6. Admin / debug UI (item 29). *A4 prerequisite met; not yet built.*
 
 **Phase F — Advanced positioning**
-36. ⬜ F1. Salience and temporal weighting (item 31).
-37. ⬜ F2. Semantic memory tiers (item 32).
-38. ⬜ F3. GraphRAG (item 33).
-39. ⬜ F4. Richer multimodal retrieval (item 34).
-40. ⬜ F5. Reassess horizontal scaling (item 35).
-41. ⬜ F6. Reassess pluggable storage backends (item 36).
+41. ⬜ F1. Salience and temporal weighting (item 31).
+42. ⬜ F2. Semantic memory tiers (item 32).
+43. ⬜ F3. GraphRAG (item 33).
+44. ⬜ F4. Richer multimodal retrieval (item 34).
+45. ⬜ F5. Reassess horizontal scaling (item 35).
+46. ⬜ F6. Reassess pluggable storage backends (item 36).
 
 ## Recommendation
 
 If the goal is **a full-featured world-class search system that is also safe to run in production**, the balanced sequence is:
 
 1. ✅ Product boundary (done).
-2. ✅ **Phase A** — ship metadata + filters + explain (user wins), and close the most painful safety debt (path, SQL, locks, fsync) in the same release. Cheap, broad impact, unlocks every later phase. (Search-failure semantics is already closed via A3; see `BREAKING.md`.)
+2. ✅ **Phase A** — ship metadata + filters + explain (user wins), and close the most painful safety debt (path, SQL, locks, fsync) in the same release. Cheap, broad impact, unlocks every later phase. (Search-failure semantics is closed via A3; see `BREAKING.md`.)
 3. ✅ **Phase B** — observability + production-model eval lane first; then the server-side multi-collection refactor and stronger routing. Without B1/B6 the later ranking work has no story.
-4. ⬜ **Phase C** — the ranking-leap features (per-collection model, multilingual, enrichment, HyDE, RAG Fusion). Each gated by the eval harness.
-5. ⬜ **Phase D** — finish the job contract, export/import, key rotation; the system becomes operable end-to-end.
-6. ⬜ **Phase E and F** — surface (SDKs, UI, connectors) and differentiators (salience, GraphRAG, multimodal, scale). Only after A–D close.
+4. ✅ **Phase C** — the ranking-leap features (per-collection model, multilingual, enrichment, HyDE, RAG Fusion) plus C0/C0b install + release polish and C6/C7 hardening. All gated by the eval harness or BREAKING.md.
+5. ⬜ **Active backlog (post-Phase C)** — C8 wizard rework (partial), C9 container support, C13 test perf. Land before opening Phase D, since they unblock UX (C8), operator deployments (C9), and developer iteration speed (C13).
+6. ⬜ **Phase D** — finish the job contract, export/import, key rotation; the system becomes operable end-to-end.
+7. ⬜ **Phase E and F** — surface (SDKs, UI, connectors) and differentiators (salience, GraphRAG, multimodal, scale). Only after A–D close.
 
-The biggest mistakes this ordering protects against:
+The biggest mistakes this ordering protects against (Phases A–C have shipped; these warnings stand as a record of the why):
 
-- Shipping HyDE / RAG Fusion (C4/C5) before observability (B1) and the production-model eval lane (B6) — you will not know whether they helped.
-- Building filters (A2) without a metadata schema (A1) — they will be re-built within one release.
-- Letting hardening (A3–A7, B5, C6, C7, D7, D8) accumulate behind features — the production incident curve is exponential.
+- Shipping HyDE / RAG Fusion (C4/C5) before observability (B1) and the production-model eval lane (B6) — you will not know whether they helped. *(B1 + B6 shipped before C4 + C5, as ordered.)*
+- Building filters (A2) without a metadata schema (A1) — they will be re-built within one release. *(A1 shipped before A2.)*
+- Letting hardening (A3–A7, B5, C6, C7, D7, D8) accumulate behind features — the production incident curve is exponential. *(D7/D8 still open — Phase D priority.)*
 
 ## Related documents
 
@@ -279,4 +307,4 @@ The biggest mistakes this ordering protects against:
 - [`02_competitive_analysis_marveen.md`](./02_competitive_analysis_marveen.md) — UX and memory-tier comparison.
 - [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) — debt register cross-referenced from items above (`SEC-1`, `EVL-1`, `CON-2`, `CON-4`, `ARCH-3`).
 - [`../../BREAKING.md`](../../BREAKING.md) — already-queued contract changes that interact with items 6, 7, 12.
-- [`../../roadmap.md`](../../roadmap.md) — active near-term roadmap.
+- [`../roadmap.md`](../roadmap.md) — active near-term roadmap.
