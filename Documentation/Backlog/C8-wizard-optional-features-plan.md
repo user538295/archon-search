@@ -305,7 +305,7 @@ All keys are already defined in `SearchConfig` / `archon-search.toml.example`. T
   - Checkpoint: `uv run pytest tests/test_install_config_writer.py -v`
 
 #### Task 2.3 — `_install_code_extra()`
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: nothing (standalone function)
 - **Description**:
   - `def _install_code_extra(dry_run: bool = False) -> None`

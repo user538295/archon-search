@@ -850,6 +850,48 @@ def _prompt_gpu_confirm(non_interactive: bool, gpu: GpuType) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Code enrichment package install (Task C8-2.3)
+# ---------------------------------------------------------------------------
+
+def _install_code_extra(dry_run: bool = False) -> None:
+    """Install ``archon-search[code]`` (tree-sitter enrichment packages).
+
+    Primary path: ``uv pip install --python <sys.executable> archon-search[code]``.
+    Falls back to ``sys.executable -m pip install archon-search[code]`` when uv
+    is absent or fails.
+
+    Raises ``InstallError`` if both paths fail.
+    No-op (with an informational print) when *dry_run* is True.
+    """
+    package = "archon-search[code]"
+    if dry_run:
+        click.echo(f"[dry-run] Would install {package}")
+        return
+
+    click.echo("Installing code enrichment packages...")
+    python = sys.executable
+    try:
+        subprocess.run(
+            ["uv", "pip", "install", "--python", python, package],
+            check=True,
+            capture_output=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        # uv not found or failed — fall back to pip
+        try:
+            subprocess.run(
+                [python, "-m", "pip", "install", package],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as pip_exc:
+            stderr = (pip_exc.stderr or b"").decode(errors="replace")
+            raise InstallError(f"Failed to install {package}: {stderr}") from pip_exc
+
+    click.echo("Code enrichment packages installed.")
+
+
+# ---------------------------------------------------------------------------
 # Legacy service cleanup (Task 3.4)
 # ---------------------------------------------------------------------------
 
