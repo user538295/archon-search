@@ -781,6 +781,29 @@ def _prompt_multilingual(non_interactive: bool, flag_value: bool) -> bool:
     return raw in {"y", "yes"}
 
 
+def _prompt_gpu_confirm(non_interactive: bool, gpu: GpuType) -> bool:
+    """Ask the user to confirm GPU acceleration after auto-detection.
+
+    Returns True immediately when ``gpu`` is ``GpuType.NONE`` (nothing to confirm).
+    Returns True immediately when ``non_interactive`` is True (auto-enable).
+    For Metal or CUDA GPUs, prints a [Y/n] prompt; accepts "n"/"no" as decline.
+    On EOFError returns True (auto-enable).
+    """
+    if gpu == GpuType.NONE:
+        return True
+    if non_interactive:
+        return True
+    if gpu == GpuType.METAL:
+        prompt = "Apple Silicon detected — enable Metal acceleration? [Y/n]: "
+    else:
+        prompt = "NVIDIA GPU detected — enable CUDA acceleration? [Y/n]: "
+    try:
+        raw = input(prompt).strip().lower()
+    except EOFError:
+        return True
+    return raw not in {"n", "no"}
+
+
 # ---------------------------------------------------------------------------
 # Legacy service cleanup (Task 3.4)
 # ---------------------------------------------------------------------------

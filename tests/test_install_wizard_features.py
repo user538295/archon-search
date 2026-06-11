@@ -2,7 +2,8 @@
 from __future__ import annotations
 from unittest.mock import patch
 
-from archon_search.install import WizardFeatures, _prompt_multilingual, _prompt_optional_features
+from archon_search.install import WizardFeatures, _prompt_gpu_confirm, _prompt_multilingual, _prompt_optional_features
+from archon_search.platform.types import GpuType
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
 
 
@@ -240,3 +241,49 @@ class TestPromptOptionalFeatures:
         assert features.eager_load_embedders is False
         assert features.routing_strategy == "centroid"
         assert features.log_format == "text"
+
+
+class TestPromptGpuConfirm:
+    """Tests for _prompt_gpu_confirm() — Task 1.4."""
+
+    def test_no_gpu_returns_true(self) -> None:
+        """GpuType.NONE always returns True without prompting."""
+        with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+            result = _prompt_gpu_confirm(non_interactive=False, gpu=GpuType.NONE)
+        assert result is True
+
+    def test_non_interactive_metal_returns_true(self) -> None:
+        """non_interactive=True with Metal GPU returns True without prompting."""
+        with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+            result = _prompt_gpu_confirm(non_interactive=True, gpu=GpuType.METAL)
+        assert result is True
+
+    def test_interactive_metal_accept(self) -> None:
+        """Empty input (default) with Metal returns True."""
+        with patch("builtins.input", return_value=""):
+            result = _prompt_gpu_confirm(non_interactive=False, gpu=GpuType.METAL)
+        assert result is True
+
+    def test_interactive_metal_decline(self) -> None:
+        """Input 'n' with Metal returns False."""
+        with patch("builtins.input", return_value="n"):
+            result = _prompt_gpu_confirm(non_interactive=False, gpu=GpuType.METAL)
+        assert result is False
+
+    def test_interactive_cuda_decline(self) -> None:
+        """Input 'no' with CUDA returns False."""
+        with patch("builtins.input", return_value="no"):
+            result = _prompt_gpu_confirm(non_interactive=False, gpu=GpuType.CUDA)
+        assert result is False
+
+    def test_interactive_cuda_accept(self) -> None:
+        """Empty input (default) with CUDA returns True."""
+        with patch("builtins.input", return_value=""):
+            result = _prompt_gpu_confirm(non_interactive=False, gpu=GpuType.CUDA)
+        assert result is True
+
+    def test_eof_returns_true(self) -> None:
+        """EOFError returns True (auto-enable)."""
+        with patch("builtins.input", side_effect=EOFError):
+            result = _prompt_gpu_confirm(non_interactive=False, gpu=GpuType.METAL)
+        assert result is True
