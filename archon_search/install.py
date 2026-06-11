@@ -491,6 +491,7 @@ def _render_summary(
     profile: InstallProfile,
     multilingual: bool,
     providers: list[str],
+    features: WizardFeatures | None = None,
 ) -> str:
     """Return an install summary block string. Does NOT print."""
     cap = _PROFILE_CAPS.get(profile_name, profile_name.capitalize())
@@ -507,6 +508,26 @@ def _render_summary(
         "  Note: Model files are downloaded now. ONNX session initialization happens in the",
         "  server process on first query — expect ~5–15s latency on first search.",
     ]
+    if features is not None:
+        feature_bullets: list[str] = []
+        if features.install_code_extra:
+            feature_bullets.append("• Code enrichment (tree-sitter)")
+        if features.disable_reranker:
+            feature_bullets.append("• Reranker disabled")
+        if features.enable_watch:
+            feature_bullets.append("• Watch directories (auto-reindex)")
+        if features.enable_telemetry:
+            feature_bullets.append("• Telemetry enabled")
+        if features.eager_load_embedders:
+            feature_bullets.append("• Eager load embedders at startup")
+        if features.routing_strategy != "centroid":
+            feature_bullets.append(f"• Routing: {features.routing_strategy}")
+        if features.log_format != "text":
+            feature_bullets.append(f"• Log format: {features.log_format}")
+        if feature_bullets:
+            lines.append("")
+            lines.append("  Optional features:")
+            lines.extend(f"    {b}" for b in feature_bullets)
     return "\n".join(lines)
 
 

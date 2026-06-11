@@ -326,7 +326,7 @@ All keys are already defined in `SearchConfig` / `archon-search.toml.example`. T
   - Checkpoint: `uv run pytest tests/test_install_code_extra.py -v`
 
 #### Task 2.4 — Extend `_render_summary()` to display optional features
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Current signature: `_render_summary(profile_name, prof, multilingual, providers) -> str`

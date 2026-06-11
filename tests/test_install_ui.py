@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from archon_search.install import _render_profile_table, _render_summary
+from archon_search.install import _render_profile_table, _render_summary, WizardFeatures
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES, InstallProfile, get_profile
 
 
@@ -128,3 +128,113 @@ def test_render_table_narrow_multilingual_minimal_no_reranker_no_plus():
     output = _render_profile_table(multilingual=True, width=60)
     assert "+ no reranker" not in output
     assert "no reranker" in output
+
+
+# ---------------------------------------------------------------------------
+# _render_summary optional features tests (Task C8-2.4)
+# ---------------------------------------------------------------------------
+
+
+def test_render_summary_no_features():
+    """features=None produces no 'Optional features' section (backward-compatible)."""
+    profile = get_profile("minimal", multilingual=False)
+    output = _render_summary("minimal", profile, multilingual=False, providers=[], features=None)
+    assert "Optional features" not in output
+
+
+def test_render_summary_all_defaults():
+    """WizardFeatures() (all defaults) also produces no optional section."""
+    profile = get_profile("minimal", multilingual=False)
+    output = _render_summary("minimal", profile, multilingual=False, providers=[], features=WizardFeatures())
+    assert "Optional features" not in output
+
+
+def test_render_summary_with_code_and_telemetry():
+    """WizardFeatures with install_code_extra and enable_telemetry contains both labels."""
+    profile = get_profile("minimal", multilingual=False)
+    output = _render_summary(
+        "minimal",
+        profile,
+        multilingual=False,
+        providers=[],
+        features=WizardFeatures(install_code_extra=True, enable_telemetry=True),
+    )
+    assert "Optional features" in output
+    assert "Code enrichment" in output
+    assert "Telemetry" in output
+
+
+def test_render_summary_routing_hybrid():
+    """WizardFeatures with routing_strategy='hybrid' mentions 'Routing: hybrid'."""
+    profile = get_profile("minimal", multilingual=False)
+    output = _render_summary(
+        "minimal",
+        profile,
+        multilingual=False,
+        providers=[],
+        features=WizardFeatures(routing_strategy="hybrid"),
+    )
+    assert "Optional features" in output
+    assert "Routing: hybrid" in output
+
+
+def test_render_summary_disable_reranker():
+    """WizardFeatures with disable_reranker=True mentions reranker disabled."""
+    profile = get_profile("balanced", multilingual=False)
+    output = _render_summary(
+        "balanced",
+        profile,
+        multilingual=False,
+        providers=[],
+        features=WizardFeatures(disable_reranker=True),
+    )
+    assert "Optional features" in output
+    assert "Reranker disabled" in output
+
+
+def test_render_summary_log_format_json():
+    """WizardFeatures with log_format='json' mentions 'Log format: json'."""
+    profile = get_profile("minimal", multilingual=False)
+    output = _render_summary(
+        "minimal",
+        profile,
+        multilingual=False,
+        providers=[],
+        features=WizardFeatures(log_format="json"),
+    )
+    assert "Optional features" in output
+    assert "Log format: json" in output
+
+
+def test_render_summary_eager_load_and_watch():
+    """WizardFeatures with eager_load_embedders and enable_watch mentions both."""
+    profile = get_profile("minimal", multilingual=False)
+    output = _render_summary(
+        "minimal",
+        profile,
+        multilingual=False,
+        providers=[],
+        features=WizardFeatures(eager_load_embedders=True, enable_watch=True),
+    )
+    assert "Optional features" in output
+    assert "Eager load" in output
+    assert "Watch" in output
+
+
+def test_render_summary_base_content_preserved_with_features():
+    """Base profile content (embedder, chunk size) is still present when features are non-None."""
+    profile = get_profile("balanced", multilingual=False)
+    output = _render_summary(
+        "balanced",
+        profile,
+        multilingual=False,
+        providers=[],
+        features=WizardFeatures(enable_telemetry=True),
+    )
+    # Base content still present
+    assert "Balanced" in output
+    assert profile.embedder in output
+    assert str(profile.chunk_size) in output
+    # Optional section also present
+    assert "Optional features" in output
+    assert "Telemetry" in output
