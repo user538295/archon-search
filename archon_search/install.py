@@ -642,6 +642,25 @@ def _select_profile(
     raise SystemExit(1)  # unreachable, satisfies type checker
 
 
+def _prompt_multilingual(non_interactive: bool, flag_value: bool) -> bool:
+    """Ask whether the corpus includes non-English documents.
+
+    Returns ``flag_value`` unchanged when it is True (flag takes precedence).
+    Returns False in non-interactive mode (default: English).
+    Otherwise prints a yes/no prompt and returns the user's answer.
+    """
+    if flag_value:
+        return True
+    if non_interactive:
+        return False
+    try:
+        raw = input("Will your corpus include non-English documents? [y/N]: ").strip().lower()
+    except EOFError:
+        print("No input received (EOF). Using English.")
+        return False
+    return raw in {"y", "yes"}
+
+
 # ---------------------------------------------------------------------------
 # Legacy service cleanup (Task 3.4)
 # ---------------------------------------------------------------------------

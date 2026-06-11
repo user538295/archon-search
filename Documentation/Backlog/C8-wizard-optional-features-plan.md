@@ -167,7 +167,7 @@ All keys are already defined in `SearchConfig` / `archon-search.toml.example`. T
   - Checkpoint: `uv run pytest tests/test_install_wizard_features.py -v`
 
 #### Task 1.2 — `_prompt_multilingual()`
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: nothing (no dependency on Task 1.1)
 - **Description**:
   - `def _prompt_multilingual(non_interactive: bool, flag_value: bool) -> bool`
