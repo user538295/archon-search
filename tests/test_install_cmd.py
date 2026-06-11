@@ -222,6 +222,25 @@ def test_no_multilingual_flag_in_help(runner: CliRunner) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task 4.3 — --enable-hyde and --enable-rag-fusion flags on wizard command
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_help_contains_enable_hyde(runner: CliRunner) -> None:
+    """--enable-hyde must appear in `wizard --help` output."""
+    result = runner.invoke(main, ["wizard", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--enable-hyde" in result.output
+
+
+def test_wizard_help_contains_enable_rag_fusion(runner: CliRunner) -> None:
+    """--enable-rag-fusion must appear in `wizard --help` output."""
+    result = runner.invoke(main, ["wizard", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--enable-rag-fusion" in result.output
+
+
+# ---------------------------------------------------------------------------
 # uninstall command — stop and unregister are called
 # ---------------------------------------------------------------------------
 

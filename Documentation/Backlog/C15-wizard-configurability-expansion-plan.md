@@ -343,7 +343,7 @@ else:  # source.startswith("file:")
   - Checkpoint: `uv run pytest tests/test_e2e_wizard_optional_features.py -m integration -v --no-cov -k "test_wizard_enable_hyde or test_wizard_enable_rag or test_wizard_non_interactive_skips_hyde"`
 
 #### Task 4.3 — `install_cmd.py wizard` — `--enable-hyde` and `--enable-rag-fusion` Click flags
-- [ ] **File**: `archon_search/cli/install_cmd.py`
+- [x] **File**: `archon_search/cli/install_cmd.py`
 - **Depends on**: Task 4.2
 - **Description**:
   - Add `@click.option("--enable-hyde", is_flag=True, default=False, help="Enable HyDE query expansion (requires ANTHROPIC_API_KEY)")`
