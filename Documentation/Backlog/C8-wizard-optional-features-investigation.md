@@ -363,17 +363,17 @@ The following optional features or capabilities exist in the codebase but are no
 
 | Feature | Extra Needed | Config Change Needed | Surfaced in Wizard | Requires Re-index |
 |---|---|---|---|---|
-| Code symbol enrichment (`[code]`) | Yes | No | No | No (existing code files need re-ingest for symbol metadata) |
-| Multilingual language detection | Yes (`multilingual`) | Yes (`multilingual = true`) | Partially (CLI flag only) | Yes |
-| Multilingual models | No | Via profile | Partially (footnote only) | Yes |
-| Reranker on/off | No | Yes (`reranker_model = ""`) | No | No |
-| GPU acceleration (Metal/CUDA) | No | Auto-configured | Auto-detected, not prompted | No |
-| Filesystem watcher | No | Yes (`watch = true`) | No | No |
-| Telemetry | No | Yes (`enabled = true`) | No | No |
-| Eager embedder loading | No | Yes (`eager_load_embedders = true`) | No | No |
-| HyDE query expansion (C4, planned) | Yes (`hyde`) | Yes (`[hyde].enabled = true`) | No (not yet implemented) | No |
-| Routing strategy: hybrid | No | Yes (`routing_strategy = "hybrid"`) | No | No |
-| JSON log format | No | Yes (`format = "json"`) | No | No |
+| Code symbol enrichment (`[code]`) | Yes | No | **Yes** (`--code / --no-code`; installs `[code]` extra via uv/pip) | No (existing code files need re-ingest for symbol metadata) |
+| Multilingual language detection | Yes (`multilingual`) | Yes (`multilingual = true`) | **Yes** (interactive question "Will your corpus include non-English documents?" before profile selection; also `--multilingual` flag) | Yes |
+| Multilingual models | No | Via profile | **Yes** (multilingual question selects multilingual model stack) | Yes |
+| Reranker on/off | No | Yes (`reranker_model = ""`) | **Yes** (`--no-reranker`; interactive question when profile includes a reranker) | No |
+| GPU acceleration (Metal/CUDA) | No | Auto-configured | **Yes** (interactive confirmation after auto-detection: "Apple Silicon detected — enable Metal acceleration? [Y/n]"; `--disable-gpu` flag for non-interactive override) | No |
+| Filesystem watcher | No | Yes (`watch = true`) | **Yes** (`--watch / --no-watch`; interactive question "Auto-watch directories and re-index on file changes?") | No |
+| Telemetry | No | Yes (`enabled = true`) | **Yes** (`--telemetry / --no-telemetry`; interactive question "Enable local query telemetry?") | No |
+| Eager embedder loading | No | Yes (`eager_load_embedders = true`) | **Yes** (`--eager-load / --no-eager-load`; interactive question "Pre-load embedding models at startup?") | No |
+| HyDE query expansion (C4, planned) | Yes (`hyde`) | Yes (`[hyde].enabled = true`) | No (not yet implemented — depends on C4) | No |
+| Routing strategy: hybrid | No | Yes (`routing_strategy = "hybrid"`) | **Yes** (`--routing-strategy {centroid,hybrid}`; interactive choice "Routing strategy (centroid/hybrid) [centroid]") | No |
+| JSON log format | No | Yes (`format = "json"`) | **Yes** (`--log-format {text,json}`; interactive question "Log format (text/json) [text]") | No |
 
 ---
 

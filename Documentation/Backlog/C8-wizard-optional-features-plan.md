@@ -451,7 +451,7 @@ All keys are already defined in `SearchConfig` / `archon-search.toml.example`. T
 ### Phase 4 — Verification & Documentation
 
 #### Task 4.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: Tasks 1.1–1.4, 2.1–2.4, 3.1–3.3
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, Architecture docs, User Manual, `archon-search.toml.example`, `CLAUDE.md`, `contributing.md`, `Documentation/Backlog/C8-wizard-optional-features-investigation.md`) and update every file whose content is affected by the changes delivered in this plan.

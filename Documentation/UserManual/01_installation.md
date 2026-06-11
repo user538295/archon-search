@@ -84,23 +84,29 @@ The chosen profile is recorded in `[database].profile` and `[database].multiling
 
 ## Install as a background service (optional)
 
-To register and start `archon-search` as a user service:
+The setup flow uses two separate commands:
+
+- **`archon-search wizard`** — the full interactive setup: choose a profile, configure optional features, download models, register and start the service. Run this first.
+- **`archon-search install`** — register and start the service only (no prompts, no model download). Requires `wizard` to have been run first.
 
 ```bash
-archon-search install
+archon-search wizard
 ```
 
-The interactive installer will prompt you to choose a profile. To skip the prompt:
+The wizard prompts you to choose a profile, answer questions about optional features, and then downloads models and starts the service. To skip all prompts:
 
 ```bash
 # Non-interactive English minimal install (fastest, no license required)
-archon-search install --profile minimal --non-interactive --skip-preload
+archon-search wizard --profile minimal --non-interactive --skip-preload
 
 # Multilingual balanced install with Jina license accepted
-archon-search install --profile balanced --multilingual --accept-jina-license --non-interactive
+archon-search wizard --profile balanced --multilingual --accept-jina-license --non-interactive
+
+# Enable optional features non-interactively
+archon-search wizard --profile minimal --non-interactive --watch --telemetry --log-format json
 ```
 
-All flags (verified against `archon_search/cli/install_cmd.py`):
+All `wizard` flags (verified against `archon_search/cli/install_cmd.py`):
 
 | Flag | Effect |
 | --- | --- |
@@ -114,18 +120,30 @@ All flags (verified against `archon_search/cli/install_cmd.py`):
 | `--dry-run` | Print actions without executing. |
 | `--non-interactive` | Skip all confirmation prompts. |
 | `--config PATH` | Use a non-default config file when computing data/log paths. |
+| `--code / --no-code` | Install tree-sitter code enrichment packages (`archon-search[code]`). Enables symbol extraction for code files. |
+| `--watch / --no-watch` | Enable filesystem watcher: auto-reindex collection source directories on file changes. |
+| `--telemetry / --no-telemetry` | Enable local query telemetry (structural metadata only, no raw query strings). |
+| `--eager-load / --no-eager-load` | Pre-load embedding models at startup (eliminates ~5–15s first-query latency). |
+| `--no-reranker` | Disable the cross-encoder reranker for lower latency (less precise results). |
+| `--routing-strategy {centroid,hybrid}` | Set routing strategy. `hybrid` blends centroid + description-embedding scores. |
+| `--log-format {text,json}` | Log format. Use `json` for container deployments and log aggregators. |
+| `--disable-gpu` | Force CPU execution; skip Metal/CUDA acceleration even when auto-detected. |
 
-The installer:
+The wizard:
 
 1. Detects and removes any legacy service file (`~/Library/LaunchAgents/com.archon.search.plist` on macOS, `~/.config/systemd/user/archon-search.service` on Linux).
-2. Prompts for (or validates) the install profile and multilingual flag.
-3. Prompts for Jina license acceptance if the profile requires it (or checks `--accept-jina-license`).
-4. **C2**: When `--multilingual`, prompts for fasttext `lid.176.ftz` CC-BY-SA 3.0 license acceptance (or checks `--accept-fasttext-license`) and downloads the model to `~/.archon-search/models/`.
-5. Creates `~/.archon-search/archon-search.toml` from the profile defaults if missing.
-6. Checks available disk space for the selected profile.
-7. Pre-warms model weights (unless `--skip-preload`).
-8. Registers and starts the service via the platform adapter (`archon_search/platform/macos.py`, `linux.py`).
-9. Polls `GET http://<host>:<port>/health` for up to 60 seconds; exits non-zero if the service does not become ready.
+2. Asks "Will your corpus include non-English documents?" (sets multilingual models if yes; skipped when `--multilingual` flag is passed).
+3. Prompts for (or validates) the install profile.
+4. Asks about optional features: code enrichment, reranker toggle, filesystem watcher, telemetry, eager loading, routing strategy, and log format.
+5. Prompts for Jina license acceptance if the profile requires it (or checks `--accept-jina-license`).
+6. **C2**: When `--multilingual`, prompts for fasttext `lid.176.ftz` CC-BY-SA 3.0 license acceptance (or checks `--accept-fasttext-license`) and downloads the model to `~/.archon-search/models/`.
+7. Detects GPU hardware (Metal on Apple Silicon, CUDA on NVIDIA) and prompts for confirmation (or auto-enables with `--non-interactive`; skip with `--disable-gpu`).
+8. Creates `~/.archon-search/archon-search.toml` from the profile defaults (and optional feature choices) if missing.
+9. Checks available disk space for the selected profile.
+10. Installs code enrichment packages if requested (`--code`).
+11. Pre-warms model weights (unless `--skip-preload`).
+12. Registers and starts the service via the platform adapter (`archon_search/platform/macos.py`, `linux.py`).
+13. Polls `GET http://<host>:<port>/health` for up to 60 seconds; exits non-zero if the service does not become ready.
 
 To remove:
 

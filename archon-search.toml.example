@@ -48,6 +48,8 @@ multilingual = false
 # embedder_cache_size = 3
 
 # If true, pre-warm all distinct embedding models at server startup (eager loading).
+# Eliminates the ~5–15s first-query latency by loading models before any request arrives.
+# Set interactively via `archon-search wizard` or with the `--eager-load / --no-eager-load` flag.
 # eager_load_embedders = false
 
 # B5: incremental centroid maintenance (default: true).
@@ -76,6 +78,8 @@ routing_confidence_threshold = 0.30
 max_parallel_collections = 3
 # Routing strategy: "centroid" (pure vector centroid similarity) or
 # "hybrid" (blends centroid score with description-embedding cosine similarity).
+# Use "hybrid" for corpora with distinct domain boundaries to improve routing precision.
+# Set interactively via `archon-search wizard` or with the `--routing-strategy {centroid,hybrid}` flag.
 routing_strategy = "centroid"
 # Weight [0.0, 1.0] for description-embedding cosine in hybrid routing.
 # Ignored when routing_strategy = "centroid".
@@ -88,6 +92,8 @@ pinned_collections = []
 # manage collections via the HTTP API.
 collections = []
 # Watch source directories and reindex on change.
+# When true, the watchdog monitors collection source paths and triggers re-ingest on file changes.
+# Set interactively via `archon-search wizard` or with the `--watch / --no-watch` flag.
 watch = false
 
 [logging]
@@ -97,6 +103,8 @@ level = "INFO"
 # set log_file = "" explicitly to opt out.
 log_file = "~/.archon-search/logs/archon-search.log"
 # Log format: "text" (default) or "json" (structured JSON for log aggregators).
+# Use "json" for container deployments and log aggregation pipelines (e.g., Datadog, Loki).
+# Set interactively via `archon-search wizard` or with the `--log-format {text,json}` flag.
 # format = "text"
 
 # Number of rotated log files to retain (daily rotation at UTC midnight).
@@ -186,6 +194,7 @@ num_queries = 2
 # file under log_dir. Only structural metadata is recorded (collection names,
 # latency, result counts, etc.) — raw query text is never written to disk.
 # Old files are pruned after retention_days.
+# Set interactively via `archon-search wizard` or with the `--telemetry / --no-telemetry` flag.
 enabled = false
 retention_days = 30
 log_dir = "~/.archon-search/search-logs"
