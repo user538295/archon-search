@@ -416,7 +416,7 @@ All keys are already defined in `SearchConfig` / `archon-search.toml.example`. T
   - Checkpoint: `uv run pytest tests/test_install_cmd.py -v`
 
 #### Task 3.3 — E2E tests for wizard CLI optional features
-- [ ] **File**: `tests/test_e2e_wizard_optional_features.py` (new file)
+- [x] **File**: `tests/test_e2e_wizard_optional_features.py` (new file)
 - **Depends on**: Tasks 3.1, 3.2
 - **Marker**: `@pytest.mark.integration`
 - **Description**:
