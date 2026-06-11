@@ -149,6 +149,17 @@ class WizardFeatures:
     eager_load_embedders: bool = False
     routing_strategy: str = "centroid"
     log_format: str = "text"
+    # C15 Tier 1 deployment flags
+    host: str | None = None
+    port: int | None = None
+    db_path: str | None = None
+    log_level: str | None = None
+    log_to_stderr: bool = False
+    top_k: int | None = None
+    telemetry_retention_days: int | None = None
+    # C15 Tier 2 AI query expansion flags
+    enable_hyde: bool = False
+    enable_rag_fusion: bool = False
 
 
 def _write_profile_config(

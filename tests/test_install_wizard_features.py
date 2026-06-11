@@ -370,6 +370,68 @@ class TestPromptOptionalFeaturesExplanations:
         assert mock_input.call_count == 6
 
 
+class TestWizardFeaturesC15NewFields:
+    """Tests for C15 Task 1.1 — 9 new WizardFeatures fields."""
+
+    def test_wizard_features_new_fields_default_to_none_or_false(self) -> None:
+        """All 9 new C15 fields have correct defaults (None or False)."""
+        f = WizardFeatures()
+        assert f.host is None
+        assert f.port is None
+        assert f.db_path is None
+        assert f.log_level is None
+        assert f.log_to_stderr is False
+        assert f.top_k is None
+        assert f.telemetry_retention_days is None
+        assert f.enable_hyde is False
+        assert f.enable_rag_fusion is False
+
+    def test_wizard_features_new_fields_accept_values(self) -> None:
+        """All 9 new C15 fields accept non-default values."""
+        f = WizardFeatures(
+            host="0.0.0.0",
+            port=9000,
+            db_path="~/custom",
+            log_level="DEBUG",
+            log_to_stderr=True,
+            top_k=20,
+            telemetry_retention_days=7,
+            enable_hyde=True,
+            enable_rag_fusion=True,
+        )
+        assert f.host == "0.0.0.0"
+        assert f.port == 9000
+        assert f.db_path == "~/custom"
+        assert f.log_level == "DEBUG"
+        assert f.log_to_stderr is True
+        assert f.top_k == 20
+        assert f.telemetry_retention_days == 7
+        assert f.enable_hyde is True
+        assert f.enable_rag_fusion is True
+
+    def test_wizard_features_existing_fields_unchanged(self) -> None:
+        """Existing WizardFeatures fields are unaffected by new additions."""
+        f = WizardFeatures(
+            install_code_extra=True,
+            disable_reranker=True,
+            enable_watch=True,
+            enable_telemetry=True,
+            eager_load_embedders=True,
+            routing_strategy="hybrid",
+            log_format="json",
+        )
+        assert f.install_code_extra is True
+        assert f.disable_reranker is True
+        assert f.enable_watch is True
+        assert f.enable_telemetry is True
+        assert f.eager_load_embedders is True
+        assert f.routing_strategy == "hybrid"
+        assert f.log_format == "json"
+        # New fields still default
+        assert f.host is None
+        assert f.port is None
+
+
 class TestPromptGpuConfirm:
     """Tests for _prompt_gpu_confirm() — Task 1.4."""
 
