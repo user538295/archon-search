@@ -152,7 +152,7 @@ After this plan ships: `--dry-run` makes zero filesystem writes across all three
   - Checkpoint: `uv run pytest tests/test_install_dry_run.py -n0 -x`
 
 #### Task 1.2 — Gate Branch C filesystem writes
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - In `run()`, Branch C (idempotent re-run, lines 1291–1293): wrap both `shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))` and `_write_profile_config(...)` calls with `if not self.dry_run:`.

@@ -1294,8 +1294,12 @@ class SearchInstaller:
             else:
                 # Branch C: idempotent reinstall (same profile)
                 branch = "idempotent"
-                shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
-                _write_profile_config(config_path, prof, profile_name, is_multilingual, features=features)
+                if not self.dry_run:
+                    shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
+                    _write_profile_config(config_path, prof, profile_name, is_multilingual, features=features)
+                else:
+                    print(f"[DRY RUN] Would write .bak: {config_path.with_suffix('.toml.bak')}")
+                    print(f"[DRY RUN] Would overwrite config: {config_path}")
 
             # Step 8b: reload config with freshly-written values
             if self.dry_run and branch == "fresh":
