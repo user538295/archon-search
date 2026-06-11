@@ -260,7 +260,7 @@ All keys are already defined in `SearchConfig` / `archon-search.toml.example`. T
 > **Releasable**: after this phase, all config-writing functions accept `WizardFeatures` and correctly write optional sections; `_install_code_extra()` is callable.
 
 #### Task 2.1 — `_apply_wizard_features_to_toml()`
-- [ ] **File**: `archon_search/install.py`
+- [x] **File**: `archon_search/install.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - `def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None`

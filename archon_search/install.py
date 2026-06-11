@@ -196,6 +196,44 @@ def _profile_toml(profile_name: str, multilingual: bool) -> str:
     return tomlkit.dumps(doc)
 
 
+def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None:
+    """Write non-default WizardFeatures fields to *doc* in-place.
+
+    Only fields that differ from WizardFeatures defaults are written, to avoid
+    TOML clutter for basic installs. Missing sections are created via tomlkit.table().
+    ``install_code_extra`` is intentionally NOT written — it controls a subprocess
+    install, not a config key.
+    """
+
+    def _ensure_section(name: str) -> None:
+        if name not in doc:
+            doc.add(name, tomlkit.table())
+
+    if features.disable_reranker:
+        _ensure_section("database")
+        doc["database"]["reranker_model"] = ""
+
+    if features.eager_load_embedders:
+        _ensure_section("database")
+        doc["database"]["eager_load_embedders"] = True
+
+    if features.enable_watch:
+        _ensure_section("collections")
+        doc["collections"]["watch"] = True
+
+    if features.enable_telemetry:
+        _ensure_section("telemetry")
+        doc["telemetry"]["enabled"] = True
+
+    if features.routing_strategy != "centroid":
+        _ensure_section("routing")
+        doc["routing"]["routing_strategy"] = features.routing_strategy
+
+    if features.log_format != "text":
+        _ensure_section("logging")
+        doc["logging"]["format"] = features.log_format
+
+
 # ---------------------------------------------------------------------------
 # Disk space guard (Task C0-2.2)
 # ---------------------------------------------------------------------------
