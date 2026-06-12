@@ -676,6 +676,12 @@ def _render_summary(
     return "\n".join(lines)
 
 
+# SYNC: must match the default returned by `key_manager.get_key_file()`
+# (i.e. `get_data_dir() / ".search.env"` when neither ARCHON_SEARCH_KEY_FILE
+# nor ARCHON_SEARCH_DATA_DIR is set). Display-only fallback for the
+# pre-install summary when `api_key_file` is not yet known; never used as
+# a real path. If the data-dir default ever shifts (XDG compliance etc.),
+# update this string alongside `archon_search.paths.get_data_dir()`.
 _KEY_FILE_PLACEHOLDER = "~/.archon-search/.search.env"
 
 

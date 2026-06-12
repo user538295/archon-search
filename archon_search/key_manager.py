@@ -33,31 +33,60 @@ def get_key_file() -> Path:
 
     Resolution order:
 
-    1. ``$ARCHON_SEARCH_KEY_FILE`` if set and non-empty —
-       ``Path(env).expanduser()``.
+    1. ``$ARCHON_SEARCH_KEY_FILE`` if set and non-whitespace — stripped,
+       expanded via ``Path.expanduser()``, required to be absolute. Empty
+       or whitespace-only is treated as "not set" and falls through to
+       step 2 (the plan deliberately keeps this lenient for ``KEY_FILE``
+       — unlike ``ARCHON_SEARCH_DATA_DIR`` which raises on empty — so
+       operators can unset an override without unsetting the env var
+       entirely).
     2. ``get_data_dir() / ".search.env"`` otherwise.
 
     ``ARCHON_SEARCH_KEY_FILE`` takes precedence over ``ARCHON_SEARCH_DATA_DIR``
     so operators can pin the key file location independently of the rest of
     the runtime state directory.
+
+    Raises ``ValueError`` if ``ARCHON_SEARCH_KEY_FILE`` resolves to a
+    relative path (CWD inside a container is not contractually stable) or
+    contains ``~`` but HOME is unset (``Path.expanduser`` raises
+    ``RuntimeError`` — translated for parity with ``get_data_dir``).
     """
-    raw = os.environ.get("ARCHON_SEARCH_KEY_FILE") or ""
-    if raw:
-        return Path(raw).expanduser()
+    raw = os.environ.get("ARCHON_SEARCH_KEY_FILE")
+    if raw is not None:
+        stripped = raw.strip()
+        if stripped:
+            try:
+                result = Path(stripped).expanduser()
+            except RuntimeError as exc:
+                raise ValueError(
+                    f"ARCHON_SEARCH_KEY_FILE={raw!r} contains '~' but HOME is not set"
+                ) from exc
+            if not result.is_absolute():
+                raise ValueError(
+                    f"ARCHON_SEARCH_KEY_FILE must be an absolute path, got {raw!r}"
+                )
+            return result
     return get_data_dir() / ".search.env"
 
 
 def load_or_generate_key() -> tuple[str, str]:
-    """Return (key, source). Source is 'env var', 'file: ...', or 'auto-generated'."""
+    """Return (key, source). Source is 'env var', 'file: ...', or 'auto-generated'.
+
+    The key file path is resolved once at the start of the file/auto-generate
+    branches and threaded through so the reported source path always matches
+    the path that was actually read or written (no TOCTOU between resolve
+    and report).
+    """
     key = _load_from_env()
     if key is not None:
         return key, "env var"
 
-    key = _load_from_file()
+    key_file = get_key_file()
+    key = _load_from_file(key_file)
     if key is not None:
-        return key, f"file: {get_key_file()}"
+        return key, f"file: {key_file}"
 
-    key = _generate_and_write()
+    key = _generate_and_write(key_file)
     return key, "auto-generated"
 
 
@@ -71,8 +100,15 @@ def _load_from_env() -> str | None:
     return val
 
 
-def _load_from_file() -> str | None:
-    key_file = get_key_file()
+def _load_from_file(key_file: Path) -> str | None:
+    """Read and validate the API key from *key_file*.
+
+    *key_file* must be the path resolved by ``get_key_file()`` at the start
+    of the current call to ``load_or_generate_key()``. Callers thread the
+    resolved path in so the reported source string (``f"file: {key_file}"``)
+    cannot drift if ``ARCHON_SEARCH_KEY_FILE``/``ARCHON_SEARCH_DATA_DIR``
+    change between resolve and report (TOCTOU).
+    """
     if not key_file.exists():
         return None
 
@@ -105,8 +141,13 @@ def _validate_key(value: str) -> bool:
     return bool(value) and bool(_HEX_RE.fullmatch(value))
 
 
-def _generate_and_write() -> str:
-    key_file = get_key_file()
+def _generate_and_write(key_file: Path) -> str:
+    """Atomically write a freshly generated key to *key_file* and return it.
+
+    *key_file* must be the path resolved by ``get_key_file()`` at the start
+    of the current call to ``load_or_generate_key()`` — see
+    ``_load_from_file`` for the same contract.
+    """
     os.makedirs(key_file.parent, exist_ok=True)
     key = secrets.token_hex(32)  # 64 hex chars
     payload = f"{ENV_VAR}={key}\n".encode()
@@ -119,7 +160,7 @@ def _generate_and_write() -> str:
         except FileExistsError:
             if attempt == 0:
                 time.sleep(0.1)
-                existing = _load_from_file()
+                existing = _load_from_file(key_file)
                 if existing is not None:
                     return existing
                 try:
@@ -127,7 +168,7 @@ def _generate_and_write() -> str:
                 except OSError:
                     pass
                 continue
-            existing = _load_from_file()
+            existing = _load_from_file(key_file)
             if existing is not None:
                 return existing
             raise RuntimeError("key generation failed: concurrent write conflict")

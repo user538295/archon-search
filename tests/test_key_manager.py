@@ -95,7 +95,7 @@ class TestLoadFromFile:
         import logging
 
         with caplog.at_level(logging.ERROR):
-            result = km._load_from_file()
+            result = km._load_from_file(key_file)
         assert result is None
         assert any("ERROR" in r.levelname for r in caplog.records)
 
@@ -109,7 +109,7 @@ class TestLoadFromFile:
         import logging
 
         with caplog.at_level(logging.ERROR):
-            result = km._load_from_file()
+            result = km._load_from_file(key_file)
         assert result is None
         assert any("ERROR" in r.levelname for r in caplog.records)
 
@@ -119,7 +119,7 @@ class TestLoadFromFile:
         # Leading and trailing spaces
         _write_key_file(key_file, f"ARCHON_SEARCH_API_KEY=  {VALID_HEX_64}  \n")
         monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-        result = km._load_from_file()
+        result = km._load_from_file(key_file)
         assert result == VALID_HEX_64
 
     def test_key_with_crlf_line_endings(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -127,7 +127,7 @@ class TestLoadFromFile:
         key_file = tmp_path / ".search.env"
         _write_key_file(key_file, f"ARCHON_SEARCH_API_KEY={VALID_HEX_64}\r\n")
         monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-        result = km._load_from_file()
+        result = km._load_from_file(key_file)
         assert result == VALID_HEX_64
 
     def test_key_file_missing_prefix(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -135,7 +135,7 @@ class TestLoadFromFile:
         key_file = tmp_path / ".search.env"
         _write_key_file(key_file, "SOME_OTHER_VAR=abc123\n")
         monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-        result = km._load_from_file()
+        result = km._load_from_file(key_file)
         assert result is None
 
     def test_chmod_on_wide_perms(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -146,7 +146,7 @@ class TestLoadFromFile:
         _write_key_file(key_file, f"ARCHON_SEARCH_API_KEY={VALID_HEX_64}\n")
         key_file.chmod(0o644)
         monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-        result = km._load_from_file()
+        result = km._load_from_file(key_file)
         assert result == VALID_HEX_64
         # Should have been chmod'd to 600
         mode = stat.S_IMODE(key_file.stat().st_mode)
@@ -182,7 +182,7 @@ class TestAutoGenerate:
         monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
 
         with patch("archon_search.key_manager.atomic_write_bytes") as mock_write:
-            key = km._generate_and_write()
+            key = km._generate_and_write(key_file)
 
         mock_write.assert_called_once_with(key_file, f"{km.ENV_VAR}={key}\n".encode(), mode=0o600)
 
@@ -205,7 +205,7 @@ class TestAutoGenerate:
             return real_os_open(path, flags, mode)
 
         with patch("os.open", side_effect=fake_os_open):
-            result = km._generate_and_write()
+            result = km._generate_and_write(key_file)
 
         assert result == existing_key
 
@@ -228,7 +228,7 @@ class TestAutoGenerate:
             real_write(path, data, mode=mode)
 
         with patch("archon_search.key_manager.atomic_write_bytes", side_effect=flaky_write):
-            key = km._generate_and_write()
+            key = km._generate_and_write(key_file)
 
         assert len(key) == 64
         assert all(c in "0123456789abcdef" for c in key)
@@ -259,7 +259,7 @@ class TestAutoGenerate:
             side_effect=OSError("injected replace failure"),
         ):
             with pytest.raises(OSError, match="injected replace failure"):
-                km._generate_and_write()
+                km._generate_and_write(key_file)
 
     def test_concurrent_bootstrap_retry_still_works(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -277,7 +277,7 @@ class TestAutoGenerate:
             ),
             patch.object(km, "_load_from_file", side_effect=[None, existing_key]),
         ):
-            result = km._generate_and_write()
+            result = km._generate_and_write(key_file)
 
         assert result == existing_key
 
@@ -299,7 +299,7 @@ class TestAutoGenerate:
             patch.object(km, "_load_from_file", return_value=None),
         ):
             with pytest.raises(RuntimeError, match="key generation failed"):
-                km._generate_and_write()
+                km._generate_and_write(key_file)
 
 
 # ---------------------------------------------------------------------------
@@ -364,3 +364,87 @@ class TestGetKeyFile:
             "ARCHON_SEARCH_KEY_FILE is set"
         )
         assert explicit.read_text() == f"ARCHON_SEARCH_API_KEY={key}\n"
+
+    def test_get_key_file_relative_path_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Relative `ARCHON_SEARCH_KEY_FILE` is rejected — CWD inside the
+        container is implementation-dependent and a relative key path would
+        leak the secret to whatever directory the process happens to be in.
+        Parity with `get_data_dir()`'s same guard."""
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "secrets/.env")
+        with pytest.raises(ValueError, match="absolute path"):
+            km.get_key_file()
+
+    def test_get_key_file_tilde_with_home_unset_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`ARCHON_SEARCH_KEY_FILE="~/x"` + HOME unset → `Path.expanduser`
+        raises `RuntimeError`. `get_key_file()` translates it into the same
+        `ValueError` callers of `get_data_dir()` already expect."""
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "~/keys/.env")
+
+        def _raise(_self: Path) -> Path:
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.setattr(Path, "expanduser", _raise)
+        with pytest.raises(ValueError, match="HOME is not set"):
+            km.get_key_file()
+
+    def test_get_key_file_whitespace_padding_stripped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Leading/trailing whitespace from copy-paste must be stripped
+        before Path construction — `get_data_dir()` already does this, and
+        `get_key_file()` matches for consistency."""
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "  /custom/.env  ")
+        assert km.get_key_file() == Path("/custom/.env")
+
+    def test_get_key_file_empty_env_falls_through_to_data_dir(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty `ARCHON_SEARCH_KEY_FILE` is intentionally lenient — it
+        falls through to `get_data_dir()` rather than raising. This
+        documents the deliberate asymmetry with `ARCHON_SEARCH_DATA_DIR`
+        (which raises on empty): operators may want to unset a `KEY_FILE`
+        override by emptying the env var without redefining the rest of
+        their config."""
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "")
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+        assert km.get_key_file() == Path("/data/.search.env")
+
+    def test_get_key_file_whitespace_only_env_falls_through(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Whitespace-only `ARCHON_SEARCH_KEY_FILE` behaves like empty —
+        falls through to `get_data_dir()`. Same rationale as
+        `test_get_key_file_empty_env_falls_through_to_data_dir`."""
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "   ")
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+        assert km.get_key_file() == Path("/data/.search.env")
+
+    def test_get_key_file_whitespace_padded_relative_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Whitespace padding is stripped BEFORE the absolute-path check —
+        a relative payload like ``"  secrets/.env  "`` must still raise
+        ``ValueError``, not silently slip through because of the surrounding
+        spaces."""
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "  secrets/.env  ")
+        with pytest.raises(ValueError, match="absolute path"):
+            km.get_key_file()
+
+    def test_load_or_generate_key_file_source_matches_resolved_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """TOCTOU regression guard: when ``load_or_generate_key()`` finds an
+        existing key on disk, the reported source string must report the
+        path actually read — i.e. the path resolved once at the top of the
+        function and threaded through, not a fresh re-resolution."""
+        monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
+        explicit = tmp_path / "explicit.env"
+        _write_key_file(explicit, f"ARCHON_SEARCH_API_KEY={VALID_HEX_64}\n")
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", str(explicit))
+        key, source = km.load_or_generate_key()
+        assert key == VALID_HEX_64
+        assert source == f"file: {explicit}"
