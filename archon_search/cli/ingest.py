@@ -10,6 +10,7 @@ import click
 
 from archon_search.config import load_config
 from archon_search.observability import bind_stage_recorder, new_correlation_id
+from archon_search.paths import get_data_dir
 from archon_search.pipeline import create_pipeline
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,9 @@ logger = logging.getLogger(__name__)
 def ingest(ingest_path: Path | None, collection: str | None, config_path: Path | None) -> None:
     """Ingest documents from a directory into a collection."""
     if ingest_path is None:
-        ingest_path = Path.home() / ".archon-search" / "history" / "sessions"
+        # Resolved lazily via get_data_dir() so ARCHON_SEARCH_DATA_DIR
+        # redirects the default ingest path at call time (C9 Task 2.6).
+        ingest_path = get_data_dir() / "history" / "sessions"
         click.echo(f"No --path given, using default: {ingest_path}")
 
     try:

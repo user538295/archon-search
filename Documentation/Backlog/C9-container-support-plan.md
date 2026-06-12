@@ -274,7 +274,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Plan-driven doc audit found a stale `FASTTEXT_MODELS_DIR` reference in `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md:46`. Fixed in this review pass. Historical references in `Documentation/Completed/C2-multilingual-retrieval-plan.md`, `Documentation/Completed/C8-wizard-optional-features-investigation.md`, and `Documentation/Backlog/C9-container-support-brief.md` are intentionally left as-is — they describe the original state being remediated.
 
 #### Task 2.6 — cli/ingest.py: lazy history sessions path
-- [ ] **File**: `archon_search/cli/ingest.py`
+- [x] **File**: `archon_search/cli/ingest.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - Line 25: replace `Path.home() / ".archon-search" / "history" / "sessions"` with `get_data_dir() / "history" / "sessions"`. Import `get_data_dir` from `archon_search.paths`.
