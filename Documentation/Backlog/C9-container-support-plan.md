@@ -386,7 +386,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Checkpoint: `uv run pytest tests/test_dockerfile_lint.py -v`
 
 #### Task 4.2 — docker-compose.yml
-- [ ] **Files**: `docker-compose.yml`, `.env.example`
+- [x] **Files**: `docker-compose.yml`, `.env.example`
 - **Depends on**: Task 4.1
 - **Description**:
   - Three services: `archon-dev`, `archon-test`, `archon-prod`. Each has:

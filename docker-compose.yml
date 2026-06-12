@@ -1,0 +1,85 @@
+# archon-search docker-compose stack.
+#
+# Three services are declared as sibling deployment targets that share the
+# same image but never the same data: `archon-dev`, `archon-test`, and
+# `archon-prod`. Each one mounts a *separate* named volume so a corrupt
+# dev index can never poison the production state, and each one exposes
+# the server on its own host port so all three can run side-by-side on
+# a developer workstation.
+#
+# Operator notes:
+#   - TLS termination is the operator's responsibility — put a reverse
+#     proxy (nginx, Caddy, Traefik) in front of this service if you need
+#     HTTPS. The container speaks plaintext HTTP only.
+#   - LanceDB is single-writer: do not mount the same named volume to
+#     more than one running container at the same time, or the index
+#     state is undefined.
+#   - Without a persistent volume (and without ARCHON_SEARCH_API_KEY in
+#     the environment), the API key regenerates on every container start
+#     and previously-issued tokens stop working. The named volumes below
+#     pin the key to disk so this only happens on first boot.
+#   - To override the image (for example, to test a locally-built
+#     `archon-search:latest`), set `ARCHON_SEARCH_IMAGE=archon-search:latest`
+#     in a `.env` file next to this compose file. See `.env.example`.
+
+services:
+  archon-dev:
+    image: ${ARCHON_SEARCH_IMAGE:-ghcr.io/your-org/archon-search:latest}
+    environment:
+      ARCHON_SEARCH_API_KEY: ${ARCHON_SEARCH_API_KEY:-}
+      ARCHON_SEARCH_DATA_DIR: /data
+      # To enable the shared fastembed cache: (1) uncomment the next env
+      # line, (2) uncomment the `archon-model-cache` volume mount below,
+      # AND (3) uncomment the `archon-model-cache:` volume declaration at
+      # the bottom of this file. All three must be uncommented together
+      # or compose rejects the config with "undefined volume".
+      # FASTEMBED_CACHE_PATH: /data/fastembed-cache
+    volumes:
+      - archon-dev-data:/data
+      # - archon-model-cache:/data/fastembed-cache
+    ports:
+      - "18765:8765"
+    stop_grace_period: 30s
+
+  archon-test:
+    image: ${ARCHON_SEARCH_IMAGE:-ghcr.io/your-org/archon-search:latest}
+    environment:
+      ARCHON_SEARCH_API_KEY: ${ARCHON_SEARCH_API_KEY:-}
+      ARCHON_SEARCH_DATA_DIR: /data
+      # See `archon-dev` for the three-step uncomment procedure required
+      # to wire up the shared fastembed model cache.
+      # FASTEMBED_CACHE_PATH: /data/fastembed-cache
+    volumes:
+      - archon-test-data:/data
+      # - archon-model-cache:/data/fastembed-cache
+    ports:
+      - "18766:8765"
+    stop_grace_period: 30s
+
+  archon-prod:
+    image: ${ARCHON_SEARCH_IMAGE:-ghcr.io/your-org/archon-search:latest}
+    environment:
+      ARCHON_SEARCH_API_KEY: ${ARCHON_SEARCH_API_KEY:-}
+      ARCHON_SEARCH_DATA_DIR: /data
+      # See `archon-dev` for the three-step uncomment procedure required
+      # to wire up the shared fastembed model cache.
+      # FASTEMBED_CACHE_PATH: /data/fastembed-cache
+    volumes:
+      - archon-prod-data:/data
+      # - archon-model-cache:/data/fastembed-cache
+    ports:
+      - "8765:8765"
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  archon-dev-data:
+  archon-test-data:
+  archon-prod-data:
+  # Optional shared cache for fastembed model weights. Uncomment this
+  # volume AND the `FASTEMBED_CACHE_PATH` environment line in every
+  # service that should reuse the cache. Mount target inside the
+  # container is `/data/fastembed-cache`, which keeps the cache on the
+  # same persistent volume layout as the rest of the runtime state and
+  # avoids re-downloading several hundred MB on every container recreate.
+  # archon-model-cache:
