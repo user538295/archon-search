@@ -25,7 +25,7 @@ Verified against the codebase as of 2026-05-20:
 | `.search.env` (mode 0600) | `key_manager.py:KEY_FILE` | `ARCHON_SEARCH_API_KEY=<hex>`. Auto-generated on first start if missing. | Critical — without this, clients lose access. |
 | `search/` (default `db_path`) | `store.py` (LanceDB), `progress.py` (state) | LanceDB tables (vectors + FTS), per-collection metadata, centroids. | Critical. |
 | `<db_path>/.indexing_state.json` | `progress.py:IndexingStateStore` (`self._state_file = self._state_dir / ".indexing_state.json"`, line 86) | Per-collection indexing progress, last_updated, trigger. Lives inside whatever `db_path` resolves to (default `~/.archon-search/search`). | Important — recoverable by re-sync but loses progress. |
-| `archon-search-jobs.json` | `jobs/model.py:JOBS_FILE` (`Path.home() / ".archon-search" / "archon-search-jobs.json"`, line 8) | Async job records. Crash recovery marks `RUNNING`/`CANCELLING` jobs as failed on next start. | Low — transient. |
+| `archon-search-jobs.json` | `jobs/model.py:get_jobs_file()` (resolves lazily under `get_data_dir() / "archon-search-jobs.json"`; default `~/.archon-search/archon-search-jobs.json`) | Async job records. Crash recovery marks `RUNNING`/`CANCELLING` jobs as failed on next start. | Low — transient. |
 | `logs/archon-search.log` | `config.py` (default `log_file = "~/.archon-search/logs/archon-search.log"`) | Server log. | Low — operational only. |
 | `search-logs/YYYY-MM-DD.jsonl` | `telemetry/writer.py` | One file per UTC day; pruned after `[telemetry].retention_days`. | Optional — operator decision. |
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from archon_search._durable_io import atomic_write_json
 from archon_search.constants import DEFAULT_NAMESPACE
-from archon_search.jobs.model import JOBS_FILE, IngestJob, JobStatus
+from archon_search.jobs.model import IngestJob, JobStatus, get_jobs_file
 from archon_search.types import DeleteJob, ReindexJob
 
 logger = logging.getLogger(__name__)
@@ -27,8 +27,8 @@ def _now_iso() -> str:
 class JobStore:
     """Persistent JSON-backed store for ingest jobs."""
 
-    def __init__(self, path: Path = JOBS_FILE) -> None:
-        self._path = path
+    def __init__(self, path: Path | None = None) -> None:
+        self._path = path if path is not None else get_jobs_file()
         self._jobs: dict[str, IngestJob] = {}
         changed = self._load()
         if changed:

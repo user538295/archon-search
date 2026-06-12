@@ -138,7 +138,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | Module | Purpose | Key public symbols |
 |---|---|---|
 | `archon_search/jobs/store.py` | Persistent JSON-backed job store with atomic writes, 7-day eviction, RUNNING/CANCELLING crash-to-FAILED recovery, and `transition()` for atomic state changes. | `JobStore` |
-| `archon_search/jobs/model.py` | Re-exports `IngestJob`/`JobStatus`, defines `JOBS_FILE`, provides `job_to_dict` for response shaping. | `IngestJob`, `JobStatus`, `JOBS_FILE`, `job_to_dict` |
+| `archon_search/jobs/model.py` | Re-exports `IngestJob`/`JobStatus`, exposes `get_jobs_file()` (lazy, honours `ARCHON_SEARCH_DATA_DIR`), provides `job_to_dict` for response shaping. | `IngestJob`, `JobStatus`, `get_jobs_file`, `job_to_dict` |
 
 ## Eval
 

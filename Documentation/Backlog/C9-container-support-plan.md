@@ -233,7 +233,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 - **Test isolation requirement**: After this migration, `get_key_file()` falls back to `get_data_dir() / ".search.env"` which uses `Path.home() / ".archon-search"` when `ARCHON_SEARCH_DATA_DIR` is unset. Tests that only set `ARCHON_SEARCH_KEY_FILE` leave the jobs file, log dir, and other paths resolving to the developer's real home directory. ALL tests that previously used `monkeypatch.setattr(km, "KEY_FILE", tmp_path / ".search.env")` MUST be migrated to `monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))`. Using `ARCHON_SEARCH_KEY_FILE` alone is insufficient for full isolation.
 
 #### Task 2.4 — jobs/model.py + jobs/store.py: lazy jobs file path
-- [ ] **Files**: `archon_search/jobs/model.py`, `archon_search/jobs/store.py`, `archon_search/jobs/__init__.py`
+- [x] **Files**: `archon_search/jobs/model.py`, `archon_search/jobs/store.py`, `archon_search/jobs/__init__.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - `jobs/model.py`: remove module-level `JOBS_FILE: Path = ...` constant (line 8). Add `get_jobs_file() -> Path` function that returns `get_data_dir() / "archon-search-jobs.json"`. Import `get_data_dir` from `archon_search.paths`. Update `__all__` to export `get_jobs_file` instead of (or alongside) `JOBS_FILE`.

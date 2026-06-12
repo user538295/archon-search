@@ -27,7 +27,7 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
 | `search/` | `store.py` (LanceDB) | vector + FTS + collection meta tables | `db_path` config key; created on `SearchStore.connect()` |
 | `search-logs/` | `telemetry/writer.py` | `YYYY-MM-DD.jsonl` per UTC day | only if `[telemetry].enabled = true` |
 | `logs/archon-search.log` | server | server logs | `[logging].log_file` |
-| `archon-search-jobs.json` | `jobs/store.py` | job state for long-running ingest/reindex | `JOBS_FILE` constant in `jobs/model.py` |
+| `archon-search-jobs.json` | `jobs/store.py` | job state for long-running ingest/reindex | `get_jobs_file()` in `jobs/model.py` |
 | `.indexing_state.json` | `progress.py` (`IndexingStateStore`) | per-collection indexing progress/status | atomic-rename writes; RMW serialized by an internal `RLock` (see "Indexing state") |
 
 Override paths:
@@ -261,7 +261,7 @@ The persisted schema is the closed field set declared in `telemetry/entry.py::DO
 
 ## Job state
 
-Long-running operations (ingest, reindex, delete) are tracked in `~/.archon-search/archon-search-jobs.json` (constant `JOBS_FILE` in `jobs/model.py`). Each job carries `JobStatus ∈ {PENDING, RUNNING, DONE, FAILED, CANCELLED, CANCELLING}` plus a `result` dict or an `error` string (see `archon_search/types.py::IngestJob`). The file is rewritten on every transition via `atomic_write_json` (see [Durability contract](#durability-contract) above); see source: `archon_search/jobs/store.py` for the exact concurrency model.
+Long-running operations (ingest, reindex, delete) are tracked in `~/.archon-search/archon-search-jobs.json` (resolved lazily via `get_jobs_file()` in `jobs/model.py`; honours `ARCHON_SEARCH_DATA_DIR`). Each job carries `JobStatus ∈ {PENDING, RUNNING, DONE, FAILED, CANCELLED, CANCELLING}` plus a `result` dict or an `error` string (see `archon_search/types.py::IngestJob`). The file is rewritten on every transition via `atomic_write_json` (see [Durability contract](#durability-contract) above); see source: `archon_search/jobs/store.py` for the exact concurrency model.
 
 ## Indexing state
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.jobs.model import JOBS_FILE, IngestJob, JobStatus
+from archon_search.jobs.model import IngestJob, JobStatus, get_jobs_file
 from archon_search.jobs.store import JobStore
 
 
@@ -164,7 +164,7 @@ def test_list_returns_all_jobs(store: JobStore) -> None:
 
 
 def test_jobs_file_default_path() -> None:
-    assert JOBS_FILE == Path.home() / ".archon-search" / "archon-search-jobs.json"
+    assert get_jobs_file() == Path.home() / ".archon-search" / "archon-search-jobs.json"
 
 
 # ---------------------------------------------------------------------------
