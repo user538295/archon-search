@@ -61,7 +61,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 - LanceDB single-writer: running two containers against the same `ARCHON_SEARCH_DATA_DIR` volume is undefined behavior — documented, not guarded.
 - If no persistent volume and no `ARCHON_SEARCH_API_KEY` is provided, the key regenerates on every start — documented prominently.
 - `ARCHON_SEARCH_CONTAINER` will be droppable once ARCH-3 delivers full per-field env overrides; retained now as an explicit, operator-friendly toggle.
-- `archon-search collection add/remove` commands write to the TOML config file at `get_default_config_path()`, which resolves to `~/.archon-search/archon-search.toml` — NOT under `ARCHON_SEARCH_DATA_DIR`. These commands will fail inside the container (non-root user, HOME may be read-only). Operators who need to modify collection config must set `ARCHON_SEARCH_CONFIG` to a path inside the `/data` volume, or edit config outside the container.
+- `archon-search collection add/remove` commands write to the TOML config file at `get_default_config_path()`, which resolves to `~/.archon-search/archon-search.toml` — NOT under `ARCHON_SEARCH_DATA_DIR`. These commands will fail inside the container (non-root user, HOME may be read-only). Operators who need dynamic collection management inside a container must set `ARCHON_SEARCH_CONFIG` to a writable path under `/data` (e.g., `ARCHON_SEARCH_CONFIG=/data/archon-search.toml`). To surface this limitation at runtime: in `archon_search/cli/serve.py`, after `load_config(config_path, serve=True)`, a startup log warning is emitted when `ARCHON_SEARCH_DATA_DIR` is set but `ARCHON_SEARCH_CONFIG` is not (see Task 3.1).
 
 ---
 
@@ -77,7 +77,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 ### Modified modules
 - `archon_search/config.py` — `load_config()` gains env var overrides for `ARCHON_SEARCH_HOST`, `ARCHON_SEARCH_PORT`, and `ARCHON_SEARCH_DATA_DIR`-derived paths. Accepts `serve: bool = False` kwarg to default host to `0.0.0.0` before TOML/env processing.
 - `archon_search/logging_setup.py` — `configure_logging()` adds `StreamHandler(sys.stderr)` when `ARCHON_SEARCH_CONTAINER=1`.
-- `archon_search/key_manager.py` — module-level `KEY_FILE` constant replaced with `_get_key_file() -> Path` (lazy, honours `ARCHON_SEARCH_KEY_FILE` first, then `get_data_dir()`).
+- `archon_search/key_manager.py` — module-level `KEY_FILE` constant replaced with `get_key_file() -> Path` (lazy, honours `ARCHON_SEARCH_KEY_FILE` first, then `get_data_dir()`); `install.py` updated to import and call `get_key_file()` instead of `KEY_FILE`.
 - `archon_search/jobs/model.py` + `jobs/store.py` — `JOBS_FILE` constant replaced with `get_jobs_file() -> Path`; `JobStore.__init__` default parameter changed to `None`.
 - `archon_search/language_detector.py` + `server/app.py` + `pipeline.py` — `FASTTEXT_MODELS_DIR` constant replaced with `get_fasttext_models_dir() -> Path`; module-level `_MULTILINGUAL_MODEL_PATH` in `app.py` made lazy.
 - `archon_search/cli/ingest.py` — history sessions default path uses `get_data_dir()`.
@@ -100,7 +100,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 | `config.db_path` | `$DATA_DIR/search` |
 | `config.log_file` | `$DATA_DIR/logs/archon-search.log` |
 | `config.telemetry.log_dir` | `$DATA_DIR/search-logs` |
-| `key_manager._get_key_file()` | `$DATA_DIR/.search.env` (unless `ARCHON_SEARCH_KEY_FILE` set) |
+| `key_manager.get_key_file()` | `$DATA_DIR/.search.env` (unless `ARCHON_SEARCH_KEY_FILE` set) |
 | `jobs.get_jobs_file()` | `$DATA_DIR/archon-search-jobs.json` |
 | `language_detector.get_fasttext_models_dir()` | `$DATA_DIR/models` |
 | `cli/ingest.py` history default | `$DATA_DIR/history/sessions` |
@@ -116,7 +116,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 - [ ] **File**: `archon_search/config.py`
 - **Depends on**: nothing
 - **Description**:
-  - Add an env var application block at the end of `load_config()`, after all TOML parsing.
+  - Add an env var application block at the end of `load_config()`, after all TOML parsing. **Critical structural prerequisite**: `load_config()` currently early-returns (`return config`) at the `except FileNotFoundError` branch before the env var block would run. This branch MUST be converted from an early return to a fall-through: catch `FileNotFoundError`, set a flag or continue past the TOML-parsing block, and ensure the env var application block executes unconditionally (whether or not a TOML file was found). Without this change, `ARCHON_SEARCH_HOST`, `ARCHON_SEARCH_PORT`, and `ARCHON_SEARCH_DATA_DIR` env vars are silently ignored in the primary container deployment path (no mounted config file).
   - `ARCHON_SEARCH_HOST`: read with `os.environ.get("ARCHON_SEARCH_HOST")`; if present and non-empty, set `config.host`. No further validation (any string is a valid host string at config time).
   - `ARCHON_SEARCH_PORT`: read with `os.environ.get("ARCHON_SEARCH_PORT")`; if present, parse as int (raise `ConfigError("ARCHON_SEARCH_PORT must be an integer, got {value!r}")` on non-int); validate 1–65535 (raise `ConfigError("ARCHON_SEARCH_PORT must be between 1 and 65535, got {n}")` on out-of-range); set `config.port`.
   - Empty string for `ARCHON_SEARCH_PORT` is treated as "not set" (skip override).
@@ -133,8 +133,9 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Unit: `test_host_env_empty_string_ignored` — `ARCHON_SEARCH_HOST=""` → host stays at default (empty string is treated as "not set").
   - Unit: `test_serve_kwarg_sets_default_host` — `load_config(serve=True)` with no env/TOML → `config.host == "0.0.0.0"`.
   - Unit: `test_serve_kwarg_overridable_by_env` — `load_config(serve=True)` with `ARCHON_SEARCH_HOST="192.168.1.1"` → host is `"192.168.1.1"`.
-  - Unit: `test_serve_kwarg_overridable_by_toml` — `load_config(serve=True, config_path=toml_with_host)` → TOML host wins.
+  - Unit: `test_serve_kwarg_overridable_by_toml` — `load_config(toml_with_host, serve=True)` → TOML host wins. (Note: the parameter is named `path`, not `config_path` — use positional argument syntax.)
   - Checkpoint: `uv run pytest tests/test_config_env_overrides.py -v`
+  - Note: all `pytest.raises(ConfigError, ...)` calls in this test file MUST use `match=` to verify the error message content (e.g., `pytest.raises(ConfigError, match="integer")`, `pytest.raises(ConfigError, match="1 and 65535")`). A bare `pytest.raises(ConfigError)` without `match=` does not verify the message and will pass even with a wrong error message.
 - **conftest.py requirement**: Add an `autouse=True` function-scoped fixture to `tests/conftest.py` that calls `monkeypatch.delenv` (with `raising=False`) for these six env vars before each test: `ARCHON_SEARCH_HOST`, `ARCHON_SEARCH_PORT`, `ARCHON_SEARCH_DATA_DIR`, `ARCHON_SEARCH_CONTAINER`, `ARCHON_SEARCH_KEY_FILE`, `ARCHON_SEARCH_CONFIG`. This prevents env var leakage between tests. IMPORTANT: do NOT include `ARCHON_SEARCH_API_KEY` in this list — it is set globally at module level (`tests/conftest.py` line 25) for auth test infrastructure and must remain set for all tests.
 
 #### Task 1.2 — Config regression baseline
@@ -152,7 +153,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Unit: `test_default_log_file` — `config.log_file == "~/.archon-search/logs/archon-search.log"`.
   - Unit: `test_default_telemetry_disabled` — `config.telemetry.enabled == False`.
   - Unit: `test_default_telemetry_log_dir` — `config.telemetry.log_dir == "~/.archon-search/search-logs"`.
-  - Unit: `test_all_defaults_snapshot` — single parameterised assertion covering every named field so new fields are not silently skipped.
+  - Unit: `test_all_defaults_snapshot` — build an `expected` dict mapping field name to expected default value for EVERY field in `SearchConfig`; compare `dataclasses.asdict(config)` against it; AND assert `set(expected.keys()) == {f.name for f in dataclasses.fields(SearchConfig)}` — this ensures the test FAILS when a new field is added to `SearchConfig` without updating the expected dict.
   - Checkpoint: `uv run pytest tests/test_config_defaults.py -v`
 
 ---
@@ -207,19 +208,27 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 - [ ] **File**: `archon_search/key_manager.py`
 - **Depends on**: Task 2.1
 - **Description**:
-  - Remove the module-level `KEY_FILE: Path = ...` constant (lines 16–21).
-  - Add `_get_key_file() -> Path`: if `ARCHON_SEARCH_KEY_FILE` env var is set and non-empty, return `Path(env).expanduser()`; otherwise return `get_data_dir() / ".search.env"`. Import `get_data_dir` from `archon_search.paths`.
-  - Replace all six internal usages of `KEY_FILE` with `_get_key_file()`: `load_or_generate_key()` (source string), `_load_from_file()` (exists check, stat, read), `_generate_and_write()` (makedirs, payload construction, `.with_suffix()`).
-  - `ARCHON_SEARCH_KEY_FILE` still takes precedence over `ARCHON_SEARCH_DATA_DIR` (evaluated inside `_get_key_file()`).
+  - Remove the module-level `KEY_FILE: Path = ...` constant (lines 16–21). Also remove `_key_file_env = os.environ.get("ARCHON_SEARCH_KEY_FILE") or ""` (line 16) — this is a module-level evaluation of the env var that will be stale after import. The `get_key_file()` function must read `os.environ.get("ARCHON_SEARCH_KEY_FILE")` fresh on every call, not from a captured module-level variable.
+  - Add `get_key_file() -> Path` (rename from `_get_key_file` — see ImportError note below): if `ARCHON_SEARCH_KEY_FILE` env var is set and non-empty, return `Path(env).expanduser()`; otherwise return `get_data_dir() / ".search.env"`. Import `get_data_dir` from `archon_search.paths`.
+  - Replace all internal usages of `KEY_FILE` with `get_key_file()`: `load_or_generate_key()` (source string), including `load_or_generate_key()` line 35: `return key, f"file: {KEY_FILE}"` → `return key, f"file: {get_key_file()}"`, `_load_from_file()` (exists check, stat, read), `_generate_and_write()` (makedirs, payload construction, `.with_suffix()`).
+  - `ARCHON_SEARCH_KEY_FILE` still takes precedence over `ARCHON_SEARCH_DATA_DIR` (evaluated inside `get_key_file()`).
+  - **`install.py` ImportError (required)**: `archon_search/install.py` imports `KEY_FILE` directly: `from archon_search.key_manager import KEY_FILE, load_or_generate_key` (line 27) and uses it in ~8 locations (lines 707, 1753, 1774, 1775, 1788, 1827, 1840, 1845). Removing `KEY_FILE` without updating `install.py` causes `ImportError` at startup. **Recommended**: make `_get_key_file()` public by renaming it to `get_key_file()`, then update `install.py` line 27 import and all 8 usages to call `get_key_file()`. Rename `_get_key_file` to `get_key_file` throughout the plan.
 - **Releasable**: after this task, key file path is resolved lazily at call time, not at import time.
 - **Tests (TDD)** — `tests/test_key_manager.py` (extend existing):
   - Unit: `test_get_key_file_default` — no env vars → `Path.home() / ".archon-search" / ".search.env"`.
   - Unit: `test_get_key_file_key_file_env` — `ARCHON_SEARCH_KEY_FILE="/custom/.env"` → `Path("/custom/.env")`.
   - Unit: `test_get_key_file_data_dir_env` — `ARCHON_SEARCH_DATA_DIR="/data"` → `Path("/data/.search.env")`.
   - Unit: `test_key_file_env_overrides_data_dir` — both set → `ARCHON_SEARCH_KEY_FILE` wins.
-  - Unit: `test_no_module_level_key_file_constant` — `import inspect, archon_search.key_manager as km; src = inspect.getsource(km); assert "Path.home()" not in src` — verifies no import-time `Path.home()` evaluation remains, regardless of constant naming.
+  - Unit: `test_no_module_level_key_file_constant` — set `ARCHON_SEARCH_DATA_DIR="/tmp/guard-test"` before importing (or use `monkeypatch.setenv`), then call `get_key_file()`; assert the result starts with `/tmp/guard-test`. This behavioral test verifies laziness without fragile source inspection. (The `inspect.getsource` approach is defeated by any equivalent expression for `Path.home()` and fails on comments — use the behavioral test instead.)
+  - Integration: `test_load_or_generate_key_uses_key_file_env_over_data_dir` — set both `ARCHON_SEARCH_KEY_FILE` to a `tmp_path / "explicit.env"` and `ARCHON_SEARCH_DATA_DIR` to a different `tmp_path / "data"`; call `load_or_generate_key()`; assert the key was written to `tmp_path / "explicit.env"` (not `tmp_path / "data" / ".search.env"`).
   - Checkpoint: `uv run pytest tests/test_key_manager.py -v`
-- **Migration of existing tests (required)**: Every test that uses `monkeypatch.setattr(km, "KEY_FILE", ...)` must be updated. This includes tests in `tests/test_key_manager.py` (~20 occurrences) AND `tests/server/test_middleware_auth.py` (at least 1 occurrence — verify by grepping for `KEY_FILE` across all test files). Update all to use `monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", ...)` or `monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", ...)`. Do not leave any `setattr` patching of `KEY_FILE` — after removal, those patches silently become no-ops and the tests test nothing.
+- **Migration of existing tests (required)**: `tests/test_key_manager.py` has approximately 22 `KEY_FILE` references in total. Distinguish between two patterns:
+  - **`monkeypatch.setattr` patches** (~19 occurrences): these must be converted to `monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))` or `monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", str(tmp_path / ".search.env"))`.
+  - **Direct `KEY_FILE` attribute reads** (~3–5 occurrences at approximately lines 312, 320, 335, 346, 351): these look like `fresh_km.KEY_FILE` or `km.KEY_FILE` — attribute reads that will raise `AttributeError` after removal. Rewrite these to call `get_key_file()` instead: `fresh_km.get_key_file()` or `archon_search.key_manager.get_key_file()`.
+
+  Every test that uses `monkeypatch.setattr(km, "KEY_FILE", ...)` must be updated. This includes tests in `tests/test_key_manager.py` (~20 occurrences) AND `tests/server/test_middleware_auth.py` (at least 1 occurrence — verify by grepping for `KEY_FILE` across all test files). Additionally, these files patch `archon_search.install.KEY_FILE` (or `KEY_FILE` via `archon_search.install`) and must also be updated: `tests/test_install_run.py` (~1 occurrence), `tests/test_install_run_c15.py` (~3+ occurrences), `tests/test_e2e_wizard_optional_features.py` (~8+ occurrences), `tests/test_install_ui.py` (~1 occurrence). Verify the full list with: `grep -rn "KEY_FILE" tests/` before migrating. All `monkeypatch.setattr(..., "KEY_FILE", ...)` patches must be converted — they become silent no-ops after `KEY_FILE` is removed or replaced. Update all to use `monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", ...)` or `monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", ...)`. Do not leave any `setattr` patching of `KEY_FILE` — after removal, those patches silently become no-ops and the tests test nothing.
+  Note: `tests/test_install_ui.py` contains a direct attribute read at approximately line 352-356: `assert str(key_manager.KEY_FILE) in out`. This is NOT a `setattr` patch — it is a direct attribute access that will raise `AttributeError` after `KEY_FILE` is removed. Rewrite this assertion to call `get_key_file()`: `assert str(key_manager.get_key_file()) in out`.
+- **Test isolation requirement**: After this migration, `get_key_file()` falls back to `get_data_dir() / ".search.env"` which uses `Path.home() / ".archon-search"` when `ARCHON_SEARCH_DATA_DIR` is unset. Tests that only set `ARCHON_SEARCH_KEY_FILE` leave the jobs file, log dir, and other paths resolving to the developer's real home directory. ALL tests that previously used `monkeypatch.setattr(km, "KEY_FILE", tmp_path / ".search.env")` MUST be migrated to `monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))`. Using `ARCHON_SEARCH_KEY_FILE` alone is insufficient for full isolation.
 
 #### Task 2.4 — jobs/model.py + jobs/store.py: lazy jobs file path
 - [ ] **Files**: `archon_search/jobs/model.py`, `archon_search/jobs/store.py`, `archon_search/jobs/__init__.py`
@@ -236,6 +245,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Unit: `test_job_store_explicit_path_overrides` — `JobStore(path=Path("/custom/jobs.json"))._path == Path("/custom/jobs.json")`.
   - Checkpoint: `uv run pytest tests/test_jobs_paths.py -v`
 - **Migration of existing tests (required)**: If any existing tests use `monkeypatch.setattr` on `JOBS_FILE`, update them to use `monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", ...)` instead.
+- **Test isolation requirement**: After this migration, `get_jobs_file()` falls back to `get_data_dir() / "archon-search-jobs.json"` which uses `Path.home() / ".archon-search"` when `ARCHON_SEARCH_DATA_DIR` is unset. ALL tests that previously patched `JOBS_FILE` via `setattr` MUST be migrated to `monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))` to ensure the jobs file and all other paths resolve to a temp directory rather than the developer's real home directory.
 
 #### Task 2.5 — language_detector.py + server/app.py + pipeline.py: lazy fasttext models dir
 - [ ] **Files**: `archon_search/language_detector.py`, `archon_search/server/app.py`, `archon_search/pipeline.py`
@@ -243,15 +253,16 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 - **Description**:
   - `language_detector.py`: replace module-level `FASTTEXT_MODELS_DIR = Path.home() / ".archon-search" / "models"` with `get_fasttext_models_dir() -> Path` function that returns `get_data_dir() / "models"`. Keep `FASTTEXT_MODEL_FILENAME` constant as-is (it is a filename, not a path).
   - `server/app.py`: remove module-level `_MULTILINGUAL_MODEL_PATH: Path = FASTTEXT_MODELS_DIR / FASTTEXT_MODEL_FILENAME` (line 53). Replace usages (lines 86, 212) with a lazy call `get_fasttext_models_dir() / FASTTEXT_MODEL_FILENAME` at the call site. Update import to replace `FASTTEXT_MODELS_DIR` with `get_fasttext_models_dir`.
-  - `pipeline.py`: update the two `FASTTEXT_MODELS_DIR` usages (lines 1008, 1030 — specifically inside `create_pipeline()`) to call `get_fasttext_models_dir()` at runtime. Remove the `from archon_search.language_detector import FASTTEXT_MODELS_DIR` import; add `from archon_search.language_detector import get_fasttext_models_dir`. This import MUST be updated — removing `FASTTEXT_MODELS_DIR` from `language_detector.py` without updating this callsite causes `ImportError`.
+  - `pipeline.py`: update the two `FASTTEXT_MODELS_DIR` usages (lines 1561, 1583 — specifically inside `create_pipeline()`) to call `get_fasttext_models_dir()` at runtime. Remove the `from archon_search.language_detector import FASTTEXT_MODELS_DIR` import; add `from archon_search.language_detector import get_fasttext_models_dir`. This import MUST be updated — removing `FASTTEXT_MODELS_DIR` from `language_detector.py` without updating this callsite causes `ImportError`.
 - **Releasable**: after this task, fasttext models dir is resolved lazily at call time; `ARCHON_SEARCH_DATA_DIR` correctly redirects model downloads.
 - **Tests (TDD)** — `tests/test_language_detector_paths.py`:
   - Unit: `test_get_fasttext_models_dir_default` — no env vars → `Path.home() / ".archon-search" / "models"`.
   - Unit: `test_get_fasttext_models_dir_data_dir` — `ARCHON_SEARCH_DATA_DIR="/data"` → `Path("/data/models")`.
-  - Unit: `test_no_module_level_fasttext_models_dir` — `import inspect, archon_search.language_detector as ld; assert "Path.home()" not in inspect.getsource(ld)`.
-  - Unit: `test_no_module_level_multilingual_model_path` — `import inspect, archon_search.server.app as app; assert "Path.home()" not in inspect.getsource(app)` and `assert not isinstance(getattr(app, "_MULTILINGUAL_MODEL_PATH", None), Path)`.
+  - Unit: `test_no_module_level_fasttext_models_dir` — set `ARCHON_SEARCH_DATA_DIR="/tmp/guard-test"` via `monkeypatch.setenv`, call `get_fasttext_models_dir()`, assert result == `Path("/tmp/guard-test/models")`.
+  - Unit: `test_no_module_level_multilingual_model_path` — set `ARCHON_SEARCH_DATA_DIR="/tmp/guard-test"` via `monkeypatch.setenv`, trigger the lazy call path (e.g., `from archon_search.language_detector import get_fasttext_models_dir, FASTTEXT_MODEL_FILENAME; path = get_fasttext_models_dir() / FASTTEXT_MODEL_FILENAME`), assert path starts with `/tmp/guard-test/models/`.
   - Checkpoint: `uv run pytest tests/test_language_detector_paths.py -v`
 - **Migration of existing tests (required)**: If any existing tests use `monkeypatch.setattr` on `FASTTEXT_MODELS_DIR`, update them to use `monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", ...)` instead.
+- **Test isolation requirement**: After this migration, `get_fasttext_models_dir()` falls back to `get_data_dir() / "models"` which uses `Path.home() / ".archon-search"` when `ARCHON_SEARCH_DATA_DIR` is unset. ALL tests that previously patched `FASTTEXT_MODELS_DIR` via `setattr` MUST be migrated to `monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))` to ensure model paths resolve to a temp directory rather than the developer's real home directory.
 
 #### Task 2.6 — cli/ingest.py: lazy history sessions path
 - [ ] **File**: `archon_search/cli/ingest.py`
@@ -261,7 +272,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - This is inside a function body so it is already evaluated at call time; only the source of the base directory changes.
 - **Releasable**: after this task, all seven runtime-state paths are driven by `ARCHON_SEARCH_DATA_DIR`.
 - **Tests (TDD)** — `tests/test_cli_ingest_paths.py`:
-  - Unit: `test_default_history_path` — with no env var, invokes `ingest` with no `--path` and captures the resolved path (`click.testing.CliRunner`); assert it ends with `.archon-search/history/sessions`.
+  - Unit: `test_default_history_path` — use `click.testing.CliRunner` to invoke the `ingest` command with no `--sessions-dir` argument; mock `load_config` to raise `SystemExit(0)` immediately so the real pipeline is never created; capture the `click.echo` output that prints the resolved default sessions path before config loading (or alternatively: directly import and call the path-resolution logic without invoking the full CLI). Assert the path ends with `/.archon-search/history/sessions`. If the path is only computed inside a function that also tries to load config, consider extracting the default as a module-level lazy callable rather than testing through the CLI.
   - Unit: `test_history_path_uses_data_dir` — `ARCHON_SEARCH_DATA_DIR="/data"` → resolved path ends with `/data/history/sessions`.
   - Checkpoint: `uv run pytest tests/test_cli_ingest_paths.py -v`
 
@@ -279,6 +290,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - `main.py`: add `from archon_search.cli.serve import serve` and `main.add_command(serve)`.
   - Docstring on `serve`: `"""Start the archon-search server in the foreground (container / direct-run mode)."""`
   - The `serve=True` kwarg to `load_config()` sets the host default to `0.0.0.0` before TOML and env var processing (established in Task 1.1). An explicit `ARCHON_SEARCH_HOST` env var or TOML `host` key still overrides it.
+  - After `load_config(config_path, serve=True)`, add a startup log warning when `ARCHON_SEARCH_DATA_DIR` is set but `ARCHON_SEARCH_CONFIG` is not: `logger.warning("ARCHON_SEARCH_DATA_DIR is set but ARCHON_SEARCH_CONFIG is not — 'collection add/remove' commands will fail; set ARCHON_SEARCH_CONFIG=/data/archon-search.toml to enable collection management inside the container.")`. This surfaces the container collection-management limitation at runtime.
 - **Releasable**: after this task, `archon-search serve` is the `CMD` for the Docker container.
 - **Tests (TDD)** — `tests/test_cli_serve.py`:
   - Unit: `test_serve_calls_run_server` — mock `run_server` and `load_config`; invoke `serve` via `CliRunner`; assert `run_server` was called once.
@@ -288,6 +300,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Unit: `test_serve_does_not_call_service_management` — mock `_get_service`; invoke `serve`; assert `_get_service` was never called.
   - Integration: `test_serve_registered_in_cli` — `from archon_search.cli.main import main; assert "serve" in main.commands`.
   - Unit: `test_start_still_registered_in_cli` — `from archon_search.cli.main import main; assert "start" in main.commands` — verifies that adding `serve` did not accidentally remove or shadow the existing `start` command.
+  - Unit: `test_serve_warns_when_data_dir_set_without_config` — set `ARCHON_SEARCH_DATA_DIR=/data` via monkeypatch, do NOT set `ARCHON_SEARCH_CONFIG`; mock `run_server`; invoke `serve` via `CliRunner`; use `caplog` or mock `logger.warning`; assert a warning message was emitted containing "ARCHON_SEARCH_CONFIG" (or "collection add/remove will fail" or equivalent — match the warning text in the implementation).
   - Checkpoint: `uv run pytest tests/test_cli_serve.py -v`
 
 #### Task 3.2 — logging_setup.py: ARCHON_SEARCH_CONTAINER stderr handler
@@ -309,6 +322,8 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Unit: `test_container_env_with_log_file_adds_both` — `ARCHON_SEARCH_CONTAINER=1`, valid `log_file` → both file handler and stderr handler present.
   - Unit: `test_container_env_zero_does_not_add_handler` — `ARCHON_SEARCH_CONTAINER=0` → no stderr handler.
   - Unit: `test_container_env_with_empty_log_file_propagate_false` — `ARCHON_SEARCH_CONTAINER=1`, `config.log_file=""` → `logger.propagate` is `False` (no duplicate log lines through root logger).
+  - Unit: `test_container_env_stderr_handler_uses_text_formatter` — `ARCHON_SEARCH_CONTAINER=1`, `config.log_format="text"` → the stderr `StreamHandler` has a `logging.Formatter` (not the default bare formatter); its format string contains a timestamp or level placeholder (i.e., it matches the same formatter used for file handlers).
+  - Unit: `test_container_env_stderr_handler_uses_json_formatter` — `ARCHON_SEARCH_CONTAINER=1`, `config.log_format="json"` → the stderr `StreamHandler` has a JSON formatter (same class as the file handler's JSON formatter, not a plain `logging.Formatter`).
   - Checkpoint: `uv run pytest tests/test_logging_setup.py -v`
 
 ---
@@ -337,11 +352,12 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
       ```
     - Either pattern is valid — the implementer must choose one and be consistent with the release workflow. Verify the chosen pattern with a local docker build before committing.
     - GPU Python 3.12 installation: IMPORTANT: Ubuntu 22.04 ships Python 3.10, not 3.12. Python 3.12 requires the deadsnakes PPA: `apt-get install -y software-properties-common && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -y python3.12 python3.12-venv python3.12-dev python3.12-distutils`. Alternatively, use `nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu24.04` (Ubuntu 24.04 ships Python 3.12) — verify this tag exists before deciding. Install `fastembed[gpu]` or `onnxruntime-gpu` (per verification above).
-    - Both stages: install `tini` (via apt/pip), `uv`, then `pip install archon-search` (from PyPI, or `COPY . && pip install .` for local builds — use `COPY` for the plan).
+    - Both stages: install `tini` (via apt/pip), `uv`, then install via `COPY . && pip install --no-cache-dir .` (local source copy). Do NOT use `pip install archon-search` from PyPI in the release Dockerfile — the docker job in Task 5.1 has `needs: test`, which runs before/in parallel with the PyPI publish job; PyPI would serve the previous version. Using `COPY .` ensures the image contains the exact current commit.
     - Create non-root user and own the data dir: `RUN useradd --uid 1000 --no-create-home appuser && mkdir -p /data && chown appuser:appuser /data`.
     - `WORKDIR /app`, `USER appuser`.
     - Note: The `chown` is required: `VOLUME /data` creates an anonymous volume owned by root; without pre-creating `/data` with correct ownership, UID 1000 cannot write the key file on anonymous-volume runs (e.g., `docker run` without `-v`).
-    - `ENV ARCHON_SEARCH_DATA_DIR=/data ARCHON_SEARCH_CONTAINER=1`.
+    - `ENV ARCHON_SEARCH_DATA_DIR=/data ARCHON_SEARCH_CONTAINER=1 FASTEMBED_CACHE_PATH=/data/fastembed-cache`. Add `ARG GIT_COMMIT=unknown` and `LABEL org.opencontainers.image.revision=$GIT_COMMIT` to the Dockerfile. The CI workflow (Task 5.1) passes `--build-arg GIT_COMMIT=$GITHUB_SHA` to both build commands so the commit SHA is baked into the image. This allows `docker inspect` to surface which commit produced the image, helping operators detect stale `:gpu` tags.
+    - Note: `FASTEMBED_CACHE_PATH` is the env var that redirects fastembed's model weight cache. Without this, model weights download to `~/.cache/fastembed/` inside the container's ephemeral layer and are lost on every container recreate. Set to a path under `/data` so they persist on the mounted volume. Verify the exact env var name against the fastembed version in use (`pip show fastembed` → check source or docs for `FASTEMBED_CACHE_PATH`).
     - `VOLUME /data`.
     - `EXPOSE 8765`.
     - `HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 CMD python -c "import urllib.request, sys; urllib.request.urlopen('http://localhost:8765/ready')" || exit 1` — use Python urllib (no curl dependency; `python:3.12-slim` does not include curl and installing it adds ~5MB plus apt dependency maintenance).
@@ -365,15 +381,16 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 - **Depends on**: Task 4.1
 - **Description**:
   - Three services: `archon-dev`, `archon-test`, `archon-prod`. Each has:
-    - `image: archon-search:latest` (or `build: .` for local builds).
+    - `image: ${ARCHON_SEARCH_IMAGE:-ghcr.io/your-org/archon-search:latest}` — use variable substitution so operators can override the registry path; the default uses the GHCR path. For local builds, set `ARCHON_SEARCH_IMAGE=archon-search:latest` in `.env`. Add `ARCHON_SEARCH_IMAGE=archon-search:latest` as a commented-out line in `.env.example`.
     - `environment:` block with `ARCHON_SEARCH_API_KEY: ${ARCHON_SEARCH_API_KEY:-}` (variable substitution — never a hardcoded value; without a persistent volume, the server auto-generates a key) and `ARCHON_SEARCH_DATA_DIR=/data`.
     - Note: Add a `.env.example` file alongside `docker-compose.yml` with `ARCHON_SEARCH_API_KEY=your-key-here` so operators know how to configure it.
+    - `restart:` policy: `archon-prod` should have `restart: unless-stopped`; `archon-dev` and `archon-test` should have no restart policy (default: `no`).
     - Unique named volume mount: `archon-dev-data:/data`, `archon-test-data:/data`, `archon-prod-data:/data`.
     - Unique port mapping: dev `18765:8765`, test `18766:8765`, prod `8765:8765`.
     - `stop_grace_period: 30s`.
     - Comment: `# TLS termination is the operator's responsibility — reverse-proxy in front of this service.`
   - Named volumes section: declares `archon-dev-data`, `archon-test-data`, `archon-prod-data`.
-  - Commented-out `archon-model-cache` named volume with a comment explaining: mount at `$HOME/.cache/fastembed` inside the container (or the fastembed cache path) to avoid re-downloading model weights on every container recreate.
+  - Commented-out `archon-model-cache` named volume with a comment explaining: mount at `/data/fastembed-cache` inside the container to avoid re-downloading model weights on every container recreate. Uncomment and add `FASTEMBED_CACHE_PATH: /data/fastembed-cache` to the environment block of each service that uses it.
   - Comment: `# LanceDB single-writer: do not mount the same named volume to more than one running container.`
   - Comment: `# Without a persistent volume, the API key regenerates on every start.`
 - **Releasable**: after this task, `docker compose up archon-dev` starts a dev instance.
@@ -394,8 +411,8 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - `@pytest.mark.skipif(not shutil.which("docker"), reason="docker not available")`.
   - Test `test_cpu_image_starts_and_serves_ready`:
     - `subprocess.run(["docker", "build", "-t", "archon-search:smoke-test", "."], check=True, timeout=300)`.
-    - `container_id = subprocess.run(["docker", "run", "-d", "-e", "ARCHON_SEARCH_API_KEY=smoketest", "-p", "18765:8765", "archon-search:smoke-test"], capture_output=True, text=True, check=True).stdout.strip()` (note: do NOT use `--rm` with `-d`; the container must remain for cleanup; `Popen` does not capture stdout and must not be used here).
-    - Poll `http://localhost:18765/ready` with `urllib.request` up to 30s (1s sleep between attempts).
+    - `container_id = subprocess.run(["docker", "run", "-d", "-e", "ARCHON_SEARCH_API_KEY=smoketest", "-p", "28765:8765", "archon-search:smoke-test"], capture_output=True, text=True, check=True).stdout.strip()` (note: do NOT use `--rm` with `-d`; the container must remain for cleanup; `Popen` does not capture stdout and must not be used here). `# Port 28765 used to avoid conflict with docker-compose dev service which maps 18765:8765`
+    - Poll `http://localhost:28765/ready` with `urllib.request` up to 30s (1s sleep between attempts).
     - Assert HTTP 200.
     - Cleanup: `docker rm -f <cid>` in `finally`.
   - Test `test_uid_1000_can_write_data_dir`:
@@ -416,7 +433,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 - [ ] **File**: `.github/workflows/archon-search-release.yml`
 - **Depends on**: Task 4.1
 - **Description**:
-  - Add a new job `docker` that runs after the existing `test` job (add `needs: test`).
+  - Add a new job `docker` that runs after the existing `test` job (add `needs: test`). Note: The docker job copies local source via `COPY .` in the Dockerfile — ensure the workflow `needs: test` (not `needs: publish`) since the image is built from local source, not PyPI.
   - Steps:
     1. `actions/checkout@v4` with `fetch-depth: 0`.
     2. `docker/setup-buildx-action@v3`.
@@ -427,6 +444,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
        # Pass BASE_IMAGE (or VARIANT for multi-stage) matching the pattern chosen in the Dockerfile.
        docker buildx build --push \
          --build-arg BASE_IMAGE=python:3.12-slim \
+         --build-arg GIT_COMMIT=${{ github.sha }} \
          -t ghcr.io/${{ github.repository_owner }}/archon-search:$TAG \
          -t ghcr.io/${{ github.repository_owner }}/archon-search:latest \
          .
@@ -436,11 +454,13 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
        # Pass BASE_IMAGE (or VARIANT for multi-stage) matching the pattern chosen in the Dockerfile.
        docker buildx build --push \
          --build-arg BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04 \
+         --build-arg GIT_COMMIT=${{ github.sha }} \
          -t ghcr.io/${{ github.repository_owner }}/archon-search:$TAG-gpu \
          -t ghcr.io/${{ github.repository_owner }}/archon-search:gpu \
          .
        ```
     7. Add `continue-on-error: true` to the GPU build step. IMPORTANT: also add a post-build step that adds a GitHub Actions job summary annotation (`echo "⚠️ GPU image build failed — :gpu tag not pushed" >> $GITHUB_STEP_SUMMARY`) when the GPU build step exits non-zero. Without this, a failed GPU build passes silently and operators who pull `:gpu` or `:TAG-gpu` get "image not found" with no warning.
+  Note: if the GPU build fails, the previous `:gpu` floating tag in GHCR remains and still resolves to the last successful GPU build (which may be an older version). Operators pulling `:gpu` have no way to detect staleness from the image itself. Document this in the release notes for any release where GPU build failed. The `LABEL org.opencontainers.image.revision=$GIT_COMMIT` is already mandated in Task 4.1 — the `--build-arg GIT_COMMIT=${{ github.sha }}` in the build commands above ensures the SHA is baked into both CPU and GPU images. Operators can inspect it with: `docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' ghcr.io/.../archon-search:gpu`.
   - The docker smoke test (Task 4.3) does NOT run in this job — it is a developer tool, not a release gate (GPU runner not available in standard CI). Document this decision with a comment in the workflow.
 - **Releasable**: after this task, `release.sh` publishes both image variants to GHCR automatically.
 - **Tests (TDD)**: no automated test — verify by reading the workflow YAML.
