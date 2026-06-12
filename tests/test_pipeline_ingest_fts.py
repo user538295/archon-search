@@ -69,6 +69,9 @@ class FakeStore:
             return_value=ChunkIngestResult(chunks_ingested=3, needs_recompute=False)
         )
         self.recompute_collection_meta = AsyncMock(return_value=None)
+        # Required by ingest_directory centroid block
+        self.get_collection_meta = AsyncMock(return_value=None)
+        self.update_description = AsyncMock(return_value=None)
         # Track delete_document calls with their kwargs
         self._delete_calls: list[dict[str, Any]] = []
 
@@ -213,6 +216,52 @@ def test_ingest_file_uses_rebuild_under_plan_b(
 
     store.optimize_fts.assert_not_called()
     store.rebuild_fts_index.assert_called_once()
+
+
+@patch("archon_search.pipeline.generate_description", new=AsyncMock(return_value=None))
+def test_ingest_directory_rebuild_fts_false_skips_fts(tmp_path: Any) -> None:
+    """ingest_directory(rebuild_fts=False) must call neither optimize_fts nor rebuild_fts_index."""
+    store = FakeStore()
+    pipeline = make_pipeline(store)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Test\n\n" + "Some content. " * 30)
+
+    asyncio.run(
+        pipeline.ingest_directory(
+            tmp_path,
+            "mycol",
+            embedder=pipeline._global_embedder,
+            rebuild_fts=False,
+        )
+    )
+
+    store.optimize_fts.assert_not_called()
+    store.rebuild_fts_index.assert_not_called()
+
+
+@patch("archon_search.pipeline.generate_description", new=AsyncMock(return_value=None))
+def test_ingest_directory_rebuild_fts_true_calls_fts(tmp_path: Any) -> None:
+    """ingest_directory(rebuild_fts=True) must call at least one FTS maintenance method."""
+    store = FakeStore()
+    pipeline = make_pipeline(store)
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text("# Test\n\n" + "Some content. " * 30)
+
+    asyncio.run(
+        pipeline.ingest_directory(
+            tmp_path,
+            "mycol",
+            embedder=pipeline._global_embedder,
+            rebuild_fts=True,
+        )
+    )
+
+    fts_called = store.optimize_fts.called or store.rebuild_fts_index.called
+    assert fts_called, (
+        "Expected optimize_fts or rebuild_fts_index to be called when rebuild_fts=True"
+    )
 
 
 # ---------------------------------------------------------------------------

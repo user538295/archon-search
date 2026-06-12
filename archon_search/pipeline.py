@@ -457,6 +457,7 @@ class SearchPipeline:
         embedder: Embedder,
         ingested_by: IngestedBy = "cli",
         collection_root: Path | None = None,
+        rebuild_fts: bool = True,
     ) -> list[IngestResult]:
         # Collect and filter files
         files: list[Path] = []
@@ -511,7 +512,7 @@ class SearchPipeline:
                     await ret
 
         # Optimize (or rebuild) FTS once if at least one successful ingest
-        if any(r.status == "ok" for r in results):
+        if rebuild_fts and any(r.status == "ok" for r in results):
             if self.store.supports_incremental_fts_delete:
                 try:
                     await self.store.optimize_fts(collection)
