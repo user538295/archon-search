@@ -439,7 +439,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 > **Releasable**: after Task 5.1 — every tag push also publishes CPU and GPU images to GHCR. After Task 5.2 — all documentation reflects the delivered implementation.
 
 #### Task 5.1 — Extend archon-search-release.yml: build and push images to GHCR
-- [ ] **File**: `.github/workflows/archon-search-release.yml`
+- [x] **File**: `.github/workflows/archon-search-release.yml`
 - **Depends on**: Task 4.1
 - **Description**:
   - Add a new job `docker` that runs after the existing `test` job (add `needs: test`). Note: The docker job copies local source via `COPY .` in the Dockerfile — ensure the workflow `needs: test` (not `needs: publish`) since the image is built from local source, not PyPI.

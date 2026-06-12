@@ -132,6 +132,124 @@ jobs:
         with:
           skip-existing: true
 
+  # ---------------------------------------------------------------------------
+  # Job 3 — build + push container images to GHCR
+  #
+  # Builds two image variants from the tagged source tree and pushes them to
+  # GHCR:
+  #   - CPU: `archon-search:<tag>` and `archon-search:latest`
+  #         base = python:3.12-slim (fastembed CPU onnxruntime)
+  #   - GPU: `archon-search:<tag>-gpu` and `archon-search:gpu`
+  #         base = nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+  #         (Python 3.12 added via the deadsnakes PPA; onnxruntime swapped for
+  #          onnxruntime-gpu — fastembed 0.8.0 does not ship a `[gpu]` extra)
+  #
+  # The Dockerfile uses `COPY .` so the image always contains the exact source
+  # at the tagged commit. `needs: test` (not `needs: publish`) — the image is
+  # built from the local working tree, never from PyPI, so the eval/test gate
+  # is the only prerequisite. Using `needs: publish` would force docker builds
+  # to wait for the PyPI publish which is irrelevant to the image content.
+  #
+  # The `--build-arg GIT_COMMIT=${{ github.sha }}` is propagated into
+  # `LABEL org.opencontainers.image.revision` (see Dockerfile) so operators can
+  # detect a stale floating `:gpu` tag by running
+  # `docker inspect --format '{{index .Config.Labels
+  # "org.opencontainers.image.revision"}}' ghcr.io/.../archon-search:gpu`.
+  #
+  # GPU build is best-effort: `continue-on-error: true` lets the workflow
+  # finish even if the NVIDIA registry is rate-limited, the deadsnakes PPA is
+  # transiently unreachable, or fastembed/onnxruntime-gpu cannot resolve. A
+  # follow-up step annotates the workflow job summary so a silent GPU failure
+  # is loud — without this, operators pulling `:gpu` or `:<tag>-gpu` would get
+  # "image not found" with no warning, or worse, the previous `:gpu` floating
+  # tag would remain in GHCR and resolve to an older build.
+  #
+  # The docker smoke test (`tests/test_docker_smoke.py`, `-m docker`) is
+  # intentionally NOT run here: it is a developer tool. CI lacks a GPU runner
+  # for the GPU smoke variant, and the build-step itself is the gate that a
+  # working image was produced.
+  # ---------------------------------------------------------------------------
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    # Only run on actual tag pushes — never on workflow_dispatch from a branch.
+    # Parallels the `github-release` job's gate so the same release contract
+    # applies to PyPI publish, image push, and the GitHub Release.
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout (at the tag)
+        uses: actions/checkout@v4
+        with:
+          # `COPY .` in the Dockerfile picks up sources at the tagged commit.
+          # Full history is fetched so hatch-vcs can derive the version.
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ "$TAG" = "$GITHUB_REF" ]; then
+            TAG=$(git describe --tags --exact-match 2>/dev/null || true)
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve a tag for the docker job."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Building images for tag: $TAG"
+
+      - name: Build and push CPU image (BASE_IMAGE=python:3.12-slim)
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          docker buildx build --push \
+            --build-arg BASE_IMAGE=python:3.12-slim \
+            --build-arg GIT_COMMIT=${{ github.sha }} \
+            -t ghcr.io/${{ github.repository_owner }}/archon-search:$TAG \
+            -t ghcr.io/${{ github.repository_owner }}/archon-search:latest \
+            .
+
+      - name: Build and push GPU image (BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04)
+        id: gpu_build
+        continue-on-error: true
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          docker buildx build --push \
+            --build-arg BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04 \
+            --build-arg GIT_COMMIT=${{ github.sha }} \
+            -t ghcr.io/${{ github.repository_owner }}/archon-search:$TAG-gpu \
+            -t ghcr.io/${{ github.repository_owner }}/archon-search:gpu \
+            .
+
+      - name: Annotate GPU build failure in job summary
+        if: steps.gpu_build.outcome == 'failure'
+        run: |
+          {
+            echo "## :warning: GPU image build failed";
+            echo "";
+            echo "The GPU image build (\`BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04\`) did not complete. The \`:gpu\` and \`:${{ steps.tag.outputs.tag }}-gpu\` tags have NOT been updated for this release.";
+            echo "";
+            echo "If the floating \`:gpu\` tag still exists in GHCR it points to the previous successful build. Verify with:";
+            echo "";
+            echo "\`\`\`bash";
+            echo "docker inspect --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' ghcr.io/${{ github.repository_owner }}/archon-search:gpu";
+            echo "\`\`\`";
+          } >> "$GITHUB_STEP_SUMMARY"
+
   github-release:
     needs: [publish]
     runs-on: ubuntu-latest
