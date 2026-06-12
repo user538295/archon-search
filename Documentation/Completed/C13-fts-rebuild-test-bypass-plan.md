@@ -241,7 +241,7 @@ No new config keys, env vars, or API contracts.
 ### Phase 4 — Verification & Documentation
 
 #### Task 4.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project that describes `ingest_directory`'s API surface or pipeline performance benchmarks and update every file whose content is affected. Likely candidates: `Documentation/Architecture/600_api_reference_or_public_interface.md`, `Documentation/Architecture/210_performance_and_scalability.md`, any Python API reference. The agent must not update docs that are unrelated.
