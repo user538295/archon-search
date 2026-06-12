@@ -170,23 +170,48 @@ def _coerce_str(value: object, field_name: str) -> str:
         raise ConfigError(f"Expected string for '{field_name}', got {type(value).__name__}") from exc
 
 
-def load_config(path: Path | None = None) -> SearchConfig:
-    """Load SearchConfig from a TOML file. Missing file returns all defaults."""
+def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfig:
+    """Load SearchConfig from a TOML file. Missing file returns all defaults.
+
+    Args:
+        path: Path to the TOML config file. Defaults to `get_default_config_path()`.
+        serve: When True, set `host` default to `"0.0.0.0"` BEFORE TOML/env processing
+            so foreground/container deployments bind to all interfaces by default.
+            TOML `[server].host` and `ARCHON_SEARCH_HOST` env var still override it.
+
+    Env var overrides applied after TOML parsing:
+        ARCHON_SEARCH_HOST: overrides `config.host` (any non-empty string).
+        ARCHON_SEARCH_PORT: overrides `config.port` (validated int in 1..65535).
+    """
     if path is None:
         path = get_default_config_path()
 
     config = SearchConfig()
+    if serve:
+        # Set the `serve` mode default BEFORE TOML/env processing so they can override.
+        config.host = "0.0.0.0"
 
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return config
+        # Fall through to the env var application block — the container/serve
+        # deployment path typically has no TOML file mounted.
+        text = None
 
-    try:
-        doc = tomlkit.parse(text)
-    except Exception as exc:
-        raise ConfigError(f"Failed to parse {path}: {exc}") from exc
+    if text is not None:
+        try:
+            doc = tomlkit.parse(text)
+        except Exception as exc:
+            raise ConfigError(f"Failed to parse {path}: {exc}") from exc
 
+        _apply_toml(config, doc)
+
+    _apply_env_overrides(config)
+    return config
+
+
+def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
+    """Apply TOML document values onto `config` in place."""
     server = doc.get("server", {})
     if "host" in server:
         config.host = str(server["host"])
@@ -434,4 +459,31 @@ def load_config(path: Path | None = None) -> SearchConfig:
         rag_fusion.num_queries = num_queries
     config.rag_fusion = rag_fusion
 
-    return config
+
+def _apply_env_overrides(config: SearchConfig) -> None:
+    """Apply `ARCHON_SEARCH_*` env var overrides onto `config` in place.
+
+    Precedence: env > TOML > dataclass default.
+
+    Raises:
+        ConfigError: on non-int or out-of-range `ARCHON_SEARCH_PORT`.
+    """
+    host_env = os.environ.get("ARCHON_SEARCH_HOST")
+    if host_env:
+        # Any non-empty string is a valid host at config time; empty string is
+        # treated as "not set" (skip override) and preserves the existing value.
+        config.host = host_env
+
+    port_env = os.environ.get("ARCHON_SEARCH_PORT")
+    if port_env:
+        try:
+            port = int(port_env)
+        except ValueError as exc:
+            raise ConfigError(
+                f"ARCHON_SEARCH_PORT must be an integer, got {port_env!r}"
+            ) from exc
+        if not 1 <= port <= 65535:
+            raise ConfigError(
+                f"ARCHON_SEARCH_PORT must be between 1 and 65535, got {port}"
+            )
+        config.port = port

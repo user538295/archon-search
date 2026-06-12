@@ -71,6 +71,24 @@ def connected_store(tmp_path_factory: pytest.TempPathFactory):  # type: ignore[n
     asyncio.run(store.disconnect())
 
 
+@pytest.fixture(autouse=True)
+def _clear_archon_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent env var leakage between tests for container/data-dir-related vars.
+
+    `ARCHON_SEARCH_API_KEY` is intentionally NOT cleared — it is set globally above
+    (line 35) for auth test infrastructure and must remain set for all tests.
+    """
+    for var in (
+        "ARCHON_SEARCH_HOST",
+        "ARCHON_SEARCH_PORT",
+        "ARCHON_SEARCH_DATA_DIR",
+        "ARCHON_SEARCH_CONTAINER",
+        "ARCHON_SEARCH_KEY_FILE",
+        "ARCHON_SEARCH_CONFIG",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture
 def auth_headers() -> dict[str, str]:
     """Bearer auth headers using the test API key."""

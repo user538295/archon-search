@@ -113,7 +113,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 > **Releasable**: after Task 1.2 — `load_config()` accepts host and port from env vars, and TOML-only setups are regression-tested.
 
 #### Task 1.1 — ARCHON_SEARCH_HOST + ARCHON_SEARCH_PORT env var overrides
-- [ ] **File**: `archon_search/config.py`
+- [x] **File**: `archon_search/config.py`
 - **Depends on**: nothing
 - **Description**:
   - Add an env var application block at the end of `load_config()`, after all TOML parsing. **Critical structural prerequisite**: `load_config()` currently early-returns (`return config`) at the `except FileNotFoundError` branch before the env var block would run. This branch MUST be converted from an early return to a fall-through: catch `FileNotFoundError`, set a flag or continue past the TOML-parsing block, and ensure the env var application block executes unconditionally (whether or not a TOML file was found). Without this change, `ARCHON_SEARCH_HOST`, `ARCHON_SEARCH_PORT`, and `ARCHON_SEARCH_DATA_DIR` env vars are silently ignored in the primary container deployment path (no mounted config file).
