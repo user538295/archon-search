@@ -219,6 +219,7 @@ async def test_ingest_directory_forwards_collection_root(
         tmp_path, col_name,
         embedder=pipeline._global_embedder,
         collection_root=tmp_path,
+        rebuild_fts=False,
     )
     assert any(r.status == "ok" for r in results), "expected at least one successful ingest"
 
@@ -248,6 +249,7 @@ async def test_ingest_directory_default_collection_root_is_none(
     results = await pipeline.ingest_directory(
         tmp_path, col_name,
         embedder=pipeline._global_embedder,
+        rebuild_fts=False,
     )
     assert any(r.status == "ok" for r in results), "expected at least one successful ingest"
 

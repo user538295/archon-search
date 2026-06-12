@@ -140,7 +140,7 @@ No new config keys, env vars, or API contracts.
 > **Releasable**: after each task — the switched tests run faster under xdist; correctness is unchanged.
 
 #### Task 2.1 — Switch eligible tests in `test_pipeline_code_enricher.py`
-- [ ] **File**: `tests/test_pipeline_code_enricher.py`
+- [x] **File**: `tests/test_pipeline_code_enricher.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Two tests call `ingest_directory` and never call `pipeline.search`, `store.hybrid_search`, or `store.full_text_search`:
