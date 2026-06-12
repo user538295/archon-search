@@ -235,7 +235,7 @@ async def test_ingest_chunks_serializes_deny_all_acl(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_app_lifespan_calls_migrate_acl():
+async def test_app_lifespan_calls_migrate_acl(tmp_path):
     """lifespan startup calls migrate_acl() after migrate_namespace()."""
     from pathlib import Path
     from archon_search.config import SearchConfig
@@ -243,7 +243,9 @@ async def test_app_lifespan_calls_migrate_acl():
     from archon_search.server.app import create_app
 
     config = SearchConfig(db_path="/tmp/test_lifespan_acl")
-    job_store = JobStore()
+    # Isolate the jobs file under tmp_path so the test never touches
+    # the developer's real ~/.archon-search (C9 Task 2.4 iterative review).
+    job_store = JobStore(path=tmp_path / "jobs.json")
 
     app = create_app(config, job_store)
 

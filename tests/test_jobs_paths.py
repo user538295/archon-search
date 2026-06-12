@@ -47,3 +47,33 @@ def test_job_store_explicit_path_overrides(tmp_path: Path) -> None:
     explicit = tmp_path / "custom" / "jobs.json"
     store = JobStore(path=explicit)
     assert store._path == explicit
+
+
+def test_get_jobs_file_reflects_env_change_between_calls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Two sequential calls return different paths when ``ARCHON_SEARCH_DATA_DIR``
+    changes between them — pins the "resolved fresh on every call" docstring
+    contract (C9 Task 2.4 iterative review)."""
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(first_dir))
+    first = get_jobs_file()
+    assert first == first_dir / "archon-search-jobs.json"
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(second_dir))
+    second = get_jobs_file()
+    assert second == second_dir / "archon-search-jobs.json"
+    assert first != second
+
+
+def test_get_jobs_file_propagates_invalid_env_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An invalid ``ARCHON_SEARCH_DATA_DIR`` (e.g. relative path) propagates as
+    ``ValueError`` from ``get_data_dir()`` — pins the error-propagation
+    contract (C9 Task 2.4 iterative review, parity with Task 2.3 key_manager)."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "relative/not/absolute")
+    with pytest.raises(ValueError, match="must be an absolute path"):
+        get_jobs_file()

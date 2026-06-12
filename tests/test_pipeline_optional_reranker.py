@@ -94,12 +94,14 @@ def test_pipeline_skips_reranker_when_model_is_empty() -> None:
 # Test 2: app.py skips ModelReranker when reranker_model is ""
 # ---------------------------------------------------------------------------
 
-def test_app_skips_reranker_when_config_model_empty() -> None:
+def test_app_skips_reranker_when_config_model_empty(tmp_path) -> None:
     from archon_search.server.app import create_app
     from archon_search.jobs import JobStore
 
     cfg = SearchConfig(reranker_model="")
-    job_store = JobStore()
+    # Isolate the jobs file under tmp_path so the test never touches
+    # the developer's real ~/.archon-search (C9 Task 2.4 iterative review).
+    job_store = JobStore(path=tmp_path / "jobs.json")
 
     with patch("archon_search.server.app.ModelReranker") as mock_model_reranker, \
          patch("archon_search.server.app.SearchStore"), \
