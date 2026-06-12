@@ -1,0 +1,41 @@
+# archon-search build-context excludes.
+# Keeps the image small and the build deterministic by stripping anything
+# that is not needed to install and run the package.
+
+# VCS metadata
+.git
+.gitignore
+
+# Python build / cache artefacts (spec-listed)
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+
+# Local virtualenv (spec-listed)
+.venv/
+
+# Test, coverage, lint caches (spec-listed)
+.pytest_cache/
+.coverage
+
+# Tests, docs, and CI definitions are not needed inside the runtime image (spec-listed)
+tests/
+Documentation/
+.github/
+
+# Telemetry artefacts (spec-listed)
+*.jsonl
+
+# Local dev artefacts that may sit at the repo root and would otherwise
+# inflate the build context.
+*.lance/
+*.db
+search-logs/
+archon-search-jobs.json
+.DS_Store
+
+# The Dockerfile itself does not need to ship into the image
+Dockerfile
+.dockerignore

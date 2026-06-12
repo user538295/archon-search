@@ -341,7 +341,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 > **Releasable**: after Task 4.3 — a correctly built CPU image passes the automated smoke test.
 
 #### Task 4.1 — Dockerfile + .dockerignore
-- [ ] **Files**: `Dockerfile`, `.dockerignore`
+- [x] **Files**: `Dockerfile`, `.dockerignore`
 - **Depends on**: Task 3.1 (serve subcommand must exist as the CMD) and Task 3.2 (ARCHON_SEARCH_CONTAINER stderr handler must exist before the Dockerfile sets ARCHON_SEARCH_CONTAINER=1)
 - **Description**:
   - **Before writing**: verify the NVIDIA CUDA 12.1.1-cudnn8-runtime-ubuntu22.04 tag exists in the NVIDIA Container Registry (`nvcr.io` or Docker Hub `nvidia/cuda`). Verify whether `fastembed>=0.8.0` ships a `[gpu]` extra (`pip index versions fastembed` + inspect extras); if it does not, document the `pip uninstall onnxruntime && pip install onnxruntime-gpu` pattern instead.
