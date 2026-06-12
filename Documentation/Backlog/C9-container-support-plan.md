@@ -313,7 +313,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Checkpoint: `uv run pytest tests/test_cli_serve.py -v`
 
 #### Task 3.2 — logging_setup.py: ARCHON_SEARCH_CONTAINER stderr handler
-- [ ] **File**: `archon_search/logging_setup.py`
+- [x] **File**: `archon_search/logging_setup.py`
 - **Depends on**: nothing (independent of Phase 2)
 - **Description**:
   - In `configure_logging(config: SearchConfig)`, after the existing handler setup (whether or not a file handler was added), check `os.environ.get("ARCHON_SEARCH_CONTAINER") == "1"`.

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import time
 from logging.handlers import TimedRotatingFileHandler
 
@@ -406,3 +407,214 @@ def test_configure_logging_json_timestamp_is_utc(tmp_path):
     # datefmt is "%Y-%m-%dT%H:%M:%SZ" — parse it back as UTC
     ts = datetime.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
     assert before <= ts <= after, f"Timestamp {ts_str!r} not in UTC range [{before}, {after}]"
+
+
+# ---------------------------------------------------------------------------
+# ARCHON_SEARCH_CONTAINER stderr handler tests (Task 3.2)
+# ---------------------------------------------------------------------------
+
+
+def _get_stderr_stream_handlers(logger: logging.Logger) -> list[logging.StreamHandler]:
+    """Return StreamHandlers attached to the logger that target sys.stderr.
+
+    Uses exact-type comparison (``type(h) is StreamHandler``) rather than
+    ``isinstance`` because ``TimedRotatingFileHandler`` inherits from
+    ``StreamHandler`` — ``isinstance`` would yield both handler kinds.
+    """
+    return [
+        h
+        for h in logger.handlers
+        if type(h) is logging.StreamHandler and h.stream is sys.stderr
+    ]
+
+
+def test_container_env_adds_stderr_handler(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = _make_config(tmp_path)
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert len(stderr_handlers) == 1
+
+
+def test_container_env_unset_no_stderr_handler(tmp_path):
+    # autouse fixture in conftest.py already deletes ARCHON_SEARCH_CONTAINER
+    cfg = _make_config(tmp_path)
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert len(stderr_handlers) == 0
+
+
+def test_container_env_with_empty_log_file(monkeypatch):
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = SearchConfig()
+    cfg.log_file = ""
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert len(stderr_handlers) == 1
+
+
+def test_container_env_with_log_file_adds_both(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = _make_config(tmp_path)
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    file_handlers = [h for h in logger.handlers if isinstance(h, TimedRotatingFileHandler)]
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert len(file_handlers) == 1
+    assert len(stderr_handlers) == 1
+
+
+def test_container_env_zero_does_not_add_handler(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "0")
+    cfg = _make_config(tmp_path)
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert len(stderr_handlers) == 0
+
+
+@pytest.mark.parametrize("value", ["true", "True", "yes", "on", " 1", "1 ", "01", "2"])
+def test_container_env_non_exact_one_does_not_add_handler(tmp_path, monkeypatch, value):
+    """Plan spec: 'presence check only' — exactly the string ``"1"`` activates container mode."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", value)
+    cfg = _make_config(tmp_path)
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert len(stderr_handlers) == 0
+
+
+def test_container_env_with_empty_log_file_propagate_false(monkeypatch):
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = SearchConfig()
+    cfg.log_file = ""
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    assert logger.propagate is False
+
+
+def test_container_env_stderr_handler_uses_text_formatter(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = _make_config(tmp_path, log_format="text")
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert stderr_handlers
+    handler = stderr_handlers[0]
+    formatter = handler.formatter
+    assert formatter is not None
+    # Text formatter is a plain logging.Formatter (not JsonFormatter)
+    from pythonjsonlogger.jsonlogger import JsonFormatter
+    assert not isinstance(formatter, JsonFormatter)
+    assert isinstance(formatter, logging.Formatter)
+    # Format string contains a timestamp or level placeholder
+    fmt_str = formatter._fmt or ""
+    assert "%(asctime)s" in fmt_str or "%(levelname)s" in fmt_str
+
+
+def test_container_env_stderr_handler_uses_json_formatter(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = _make_config(tmp_path, log_format="json")
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert stderr_handlers
+    handler = stderr_handlers[0]
+    from pythonjsonlogger.jsonlogger import JsonFormatter
+    assert isinstance(handler.formatter, JsonFormatter)
+
+
+def test_container_env_stderr_handler_has_correlation_filter(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = _make_config(tmp_path)
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert stderr_handlers
+    handler = stderr_handlers[0]
+    assert any(isinstance(f, CorrelationIdFilter) for f in handler.filters)
+
+
+def test_container_env_idempotent_no_duplicate_stderr_handler(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = _make_config(tmp_path)
+    configure_logging(cfg)
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert len(stderr_handlers) == 1
+
+
+def test_container_env_stderr_emits_log_records(capsys, monkeypatch):
+    """Behavioral: log calls actually produce output on stderr when container mode is on."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = SearchConfig()
+    cfg.log_file = ""
+    cfg.log_format = "text"
+    cfg.level = "DEBUG"
+    cfg.backup_count = 7
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    logger.warning("container stderr test message")
+    captured = capsys.readouterr()
+    assert "container stderr test message" in captured.err
+    assert "container stderr test message" not in captured.out
+
+
+def test_container_env_stderr_emits_valid_json_when_json_format(capsys, monkeypatch):
+    """Behavioral: JSON formatter on the stderr handler produces valid JSON lines."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = SearchConfig()
+    cfg.log_file = ""
+    cfg.log_format = "json"
+    cfg.level = "DEBUG"
+    cfg.backup_count = 7
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    logger.warning("json stderr test")
+    captured = capsys.readouterr()
+    lines = [l for l in captured.err.splitlines() if l.strip()]
+    assert lines, "Expected at least one log line on stderr"
+    parsed = json.loads(lines[0])
+    assert parsed["message"] == "json stderr test"
+    assert "timestamp" in parsed
+    assert "level" in parsed
+    assert "logger" in parsed
+
+
+def test_container_env_stderr_includes_correlation_id(capsys, monkeypatch):
+    """Behavioral: the CorrelationIdFilter injects correlation_id into stderr output."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = SearchConfig()
+    cfg.log_file = ""
+    cfg.log_format = "json"
+    cfg.level = "DEBUG"
+    cfg.backup_count = 7
+    configure_logging(cfg)
+    correlation_id.set("req-container-123")
+    logger = logging.getLogger("archon_search")
+    logger.info("with corr id")
+    captured = capsys.readouterr()
+    lines = [l for l in captured.err.splitlines() if l.strip()]
+    parsed = json.loads(lines[0])
+    assert parsed.get("correlation_id") == "req-container-123"
+
+
+def test_container_env_stderr_respects_log_level(capsys, monkeypatch):
+    """Behavioral: log_level on the logger filters stderr output below threshold."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = SearchConfig()
+    cfg.log_file = ""
+    cfg.log_format = "text"
+    cfg.level = "WARNING"
+    cfg.backup_count = 7
+    configure_logging(cfg)
+    child = logging.getLogger("archon_search.child_for_level_test")
+    child.debug("this is debug")
+    child.warning("this is warning")
+    captured = capsys.readouterr()
+    assert "this is warning" in captured.err
+    assert "this is debug" not in captured.err

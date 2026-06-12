@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import time
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -27,11 +29,29 @@ class CorrelationIdFilter(logging.Filter):
         return True
 
 
+def _build_formatter(log_format: str) -> logging.Formatter:
+    """Build a formatter matching the configured log_format (text or JSON)."""
+    datefmt = "%Y-%m-%dT%H:%M:%SZ"
+    fmt = "%(asctime)s %(levelname)s %(name)s %(message)s"
+    if log_format == "json":
+        formatter: logging.Formatter = JsonFormatter(
+            fmt,
+            rename_fields={"levelname": "level", "name": "logger", "asctime": "timestamp"},
+            datefmt=datefmt,
+        )
+    else:
+        formatter = logging.Formatter(fmt, datefmt=datefmt)
+    formatter.converter = time.gmtime  # type: ignore[method-assign]
+    return formatter
+
+
 def configure_logging(config: SearchConfig) -> None:
     """Configure the archon_search logger based on SearchConfig.
 
     Idempotent — calling twice removes the old handler before adding a new one.
-    When log_file is empty, all handlers are removed and propagation is restored.
+    When log_file is empty, no file handler is attached.
+    When ARCHON_SEARCH_CONTAINER=1, a StreamHandler(sys.stderr) is added in
+    addition to (or instead of) the file handler.
     """
     logger = logging.getLogger("archon_search")
 
@@ -44,21 +64,38 @@ def configure_logging(config: SearchConfig) -> None:
     # Set the log level.
     logger.setLevel(config.level)
 
-    # Empty log_file means stderr only (via root logger propagation).
-    if not config.log_file:
-        return
+    container_mode = os.environ.get("ARCHON_SEARCH_CONTAINER") == "1"
 
-    # Expand ~ in the path.
+    # File handler: only when log_file is configured.
+    if config.log_file:
+        _attach_file_handler(logger, config)
+
+    # Container handler: always check, regardless of log_file state.
+    if container_mode:
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.addFilter(CorrelationIdFilter())
+        stderr_handler.setFormatter(_build_formatter(config.log_format))
+        logger.addHandler(stderr_handler)
+        # Prevent duplicate output through the root logger.
+        logger.propagate = False
+
+
+def _attach_file_handler(logger: logging.Logger, config: SearchConfig) -> None:
+    """Attach a TimedRotatingFileHandler to ``logger`` based on ``config.log_file``.
+
+    Silently logs a warning and returns if the directory cannot be created or
+    the handler cannot be constructed (preserves prior behaviour).
+    """
     log_path = Path(config.log_file).expanduser()
 
-    # Create the directory tree if needed.
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
-        logging.warning("archon-search: could not create log directory %s", log_path.parent)
+        logging.warning(
+            "archon-search: could not create log directory %s", log_path.parent
+        )
         return
 
-    # Build the rotating file handler.
     try:
         handler = TimedRotatingFileHandler(
             log_path,
@@ -71,24 +108,8 @@ def configure_logging(config: SearchConfig) -> None:
         logging.warning("archon-search: could not open log file %s", log_path)
         return
 
-    # Attach the correlation-id filter to the handler (not the logger).
     handler.addFilter(CorrelationIdFilter())
-
-    # Build and attach the formatter.
-    datefmt = "%Y-%m-%dT%H:%M:%SZ"
-    fmt = "%(asctime)s %(levelname)s %(name)s %(message)s"
-    if config.log_format == "json":
-        formatter: logging.Formatter = JsonFormatter(
-            fmt,
-            rename_fields={"levelname": "level", "name": "logger", "asctime": "timestamp"},
-            datefmt=datefmt,
-        )
-    else:
-        formatter = logging.Formatter(fmt, datefmt=datefmt)
-    formatter.converter = time.gmtime  # type: ignore[method-assign]
-    handler.setFormatter(formatter)
-
+    handler.setFormatter(_build_formatter(config.log_format))
     logger.addHandler(handler)
-
     # Prevent duplicate output on stderr via root logger.
     logger.propagate = False
