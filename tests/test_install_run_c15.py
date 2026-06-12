@@ -453,3 +453,14 @@ def test_run_db_path_migration_note_when_different(tmp_path: Path, capsys) -> No
     captured = capsys.readouterr()
     # Migration note should mention the path change
     assert "db_path" in captured.out or "database" in captured.out.lower() or "migrat" in captured.out.lower()
+
+
+def test_run_summary_shows_passed_host_and_port(tmp_path: Path, capsys) -> None:
+    """run(host='10.0.0.1', port=9999) → summary screen contains 'http://10.0.0.1:9999'."""
+    rc, _ = _run_installer(tmp_path, {"host": "10.0.0.1", "port": 9999})
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "http://10.0.0.1:9999" in captured.out, (
+        f"Expected 'http://10.0.0.1:9999' in summary output, got:\n{captured.out}"
+    )

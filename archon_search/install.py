@@ -1746,8 +1746,8 @@ class SearchInstaller:
             print(_render_summary(
                 profile_name, prof, is_multilingual, providers, features,
                 db_path=str(Path(cfg.db_path).expanduser()),
-                host=cfg.host,
-                port=cfg.port,
+                host=features.host if features.host is not None else cfg.host,
+                port=features.port if features.port is not None else cfg.port,
                 api_key_file=str(_key_manager.KEY_FILE),
                 download_mb=prof.download_mb,
             ))
