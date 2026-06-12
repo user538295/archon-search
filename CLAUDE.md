@@ -19,7 +19,7 @@ uv sync --dev
 # Run the server (entry point archon_search.cli.main:main)
 uv run archon-search
 
-# Full test suite (default addopts enforce --cov-fail-under=85; runs in parallel via pytest-xdist)
+# Full test suite — ALL tests, no marker exclusions (default addopts enforce --cov-fail-under=85)
 uv run pytest
 
 # Serial execution — required for fail-fast (-x) and stdout passthrough (-s)
@@ -34,11 +34,14 @@ uv run pytest tests/test_router.py::test_name -n0 -x
 # Skip coverage locally (developer override only — never bake into addopts)
 uv run pytest --no-cov
 
-# Marker-gated suites (excluded from default run)
+# Gated eval suite (requires --thresholds-path; skips gracefully without it)
 uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py
-uv run pytest -m integration
-uv run pytest -m live
-uv run pytest -m benchmark   # needs a running server; auto-skips if unreachable
+
+# Notes on markers:
+# - integration: all run by default; no server or network required
+# - benchmark: serialized via xdist_group("benchmark"); server-dependent tests auto-skip
+# - eval: report-only tests always run; gated tests skip gracefully without --thresholds-path
+# - live / live_eval: skip gracefully when live infrastructure is absent
 
 # Cut a release (tag + push; CI runs eval + publishes to PyPI via OIDC)
 bash release.sh           # interactive

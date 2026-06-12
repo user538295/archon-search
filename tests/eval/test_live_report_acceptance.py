@@ -23,8 +23,8 @@ RUNTIME_CFG_PATH = CORPUS_ROOT / "runtime.toml"
 
 
 @pytest.mark.eval
-def test_live_eval_marker_excluded_from_default_run() -> None:
-    """live_eval must appear in both markers list and addopts exclusion expression."""
+def test_live_eval_marker_included_in_default_run() -> None:
+    """live_eval must appear in the markers list and must NOT be excluded from addopts."""
     with PYPROJECT_PATH.open("rb") as f:
         config = tomllib.load(f)
 
@@ -34,7 +34,7 @@ def test_live_eval_marker_excluded_from_default_run() -> None:
 
     marker_names = [m.split(":")[0].strip() for m in markers]
     assert "live_eval" in marker_names, "live_eval marker must be registered in pyproject.toml [markers]"
-    assert "not live_eval" in addopts, "live_eval must be negated in the addopts exclusion expression"
+    assert "not live_eval" not in addopts, "live_eval must not be excluded from the default run"
 
 
 @pytest.mark.eval

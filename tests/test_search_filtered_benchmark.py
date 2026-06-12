@@ -167,6 +167,7 @@ async def _measure(
 
 
 @pytest.mark.benchmark
+@pytest.mark.xdist_group("benchmark")
 def test_glob_filtered_search_p95_under_threshold(bench_store) -> None:  # type: ignore[no-untyped-def]
     """Glob-filtered hybrid search p95 must stay under the configured ceiling.
 
@@ -197,6 +198,7 @@ def test_glob_filtered_search_p95_under_threshold(bench_store) -> None:  # type:
 
 
 @pytest.mark.benchmark
+@pytest.mark.xdist_group("benchmark")
 def test_prefix_filtered_search_p95_regression_under_threshold(bench_store) -> None:  # type: ignore[no-untyped-def]
     """Prefix-filtered hybrid search must not regress p95 beyond allowed % vs unfiltered.
 
@@ -244,6 +246,7 @@ def test_prefix_filtered_search_p95_regression_under_threshold(bench_store) -> N
 
 
 @pytest.mark.benchmark
+@pytest.mark.xdist_group("benchmark")
 def test_hyde_false_search_p95_under_threshold(bench_store) -> None:  # type: ignore[no-untyped-def]
     """HyDE fast-path (hyde=False) hybrid search p95 must stay under the configured ceiling.
 

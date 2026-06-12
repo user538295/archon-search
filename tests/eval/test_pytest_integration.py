@@ -39,10 +39,10 @@ def _addopts_str() -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_eval_pytest_marker_excluded_from_default_run() -> None:
+def test_eval_pytest_marker_included_in_default_run() -> None:
     addopts = _addopts_str()
-    assert "not eval" in addopts, addopts
-    assert "not live" in addopts, addopts
+    assert "not eval" not in addopts, "eval marker must not be excluded from the default run"
+    assert "not live" not in addopts, "live marker must not be excluded from the default run"
 
 
 def test_package_pytest_config_uses_strict_markers_and_config() -> None:

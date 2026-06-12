@@ -969,6 +969,7 @@ async def test_eval_rag_fusion_regression_scenario(tmp_path: Path) -> None:
 
 
 @pytest.mark.benchmark
+@pytest.mark.xdist_group("benchmark")
 def test_bench_search_rag_fusion_disabled_latency(tmp_path_factory) -> None:  # type: ignore[no-untyped-def]
     """RAG Fusion disabled path (rag_fusion=False) p95 must stay under the configured ceiling.
 
@@ -1100,6 +1101,7 @@ def test_bench_search_rag_fusion_disabled_latency(tmp_path_factory) -> None:  # 
 
 
 @pytest.mark.benchmark
+@pytest.mark.xdist_group("benchmark")
 def test_bench_search_rag_fusion_enabled_latency(tmp_path_factory) -> None:  # type: ignore[no-untyped-def]
     """RAG Fusion enabled path (rag_fusion=True, mocked generator) p95 stays under ceiling.
 

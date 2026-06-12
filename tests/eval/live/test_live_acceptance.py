@@ -174,6 +174,7 @@ async def test_fixture_isolation(
 
 
 @pytest.mark.live_eval
+@pytest.mark.xdist_group("benchmark")
 async def test_latency_stability(
     live_corpus_root: Path,
     live_runtime_cfg_path: Path,

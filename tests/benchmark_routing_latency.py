@@ -100,6 +100,7 @@ async def _measure_inprocess(iterations: int, warmup: int) -> list[float]:
 
 
 @pytest.mark.benchmark
+@pytest.mark.xdist_group("benchmark")
 def test_routing_latency_harness_runs() -> None:
     """Benchmark routing latency: in-process MultiCollectionRouter vs HTTP POST /route.
 
