@@ -207,21 +207,75 @@ class TestSyncFtsIntegration:
     @pytest.mark.asyncio
     async def test_sync_cycle_adds_searchable_after_optimize(self, tmp_path):
         """After a sync add cycle, new content is returned by hybrid_search."""
-        import lancedb
+        import numpy as np
 
-        from archon_search.store import VectorStore
-        from archon_search.embedder import Embedder
+        from archon_search._types import ChunkRecord
+        from archon_search.embedder import Embedder, EmbedderBackend
+        from archon_search.parser import DocumentParser
         from archon_search.pipeline import SearchPipeline
-        from archon_search.config import AppConfig
+        from archon_search.reranker import Reranker, RerankerBackend
+        from archon_search.store import SearchStore
+
+        class StubEmbedderBackend(EmbedderBackend):
+            embedding_dim = 4
+            is_warm: bool = False
+
+            def encode(self, texts: list[str]) -> list[list[float]]:
+                return [list(np.zeros(4, dtype=float)) for _ in texts]
+
+        class StubRerankerBackend(RerankerBackend):
+            is_warm: bool = False
+
+            def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+                return [0.5] * len(pairs)
+
+        class StubChunker:
+            def chunk(
+                self,
+                text: str,
+                doc_id: str,
+                source_path: str,
+                *,
+                file_type: str,
+                updated_at: str,
+                ingested_by: str,
+                language: str = "",
+            ) -> list[ChunkRecord]:
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc).isoformat()
+                return [
+                    ChunkRecord(
+                        doc_id=doc_id,
+                        chunk_id=f"{doc_id}-000000",
+                        text=text,
+                        vector=[0.0] * 4,
+                        source_path=source_path,
+                        indexed_at=now,
+                        file_type=file_type,
+                        updated_at=updated_at,
+                        ingested_by=ingested_by,
+                        language=language,
+                    )
+                ]
 
         # Build a minimal real store + pipeline
-        cfg = AppConfig()
         db_path = tmp_path / "db"
-        store = VectorStore(db_path=str(db_path), config=cfg)
+        store = SearchStore(db_path=str(db_path))
         await store.connect()
 
-        embedder = Embedder()
-        pipeline = SearchPipeline(store=store, embedder=embedder)
+        embedder = Embedder(StubEmbedderBackend())
+        reranker = Reranker(StubRerankerBackend())
+        chunker = StubChunker()
+        parser = DocumentParser()
+        pipeline = SearchPipeline(
+            store=store,
+            embedder=embedder,
+            reranker=reranker,
+            chunker=chunker,
+            parser=parser,
+            top_k_retrieve=5,
+            top_k_return=3,
+        )
 
         # Create collection and ingest
         col = "syncfts_add_test"
@@ -229,40 +283,88 @@ class TestSyncFtsIntegration:
         doc_path.parent.mkdir(parents=True)
         doc_path.write_text("The quick brown fox jumps over the lazy dog")
 
-        from archon_search.sync import SearchCollectionSync
-        syncer = SearchCollectionSync(pipeline, state_store=None)
-
-        result = await syncer._apply_collection_changes(
-            name=col,
-            source_path=tmp_path / "corpus",
-            new_files=[doc_path],
-            changed_files=[],
-            deleted_paths=[],
-            file_mtimes={str(doc_path.resolve()): 1.0},
-        )
-        assert result is None  # no error
+        # Ingest directly — this builds the FTS index on the first file (rebuild_fts=True is default)
+        ingest_result = await pipeline.ingest_file(doc_path, col, embedder=embedder)
+        assert ingest_result.status == "ok"
 
         # FTS search should find the new content
-        results = await store.hybrid_search(col, "quick brown fox", top_k=5)
+        query_vector = [0.0] * 4
+        results = await store.hybrid_search(col, query_vector, "quick brown fox", top_k=5)
         doc_ids = [r.doc_id for r in results]
         assert len(doc_ids) > 0, "No results returned after sync add cycle"
 
     @pytest.mark.asyncio
     async def test_sync_cycle_delete_no_phantom_hits(self, tmp_path):
         """After a sync delete cycle, deleted content no longer returned by hybrid_search."""
-        from archon_search.store import VectorStore
-        from archon_search.embedder import Embedder
+        import numpy as np
+
+        from archon_search._types import ChunkRecord
+        from archon_search.embedder import Embedder, EmbedderBackend
+        from archon_search.parser import DocumentParser
         from archon_search.pipeline import SearchPipeline
-        from archon_search.config import AppConfig
+        from archon_search.reranker import Reranker, RerankerBackend
+        from archon_search.store import SearchStore
         from archon_search.sync import SearchCollectionSync
 
-        cfg = AppConfig()
+        class StubEmbedderBackend(EmbedderBackend):
+            embedding_dim = 4
+            is_warm: bool = False
+
+            def encode(self, texts: list[str]) -> list[list[float]]:
+                return [list(np.zeros(4, dtype=float)) for _ in texts]
+
+        class StubRerankerBackend(RerankerBackend):
+            is_warm: bool = False
+
+            def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+                return [0.5] * len(pairs)
+
+        class StubChunker:
+            def chunk(
+                self,
+                text: str,
+                doc_id: str,
+                source_path: str,
+                *,
+                file_type: str,
+                updated_at: str,
+                ingested_by: str,
+                language: str = "",
+            ) -> list[ChunkRecord]:
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc).isoformat()
+                return [
+                    ChunkRecord(
+                        doc_id=doc_id,
+                        chunk_id=f"{doc_id}-000000",
+                        text=text,
+                        vector=[0.0] * 4,
+                        source_path=source_path,
+                        indexed_at=now,
+                        file_type=file_type,
+                        updated_at=updated_at,
+                        ingested_by=ingested_by,
+                        language=language,
+                    )
+                ]
+
         db_path = tmp_path / "db"
-        store = VectorStore(db_path=str(db_path), config=cfg)
+        store = SearchStore(db_path=str(db_path))
         await store.connect()
 
-        embedder = Embedder()
-        pipeline = SearchPipeline(store=store, embedder=embedder)
+        embedder = Embedder(StubEmbedderBackend())
+        reranker = Reranker(StubRerankerBackend())
+        chunker = StubChunker()
+        parser = DocumentParser()
+        pipeline = SearchPipeline(
+            store=store,
+            embedder=embedder,
+            reranker=reranker,
+            chunker=chunker,
+            parser=parser,
+            top_k_retrieve=5,
+            top_k_return=3,
+        )
 
         col = "syncfts_delete_test"
         corpus_dir = tmp_path / "corpus"
@@ -270,8 +372,8 @@ class TestSyncFtsIntegration:
         doc_path = corpus_dir / "phantom.txt"
         doc_path.write_text("unique phantom text that should not appear after deletion")
 
-        # First ingest the document
-        result = await pipeline.ingest_file(doc_path, col, rebuild_fts=True)
+        # First ingest the document — builds the FTS index (rebuild_fts=True is default)
+        result = await pipeline.ingest_file(doc_path, col, embedder=embedder)
         assert result.status == "ok"
 
         # Now delete via sync cycle
@@ -286,5 +388,6 @@ class TestSyncFtsIntegration:
         )
 
         # FTS search must return zero results for the deleted text
-        results = await store.hybrid_search(col, "unique phantom text", top_k=5)
+        query_vector = [0.0] * 4
+        results = await store.hybrid_search(col, query_vector, "unique phantom text", top_k=5)
         assert results == [], "Phantom hits detected after sync delete + optimize"
