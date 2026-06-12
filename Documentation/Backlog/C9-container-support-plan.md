@@ -413,7 +413,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Checkpoint: `uv run pytest tests/test_compose_lint.py -v`
 
 #### Task 4.3 — CI docker smoke test
-- [ ] **File**: `tests/test_docker_smoke.py`
+- [x] **File**: `tests/test_docker_smoke.py`
 - **Depends on**: Task 4.1
 - **Description**:
   - `@pytest.mark.docker` — excluded from default test run; run explicitly in CI with `-m docker`.

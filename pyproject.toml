@@ -85,6 +85,7 @@ markers = [
     "eval: deterministic full-corpus evaluation slice; gated tests skip gracefully without --thresholds-path",
     "live: tests that require live network or external services; skip gracefully when infrastructure is absent",
     "live_eval: full live-model eval suite; skip gracefully when infrastructure is absent",
+    "docker: tests that require a running Docker daemon and perform a real image build; excluded from default run, opt in with `-m docker`",
 ]
 
 [tool.uv]
