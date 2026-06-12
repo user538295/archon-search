@@ -225,7 +225,7 @@ No new config keys, env vars, or API contracts.
 > **Releasable**: after Task 3.1 — wall-time improvement is quantified and the 5-run gate passes.
 
 #### Task 3.1 — 5-run stability gate and wall-time measurement
-- [ ] **File**: N/A (shell task)
+- [x] **File**: N/A (shell task)
 - **Depends on**: Tasks 2.1, 2.2
 - **Description**:
   - Run `uv run pytest --no-cov` five times and record wall-clock time for each run.
