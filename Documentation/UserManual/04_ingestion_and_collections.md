@@ -29,7 +29,7 @@ Flags (`archon_search/cli/ingest.py`):
 
 | Flag | Default | Effect |
 | --- | --- | --- |
-| `--path PATH` | `~/.archon-search/history/sessions` | Directory to ingest. When omitted, the CLI prints `No --path given, using default: <path>` to stdout before running. |
+| `--path PATH` | `~/.archon-search/history/sessions` (re-rooted by `ARCHON_SEARCH_DATA_DIR` to `$DATA_DIR/history/sessions` when set) | Directory to ingest. When omitted, the CLI prints `No --path given, using default: <path>` to stdout before running. The default path is resolved lazily on every invocation via `get_data_dir()`. |
 | `--collection NAME` | Path basename | Override the collection name. |
 | `--config PATH` | default config path | Alternative config file. |
 
