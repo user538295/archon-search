@@ -160,6 +160,8 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 
 ### Phase 2 — ARCH-3: Relocatable path root
 > **Releasable**: after Task 2.6 — `ARCHON_SEARCH_DATA_DIR` is a single env var knob that correctly redirects all seven runtime-state paths; no path is computed at module import time.
+>
+> **Env var scope (set after Task 2.3 review):** Only `get_key_file()` (Task 2.3) has its own override env var (`ARCHON_SEARCH_KEY_FILE`) because the key file has a separate security lifecycle from the rest of the data directory. Tasks 2.4–2.6 derive their paths **solely from `get_data_dir()`** with no per-path env var override — do not cargo-cult an `ARCHON_SEARCH_JOBS_FILE` / `ARCHON_SEARCH_FASTTEXT_MODELS_DIR` / etc. into those tasks.
 
 #### Task 2.1 — archon_search/paths.py: get_data_dir()
 - [x] **File**: `archon_search/paths.py`
