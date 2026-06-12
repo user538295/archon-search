@@ -23,15 +23,19 @@ Developers iterating locally. The 5-min hard target is already met (worst run 14
 ## In Scope
 - Add `rebuild_fts: bool = True` parameter to `archon_search/pipeline.py:ingest_directory`
 - Pass it through to skip the FTS optimize/rebuild block when `False`
-- Audit the 6 test files that call `ingest_directory`:
-  - `tests/test_sync_e2e.py` (16 tests, none query FTS → all eligible)
-  - `tests/test_pipeline_code_enricher.py` (none query FTS → all eligible)
+- Audit the 6 test files that call `ingest_directory` directly:
+  - `tests/server/test_mcp_error_responses.py` — NOT eligible: mocks `pipeline.ingest_directory = AsyncMock(...)` entirely. No real FTS rebuild happens.
+  - `tests/test_pipeline_code_enricher.py` — 2 tests call `ingest_directory` (lines 218, 248); both eligible (neither queries FTS). The remaining 5 tests in the file call `ingest_file` and are out of scope.
   - `tests/pipeline/test_pipeline_ingest.py` (some tests don't query FTS — per-test audit needed)
   - `tests/pipeline/test_pipeline_search.py` (queries FTS → keep `rebuild_fts=True`)
   - `tests/test_pipeline_acl.py` (queries FTS → keep `rebuild_fts=True`)
   - `tests/test_pipeline_ingest_directory_fts.py` (FTS-specific → keep `rebuild_fts=True`)
 - Update tests that don't query FTS to pass `rebuild_fts=False`
+- For every test switched to `rebuild_fts=False`, verify via grep that the test body contains no call to `pipeline.search`, `store.hybrid_search`, or `store.full_text_search` (required because FTS misclassification is silent — see Edge Cases)
+- Add a unit test verifying `optimize_fts` and `rebuild_fts_index` are NOT called when `rebuild_fts=False` is passed to `ingest_directory` (mirroring the pattern in `test_pipeline_ingest_fts.py`)
+- No external API documentation update needed — `rebuild_fts` is not exposed via MCP, HTTP, or CLI. If the Python API surface is separately documented, update it there.
 - Run the C12 5-run stability gate
+- Run coverage before and after; confirm lines 513-528 in `pipeline.py` remain covered by the retained FTS tests
 - Record new wall-time median
 
 ## Out of Scope
@@ -50,14 +54,16 @@ Developers iterating locally. The 5-min hard target is already met (worst run 14
 
 ## Edge Cases & Constraints
 - **`test_pipeline_ingest.py` mixed-purpose tests**: some tests assert on `IngestResult.status`, others on document presence in the store, others on search behavior. Only the third group needs FTS. Audit via `grep -B2 -A 40 'def test_' | grep -E 'search\\(|hybrid|keyword'` per test, not per file.
-- **`rebuild_fts=False` + later `pipeline.search` in the same test**: would raise `FTSIndexNotFoundError` (already documented at `store.py:67-70`). This is the correct failure mode — tests that need search must keep `rebuild_fts=True`. The 5-run gate will catch any misclassification.
+- **`rebuild_fts=False` + later `pipeline.search` in the same test**: `hybrid_search` at `store.py:1505-1506` silently degrades to vector-only results with a warning log — it does NOT raise `FTSIndexNotFoundError`. A misclassified test will pass, but with weakened assertion coverage (FTS recall is untested). The 5-run gate catches test failures; it does NOT catch FTS misclassification. The explicit audit grep step (see In Scope) is the required mitigation.
 - **Centroid recomputation is independent**: `ingest_directory` at `pipeline.py:530-` computes the centroid from `all_vectors` regardless of FTS rebuild. No coupling.
 - **`optimize_fts` already wraps `rebuild_fts_index` in a try/except** (line 516-525): the new `if not rebuild_fts: skip` branch must precede this entire block.
-- **`sync_e2e` "second sync" tests**: they ingest twice, modify, ingest again. Skipping FTS rebuild on all calls is safe because the sync's correctness is verified via `IndexingStateStore.read()` and result dicts, not search output.
 
 ## Open Questions
-- Should the parameter be `rebuild_fts: bool = True` (matches `ingest_file`) or `_test_skip_fts: bool = False` (signals test-only intent)? Recommend the former — it is symmetric and not test-coupled.
-- Worth investigating: does LanceDB's FTS `create_index` honor any concurrency-limiting env var? If yes, that may be a simpler global fix. Quick check via `lancedb` source / docs would resolve before deciding.
+
+All resolved.
+
+- **Parameter name**: Use `rebuild_fts: bool = True` — symmetric with `ingest_file`, has legitimate production semantics, and matches the internal `rebuild_fts=False` already passed at `pipeline.py:497`.
+- **LanceDB FTS concurrency env var**: No such knob exists in `lancedb==0.30.2`. The contention is inter-process (14 xdist workers building separate Tantivy indexes on the same disk); `RAYON_NUM_THREADS` would only cap intra-process thread parallelism and would not reduce the number of concurrent index builds. The `rebuild_fts` parameter approach stands.
 
 ## Rollback
 1. Revert the `rebuild_fts: bool = True` parameter on `ingest_directory` (`archon_search/pipeline.py`).
@@ -72,9 +78,11 @@ The change is additive (default preserves behavior), so partial rollback is also
 - **Shared session-scoped collection** — most slow ingest tests create a unique collection via `col_name`. A shared, FTS-indexed fixture collection would amortize the index build. Requires careful isolation (no cross-test write conflicts) and is a bigger refactor than C13.
 
 ## Expected Impact (estimate, must be verified)
-- ~30 tests currently at ~35s wall time → expected ~5–10s without FTS rebuild
+- The eligible pool is ~25–40 tests (pending the per-test audit): ~25–38 from the qualifying subset of `test_pipeline_ingest.py` (95 `ingest_directory` calls in the file, only 6 lines reference FTS search) plus 2 from `test_pipeline_code_enricher.py`
+- Eligible tests currently at ~35s wall time → expected ~5–10s without FTS rebuild
 - Worst-case worker time drops by an estimated 25–35s
-- Wall-time median estimate: **127s → 90–100s** (29–37% additional reduction)
+- Wall-time median estimate: **127s → 90–105s** (24–37% additional reduction); the 90s target may be reachable with C13 alone pending the per-test audit results
+- Actual savings depend on the per-test audit results; run the 5-run gate to confirm.
 - The new floor would likely be a different I/O-heavy operation (e.g. embedder model load on real-model tests) or the `~17s` test_ingest_centroid_replaced_on_reingest
 
 ## Recommendation
