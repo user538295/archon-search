@@ -45,41 +45,6 @@ def _build_formatter(log_format: str) -> logging.Formatter:
     return formatter
 
 
-def configure_logging(config: SearchConfig) -> None:
-    """Configure the archon_search logger based on SearchConfig.
-
-    Idempotent — calling twice removes the old handler before adding a new one.
-    When log_file is empty, no file handler is attached.
-    When ARCHON_SEARCH_CONTAINER=1, a StreamHandler(sys.stderr) is added in
-    addition to (or instead of) the file handler.
-    """
-    logger = logging.getLogger("archon_search")
-
-    # Idempotency: remove and close all existing handlers, reset propagate.
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
-        handler.close()
-    logger.propagate = True
-
-    # Set the log level.
-    logger.setLevel(config.level)
-
-    container_mode = os.environ.get("ARCHON_SEARCH_CONTAINER") == "1"
-
-    # File handler: only when log_file is configured.
-    if config.log_file:
-        _attach_file_handler(logger, config)
-
-    # Container handler: always check, regardless of log_file state.
-    if container_mode:
-        stderr_handler = logging.StreamHandler(sys.stderr)
-        stderr_handler.addFilter(CorrelationIdFilter())
-        stderr_handler.setFormatter(_build_formatter(config.log_format))
-        logger.addHandler(stderr_handler)
-        # Prevent duplicate output through the root logger.
-        logger.propagate = False
-
-
 def _attach_file_handler(logger: logging.Logger, config: SearchConfig) -> None:
     """Attach a TimedRotatingFileHandler to ``logger`` based on ``config.log_file``.
 
@@ -113,3 +78,38 @@ def _attach_file_handler(logger: logging.Logger, config: SearchConfig) -> None:
     logger.addHandler(handler)
     # Prevent duplicate output on stderr via root logger.
     logger.propagate = False
+
+
+def configure_logging(config: SearchConfig) -> None:
+    """Configure the archon_search logger based on SearchConfig.
+
+    Idempotent — calling twice removes all existing handlers before reattaching
+    new ones. When log_file is empty, no file handler is attached. When
+    ARCHON_SEARCH_CONTAINER=1, a StreamHandler(sys.stderr) is added in addition
+    to (or instead of) the file handler.
+    """
+    logger = logging.getLogger("archon_search")
+
+    # Idempotency: remove and close all existing handlers, reset propagate.
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
+    logger.propagate = True
+
+    # Set the log level.
+    logger.setLevel(config.level)
+
+    container_mode = os.environ.get("ARCHON_SEARCH_CONTAINER") == "1"
+
+    # File handler: only when log_file is configured.
+    if config.log_file:
+        _attach_file_handler(logger, config)
+
+    # Container handler: always check, regardless of log_file state.
+    if container_mode:
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.addFilter(CorrelationIdFilter())
+        stderr_handler.setFormatter(_build_formatter(config.log_format))
+        logger.addHandler(stderr_handler)
+        # Prevent duplicate output through the root logger.
+        logger.propagate = False

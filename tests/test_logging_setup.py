@@ -453,7 +453,9 @@ def test_container_env_with_empty_log_file(monkeypatch):
     configure_logging(cfg)
     logger = logging.getLogger("archon_search")
     stderr_handlers = _get_stderr_stream_handlers(logger)
+    file_handlers = [h for h in logger.handlers if isinstance(h, TimedRotatingFileHandler)]
     assert len(stderr_handlers) == 1
+    assert len(file_handlers) == 0
 
 
 def test_container_env_with_log_file_adds_both(tmp_path, monkeypatch):
@@ -476,7 +478,7 @@ def test_container_env_zero_does_not_add_handler(tmp_path, monkeypatch):
     assert len(stderr_handlers) == 0
 
 
-@pytest.mark.parametrize("value", ["true", "True", "yes", "on", " 1", "1 ", "01", "2"])
+@pytest.mark.parametrize("value", ["", "true", "True", "yes", "on", " 1", "1 ", "01", "2"])
 def test_container_env_non_exact_one_does_not_add_handler(tmp_path, monkeypatch, value):
     """Plan spec: 'presence check only' — exactly the string ``"1"`` activates container mode."""
     monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", value)
@@ -618,3 +620,81 @@ def test_container_env_stderr_respects_log_level(capsys, monkeypatch):
     captured = capsys.readouterr()
     assert "this is warning" in captured.err
     assert "this is debug" not in captured.err
+
+
+def test_container_env_idempotent_closes_old_stderr_handler(tmp_path, monkeypatch):
+    """Idempotent reconfigure must close the previous stderr handler, not leak it."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = _make_config(tmp_path)
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    first_stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert len(first_stderr_handlers) == 1
+    first_handler = first_stderr_handlers[0]
+    configure_logging(cfg)
+    new_stderr_handlers = _get_stderr_stream_handlers(logger)
+    # New handler is a different instance from the old one.
+    assert len(new_stderr_handlers) == 1
+    assert new_stderr_handlers[0] is not first_handler
+    # The old handler must no longer be attached to the logger.
+    assert first_handler not in logger.handlers
+
+
+def test_container_env_transition_on_to_off_resets_propagate(tmp_path, monkeypatch):
+    """Transition from ARCHON_SEARCH_CONTAINER=1 with empty log_file → unset must
+    restore logger.propagate=True and remove the stderr handler."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = SearchConfig()
+    cfg.log_file = ""
+    cfg.log_format = "text"
+    cfg.level = "DEBUG"
+    cfg.backup_count = 7
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    assert logger.propagate is False
+    assert len(_get_stderr_stream_handlers(logger)) == 1
+
+    # Now turn container mode off
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER")
+    configure_logging(cfg)
+    assert logger.propagate is True
+    assert len(_get_stderr_stream_handlers(logger)) == 0
+    assert len(logger.handlers) == 0
+
+
+def test_container_env_formatter_parity_with_file_handler_text(tmp_path, monkeypatch):
+    """Stderr handler and file handler must share the exact same formatter
+    type, format string, and time converter when both are active (text mode)."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = _make_config(tmp_path, log_format="text")
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    file_handlers = [h for h in logger.handlers if isinstance(h, TimedRotatingFileHandler)]
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert file_handlers and stderr_handlers
+    file_fmt = file_handlers[0].formatter
+    stderr_fmt = stderr_handlers[0].formatter
+    assert file_fmt is not None and stderr_fmt is not None
+    assert type(file_fmt) is type(stderr_fmt)
+    assert file_fmt._fmt == stderr_fmt._fmt
+    assert file_fmt.datefmt == stderr_fmt.datefmt
+    assert file_fmt.converter is stderr_fmt.converter is time.gmtime
+
+
+def test_container_env_formatter_parity_with_file_handler_json(tmp_path, monkeypatch):
+    """Stderr handler and file handler must share the exact same formatter
+    type, format string, and time converter when both are active (json mode)."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = _make_config(tmp_path, log_format="json")
+    configure_logging(cfg)
+    logger = logging.getLogger("archon_search")
+    file_handlers = [h for h in logger.handlers if isinstance(h, TimedRotatingFileHandler)]
+    stderr_handlers = _get_stderr_stream_handlers(logger)
+    assert file_handlers and stderr_handlers
+    file_fmt = file_handlers[0].formatter
+    stderr_fmt = stderr_handlers[0].formatter
+    assert file_fmt is not None and stderr_fmt is not None
+    assert type(file_fmt) is type(stderr_fmt)
+    assert file_fmt._fmt == stderr_fmt._fmt
+    assert file_fmt.datefmt == stderr_fmt.datefmt
+    assert file_fmt.converter is stderr_fmt.converter is time.gmtime
