@@ -1782,6 +1782,8 @@ class SearchInstaller:
                         "ARCHON_SEARCH_API_KEY is set."
                     )
                 print("Server key updated. Restart the service to apply: archon-search restart.")
+            elif server_key is not None and self.dry_run:
+                print(f"[dry-run] Would write server key to {KEY_FILE}.")
 
             # Step 14: pre-warm
             if not skip_preload:

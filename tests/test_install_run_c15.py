@@ -350,6 +350,39 @@ def test_run_no_server_key_does_not_write_key_file(tmp_path: Path) -> None:
     assert not key_file.exists(), "Key file should not be created when server_key not passed"
 
 
+def test_run_dry_run_server_key_prints_message(tmp_path: Path, capsys) -> None:
+    """run(dry_run=True, server_key=...) → [dry-run] message printed, key file not written."""
+    config_path = tmp_path / "archon-search.toml"
+    key_file = tmp_path / ".search.env"
+
+    module_patches = _base_run_patches(tmp_path)
+    module_patches["archon_search.install.get_default_config_path"] = MagicMock(return_value=config_path)
+    module_patches["archon_search.install.KEY_FILE"] = key_file
+
+    method_patches = _method_patches()
+
+    with patch.multiple(
+        "archon_search.install",
+        **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
+    ):
+        with patch.multiple(SearchInstaller, **method_patches):
+            with patch("archon_search.install.atomic_write_bytes") as mock_write:
+                installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+                rc = installer.run(
+                    non_interactive=True,
+                    profile="minimal",
+                    skip_preload=True,
+                    server_key=_VALID_SERVER_KEY,
+                )
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "[dry-run] Would write server key to" in captured.out
+    assert str(key_file) in captured.out
+    # key file must not be written in dry-run mode
+    mock_write.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Tests: db_path special handling
 # ---------------------------------------------------------------------------
