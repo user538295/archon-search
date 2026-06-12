@@ -629,6 +629,7 @@ class TestSearchCollectionSyncIntegration:
                 file_type: str,
                 updated_at: str,
                 ingested_by: str,
+                language: str = "",
             ) -> list[ChunkRecord]:
                 from datetime import datetime, timezone
                 if not text or not text.strip():
