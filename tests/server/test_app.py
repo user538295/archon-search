@@ -48,8 +48,12 @@ class TestCheckMultilingualDeps:
         cfg = _make_config(multilingual=True)
 
         mock_fasttext = MagicMock()
+        missing_path = tmp_path / "missing" / "lid.176.ftz"
         with patch("archon_search.server.app._import_fasttext", return_value=mock_fasttext):
-            with patch("archon_search.server.app._MULTILINGUAL_MODEL_PATH", tmp_path / "missing" / "lid.176.ftz"):
+            with patch(
+                "archon_search.server.app._multilingual_model_path",
+                return_value=missing_path,
+            ):
                 with pytest.raises(RuntimeError) as exc_info:
                     _check_multilingual_deps(cfg)
         assert "lid.176.ftz" in str(exc_info.value)
@@ -63,7 +67,10 @@ class TestCheckMultilingualDeps:
 
         mock_fasttext = MagicMock()
         with patch("archon_search.server.app._import_fasttext", return_value=mock_fasttext):
-            with patch("archon_search.server.app._MULTILINGUAL_MODEL_PATH", model_path):
+            with patch(
+                "archon_search.server.app._multilingual_model_path",
+                return_value=model_path,
+            ):
                 _check_multilingual_deps(cfg)  # no exception
 
 

@@ -1558,7 +1558,7 @@ def create_pipeline(
     from archon_search.language_detector import (  # noqa: PLC0415
         LanguageDetector,
         FASTTEXT_MODEL_FILENAME,
-        FASTTEXT_MODELS_DIR,
+        get_fasttext_models_dir,
     )
 
     store = SearchStore(cfg.db_path)
@@ -1580,7 +1580,7 @@ def create_pipeline(
 
     language_detector: LanguageDetector | None = None
     if cfg.multilingual:
-        model_path = FASTTEXT_MODELS_DIR / FASTTEXT_MODEL_FILENAME
+        model_path = get_fasttext_models_dir() / FASTTEXT_MODEL_FILENAME
         language_detector = LanguageDetector(model_path)
 
     return SearchPipeline(

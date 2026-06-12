@@ -14,7 +14,7 @@ from fastapi.openapi.utils import get_openapi
 
 from archon_search.chunker import DocumentChunker
 from archon_search.config import SearchConfig
-from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, FASTTEXT_MODELS_DIR
+from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttext_models_dir
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.jobs.store import JobStore
@@ -49,8 +49,14 @@ from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger(__name__)
 
-# Patchable seam: resolved model path for the fasttext lid.176.ftz model.
-_MULTILINGUAL_MODEL_PATH: Path = FASTTEXT_MODELS_DIR / FASTTEXT_MODEL_FILENAME
+
+def _multilingual_model_path() -> Path:
+    """Return the lid.176.ftz model path, resolved lazily on every call.
+
+    Derived from ``get_fasttext_models_dir()`` so ``ARCHON_SEARCH_DATA_DIR``
+    redirects the model lookup at call time, not at import time.
+    """
+    return get_fasttext_models_dir() / FASTTEXT_MODEL_FILENAME
 
 
 def _import_fasttext() -> Any:
@@ -83,7 +89,7 @@ def _check_multilingual_deps(config: SearchConfig) -> None:
         )
 
     # Check 2 — model file presence
-    if not _MULTILINGUAL_MODEL_PATH.exists():
+    if not _multilingual_model_path().exists():
         raise RuntimeError(
             "multilingual=true but lid.176.ftz model is missing; "
             "run: archon-search install --multilingual"
@@ -209,7 +215,7 @@ def create_app(
     # _check_multilingual_deps() has already passed at this point, so imports are safe.
     if config.multilingual:
         from archon_search.language_detector import LanguageDetector  # noqa: PLC0415
-        _lang_detector = LanguageDetector(_MULTILINGUAL_MODEL_PATH)
+        _lang_detector = LanguageDetector(_multilingual_model_path())
     else:
         _lang_detector = None
 

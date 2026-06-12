@@ -253,7 +253,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Plan's TDD list was missing two parity tests vs Task 2.3 (`key_manager`): (a) `get_jobs_file()` must reflect env changes between two sequential calls (laziness contract), and (b) `get_jobs_file()` must propagate `ValueError` from `get_data_dir()` on invalid env input. Both added in `tests/test_jobs_paths.py`.
 
 #### Task 2.5 — language_detector.py + server/app.py + pipeline.py: lazy fasttext models dir
-- [ ] **Files**: `archon_search/language_detector.py`, `archon_search/server/app.py`, `archon_search/pipeline.py`
+- [x] **Files**: `archon_search/language_detector.py`, `archon_search/server/app.py`, `archon_search/pipeline.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - `language_detector.py`: replace module-level `FASTTEXT_MODELS_DIR = Path.home() / ".archon-search" / "models"` with `get_fasttext_models_dir() -> Path` function that returns `get_data_dir() / "models"`. Keep `FASTTEXT_MODEL_FILENAME` constant as-is (it is a filename, not a path).
