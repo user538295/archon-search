@@ -1617,7 +1617,9 @@ class SearchInstaller:
                 try:
                     _check_reinstall_guard(existing_cfg, prof, profile_name, is_multilingual)
                 except NeedsForceDeleteError as exc:
-                    if not (force and delete_db):
+                    if self.dry_run:
+                        print(f"[dry-run] Warning: {exc} (proceeding in dry-run mode; pass --force --delete-db to apply)")
+                    elif not (force and delete_db):
                         print(str(exc))
                         return 1
 

@@ -196,6 +196,43 @@ def test_run_reinstall_different_profile_no_force_returns_1(tmp_path: Path) -> N
 
 
 # ---------------------------------------------------------------------------
+# Test 4b: reinstall different profile with --dry-run does NOT return 1
+# ---------------------------------------------------------------------------
+
+
+def test_run_reinstall_different_profile_dry_run_continues(tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    # Write minimal profile config so an existing config is detected
+    from archon_search.install import _profile_toml
+    config_path.write_text(_profile_toml("minimal", False))
+
+    load_service_mock = MagicMock(return_value=0)
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._check_disk_space"),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "load_service", load_service_mock),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+        rc = installer.run(
+            non_interactive=True,
+            profile="max",  # different profile — triggers NeedsForceDeleteError
+            skip_preload=True,
+        )
+
+    assert rc != 1, "dry-run should not exit 1 on model-mismatch guard"
+    captured = capsys.readouterr()
+    assert "[dry-run] Warning:" in captured.out
+
+
+# ---------------------------------------------------------------------------
 # Test 5: multilingual balanced non-interactive returns 1 (Jina license)
 # ---------------------------------------------------------------------------
 
