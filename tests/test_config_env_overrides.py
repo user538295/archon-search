@@ -1,6 +1,7 @@
-"""Tests for `ARCHON_SEARCH_HOST` / `ARCHON_SEARCH_PORT` env var overrides and `serve` kwarg.
+"""Tests for `ARCHON_SEARCH_HOST` / `ARCHON_SEARCH_PORT` / `ARCHON_SEARCH_DATA_DIR`
+env var overrides and the `serve` kwarg.
 
-Plan: Documentation/Backlog/C9-container-support-plan.md Task 1.1.
+Plan: Documentation/Backlog/C9-container-support-plan.md Tasks 1.1 and 2.2.
 
 All env vars (`ARCHON_SEARCH_HOST`, `ARCHON_SEARCH_PORT`, `ARCHON_SEARCH_DATA_DIR`, etc.)
 are cleared by the `_clear_archon_env_vars` autouse fixture in `tests/conftest.py`,
@@ -115,3 +116,106 @@ def test_defaults_when_env_cleared(tmp_path: Path) -> None:
     assert isinstance(config, SearchConfig)
     assert config.host == "127.0.0.1"
     assert config.port == 8765
+
+
+# ---------------------------------------------------------------------------
+# ARCHON_SEARCH_DATA_DIR overrides (Task 2.2)
+#
+# `get_data_dir()` raises `ValueError` (NOT `ConfigError`) on misconfiguration
+# to avoid a circular import between `archon_search.paths` and
+# `archon_search.config`. `load_config()` wraps the call in try/except so
+# callers only need to catch `ConfigError`.
+# ---------------------------------------------------------------------------
+
+
+def test_data_dir_overrides_db_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`ARCHON_SEARCH_DATA_DIR="/data"` → `config.db_path == "/data/search"`."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    config = load_config(path=tmp_path / "nonexistent.toml")
+    assert config.db_path == "/data/search"
+
+
+def test_data_dir_overrides_log_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`ARCHON_SEARCH_DATA_DIR="/data"` → `config.log_file == "/data/logs/archon-search.log"`."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    config = load_config(path=tmp_path / "nonexistent.toml")
+    assert config.log_file == "/data/logs/archon-search.log"
+
+
+def test_data_dir_overrides_telemetry_log_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`ARCHON_SEARCH_DATA_DIR="/data"` → `config.telemetry.log_dir == "/data/search-logs"`."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    config = load_config(path=tmp_path / "nonexistent.toml")
+    assert config.telemetry.log_dir == "/data/search-logs"
+
+
+def test_data_dir_overrides_toml_db_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Env DATA_DIR beats explicit TOML `db_path`. Precedence: env > TOML > default."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[database]\ndb_path = \"/toml/db\"\n", encoding="utf-8")
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    config = load_config(path=toml_file)
+    assert config.db_path == "/data/search"
+
+
+def test_data_dir_overrides_toml_log_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Env DATA_DIR beats explicit TOML `log_file`. Symmetric with `db_path`
+    precedence so future reorderings of TOML/env application can't silently
+    flip the contract for one field but not the others."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        "[logging]\nlog_file = \"/var/log/archon/app.log\"\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    config = load_config(path=toml_file)
+    assert config.log_file == "/data/logs/archon-search.log"
+
+
+def test_data_dir_overrides_toml_telemetry_log_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Env DATA_DIR beats explicit TOML `[telemetry].log_dir`. Same rationale
+    as `test_data_dir_overrides_toml_log_file` — keep the three fields in lockstep."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        "[telemetry]\nlog_dir = \"/var/log/archon/telemetry\"\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    config = load_config(path=toml_file)
+    assert config.telemetry.log_dir == "/data/search-logs"
+
+
+def test_data_dir_relative_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Relative `ARCHON_SEARCH_DATA_DIR` → `get_data_dir()` raises `ValueError`,
+    which `load_config()` must translate into `ConfigError`. Complements
+    `test_data_dir_empty_raises` to exercise the second branch of the error
+    translation contract."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "data")
+    with pytest.raises(ConfigError, match="absolute path"):
+        load_config(path=tmp_path / "nonexistent.toml")
+
+
+def test_data_dir_empty_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Empty `ARCHON_SEARCH_DATA_DIR` → `get_data_dir()` raises `ValueError`,
+    which `load_config()` must translate into `ConfigError` so callers only
+    have to catch one exception type."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "")
+    with pytest.raises(ConfigError, match="must not be empty"):
+        load_config(path=tmp_path / "nonexistent.toml")
+
+
+def test_serve_kwarg_with_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Full container path: `serve=True` + `ARCHON_SEARCH_DATA_DIR` + no TOML
+    sets host to `0.0.0.0` and routes all derived paths through the data dir.
+    This is the canonical production container invocation."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    config = load_config(path=tmp_path / "nonexistent.toml", serve=True)
+    assert config.host == "0.0.0.0"
+    assert config.db_path == "/data/search"
+    assert config.log_file == "/data/logs/archon-search.log"

@@ -10,6 +10,7 @@ from pathlib import Path
 import tomlkit
 
 from archon_search.constants import DEFAULT_FAST_MODEL, DEFAULT_ROUTING_DESCRIPTION_WEIGHT
+from archon_search.paths import get_data_dir
 
 _logger = logging.getLogger(__name__)
 
@@ -182,6 +183,10 @@ def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfi
     Env var overrides applied after TOML parsing:
         ARCHON_SEARCH_HOST: overrides `config.host` (any non-empty string).
         ARCHON_SEARCH_PORT: overrides `config.port` (validated int in 1..65535).
+        ARCHON_SEARCH_DATA_DIR: when set, overrides `config.db_path`,
+            `config.log_file`, and `config.telemetry.log_dir` (derived under
+            the data directory). Wins over any TOML-sourced values for those
+            three fields.
     """
     if path is None:
         path = get_default_config_path()
@@ -466,7 +471,9 @@ def _apply_env_overrides(config: SearchConfig) -> None:
     Precedence: env > TOML > dataclass default.
 
     Raises:
-        ConfigError: on non-int or out-of-range `ARCHON_SEARCH_PORT`.
+        ConfigError: on non-int or out-of-range `ARCHON_SEARCH_PORT`,
+            or on misconfigured `ARCHON_SEARCH_DATA_DIR` (empty, relative,
+            or otherwise rejected by `get_data_dir()`).
     """
     host_env = os.environ.get("ARCHON_SEARCH_HOST")
     if host_env:
@@ -487,3 +494,18 @@ def _apply_env_overrides(config: SearchConfig) -> None:
                 f"ARCHON_SEARCH_PORT must be between 1 and 65535, got {port}"
             )
         config.port = port
+
+    # `get_data_dir()` reads ARCHON_SEARCH_DATA_DIR itself and raises
+    # `ValueError` on misconfiguration (empty, relative, HOME-unset with `~`).
+    # `os.environ.get(...) is not None` distinguishes "unset" (skip override,
+    # fall back to TOML/default) from "set to empty" (loud error). We translate
+    # `ValueError` → `ConfigError` so callers of `load_config()` only need to
+    # catch one exception type.
+    if os.environ.get("ARCHON_SEARCH_DATA_DIR") is not None:
+        try:
+            data_dir = get_data_dir()
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+        config.db_path = str(data_dir / "search")
+        config.log_file = str(data_dir / "logs" / "archon-search.log")
+        config.telemetry.log_dir = str(data_dir / "search-logs")

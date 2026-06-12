@@ -185,7 +185,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Checkpoint: `uv run pytest tests/test_paths.py -v`
 
 #### Task 2.2 — config.py: ARCHON_SEARCH_DATA_DIR overrides for config paths
-- [ ] **File**: `archon_search/config.py`
+- [x] **File**: `archon_search/config.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - In the env var application block added in Task 1.1, after applying `ARCHON_SEARCH_HOST` and `ARCHON_SEARCH_PORT`: if `ARCHON_SEARCH_DATA_DIR` is set (non-empty), call `get_data_dir()` and override:
