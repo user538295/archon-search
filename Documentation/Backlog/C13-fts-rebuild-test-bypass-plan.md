@@ -155,7 +155,7 @@ No new config keys, env vars, or API contracts.
   - Checkpoint: `uv run pytest tests/test_pipeline_code_enricher.py --no-cov`
 
 #### Task 2.2 — Per-test audit and switch in `test_pipeline_ingest.py`
-- [ ] **File**: `tests/pipeline/test_pipeline_ingest.py`
+- [x] **File**: `tests/pipeline/test_pipeline_ingest.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - **Discovery first**: run `grep -rl 'ingest_directory' tests/` to discover all test files that call `ingest_directory`. This plan audits `tests/pipeline/test_pipeline_ingest.py` and `tests/test_pipeline_code_enricher.py` (Task 2.1); confirm no other test file outside these two has eligible tests before proceeding.
