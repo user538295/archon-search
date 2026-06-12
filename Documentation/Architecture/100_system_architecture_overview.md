@@ -6,7 +6,7 @@
 
 # System Architecture Overview
 
-`archon-search` is a single-process, local-first hybrid retrieval server. It indexes on-disk corpora into a LanceDB store, serves search over a FastAPI HTTP control plane and an MCP endpoint (both share a Bearer-token middleware), and keeps the index in sync with the filesystem via a watchdog observer. All runtime state lives under `~/.archon-search/`.
+`archon-search` is a single-process, local-first hybrid retrieval server. It indexes on-disk corpora into a LanceDB store, serves search over a FastAPI HTTP control plane and an MCP endpoint (both share a Bearer-token middleware), and keeps the index in sync with the filesystem via a watchdog observer. All runtime state lives under `~/.archon-search/` by default; `ARCHON_SEARCH_DATA_DIR` relocates the entire tree to a single root (used by the Docker image to put everything under `/data`). Lazy path accessors in `paths.py`, `key_manager.py`, `jobs/model.py`, `language_detector.py`, and `cli/ingest.py` all read this env var on every call, so the relocation is consistent across modules.
 
 ## Principles
 
@@ -155,6 +155,16 @@ LanceDB at `cfg.db_path` (default `~/.archon-search/search`) is the only durable
 ## Runtime Topology
 
 One Python process. `uvicorn` serves the FastAPI app produced by `create_app`; `run_server` calls `uvicorn.run(app, host=..., port=...)` with no MCP sub-app mounted. The FastMCP HTTP app defined by `create_mcp_http_app` is currently not started by the shipped entry point — this is a known gap, not the intended end state. #Unverified whether this is intentional for v1 or an oversight to be fixed. Background tasks owned by the FastAPI lifespan when `config.telemetry.enabled` is true: `TelemetryWriter`, `Pruner` (both gated behind the telemetry-enabled config flag, which defaults to false). The watchdog `Observer` runs in its own thread per `CollectionWatcher` and posts coroutines back to the main event loop. Long-running ingest/reindex work is dispatched via FastAPI `BackgroundTasks` (see `routes_jobs.py`, `routes_collections.py`) with job state recorded in the synchronous `JobStore` (see [120_services_and_integration_architecture.md](120_services_and_integration_architecture.md) for sequence diagrams).
+
+## Deployment units (C9)
+
+The same Python process runs in three supported deployment topologies; the seam between them is the CLI subcommand that launches uvicorn:
+
+1. **Host service (`archon-search install` + `archon-search start`).** Wires `LaunchdSearchService` / `SystemdSearchService` (`platform/macos.py`, `platform/linux.py`) so the OS supervises restart-on-crash. `start` delegates to `launchctl` / `systemctl` and returns immediately; the child process is `python -m archon_search.server`. Default host is `127.0.0.1`. State lives under `~/.archon-search/`.
+2. **Foreground (`archon-search serve`).** Container / CI / `nohup` topology — `cli/serve.py` calls `load_config(path, serve=True)`, which flips the host default to `0.0.0.0`, then invokes `run_server(config)` in the foreground (no platform service management). `ARCHON_SEARCH_HOST` / `ARCHON_SEARCH_PORT` env vars still override host and port.
+3. **Docker image.** Ships `archon-search serve` as the `CMD` under `tini` as PID 1; `ARCHON_SEARCH_DATA_DIR=/data` redirects every runtime path (LanceDB index, logs, telemetry, key file, jobs file, fastembed models, ingest history) onto a single mounted volume; `ARCHON_SEARCH_CONTAINER=1` attaches a `StreamHandler(sys.stderr)` to the `archon_search` logger so `docker logs` captures application output. Two image variants — CPU (`:latest`) and NVIDIA GPU (`:gpu`) — are built from the same `Dockerfile` via the `BASE_IMAGE` build-arg and published to GHCR on tag push by `.github/workflows/archon-search-release.yml`. See [`UserManual/08_running_with_docker.md`](../UserManual/08_running_with_docker.md) and [`OperatorGuide/01_deployment_topologies.md`](../OperatorGuide/01_deployment_topologies.md).
+
+All three topologies share the same `run_server` codepath, the same FastAPI app, and the same auth middleware — the deployment unit is the only thing that changes.
 
 ## Install Profile Registry (C0)
 

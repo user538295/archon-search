@@ -10,32 +10,42 @@
 
 ## Principles
 
-1. **One process per host.** LanceDB is opened by a single writer (`store.py`). Running two `archon-search` instances against the same `db_path` will corrupt state. See ADR `ADRs/01_lancedb_as_local_vector_store.md`.
+1. **One process per host (per volume).** LanceDB is opened by a single writer (`store.py`). Running two `archon-search` instances against the same `db_path` will corrupt state. See ADR `ADRs/01_lancedb_as_local_vector_store.md`.
 2. **Bind locally, terminate TLS upstream.** The server has no built-in TLS, no rate limiter, and no IP allowlist. Any non-loopback exposure must go through a reverse proxy. See `Architecture/150_security_and_privacy_architecture.md`.
-3. **Let the OS supervise.** `launchd` (macOS) and `systemd --user` (Linux) are the supported lifecycle managers — restart-on-crash is their job, not the server's.
-4. **No host/port environment override.** `host` and `port` are TOML-only (`archon_search/config.py`, fields on `SearchConfig`). Tracked as `ARCH-2` in `Architecture/530_technical_debt_refactoring_roadmap.md`. #Unverified (tech-debt tag)
+3. **Let the OS supervise** — except in containers. `launchd` (macOS) and `systemd --user` (Linux) are the supported lifecycle managers for host installs. For containerised deployments the orchestrator (Docker, Kubernetes, ECS) owns restart-on-crash.
+4. **Host/port env overrides exist (C9, was ARCH-2).** `ARCHON_SEARCH_HOST` and `ARCHON_SEARCH_PORT` override `[server].host` / `[server].port` in TOML; `ARCHON_SEARCH_DATA_DIR` relocates the entire runtime tree under a single root. These are the primary configuration knobs for the Docker image.
 
 ## Topology summary
 
 | Topology | Lifecycle owner | Restart | TLS | When to use |
 | --- | --- | --- | --- | --- |
-| Foreground (`uv run python -m archon_search.server`) | Operator shell | Manual | None | Local dev, smoke tests. |
+| Foreground (`archon-search serve` or `uv run python -m archon_search.server`) | Operator shell | Manual | None | Local dev, smoke tests, `nohup` topologies. |
 | `launchd` user agent (macOS) | `launchctl` | `KeepAlive=true`, `ThrottleInterval=60` | None | Workstation production on macOS. |
 | `systemd --user` (Linux) | `systemd` | `Restart=always`, `RestartSec=5` | None | Server-class Linux host. |
+| Docker container | `docker` / orchestrator | Orchestrator policy (`restart: unless-stopped` in shipped compose) | None (reverse-proxy upstream) | Portable, reproducible deployment unit; CI environments. See [`UserManual/08_running_with_docker.md`](../UserManual/08_running_with_docker.md). |
 | Reverse-proxied (any of the above + nginx/Caddy) | Same as base | Same as base | Terminator | Any non-loopback exposure. |
 | Windows | n/a | n/a | n/a | **Not supported** — `archon_search/platform/windows.py` raises `NotImplementedError` for install/start/stop/uninstall; `status()` returns a non-running `ServiceStatus` instead of raising. Tracked as `PLT-1`. #Unverified |
 
 ## Foreground
 
-There is no `archon-search start --foreground` subcommand. `archon-search start` (`archon_search/cli/start.py`) only validates the config and then delegates to `launchctl start` (macOS) or `systemctl --user start` (Linux) via `_get_service().start()`; it returns immediately and does not run uvicorn in the calling shell. Running `uv run archon-search` with no subcommand prints Click help.
+C9 added `archon-search serve` (`archon_search/cli/serve.py`) as the canonical foreground entry point: it calls `load_config(path, serve=True)` (host defaults to `0.0.0.0` — overridable by `[server].host` in TOML or `ARCHON_SEARCH_HOST` in the env) and then `run_server(config)` in the calling shell. It never invokes `_get_service()`, `launchctl`, or `systemctl`. `Ctrl-C` / `SIGTERM` are the only stop signals; there is no restart-on-crash.
 
-The genuine foreground entry point is the module runner, which calls `run_server` (`archon_search/server/app.py:152`) directly:
+```bash
+archon-search serve                       # default config, host 0.0.0.0:8765
+ARCHON_SEARCH_HOST=127.0.0.1 \
+ARCHON_SEARCH_PORT=9000 archon-search serve   # explicit env override
+archon-search serve --config ./local.toml     # alternative TOML
+```
+
+`archon-search start` (`archon_search/cli/start.py`) is a different subcommand: it validates the config and then delegates to `launchctl start` (macOS) or `systemctl --user start` (Linux) via `_get_service().start()`; it returns immediately and does not run uvicorn in the calling shell. Use `start` when you want OS supervision; use `serve` when you do not.
+
+The pre-C9 module runner still works and is functionally equivalent to `serve` minus the `serve=True` host default:
 
 ```bash
 uv run python -m archon_search.server
 ```
 
-The process logs to stderr; no log file is written unless you redirect. Suitable only for debugging — for this foreground command, `Ctrl-C` is the only stop signal, and there is no restart-on-crash.
+This binds to whatever `[server].host` says (default `127.0.0.1`) — no `0.0.0.0` override.
 
 ## launchd (macOS)
 
@@ -76,9 +86,9 @@ Default bind is `127.0.0.1:8765` (`config.py` defaults). Recommended postures:
 
 - **Workstation, only the local user**: leave `host = "127.0.0.1"`. No firewall rule needed.
 - **Single-host service for other processes on the same box**: leave it on loopback; the OS-level user boundary is your only isolation. The auth design is not multi-tenant — see `Architecture/150_security_and_privacy_architecture.md`.
-- **Remote access required**: bind `127.0.0.1` and front it with a reverse proxy that terminates TLS and forwards to `127.0.0.1:8765`. Do **not** bind `0.0.0.0` directly: no TLS, no rate limiter, no IP filter.
+- **Remote access required**: bind `127.0.0.1` and front it with a reverse proxy that terminates TLS and forwards to `127.0.0.1:8765`. Do **not** bind `0.0.0.0` directly outside a container: no TLS, no rate limiter, no IP filter. The Docker container is the exception — it binds `0.0.0.0` inside the container but the publish (`-p`) flag controls the host-side reachability; bind the published port to `127.0.0.1:8765` if you want to keep the upstream-proxy posture (`-p 127.0.0.1:8765:8765`).
 
-`install` (`archon_search/cli/install_cmd.py`) performs **no port-in-use pre-check**: it calls `_get_service().register()`, then `.start()`, then polls `/health` for up to 60s via `_wait_for_health`. If another process already owns the configured port, `service.start()` will still succeed (launchd/systemd accept the start command) and the agent's child uvicorn will then fail to bind; the health poll will time out and the CLI exits with a warning. For port changes edit `[server].port` in `~/.archon-search/archon-search.toml` and restart — no env override exists.
+`install` (`archon_search/cli/install_cmd.py`) performs **no port-in-use pre-check**: it calls `_get_service().register()`, then `.start()`, then polls `/health` for up to 60s via `_wait_for_health`. If another process already owns the configured port, `service.start()` will still succeed (launchd/systemd accept the start command) and the agent's child uvicorn will then fail to bind; the health poll will time out and the CLI exits with a warning. For port changes either edit `[server].port` in `~/.archon-search/archon-search.toml` and restart, or set `ARCHON_SEARCH_PORT` in the environment (C9 — overrides TOML).
 
 ## Reverse-proxy patterns
 
@@ -125,19 +135,21 @@ Notes:
 
 ## Process supervision options
 
-`launchd` and `systemd --user` are first-class. If you need something else (e.g. containers), the contract is minimal:
+`launchd` and `systemd --user` are first-class for host installs. `docker` is first-class for containerised deployments — the shipped image runs `archon-search serve` under `tini` as PID 1; the orchestrator owns restart-on-crash (`docker-compose.yml` ships `restart: unless-stopped` for `archon-prod`). For everything else (`runit`, `s6`, `supervisord`, or your own supervisor) the contract is minimal:
 
-- One process. The uvicorn server runs inside `run_server` (`archon_search/server/app.py:152`), invoked by `python -m archon_search.server` (`archon_search/server/__main__.py`). The `archon-search start` CLI does **not** run uvicorn in-process — it shells out to `launchctl`/`systemctl`, which then spawn a child whose `ExecStart` is `{python} -m archon_search.server`. If you write your own supervisor, point its `ExecStart` (or equivalent) at `python -m archon_search.server`.
+- One process. The uvicorn server runs inside `run_server` (`archon_search/server/app.py`), invoked either by `archon-search serve` (C9, foreground; host defaults to `0.0.0.0`), `python -m archon_search.server` (pre-C9 foreground; host honours `[server].host`), or `archon-search start` (which shells out to `launchctl`/`systemctl`, which then spawn a child whose `ExecStart` is `{python} -m archon_search.server`). If you write your own supervisor, point its `ExecStart` (or equivalent) at `archon-search serve` for the C9 host-defaulting behaviour, or at `python -m archon_search.server` to inherit `[server].host` from TOML.
 - Working directory: irrelevant.
-- Recognised environment overrides: `ARCHON_SEARCH_CONFIG` (config path), `ARCHON_SEARCH_API_KEY` (API key), `ARCHON_SEARCH_KEY_FILE` (key file path). None are strictly required for the foreground path, but the registered plist/unit bake in `ARCHON_SEARCH_CONFIG=~/.archon-search/archon-search.toml` (`macos.py:79`, `linux.py:93`) — if you wrap the process yourself, you almost certainly want to set `ARCHON_SEARCH_CONFIG` to point at your config.
-- Mounts: persistent volume on `~/.archon-search/` (or wherever `db_path`, `log_file`, `[telemetry].log_dir` point). All three keys exist in `SearchConfig` / `TelemetryConfig` (`archon_search/config.py`).
-- Signals: `SIGTERM` triggers FastAPI lifespan shutdown. On the shutdown side the lifespan in `app.py` (lines 109–118) disconnects the search store and, if telemetry is enabled, calls `telemetry_writer.drain_and_stop()` before cancelling background tasks. There is **no explicit job-drain** on shutdown — in-flight jobs in `JobStore` are not awaited. No grace-period constant is defined in the server, plist, or unit; tune your supervisor's stop timeout to your workload. #Unverified (specific grace value)
+- Recognised environment overrides: `ARCHON_SEARCH_CONFIG` (config path), `ARCHON_SEARCH_API_KEY` (API key), `ARCHON_SEARCH_KEY_FILE` (key file path), and the C9 trio — `ARCHON_SEARCH_HOST`, `ARCHON_SEARCH_PORT`, `ARCHON_SEARCH_DATA_DIR`. None are strictly required for the foreground path, but the registered plist/unit bake in `ARCHON_SEARCH_CONFIG=~/.archon-search/archon-search.toml` (`macos.py`, `linux.py`); the Docker image bakes in `ARCHON_SEARCH_DATA_DIR=/data`, `ARCHON_SEARCH_CONTAINER=1`, and `FASTEMBED_CACHE_PATH=/data/fastembed-cache`.
+- Mounts: persistent volume on `~/.archon-search/` for host installs, or `/data` for the Docker image (set by `ARCHON_SEARCH_DATA_DIR=/data` baked into the image). One mounted volume covers `db_path`, `log_file`, `[telemetry].log_dir`, the key file, the jobs file, the fastembed model cache, and the ingest history.
+- Signals: `SIGTERM` triggers FastAPI lifespan shutdown. On the shutdown side the lifespan in `app.py` disconnects the search store and, if telemetry is enabled, calls `telemetry_writer.drain_and_stop()` before cancelling background tasks. There is **no explicit job-drain** on shutdown — in-flight jobs in `JobStore` are not awaited. The shipped `docker-compose.yml` sets `stop_grace_period: 30s`; tune your supervisor's stop timeout to your workload.
 
-`docker-compose`, `runit`, `s6`, `supervisord` are all viable wrappers — the supported guarantees stop at "the OS restarts the process on crash and points logs somewhere persistent". CI exercises only the Linux/macOS branches (`PLT-2`). #Unverified (tech-debt tag)
+CI exercises the Linux/macOS host paths and a CPU Docker smoke test (`tests/test_docker_smoke.py`, `pytest -m docker`); the GPU image is built and pushed but not smoke-tested in CI (no GPU runner). Windows containers are not supported (`PLT-1`).
 
 ## Related documents
 
-- `Architecture/160_operational_readiness_monitoring_and_reliability.md` — observability, install lifecycle.
+- `Architecture/160_operational_readiness_monitoring_and_reliability.md` — observability, install lifecycle, container deployment.
 - `Architecture/150_security_and_privacy_architecture.md` — threat model, ACL semantics.
+- `UserManual/08_running_with_docker.md` — Docker image, `docker run` / `docker compose`, env-var matrix, persistence layout.
+- `UserManual/03_running_the_server.md` — `serve` vs. `start` subcommands.
 - `OperatorGuide/02_monitoring_and_alerts.md` — what to probe once you have a topology running.
 - `OperatorGuide/05_incident_runbook.md` — failures specific to each topology.

@@ -74,7 +74,7 @@ The header name can be changed from the default `"X-Request-ID"` via `[observabi
 
 `configure_logging()` (`archon_search/logging_setup.py`) is called as the first action in `run_server()`. When `[logging].log_file` is non-empty (the default is `~/.archon-search/logs/archon-search.log`), it opens a `TimedRotatingFileHandler` that rotates at UTC midnight and retains `[logging].backup_count` (default 7) rotated files. File logging is therefore **active by default** — no explicit opt-in is required.
 
-Set `log_file = ""` to disable file logging and write to stderr only (recommended for containers and multi-worker deployments).
+Set `log_file = ""` to disable file logging and write to stderr only (recommended for containers and multi-worker deployments). For Docker the simpler path is to keep TOML at defaults and rely on `ARCHON_SEARCH_CONTAINER=1` (baked into the published image): `configure_logging()` then attaches a `StreamHandler(sys.stderr)` to the `archon_search` logger in addition to any file handler, so `docker logs` captures application output regardless of `log_file`. The container handler uses the same formatter as the file handler (text or JSON per `[logging].format`).
 
 When `log_file` is non-empty, `configure_logging()` sets `logger.propagate = False` to prevent duplicate output — log output goes **only** to the file, not to stderr. Operators expecting logs in both destinations simultaneously must use a separate log-forwarding solution. macOS launchd users should be aware that `StandardErrorPath` output will be empty while `log_file` is configured.
 
@@ -136,6 +136,23 @@ The `SearchServiceLifecycle` ABC (`platform/service.py`) declares `start`, `stop
 GPU detection (`platform/runtime.py::SearchRuntime.detect_gpu_type`) is **not gated by OS**: it first invokes `nvidia-smi` on any platform, and returns `GpuType.CUDA` whenever `nvidia-smi` exits with rc=0. Only if `nvidia-smi` is missing or fails does it fall back to checking `platform.system() == "Darwin" and platform.machine() == "arm64"`, which returns `GpuType.METAL` (mapped to the ONNX provider name `CoreMLExecutionProvider` by `install.py::SearchInstaller.configure_providers`). Otherwise it returns `GpuType.NONE` and no provider is written.
 
 `SearchInstaller.configure_providers` writes the matching ONNX provider into `[database].providers`. As of C0, `archon-search install` calls `SearchInstaller.run()`, which invokes `detect_gpu_type()` and `configure_providers()` during the install flow — GPU detection runs automatically and the correct ONNX provider is written to `archon-search.toml` without manual intervention. Operators can override by editing `[database].providers` after installation.
+
+## Container deployment (C9)
+
+The Docker image bypasses the platform service lifecycle entirely: there is no `launchd` plist and no systemd unit. `tini` runs as PID 1 and execs `archon-search serve`, which calls `load_config(path, serve=True)` (host defaults to `0.0.0.0`) and then `run_server(config)` in the foreground. Lifecycle is the orchestrator's responsibility: `docker stop` sends `SIGTERM`, uvicorn drains in-flight HTTP requests, the FastAPI lifespan disconnects the store and drains telemetry, and the process exits; `docker-compose.yml` ships a 30-second `stop_grace_period` to give the lifespan room to finish.
+
+Two image variants are published to GHCR on every tag push by `.github/workflows/archon-search-release.yml`: `:latest` / `:<version>` (CPU, base `python:3.12-slim`) and `:gpu` / `:<version>-gpu` (NVIDIA CUDA + `onnxruntime-gpu`). Both bake the source commit into the `org.opencontainers.image.revision` label; `docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'` resolves which commit produced a given pulled tag, which matters because the `:gpu` floating tag is not deleted on a failed GPU build — operators may pull a stale `:gpu` and need to verify the SHA.
+
+The image declares a `HEALTHCHECK` against `GET /ready`:
+
+```
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD python3 -c "import urllib.request, sys; urllib.request.urlopen('http://localhost:8765/ready')" || exit 1
+```
+
+The `start-period=30s` gives the storage layer time to connect before failures count against the `retries` budget; once `SearchStore.ping()` returns OK, `docker ps` reports `(healthy)`. **`/ready` does not check model availability** — the first `/search` after a cold container start may pay a multi-second model-load tax. If you need search-readiness gating, add a separate model-warm probe or warm the embedder explicitly in your orchestration.
+
+`ARCHON_SEARCH_DATA_DIR=/data` is baked into the image so every runtime path (LanceDB index, logs, telemetry JSONL, key file, jobs file, fastembed models, ingest history) lands on a single mounted volume. Without a volume the key regenerates on every container start. See [`UserManual/08_running_with_docker.md`](../UserManual/08_running_with_docker.md) for the env-var matrix and the dev/test/prod docker-compose stack.
 
 ## Runbooks
 

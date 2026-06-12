@@ -19,6 +19,10 @@ uv sync --dev
 # Run the server (entry point archon_search.cli.main:main)
 uv run archon-search
 
+# Run the server in the foreground (container / direct-run mode; defaults to 0.0.0.0).
+# Does not invoke launchd/systemd; blocks until SIGTERM/Ctrl-C.
+uv run archon-search serve
+
 # Full test suite — ALL tests, no marker exclusions (default addopts enforce --cov-fail-under=85)
 uv run pytest
 
@@ -68,8 +72,10 @@ The runtime is a layered pipeline; understanding the seam between these modules 
 - `collection_meta.py`, `description_generator.py`, `acl.py` add per-collection metadata, auto-generated descriptions, and access control.
 - `watcher.py` + `sync.py` keep on-disk corpora and the index in sync (watchdog-driven).
 - `jobs/` is the async job store (model + store) used by long-running ingest/reindex operations exposed over the API.
-- `key_manager.py` owns the API-key bootstrap (auto-generates `~/.archon-search/.search.env` with mode 600 on first start; `ARCHON_SEARCH_API_KEY` env overrides; `ARCHON_SEARCH_KEY_FILE` redirects).
-- `config.py` + `constants.py` load `~/.archon-search/archon-search.toml` (see `archon-search.toml.example`).
+- `key_manager.py` owns the API-key bootstrap (auto-generates the key file with mode 600 on first start; `ARCHON_SEARCH_API_KEY` env overrides; `ARCHON_SEARCH_KEY_FILE` redirects the path; otherwise the file lives at `get_data_dir() / ".search.env"` — see `paths.py`).
+- `paths.py` is the single source of truth for the runtime data directory: `get_data_dir()` reads `ARCHON_SEARCH_DATA_DIR` and falls back to `~/.archon-search/`. All path accessors (`key_manager.get_key_file()`, `jobs.get_jobs_file()`, `language_detector.get_fasttext_models_dir()`, `cli/ingest.py` history default, `config.load_config()` overrides for `db_path`/`log_file`/`telemetry.log_dir`) derive from it, so a single env var relocates the entire runtime tree — used by the Docker image to mount everything under `/data`.
+- `config.py` + `constants.py` load `~/.archon-search/archon-search.toml` (see `archon-search.toml.example`). `load_config()` accepts env-var overrides for `ARCHON_SEARCH_HOST`, `ARCHON_SEARCH_PORT`, and `ARCHON_SEARCH_DATA_DIR`, and a `serve: bool` kwarg that flips the host default to `0.0.0.0` (used by `archon-search serve`).
+- `logging_setup.configure_logging()` attaches a `StreamHandler(sys.stderr)` to the `archon_search` logger when `ARCHON_SEARCH_CONTAINER=1`, so `docker logs` captures application output even with an empty `log_file`.
 - `platform/` (`runtime.py`, `service.py`, `macos.py`, `linux.py`, `windows.py`) handles OS-specific service install/uninstall; `install.py` + `cli/install_cmd.py` wire it to the CLI.
 
 ### Server (`archon_search/server/`)
@@ -82,7 +88,7 @@ MCP tools (registered in `mcp.py`, 10 total): `search`, `search_with_context`, `
 
 ### CLI (`archon_search/cli/`)
 
-`main.py` is the `archon-search` entry point (Click). Subcommands: `start`, `stop`, `status`, `ingest`, `sync`, `collection`, `config_cmd`, `install_cmd`. `_helpers.py` is shared CLI infrastructure.
+`main.py` is the `archon-search` entry point (Click). Subcommands: `start`, `stop`, `status`, `serve`, `ingest`, `sync`, `collection`, `config_cmd`, `install_cmd`. `_helpers.py` is shared CLI infrastructure. `serve.py` is the container / direct-run entry point: it loads config with `serve=True` (so the host default is `0.0.0.0`), then calls `run_server(config)` in the foreground — it never touches `launchd`/`systemd`.
 
 ### Telemetry (`archon_search/telemetry/`)
 

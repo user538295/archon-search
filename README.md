@@ -60,11 +60,40 @@ curl -X POST http://127.0.0.1:8765/search \
   -d '{"collection": "docs", "query": "how does the router work?"}'
 ```
 
+## Running with Docker
+
+`archon-search` ships a CPU (`:latest`) and an NVIDIA GPU (`:gpu`) image. The container runs the foreground `archon-search serve` subcommand, binds to `0.0.0.0:8765` inside the container, persists all runtime state under `/data`, and writes logs to stderr (so `docker logs` works).
+
+One-liner — ephemeral, key regenerates on every start, no persistence:
+
+```bash
+docker run --rm -p 8765:8765 ghcr.io/user538295/archon-search:latest
+```
+
+Production — supply the API key via env and pin runtime state to a named volume:
+
+```bash
+docker run -d \
+  --name archon-search \
+  -e ARCHON_SEARCH_API_KEY=$ARCHON_SEARCH_API_KEY \
+  -v archon-search-data:/data \
+  -p 8765:8765 \
+  ghcr.io/user538295/archon-search:latest
+```
+
+**Persistent-volume warning.** Without a mounted volume *and* without `ARCHON_SEARCH_API_KEY`, the server auto-generates a fresh key on every container start and previously-issued tokens stop working. Either mount a volume so the key persists at `/data/.search.env`, or pass `ARCHON_SEARCH_API_KEY` explicitly.
+
+For a dev/test/prod stack with isolated volumes, see [`docker-compose.yml`](docker-compose.yml) and [`.env.example`](.env.example). For an end-to-end operator guide (compose stack, image variants, env-var reference, persistence layout), see [Documentation/UserManual/08_running_with_docker.md](Documentation/UserManual/08_running_with_docker.md).
+
+**Single-writer caveat.** LanceDB is single-writer: do not mount the same data volume into more than one running container — the on-disk state is undefined.
+
+**TLS.** The container speaks plaintext HTTP only. Put a reverse proxy (nginx, Caddy, Traefik) in front of it for any non-loopback exposure.
+
 ## Authentication
 
 All endpoints except `GET /health` require a `Bearer` token in the `Authorization` header.
 
-On first start, the server auto-generates a key and writes it to `~/.archon-search/.search.env` with permissions `600`. To override (Docker, CI, multi-host), set the `ARCHON_SEARCH_API_KEY` environment variable — it takes priority over the file. To point the server at a different key file, set `ARCHON_SEARCH_KEY_FILE`.
+On first start, the server auto-generates a key and writes it to `~/.archon-search/.search.env` with permissions `600`. To override (Docker, CI, multi-host), set the `ARCHON_SEARCH_API_KEY` environment variable — it takes priority over the file. To point the server at a different key file, set `ARCHON_SEARCH_KEY_FILE`. To relocate the entire runtime tree (LanceDB index, logs, key file, jobs file, fastembed model cache, ingest history) under a single root — used by the Docker image — set `ARCHON_SEARCH_DATA_DIR` (defaults to `~/.archon-search/`).
 
 ## Configuration
 

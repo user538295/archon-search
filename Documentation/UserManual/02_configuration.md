@@ -39,8 +39,8 @@ The annotated reference is `archon-search.toml.example`. The sections below matc
 
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `host` | string | `127.0.0.1` | Bind address. Set to `0.0.0.0` only if you intend to expose the server. |
-| `port` | int | `8765` | Must be in `[1, 65535]`; out-of-range values raise `ConfigError`. |
+| `host` | string | `127.0.0.1` (or `0.0.0.0` when invoked via `archon-search serve`) | Bind address. Set to `0.0.0.0` only if you intend to expose the server. Overridable at runtime via `ARCHON_SEARCH_HOST` env var (env > TOML > default). |
+| `port` | int | `8765` | Must be in `[1, 65535]`; out-of-range values raise `ConfigError`. Overridable at runtime via `ARCHON_SEARCH_PORT` env var; non-integer or out-of-range env values raise `ConfigError`. |
 
 ### `[database]`
 
@@ -110,14 +110,32 @@ Optional `string = string` mapping (`archon_search/config.py:225-233`). Entries 
 The API key is **not** stored in the TOML. The key manager (`archon_search/key_manager.py:load_or_generate_key`) resolves in this order:
 
 1. **`ARCHON_SEARCH_API_KEY` environment variable** (highest priority). Must be a non-empty lowercase hex string (any length — no length constraint is enforced for env-var-supplied keys); invalid values are logged and ignored, falling through to the file/auto-generate steps.
-2. **`ARCHON_SEARCH_KEY_FILE`** if set, otherwise `~/.archon-search/.search.env`. The loader scans the file line by line and uses the first line starting with `ARCHON_SEARCH_API_KEY=` (trailing whitespace stripped); additional lines are ignored. If the file's permissions are not exactly `600`, the loader forces them to `600` (this can both tighten *and* loosen the mode — e.g. `400` would be widened to `600`).
+2. **`ARCHON_SEARCH_KEY_FILE`** if set, otherwise `get_data_dir() / ".search.env"` (`~/.archon-search/.search.env` by default, or `$ARCHON_SEARCH_DATA_DIR/.search.env` when `ARCHON_SEARCH_DATA_DIR` is set — the Docker image sets this to `/data` so the key file lands on the mounted volume at `/data/.search.env`). The loader scans the file line by line and uses the first line starting with `ARCHON_SEARCH_API_KEY=` (trailing whitespace stripped); additional lines are ignored. If the file's permissions are not exactly `600`, the loader forces them to `600` (this can both tighten *and* loosen the mode — e.g. `400` would be widened to `600`).
 3. **Auto-generation**. On first start with no env var and no file, a 64-char hex token (`secrets.token_hex(32)`) is generated, written atomically with mode `600`, and used.
 
-To rotate, delete `~/.archon-search/.search.env` and restart the server. To use a static key (Docker, CI), set `ARCHON_SEARCH_API_KEY` and skip the file entirely.
+To rotate, delete the key file (`~/.archon-search/.search.env` or wherever `get_key_file()` resolves to under `$ARCHON_SEARCH_DATA_DIR`) and restart the server. To use a static key (Docker, CI), set `ARCHON_SEARCH_API_KEY` and skip the file entirely.
+
+## Environment variables
+
+These env vars are read at config load (`archon_search/config.py::load_config`), at key resolution (`archon_search/key_manager.py::get_key_file`), and by every lazy path accessor (`paths.get_data_dir`, `jobs.get_jobs_file`, `language_detector.get_fasttext_models_dir`, `cli/ingest.py`). All overrides take effect on the next `load_config` call.
+
+| Variable | Effect | Default |
+| --- | --- | --- |
+| `ARCHON_SEARCH_CONFIG` | Path to `archon-search.toml`. | `~/.archon-search/archon-search.toml` |
+| `ARCHON_SEARCH_API_KEY` | Bearer token. Highest priority for auth; bypasses the key file entirely. | unset → falls through to key file or auto-generated |
+| `ARCHON_SEARCH_KEY_FILE` | Path to the key file. Takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file. Must be an absolute path; empty / whitespace-only falls through to the DATA_DIR-derived default; tilde with HOME unset raises `ValueError`. | unset → `get_data_dir() / ".search.env"` |
+| `ARCHON_SEARCH_HOST` | Bind address override. Empty string is treated as "not set" (no override). Env > TOML > default. | unset → TOML `[server].host` or `127.0.0.1` (or `0.0.0.0` under `archon-search serve`) |
+| `ARCHON_SEARCH_PORT` | Bind port override. Must parse to int 1–65535; non-integer or out-of-range raises `ConfigError`. Empty string is treated as "not set". | unset → TOML `[server].port` or `8765` |
+| `ARCHON_SEARCH_DATA_DIR` | Relocate the entire runtime tree (LanceDB index, logs, telemetry, key file, jobs file, fastembed models, ingest history) under a single root. Must be an absolute path; empty / whitespace-only raises `ConfigError`. The Docker image sets this to `/data`. | unset → `~/.archon-search/` |
+| `ARCHON_SEARCH_CONTAINER` | Attach a `StreamHandler(sys.stderr)` to the `archon_search` logger when set to `"1"` (so `docker logs` captures output). The Docker image sets this to `1`. | unset → no stderr handler |
+| `FASTEMBED_CACHE_PATH` | fastembed's own env var for the embedding-model weight cache. The Docker image sets this to `/data/fastembed-cache` so weights persist on the mounted volume. | unset → fastembed default (`~/.cache/fastembed`) |
+
+`ARCHON_SEARCH_CONFIG` and `ARCHON_SEARCH_DATA_DIR` are independent: the TOML config file is **not** relocated by `ARCHON_SEARCH_DATA_DIR`. To put the TOML on the mounted volume too (e.g. for `archon-search collection add/remove` to work inside the container), set `ARCHON_SEARCH_CONFIG=/data/archon-search.toml` explicitly. `archon-search serve` logs a warning at startup if `ARCHON_SEARCH_DATA_DIR` is set without `ARCHON_SEARCH_CONFIG`.
 
 ## Related documents
 
 - [`03_running_the_server.md`](./03_running_the_server.md) — applying config changes.
 - [`06_telemetry.md`](./06_telemetry.md) — telemetry section in detail.
 - [`07_troubleshooting.md`](./07_troubleshooting.md) — config load errors.
+- [`08_running_with_docker.md`](./08_running_with_docker.md) — Docker-specific env-var matrix and persistence layout.
 - [`../Architecture/150_security_and_privacy_architecture.md`](../Architecture/150_security_and_privacy_architecture.md) — auth and namespace model.

@@ -6,13 +6,13 @@
 
 # Data Architecture and Persistence
 
-archon-search is a single-user local service. All persistent state lives under a single root directory (`~/.archon-search/` by default). There is no database server, no remote storage, and no built-in backup; the user owns the data.
+archon-search is a single-user local service. All persistent state lives under a single root directory (`~/.archon-search/` by default; relocatable to any path via `ARCHON_SEARCH_DATA_DIR`, which the published Docker image sets to `/data`). There is no database server, no remote storage, and no built-in backup; the user owns the data.
 
 See also: [100_system_architecture_overview.md](100_system_architecture_overview.md), [120_services_and_integration_architecture.md](120_services_and_integration_architecture.md), [160_operational_readiness_monitoring_and_reliability.md](160_operational_readiness_monitoring_and_reliability.md).
 
 ## Principles
 
-1. **One directory, owned by the user.** All state lives under `~/.archon-search/`; nothing escapes it unless the user explicitly points an env var elsewhere.
+1. **One directory, owned by the user.** All state lives under a single root — `~/.archon-search/` by default, or `$ARCHON_SEARCH_DATA_DIR` if set (the Docker image sets this to `/data`). Nothing escapes the root unless the user explicitly points an override env var (`ARCHON_SEARCH_KEY_FILE`, `ARCHON_SEARCH_CONFIG`, `FASTEMBED_CACHE_PATH`) elsewhere.
 2. **LanceDB is the source of truth.** Vector + FTS data and per-collection metadata live in LanceDB tables; everything else (TOML, JSON, JSONL) is derived or operational.
 3. **Stable, content-addressed identifiers.** `doc_id` is `sha256(resolved_source_path)`; `chunk_id` is `<doc_id>-<6-digit-index>`. This is enforced by regex in `archon_search/store.py`.
 4. **Telemetry is opt-in, locally retained, never exported.** No raw query text is ever persisted (structural guarantee — see `telemetry/entry.py`).
@@ -20,20 +20,26 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
 
 ## On-disk layout under `~/.archon-search/`
 
+In the table below, paths are relative to the data-directory root — `~/.archon-search/` by default, or `$ARCHON_SEARCH_DATA_DIR` if set (the Docker image sets this to `/data`).
+
 | Path | Owner | Contents | Notes |
 |------|-------|----------|-------|
-| `archon-search.toml` | user (or `config_cmd` CLI) | runtime config | optional; missing file → all defaults (`config.py::load_config`) |
-| `.search.env` | `key_manager.py` | `ARCHON_SEARCH_API_KEY=<hex>` | mode `0600`; auto-generated on first start if missing |
+| `archon-search.toml` | user (or `config_cmd` CLI) | runtime config | optional; missing file → all defaults (`config.py::load_config`). **Note**: not relocated by `ARCHON_SEARCH_DATA_DIR` — use `ARCHON_SEARCH_CONFIG` instead. |
+| `.search.env` | `key_manager.py` | `ARCHON_SEARCH_API_KEY=<hex>` | mode `0600`; auto-generated on first start if missing. Resolved lazily via `get_key_file()`. |
 | `search/` | `store.py` (LanceDB) | vector + FTS + collection meta tables | `db_path` config key; created on `SearchStore.connect()` |
 | `search-logs/` | `telemetry/writer.py` | `YYYY-MM-DD.jsonl` per UTC day | only if `[telemetry].enabled = true` |
 | `logs/archon-search.log` | server | server logs | `[logging].log_file` |
 | `archon-search-jobs.json` | `jobs/store.py` | job state for long-running ingest/reindex | `get_jobs_file()` in `jobs/model.py` |
 | `.indexing_state.json` | `progress.py` (`IndexingStateStore`) | per-collection indexing progress/status | atomic-rename writes; RMW serialized by an internal `RLock` (see "Indexing state") |
+| `models/` | `language_detector.py` | fasttext language detector (`lid.176.ftz`) | only if `multilingual=True`; resolved lazily via `get_fasttext_models_dir()` |
+| `history/sessions/` | `cli/ingest.py` | default `--sessions-dir` for the `ingest` subcommand | resolved lazily via `get_data_dir()` |
 
 Override paths:
-- `ARCHON_SEARCH_KEY_FILE` overrides `.search.env` location.
+- `ARCHON_SEARCH_DATA_DIR` (C9) — relocates the entire layout above (except `archon-search.toml` — see `ARCHON_SEARCH_CONFIG`). The Docker image sets `ARCHON_SEARCH_DATA_DIR=/data`. Read lazily on every call by `paths.get_data_dir()`, `key_manager.get_key_file()`, `jobs.get_jobs_file()`, `language_detector.get_fasttext_models_dir()`, `cli/ingest.py`, and `config.load_config()`.
+- `ARCHON_SEARCH_KEY_FILE` overrides `.search.env` location (takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file).
 - `ARCHON_SEARCH_API_KEY` (env var) overrides reading any key file entirely.
 - `ARCHON_SEARCH_CONFIG` overrides `archon-search.toml` location.
+- `FASTEMBED_CACHE_PATH` (fastembed's own env var) overrides where the embedding model weights cache. The Docker image sets this to `/data/fastembed-cache` so model weights persist on the mounted volume.
 
 ## Durability contract
 

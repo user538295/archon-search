@@ -14,17 +14,19 @@
 
 ## Starting and stopping
 
-`archon-search start` is **not** a foreground launcher. It always delegates to the platform service adapter (launchctl on macOS, systemctl --user on Linux). There is no `--foreground` flag and no in-process uvicorn launcher reachable from the CLI. The CLI surface is uniform:
+`archon-search start` is **not** a foreground launcher. It always delegates to the platform service adapter (launchctl on macOS, systemctl --user on Linux). There is no `--foreground` flag on `start`. For a foreground/blocking invocation — Docker, CI, `nohup`, or any context where you do not want platform service management — use `archon-search serve` (see below). The CLI surface is uniform:
 
 ```bash
-archon-search start
+archon-search start            # register-and-start via launchd / systemd
 archon-search stop
 archon-search status
+archon-search serve            # foreground; blocks until SIGTERM / Ctrl-C
 ```
 
 Flags:
 
 - `start --config PATH` — validate an alternative config file before delegating to the service (`archon_search/cli/start.py`). `stop` and `status` take no flags.
+- `serve --config PATH` — same `--config` semantics as `start`, but runs uvicorn in the foreground via `run_server(config)`. The host default is `0.0.0.0` (overridable by `[server].host` in TOML or `ARCHON_SEARCH_HOST` in the env), so a containerised invocation is publicly reachable on the mapped port. `serve` never calls launchd/systemd and never registers a service — see `archon_search/cli/serve.py`. For the Docker image and the docker-compose stack see [Documentation/UserManual/08_running_with_docker.md](08_running_with_docker.md).
 
 What `start` actually does (`archon_search/cli/start.py`):
 

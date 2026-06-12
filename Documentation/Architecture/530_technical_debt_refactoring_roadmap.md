@@ -135,7 +135,7 @@ quadrantChart
     "DOC-1 CLAUDE.md MCP names": [0.1, 0.25]
 ```
 
-Resolved by A6: **CON-2** (router cache invalidation API + per-request lifecycle pinned), **CON-3** (state-store RLock; durability still tracked under A7). Resolved by B1: **ARCH-3** (correlation ID + stage-latency surface). Resolved by B5: **CON-4** (incremental centroid maintenance; three defects fixed). Quick wins (low effort, mid-to-high impact): **TEL-1**, **DOC-1**, ~~**CON-5**~~ (resolved in A3), **API-1/API-2** (already on the next-release queue). Plan deliberately (high effort, high impact): **EVL-1**, **SEC-1**, **SEC-2**, **API-3**, **API-4**. Defer until a trigger fires: **PLT-1**, **PLT-2**, **PLT-3**, **CON-1**, **EVL-2**, **ARCH-1/2**.
+Resolved by A6: **CON-2** (router cache invalidation API + per-request lifecycle pinned), **CON-3** (state-store RLock; durability still tracked under A7). Resolved by B1: **ARCH-3** (correlation ID + stage-latency surface). Resolved by B5: **CON-4** (incremental centroid maintenance; three defects fixed). Resolved by C9: **ARCH-2** (host/port env overrides), and the C9 brief's separate "ARCH-3" relocatable-path-root item (delivered as `paths.get_data_dir()` + lazy accessors in `key_manager`, `jobs`, `language_detector`, `cli/ingest.py`, and `config.load_config()`). Quick wins (low effort, mid-to-high impact): **TEL-1**, **DOC-1**, ~~**CON-5**~~ (resolved in A3), **API-1/API-2** (already on the next-release queue). Plan deliberately (high effort, high impact): **EVL-1**, **SEC-1**, **SEC-2**, **API-3**, **API-4**. Defer until a trigger fires: **PLT-1**, **PLT-2**, **PLT-3**, **CON-1**, **EVL-2**, **ARCH-1**.
 
 ## Planned refactors
 

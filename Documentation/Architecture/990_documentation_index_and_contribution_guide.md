@@ -44,11 +44,12 @@ End-user / operator documentation. Audience is medior-technical operators runnin
 | --- | --- |
 | [`UserManual/01_installation.md`](../UserManual/01_installation.md) | Install from PyPI or a checkout; ONNX provider tips; optional service install. |
 | [`UserManual/02_configuration.md`](../UserManual/02_configuration.md) | `archon-search.toml` sections, `ARCHON_SEARCH_CONFIG`, auth key resolution. |
-| [`UserManual/03_running_the_server.md`](../UserManual/03_running_the_server.md) | `start`/`stop`/`status`, exposed endpoints, Bearer-auth examples. |
+| [`UserManual/03_running_the_server.md`](../UserManual/03_running_the_server.md) | `start`/`stop`/`status`/`serve`, exposed endpoints, Bearer-auth examples. |
 | [`UserManual/04_ingestion_and_collections.md`](../UserManual/04_ingestion_and_collections.md) | `ingest`/`sync`/`collection` CLI and REST equivalents; watcher and reindex triggers. |
 | [`UserManual/05_searching.md`](../UserManual/05_searching.md) | `POST /search`, `POST /route`, and the ten MCP tools. |
 | [`UserManual/06_telemetry.md`](../UserManual/06_telemetry.md) | Opt-in local telemetry, no-raw-query invariant, read-back endpoints. |
 | [`UserManual/07_troubleshooting.md`](../UserManual/07_troubleshooting.md) | Common failure modes: auth, empty results, stuck reindex, install hangs. |
+| [`UserManual/08_running_with_docker.md`](../UserManual/08_running_with_docker.md) | C9 — Docker image (CPU + GPU), `docker run` / `docker compose`, env-var matrix, persistence layout. |
 
 ## Migration Guide
 

@@ -476,7 +476,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Checkpoint: manually review YAML syntax with `python -c "import yaml; yaml.safe_load(open('.github/workflows/archon-search-release.yml'))"`.
 
 #### Task 5.2 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, API docs, architecture docs, user guides, BREAKING.md) and update every file whose content is affected by the changes delivered in this plan. The agent must not update docs that are unrelated.
