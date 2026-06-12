@@ -291,7 +291,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 > **Releasable**: after Task 3.2 — `archon-search serve` starts uvicorn in the foreground with `0.0.0.0` default and stderr logging when `ARCHON_SEARCH_CONTAINER=1` is set.
 
 #### Task 3.1 — archon_search/cli/serve.py: serve subcommand
-- [ ] **Files**: `archon_search/cli/serve.py` (new), `archon_search/cli/main.py`
+- [x] **Files**: `archon_search/cli/serve.py` (new), `archon_search/cli/main.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - `serve.py`: `@click.command()` named `serve`. Accepts `--config` option (same signature as `start.py`). Calls `load_config(config_path, serve=True)` then `run_server(config)`. Imports `run_server` from `archon_search.server.app`.
