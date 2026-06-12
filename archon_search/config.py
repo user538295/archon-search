@@ -495,17 +495,34 @@ def _apply_env_overrides(config: SearchConfig) -> None:
             )
         config.port = port
 
-    # `get_data_dir()` reads ARCHON_SEARCH_DATA_DIR itself and raises
-    # `ValueError` on misconfiguration (empty, relative, HOME-unset with `~`).
-    # `os.environ.get(...) is not None` distinguishes "unset" (skip override,
-    # fall back to TOML/default) from "set to empty" (loud error). We translate
-    # `ValueError` → `ConfigError` so callers of `load_config()` only need to
-    # catch one exception type.
+    # ARCHON_SEARCH_DATA_DIR override. Only the three TOML-backed config
+    # fields are overridden here. The other four runtime-state paths in the
+    # plan's "Path derivations" table (key file, jobs file, fasttext models,
+    # ingest history) are non-config: their domain modules call
+    # `get_data_dir()` lazily at use sites in Tasks 2.3–2.6, not here.
+    #
+    # The env var name is duplicated as a literal string — `paths.py` defines
+    # the same string as a private `_ENV_VAR` constant, but env var names are
+    # the operator-facing public contract and the codebase consistently
+    # hardcodes them rather than centralising. Keep both in sync if you ever
+    # rename — `ARCHON_SEARCH_DATA_DIR` is the canonical operator-facing name.
+    #
+    # `get_data_dir()` reads the env var itself and raises `ValueError` on
+    # misconfiguration (empty, relative, HOME-unset with `~`). The
+    # `is not None` check distinguishes "unset" (skip override, fall back to
+    # TOML/default) from "set to empty" (loud error). DATA_DIR's strictness
+    # is intentionally asymmetric with HOST/PORT (which silently skip empty
+    # strings): an empty DATA_DIR in a container is almost certainly an
+    # operator error worth surfacing. We translate `ValueError` →
+    # `ConfigError` so callers of `load_config()` only catch one type.
     if os.environ.get("ARCHON_SEARCH_DATA_DIR") is not None:
         try:
             data_dir = get_data_dir()
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
+        # Path suffixes must match `SearchConfig`'s dataclass defaults
+        # (search / logs/archon-search.log / search-logs); the plan's
+        # "Path derivations" table is the canonical source of truth.
         config.db_path = str(data_dir / "search")
         config.log_file = str(data_dir / "logs" / "archon-search.log")
         config.telemetry.log_dir = str(data_dir / "search-logs")

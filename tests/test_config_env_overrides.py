@@ -219,3 +219,4 @@ def test_serve_kwarg_with_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert config.host == "0.0.0.0"
     assert config.db_path == "/data/search"
     assert config.log_file == "/data/logs/archon-search.log"
+    assert config.telemetry.log_dir == "/data/search-logs"
