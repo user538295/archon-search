@@ -900,13 +900,13 @@ _VALID_SERVER_KEY = "a" * 32  # 32-char lowercase hex (valid)
 
 @pytest.mark.integration
 def test_wizard_server_key_writes_key_file(runner: CliRunner, tmp_path: Path) -> None:
-    """--server-key writes ARCHON_SEARCH_API_KEY=<key> to KEY_FILE with mode 0o600."""
+    """--server-key writes ARCHON_SEARCH_API_KEY=<key> to the key file with mode 0o600."""
     config_path = tmp_path / "archon-search.toml"
     key_file = tmp_path / ".search.env"
 
     with _patched_wizard():
         with _no_anthropic_key():
-            with patch("archon_search.install.KEY_FILE", key_file):
+            with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
                 with patch("archon_search.install.os.chmod") as mock_chmod:
                     result = runner.invoke(
                         main,
@@ -914,10 +914,10 @@ def test_wizard_server_key_writes_key_file(runner: CliRunner, tmp_path: Path) ->
                     )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
-    assert key_file.exists(), "KEY_FILE should be created by --server-key"
+    assert key_file.exists(), "key file should be created by --server-key"
     content = key_file.read_text()
     assert f"ARCHON_SEARCH_API_KEY={_VALID_SERVER_KEY}" in content, (
-        f"KEY_FILE content missing expected key: {content!r}"
+        f"key file content missing expected key: {content!r}"
     )
     mock_chmod.assert_any_call(key_file, 0o600)
 
@@ -930,7 +930,7 @@ def test_wizard_server_key_prints_history_warning(runner: CliRunner, tmp_path: P
 
     with _patched_wizard():
         with _no_anthropic_key():
-            with patch("archon_search.install.KEY_FILE", key_file):
+            with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
                 with patch("archon_search.install.os.chmod"):
                     result = runner.invoke(
                         main,
@@ -951,7 +951,7 @@ def test_wizard_server_key_prints_restart_note(runner: CliRunner, tmp_path: Path
 
     with _patched_wizard():
         with _no_anthropic_key():
-            with patch("archon_search.install.KEY_FILE", key_file):
+            with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
                 with patch("archon_search.install.os.chmod"):
                     result = runner.invoke(
                         main,
@@ -974,13 +974,19 @@ def test_wizard_server_key_with_env_var_set_prints_priority_warning(
 
     with _patched_wizard():
         with patch.dict("os.environ", {"ARCHON_SEARCH_API_KEY": "b" * 64}, clear=False):
-            with patch.dict("os.environ", {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}, clear=True):
-                with patch("archon_search.install.KEY_FILE", key_file):
-                    with patch("archon_search.install.os.chmod"):
-                        result = runner.invoke(
-                            main,
-                            _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
-                        )
+            with patch.dict(
+                "os.environ",
+                {
+                    **{k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"},
+                    "ARCHON_SEARCH_DATA_DIR": str(tmp_path),
+                },
+                clear=True,
+            ):
+                with patch("archon_search.install.os.chmod"):
+                    result = runner.invoke(
+                        main,
+                        _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
+                    )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     assert "ARCHON_SEARCH_API_KEY" in result.output, (
@@ -995,23 +1001,29 @@ def test_wizard_server_key_with_env_var_set_prints_priority_warning(
 def test_wizard_server_key_with_env_var_set_still_writes_file(
     runner: CliRunner, tmp_path: Path
 ) -> None:
-    """--server-key with ARCHON_SEARCH_API_KEY set still writes the key to KEY_FILE."""
+    """--server-key with ARCHON_SEARCH_API_KEY set still writes the key to the key file."""
     config_path = tmp_path / "archon-search.toml"
     key_file = tmp_path / ".search.env"
 
     with _patched_wizard():
         with patch.dict("os.environ", {"ARCHON_SEARCH_API_KEY": "b" * 64}, clear=False):
-            with patch.dict("os.environ", {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}, clear=True):
-                with patch("archon_search.install.KEY_FILE", key_file):
-                    with patch("archon_search.install.os.chmod"):
-                        result = runner.invoke(
-                            main,
-                            _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
-                        )
+            with patch.dict(
+                "os.environ",
+                {
+                    **{k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"},
+                    "ARCHON_SEARCH_DATA_DIR": str(tmp_path),
+                },
+                clear=True,
+            ):
+                with patch("archon_search.install.os.chmod"):
+                    result = runner.invoke(
+                        main,
+                        _wizard_args(config_path, "--server-key", _VALID_SERVER_KEY),
+                    )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
-    assert key_file.exists(), "KEY_FILE should be written even when ARCHON_SEARCH_API_KEY env is set"
+    assert key_file.exists(), "key file should be written even when ARCHON_SEARCH_API_KEY env is set"
     content = key_file.read_text()
     assert f"ARCHON_SEARCH_API_KEY={_VALID_SERVER_KEY}" in content, (
-        f"KEY_FILE should contain the --server-key value: {content!r}"
+        f"key file should contain the --server-key value: {content!r}"
     )

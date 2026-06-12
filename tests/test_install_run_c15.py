@@ -230,11 +230,13 @@ def _run_with_server_key(
 
     module_patches = _base_run_patches(tmp_path)
     module_patches["archon_search.install.get_default_config_path"] = MagicMock(return_value=config_path)
-    module_patches["archon_search.install.KEY_FILE"] = key_file
 
     method_patches = _method_patches()
 
-    env_context = patch.dict(os.environ, extra_env or {})
+    env_context = patch.dict(
+        os.environ,
+        {"ARCHON_SEARCH_DATA_DIR": str(tmp_path), **(extra_env or {})},
+    )
 
     with env_context:
         with patch.multiple(
@@ -274,7 +276,6 @@ def test_run_server_key_sets_mode_600(tmp_path: Path) -> None:
     config_path = tmp_path / "archon-search.toml"
     module_patches = _base_run_patches(tmp_path)
     module_patches["archon_search.install.get_default_config_path"] = MagicMock(return_value=config_path)
-    module_patches["archon_search.install.KEY_FILE"] = key_file
 
     method_patches = _method_patches()
 
@@ -286,19 +287,20 @@ def test_run_server_key_sets_mode_600(tmp_path: Path) -> None:
         chmod_calls.append((path, mode))
         # Don't actually chmod in tests (key_file doesn't need real mode change)
 
-    with patch.multiple(
-        "archon_search.install",
-        **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
-    ):
-        with patch.multiple(SearchInstaller, **method_patches):
-            with patch("archon_search.install.os.chmod", side_effect=capturing_chmod):
-                installer = SearchInstaller(config_file=str(config_path))
-                rc = installer.run(
-                    non_interactive=True,
-                    profile="minimal",
-                    skip_preload=True,
-                    server_key=_VALID_SERVER_KEY,
-                )
+    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
+        with patch.multiple(
+            "archon_search.install",
+            **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
+        ):
+            with patch.multiple(SearchInstaller, **method_patches):
+                with patch("archon_search.install.os.chmod", side_effect=capturing_chmod):
+                    installer = SearchInstaller(config_file=str(config_path))
+                    rc = installer.run(
+                        non_interactive=True,
+                        profile="minimal",
+                        skip_preload=True,
+                        server_key=_VALID_SERVER_KEY,
+                    )
 
     assert rc == 0
     # Find the chmod call for the key file (may be other chmod calls e.g. from shutil)
@@ -357,23 +359,23 @@ def test_run_dry_run_server_key_prints_message(tmp_path: Path, capsys) -> None:
 
     module_patches = _base_run_patches(tmp_path)
     module_patches["archon_search.install.get_default_config_path"] = MagicMock(return_value=config_path)
-    module_patches["archon_search.install.KEY_FILE"] = key_file
 
     method_patches = _method_patches()
 
-    with patch.multiple(
-        "archon_search.install",
-        **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
-    ):
-        with patch.multiple(SearchInstaller, **method_patches):
-            with patch("archon_search.install.atomic_write_bytes") as mock_write:
-                installer = SearchInstaller(config_file=str(config_path), dry_run=True)
-                rc = installer.run(
-                    non_interactive=True,
-                    profile="minimal",
-                    skip_preload=True,
-                    server_key=_VALID_SERVER_KEY,
-                )
+    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
+        with patch.multiple(
+            "archon_search.install",
+            **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
+        ):
+            with patch.multiple(SearchInstaller, **method_patches):
+                with patch("archon_search.install.atomic_write_bytes") as mock_write:
+                    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+                    rc = installer.run(
+                        non_interactive=True,
+                        profile="minimal",
+                        skip_preload=True,
+                        server_key=_VALID_SERVER_KEY,
+                    )
 
     assert rc == 0
     captured = capsys.readouterr()

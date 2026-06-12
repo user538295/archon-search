@@ -205,7 +205,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
   - Checkpoint: `uv run pytest tests/test_config_env_overrides.py -v`
 
 #### Task 2.3 — key_manager.py: lazy key file path
-- [ ] **File**: `archon_search/key_manager.py`
+- [x] **File**: `archon_search/key_manager.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - Remove the module-level `KEY_FILE: Path = ...` constant (lines 16–21). Also remove `_key_file_env = os.environ.get("ARCHON_SEARCH_KEY_FILE") or ""` (line 16) — this is a module-level evaluation of the env var that will be stale after import. The `get_key_file()` function must read `os.environ.get("ARCHON_SEARCH_KEY_FILE")` fresh on every call, not from a captured module-level variable.

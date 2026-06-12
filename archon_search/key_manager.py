@@ -1,4 +1,13 @@
-"""API key loading and auto-generation for archon-search (Task 1.1)."""
+"""API key loading and auto-generation for archon-search (Task 1.1).
+
+Path resolution (C9 Task 2.3): the key file location is resolved lazily via
+``get_key_file()`` on every call. ``ARCHON_SEARCH_KEY_FILE`` (if set and
+non-empty) wins; otherwise the path falls under ``get_data_dir() / .search.env``
+so ``ARCHON_SEARCH_DATA_DIR`` (the container-friendly base data dir) also
+redirects the key file. No module-level capture of either env var: stale
+bindings would break tests that flip the env after import and the container
+bootstrap where the env is set after the package is loaded.
+"""
 from __future__ import annotations
 
 import logging
@@ -10,18 +19,32 @@ import time
 from pathlib import Path
 
 from archon_search._durable_io import atomic_write_bytes
+from archon_search.paths import get_data_dir
 
 logger = logging.getLogger(__name__)
 
-_key_file_env = os.environ.get("ARCHON_SEARCH_KEY_FILE") or ""
-KEY_FILE: Path = (
-    Path(_key_file_env).expanduser()
-    if _key_file_env
-    else Path.home() / ".archon-search" / ".search.env"
-)
 ENV_VAR: str = "ARCHON_SEARCH_API_KEY"
 
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
+
+
+def get_key_file() -> Path:
+    """Return the API key file path, resolved fresh on every call.
+
+    Resolution order:
+
+    1. ``$ARCHON_SEARCH_KEY_FILE`` if set and non-empty —
+       ``Path(env).expanduser()``.
+    2. ``get_data_dir() / ".search.env"`` otherwise.
+
+    ``ARCHON_SEARCH_KEY_FILE`` takes precedence over ``ARCHON_SEARCH_DATA_DIR``
+    so operators can pin the key file location independently of the rest of
+    the runtime state directory.
+    """
+    raw = os.environ.get("ARCHON_SEARCH_KEY_FILE") or ""
+    if raw:
+        return Path(raw).expanduser()
+    return get_data_dir() / ".search.env"
 
 
 def load_or_generate_key() -> tuple[str, str]:
@@ -32,7 +55,7 @@ def load_or_generate_key() -> tuple[str, str]:
 
     key = _load_from_file()
     if key is not None:
-        return key, f"file: {KEY_FILE}"
+        return key, f"file: {get_key_file()}"
 
     key = _generate_and_write()
     return key, "auto-generated"
@@ -49,19 +72,20 @@ def _load_from_env() -> str | None:
 
 
 def _load_from_file() -> str | None:
-    if not KEY_FILE.exists():
+    key_file = get_key_file()
+    if not key_file.exists():
         return None
 
     # Attempt to tighten permissions if too wide
     try:
-        mode = os.stat(KEY_FILE).st_mode & 0o777
+        mode = os.stat(key_file).st_mode & 0o777
         if mode != 0o600:
-            _chmod_600(KEY_FILE)
+            _chmod_600(key_file)
     except OSError:
         pass
 
     try:
-        content = KEY_FILE.read_text()
+        content = key_file.read_text()
     except OSError:
         return None
 
@@ -82,14 +106,15 @@ def _validate_key(value: str) -> bool:
 
 
 def _generate_and_write() -> str:
-    os.makedirs(KEY_FILE.parent, exist_ok=True)
+    key_file = get_key_file()
+    os.makedirs(key_file.parent, exist_ok=True)
     key = secrets.token_hex(32)  # 64 hex chars
     payload = f"{ENV_VAR}={key}\n".encode()
-    tmp = KEY_FILE.with_suffix(KEY_FILE.suffix + ".tmp")
+    tmp = key_file.with_suffix(key_file.suffix + ".tmp")
 
     for attempt in range(2):
         try:
-            atomic_write_bytes(KEY_FILE, payload, mode=0o600)
+            atomic_write_bytes(key_file, payload, mode=0o600)
             return key
         except FileExistsError:
             if attempt == 0:

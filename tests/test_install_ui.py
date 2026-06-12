@@ -349,11 +349,11 @@ def test_next_steps_shows_key_file_path(capsys):
 
 
 def test_next_steps_key_file_from_key_manager(capsys):
-    """_print_next_steps with empty api_key_file falls back to key_manager.KEY_FILE."""
+    """_print_next_steps with empty api_key_file falls back to key_manager.get_key_file()."""
     from archon_search import key_manager
     _print_next_steps("127.0.0.1", 8765, "")
     out = capsys.readouterr().out
-    assert str(key_manager.KEY_FILE) in out
+    assert str(key_manager.get_key_file()) in out
 
 
 def test_next_steps_shows_next_steps_header(capsys):

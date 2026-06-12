@@ -24,7 +24,7 @@ import tomlkit
 
 from archon_search._durable_io import atomic_write_bytes
 from archon_search.config import SearchConfig, get_default_config_path, load_config
-from archon_search.key_manager import KEY_FILE, load_or_generate_key
+from archon_search.key_manager import get_key_file, load_or_generate_key
 from archon_search.pipeline import create_pipeline
 from archon_search.platform.runtime import get_runtime, get_search_service
 from archon_search.platform.types import GpuType
@@ -704,7 +704,7 @@ def _mask_api_key(api_key_file: str) -> str:
 def _print_next_steps(host: str, port: int, api_key_file: str) -> None:
     """Print post-install guidance to stdout."""
     from archon_search import key_manager
-    key_path = Path(api_key_file) if api_key_file else key_manager.KEY_FILE
+    key_path = Path(api_key_file) if api_key_file else key_manager.get_key_file()
     print(f"\narchon-search is running on http://{host}:{port}\n")
     print("Next steps:")
     print("  archon-search ingest <path>           # add documents to search")
@@ -1750,7 +1750,7 @@ class SearchInstaller:
                 db_path=str(Path(cfg.db_path).expanduser()),
                 host=features.host if features.host is not None else cfg.host,
                 port=features.port if features.port is not None else cfg.port,
-                api_key_file=str(_key_manager.KEY_FILE),
+                api_key_file=str(_key_manager.get_key_file()),
                 download_mb=prof.download_mb,
             ))
 
@@ -1771,8 +1771,9 @@ class SearchInstaller:
 
             # Before Step 14b: write custom server key if provided
             if server_key is not None and not self.dry_run:
-                atomic_write_bytes(KEY_FILE, f"ARCHON_SEARCH_API_KEY={server_key}\n".encode())
-                os.chmod(KEY_FILE, 0o600)
+                _key_file = get_key_file()
+                atomic_write_bytes(_key_file, f"ARCHON_SEARCH_API_KEY={server_key}\n".encode())
+                os.chmod(_key_file, 0o600)
                 print(
                     "Note: your server key may appear in shell history. "
                     "Consider using ARCHON_SEARCH_API_KEY env var instead."
@@ -1785,7 +1786,7 @@ class SearchInstaller:
                     )
                 print("Server key updated. Restart the service to apply: archon-search restart.")
             elif server_key is not None and self.dry_run:
-                print(f"[dry-run] Would write server key to {KEY_FILE}.")
+                print(f"[dry-run] Would write server key to {get_key_file()}.")
 
             # Step 14: pre-warm
             if not skip_preload:
@@ -1824,7 +1825,7 @@ class SearchInstaller:
 
             # Step 16b: next steps guidance (non-dry-run only)
             if not self.dry_run:
-                _print_next_steps(cfg.host, cfg.port, str(_key_manager.KEY_FILE))
+                _print_next_steps(cfg.host, cfg.port, str(_key_manager.get_key_file()))
 
             # Step 17: completion message
             if not self.dry_run:
@@ -1837,12 +1838,12 @@ class SearchInstaller:
                 elif _key_source == "auto-generated":
                     print(
                         f"  API key: {_api_key}"
-                        f"  (generated fresh — keep this key private; also stored at: {KEY_FILE})"
+                        f"  (generated fresh — keep this key private; also stored at: {get_key_file()})"
                     )
                 else:
                     print(
                         f"  API key: {_api_key}"
-                        f"  (keep this key private; also stored at: {KEY_FILE})"
+                        f"  (keep this key private; also stored at: {get_key_file()})"
                     )
             # Post-install hint: if ANTHROPIC_API_KEY not set and HyDE/RAG Fusion not requested
             if not self.dry_run and not features.enable_hyde and not features.enable_rag_fusion:

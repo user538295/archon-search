@@ -280,11 +280,11 @@ class TestFullAppAuth:
         import archon_search.key_manager as km
         from archon_search.ai.search_client import SearchApiKeyAuth # noqa: F401
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
-        monkeypatch.setattr(km, "KEY_FILE", tmp_path / ".search.env")
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         key, _ = km.load_or_generate_key()
 
         auth = SearchApiKeyAuth()
-        assert auth._KEY_FILE == km.KEY_FILE
+        assert auth._KEY_FILE == km.get_key_file()
 
         config = SearchConfig()
         config.db_path = str(tmp_path / "search")

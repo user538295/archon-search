@@ -1,6 +1,7 @@
 """Tests for SearchInstaller.run() — TDD (Task 3.4)."""
 from __future__ import annotations
 
+import os
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
@@ -1670,12 +1671,12 @@ def _run_with_key_source(
     key_file = tmp_path / ".search.env"
 
     with (
+        patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}),
         patch("archon_search.install.get_default_config_path", return_value=config_path),
         patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
         patch("archon_search.install._remove_legacy_service"),
         patch("archon_search.install._prewarm_models"),
         patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.KEY_FILE", key_file),
         patch("archon_search.key_manager.load_or_generate_key", return_value=(key, source)),
         patch("archon_search.install.load_or_generate_key", return_value=(key, source)),
         patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),

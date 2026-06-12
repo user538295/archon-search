@@ -33,7 +33,7 @@ def _write_key_file(path: Path, content: str) -> None:
 class TestLoadFromEnv:
     def test_load_from_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv("ARCHON_SEARCH_API_KEY", VALID_HEX_64)
-        monkeypatch.setattr(km, "KEY_FILE", tmp_path / ".search.env")
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         key, source = km.load_or_generate_key()
         assert key == VALID_HEX_64
         assert source == "env var"
@@ -44,7 +44,7 @@ class TestLoadFromEnv:
         monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "")
         key_file = tmp_path / ".search.env"
         _write_key_file(key_file, f"ARCHON_SEARCH_API_KEY={VALID_HEX_64}\n")
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         key, source = km.load_or_generate_key()
         assert key == VALID_HEX_64
         assert "file" in source
@@ -57,7 +57,7 @@ class TestLoadFromEnv:
         monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "not-valid-hex!")
         key_file = tmp_path / ".search.env"
         _write_key_file(key_file, f"ARCHON_SEARCH_API_KEY={VALID_HEX_64}\n")
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         with caplog.at_level(logging.WARNING):
             key, source = km.load_or_generate_key()
         assert key == VALID_HEX_64
@@ -69,7 +69,7 @@ class TestLoadFromEnv:
         monkeypatch.setenv("ARCHON_SEARCH_API_KEY", env_key)
         key_file = tmp_path / ".search.env"
         _write_key_file(key_file, f"ARCHON_SEARCH_API_KEY={file_key}\n")
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         key, source = km.load_or_generate_key()
         assert key == env_key
         assert source == "env var"
@@ -80,7 +80,7 @@ class TestLoadFromFile:
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
         _write_key_file(key_file, f"ARCHON_SEARCH_API_KEY={VALID_HEX_64}\n")
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         key, source = km.load_or_generate_key()
         assert key == VALID_HEX_64
         assert "file" in source
@@ -91,7 +91,7 @@ class TestLoadFromFile:
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
         _write_key_file(key_file, "ARCHON_SEARCH_API_KEY=not-hex\n")
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         import logging
 
         with caplog.at_level(logging.ERROR):
@@ -105,7 +105,7 @@ class TestLoadFromFile:
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
         _write_key_file(key_file, "ARCHON_SEARCH_API_KEY=\n")
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         import logging
 
         with caplog.at_level(logging.ERROR):
@@ -118,7 +118,7 @@ class TestLoadFromFile:
         key_file = tmp_path / ".search.env"
         # Leading and trailing spaces
         _write_key_file(key_file, f"ARCHON_SEARCH_API_KEY=  {VALID_HEX_64}  \n")
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         result = km._load_from_file()
         assert result == VALID_HEX_64
 
@@ -126,7 +126,7 @@ class TestLoadFromFile:
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
         _write_key_file(key_file, f"ARCHON_SEARCH_API_KEY={VALID_HEX_64}\r\n")
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         result = km._load_from_file()
         assert result == VALID_HEX_64
 
@@ -134,7 +134,7 @@ class TestLoadFromFile:
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
         _write_key_file(key_file, "SOME_OTHER_VAR=abc123\n")
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         result = km._load_from_file()
         assert result is None
 
@@ -145,7 +145,7 @@ class TestLoadFromFile:
         key_file = tmp_path / ".search.env"
         _write_key_file(key_file, f"ARCHON_SEARCH_API_KEY={VALID_HEX_64}\n")
         key_file.chmod(0o644)
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         result = km._load_from_file()
         assert result == VALID_HEX_64
         # Should have been chmod'd to 600
@@ -157,7 +157,7 @@ class TestAutoGenerate:
     def test_auto_generate(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         key, source = km.load_or_generate_key()
         assert source == "auto-generated"
         assert len(key) == 64
@@ -171,7 +171,7 @@ class TestAutoGenerate:
             pytest.skip("chmod not relevant on Windows")
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         km.load_or_generate_key()
         mode = stat.S_IMODE(key_file.stat().st_mode)
         assert mode == 0o600
@@ -179,7 +179,7 @@ class TestAutoGenerate:
     def test_atomic_write(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
 
         with patch("archon_search.key_manager.atomic_write_bytes") as mock_write:
             key = km._generate_and_write()
@@ -192,7 +192,7 @@ class TestAutoGenerate:
         key_file = tmp_path / ".search.env"
         existing_key = "d" * 64
         _write_key_file(key_file, f"ARCHON_SEARCH_API_KEY={existing_key}\n")
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
 
         real_os_open = os.open
         call_count = 0
@@ -214,7 +214,7 @@ class TestAutoGenerate:
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
         tmp_file = tmp_path / ".search.env.tmp"
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         # Create orphaned tmp that the first O_EXCL open collides with.
         tmp_file.write_text("orphaned")
 
@@ -241,7 +241,7 @@ class TestAutoGenerate:
 
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         with caplog.at_level(logging.DEBUG):
             key, _ = km.load_or_generate_key()
         # The key value must not appear in any log record
@@ -252,7 +252,7 @@ class TestAutoGenerate:
         """A non-FileExists OSError from the helper propagates out of _generate_and_write."""
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
 
         with patch(
             "archon_search.key_manager.atomic_write_bytes",
@@ -267,7 +267,7 @@ class TestAutoGenerate:
         """FileExistsError on both attempts, with a concurrent writer's key visible on retry."""
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         existing_key = "c" * 64
 
         with (
@@ -287,7 +287,7 @@ class TestAutoGenerate:
         """Both O_EXCL attempts fail AND _load_from_file returns None → RuntimeError."""
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         key_file = tmp_path / ".search.env"
-        monkeypatch.setattr(km, "KEY_FILE", key_file)
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
 
         def always_raises(path: str, flags: int, mode: int = 0o777) -> int:
             if flags & os.O_EXCL:
@@ -307,49 +307,60 @@ class TestAutoGenerate:
 # ---------------------------------------------------------------------------
 
 
-class TestKeyFilePaths:
-    def test_key_file_default_path(self) -> None:
-        """KEY_FILE default must point to ~/.archon-search/.search.env."""
-        import importlib
-        import sys
+class TestGetKeyFile:
+    """Tests for `get_key_file()` — the lazy replacement for the old module-level
+    `KEY_FILE` constant (C9 Task 2.3)."""
 
-        saved = sys.modules.pop("archon_search.key_manager", None)
-        try:
-            import archon_search.key_manager as fresh_km
-            importlib.reload(fresh_km)
-            assert fresh_km.KEY_FILE == Path.home() / ".archon-search" / ".search.env"
-        finally:
-            if saved is not None:
-                sys.modules["archon_search.key_manager"] = saved
+    def test_get_key_file_default(self) -> None:
+        """No env vars set → ``Path.home() / ".archon-search" / ".search.env"``."""
+        assert km.get_key_file() == Path.home() / ".archon-search" / ".search.env"
 
-    def test_key_file_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """ARCHON_SEARCH_KEY_FILE env var overrides the default KEY_FILE path."""
-        import importlib
-        import sys
+    def test_get_key_file_key_file_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`ARCHON_SEARCH_KEY_FILE="/custom/.env"` → ``Path("/custom/.env")``."""
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "/custom/.env")
+        assert km.get_key_file() == Path("/custom/.env")
 
-        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "/tmp/test.env")
-        saved = sys.modules.pop("archon_search.key_manager", None)
-        try:
-            import archon_search.key_manager as fresh_km
-            importlib.reload(fresh_km)
-            assert fresh_km.KEY_FILE == Path("/tmp/test.env")
-        finally:
-            if saved is not None:
-                sys.modules["archon_search.key_manager"] = saved
-            monkeypatch.delenv("ARCHON_SEARCH_KEY_FILE", raising=False)
+    def test_get_key_file_data_dir_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`ARCHON_SEARCH_DATA_DIR="/data"` → ``Path("/data/.search.env")``."""
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+        assert km.get_key_file() == Path("/data/.search.env")
 
-    def test_key_file_empty_env_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Empty ARCHON_SEARCH_KEY_FILE must fall back to the default path, not Path('.')."""
-        import importlib
-        import sys
+    def test_key_file_env_overrides_data_dir(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both env vars set → ``ARCHON_SEARCH_KEY_FILE`` wins."""
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "/explicit/.env")
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+        assert km.get_key_file() == Path("/explicit/.env")
 
-        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "")
-        saved = sys.modules.pop("archon_search.key_manager", None)
-        try:
-            import archon_search.key_manager as fresh_km
-            importlib.reload(fresh_km)
-            assert fresh_km.KEY_FILE == Path.home() / ".archon-search" / ".search.env"
-        finally:
-            if saved is not None:
-                sys.modules["archon_search.key_manager"] = saved
-            monkeypatch.delenv("ARCHON_SEARCH_KEY_FILE", raising=False)
+    def test_no_module_level_key_file_constant(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Behavioral guard: setting ``ARCHON_SEARCH_DATA_DIR`` AFTER import
+        must still influence the resolved key file path. Any module-level
+        capture (e.g. ``KEY_FILE = ...`` or ``_key_file_env = os.environ.get(...)``)
+        evaluated at import time would be stale here and break the assertion."""
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/tmp/guard-test")
+        result = km.get_key_file()
+        assert str(result).startswith("/tmp/guard-test"), (
+            f"Expected result under /tmp/guard-test, got: {result}"
+        )
+
+    def test_load_or_generate_key_uses_key_file_env_over_data_dir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Integration: both env vars set → key is written to ``ARCHON_SEARCH_KEY_FILE``,
+        not ``ARCHON_SEARCH_DATA_DIR / .search.env``."""
+        monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
+        explicit = tmp_path / "explicit.env"
+        data_dir = tmp_path / "data"
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", str(explicit))
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+        key, source = km.load_or_generate_key()
+        assert source == "auto-generated"
+        assert explicit.exists(), "Key must be written to ARCHON_SEARCH_KEY_FILE"
+        assert not (data_dir / ".search.env").exists(), (
+            "Key must NOT fall through to ARCHON_SEARCH_DATA_DIR when "
+            "ARCHON_SEARCH_KEY_FILE is set"
+        )
+        assert explicit.read_text() == f"ARCHON_SEARCH_API_KEY={key}\n"
