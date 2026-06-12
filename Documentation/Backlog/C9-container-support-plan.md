@@ -162,7 +162,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 > **Releasable**: after Task 2.6 — `ARCHON_SEARCH_DATA_DIR` is a single env var knob that correctly redirects all seven runtime-state paths; no path is computed at module import time.
 
 #### Task 2.1 — archon_search/paths.py: get_data_dir()
-- [ ] **File**: `archon_search/paths.py`
+- [x] **File**: `archon_search/paths.py`
 - **Depends on**: nothing
 - **Description**:
   - New module. Single public function: `get_data_dir() -> Path`.
