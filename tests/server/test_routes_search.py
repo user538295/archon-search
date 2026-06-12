@@ -632,7 +632,7 @@ async def test_search_filter_excludes_everything_returns_200_empty(tmp_path: Pat
     await store.ensure_collection("filtercol", len(vector))
     await store.ingest_chunks("filtercol", [chunk])
     await store.update_collection_meta(
-        CollectionMeta(name="filtercol", embedding_model=config.embedding_model, namespace="default")
+        CollectionMeta(name="filtercol", active_embedding_model=config.embedding_model, namespace="default")
     )
     await store.disconnect()
 
@@ -678,7 +678,7 @@ async def test_include_metadata_false_suppresses_metadata_end_to_end(tmp_path: P
     await store.ensure_collection("metacol", len(vector))
     await store.ingest_chunks("metacol", [chunk])
     await store.update_collection_meta(
-        CollectionMeta(name="metacol", embedding_model=config.embedding_model, namespace="default")
+        CollectionMeta(name="metacol", active_embedding_model=config.embedding_model, namespace="default")
     )
     await store.disconnect()
 
@@ -733,7 +733,7 @@ async def test_search_end_to_end(tmp_path: Path) -> None:
     await store.ensure_collection("testcol", len(vector))
     await store.ingest_chunks("testcol", [chunk])
     await store.update_collection_meta(
-        CollectionMeta(name="testcol", embedding_model=config.embedding_model, namespace="default")
+        CollectionMeta(name="testcol", active_embedding_model=config.embedding_model, namespace="default")
     )
     await store.disconnect()
 

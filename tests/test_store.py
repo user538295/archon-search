@@ -1267,8 +1267,9 @@ async def test_old_schema_upsert_preserves_new_columns(tmp_path: Path) -> None:
         row_b["name"] = "col-b"
         await table.add([row_a, row_b])
 
-        # Run migration
+        # Run migrations (B5 then C1) to reach a fully migrated state
         await store.migrate_centroid_sum()
+        await store.migrate_per_collection_model()
 
         # Write B5 values to row_a via update_collection_meta
         meta_a = CollectionMeta(
@@ -1289,8 +1290,13 @@ async def test_old_schema_upsert_preserves_new_columns(tmp_path: Path) -> None:
         schema_mismatch = False
         try:
             await table.add([row_b_old_binary])
-        except RuntimeError as exc:
-            if "different schema" in str(exc).lower() or "missing" in str(exc).lower():
+        except (RuntimeError, ValueError) as exc:
+            exc_str = str(exc).lower()
+            if (
+                "different schema" in exc_str
+                or "missing" in exc_str
+                or "does not exist" in exc_str
+            ):
                 # LanceDB rejects old-binary inserts with a hard error (not silent corruption).
                 # BREAKING.md claim: mixed-version deployment is NOT safe.
                 schema_mismatch = True
