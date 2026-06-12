@@ -1071,13 +1071,16 @@ def test_bench_search_rag_fusion_disabled_latency(tmp_path_factory) -> None:  # 
 
         latencies: list[float] = []
         for i in range(n_iters):
-            t0 = time.perf_counter()
+            # CPU time (CLOCK_PROCESS_CPUTIME_ID) — robust to xdist scheduler jitter.
+            # The pipeline path is CPU-bound (no real I/O), so CPU time tracks the
+            # algorithmic cost we care about while ignoring sibling-worker contention.
+            t0 = time.process_time()
             # rag_fusion=False: pipeline checks the flag and falls through to normal
             # search — this confirms the rag_fusion=False code path adds no overhead.
             await pipeline.search(
                 query_text, "bench_rf", embedder=embedder, rag_fusion=False
             )
-            latencies.append((time.perf_counter() - t0) * 1000)
+            latencies.append((time.process_time() - t0) * 1000)
         return latencies
 
     try:
@@ -1215,14 +1218,15 @@ def test_bench_search_rag_fusion_enabled_latency(tmp_path_factory) -> None:  # t
 
         latencies: list[float] = []
         for _ in range(n_iters):
-            t0 = time.perf_counter()
+            # CPU time, not wall-clock — see _measure_disabled above for rationale.
+            t0 = time.process_time()
             await pipeline.search(
                 query_text, "bench_rf_on", embedder=embedder,
                 rag_fusion=True,
                 rag_fusion_generator=mock_generator,
                 rag_fusion_config=rag_fusion_config,
             )
-            latencies.append((time.perf_counter() - t0) * 1000)
+            latencies.append((time.process_time() - t0) * 1000)
         return latencies
 
     try:

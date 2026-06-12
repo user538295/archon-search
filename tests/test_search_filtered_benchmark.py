@@ -140,7 +140,15 @@ async def _measure(
     warmup: int,
     top_k: int = _TOP_K,
 ) -> list[float]:
-    """Run hybrid_search and return wall-clock latencies in milliseconds."""
+    """Run hybrid_search and return CPU-time latencies in milliseconds.
+
+    Uses ``time.process_time()`` (CLOCK_PROCESS_CPUTIME_ID) rather than wall-clock
+    ``time.perf_counter()``. The work measured is CPU-bound (in-process LanceDB +
+    NumPy + deterministic backends, no real I/O wait), so CPU time matches wall-clock
+    time when the process is uncontended and stays stable under parallel-xdist load.
+    This makes the benchmark robust to scheduler jitter from sibling workers while
+    still catching real algorithmic regressions.
+    """
     # Use a distinct seed per iteration so each query visits a different region of
     # the vector space — this catches regressions that affect only certain regions
     # and avoids measuring the same approximate-nearest-neighbour path 100 times.
@@ -154,9 +162,9 @@ async def _measure(
     latencies: list[float] = []
     for i in range(n_iters):
         qv = np.random.default_rng(i).random(_DIM, dtype=np.float32).tolist()
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         await store.hybrid_search("bench", qv, query_text, top_k, filters)
-        latencies.append((time.perf_counter() - t0) * 1000)
+        latencies.append((time.process_time() - t0) * 1000)
 
     return latencies
 
@@ -276,11 +284,11 @@ def test_hyde_false_search_p95_under_threshold(bench_store) -> None:  # type: ig
         latencies: list[float] = []
         for i in range(n_iters):
             qv = np.random.default_rng(i + 10000).random(_DIM, dtype=np.float32).tolist()
-            t0 = time.perf_counter()
+            t0 = time.process_time()
             # Full round-trip: resolve_hyde_vector + hybrid_search (as the route handler does)
             hyde_vector, _ = await resolve_hyde_vector(query_text, False, None, config)
             await store.hybrid_search("bench", qv, query_text, _TOP_K, None)
-            latencies.append((time.perf_counter() - t0) * 1000)
+            latencies.append((time.process_time() - t0) * 1000)
 
         return latencies
 

@@ -78,7 +78,7 @@ testpaths = ["tests"]
 # only on the combined report run, not on intermediate invocations.
 # `--no-cov` is a local-only override developers can pass on the CLI when
 # iterating; it must never be baked into addopts here.
-addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n auto --dist=loadgroup"
+addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n auto --dist=loadgroup --thresholds-path tests/eval/thresholds.toml"
 markers = [
     "benchmark: latency benchmark — serialized via xdist_group('benchmark'); server-dependent tests auto-skip when server is unreachable",
     "integration: integration tests requiring live infrastructure",
