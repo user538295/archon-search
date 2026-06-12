@@ -139,7 +139,7 @@ A working `docker run` and `docker compose up` that starts archon-search fully c
 - **conftest.py requirement**: Add an `autouse=True` function-scoped fixture to `tests/conftest.py` that calls `monkeypatch.delenv` (with `raising=False`) for these six env vars before each test: `ARCHON_SEARCH_HOST`, `ARCHON_SEARCH_PORT`, `ARCHON_SEARCH_DATA_DIR`, `ARCHON_SEARCH_CONTAINER`, `ARCHON_SEARCH_KEY_FILE`, `ARCHON_SEARCH_CONFIG`. This prevents env var leakage between tests. IMPORTANT: do NOT include `ARCHON_SEARCH_API_KEY` in this list — it is set globally at module level (`tests/conftest.py` line 25) for auth test infrastructure and must remain set for all tests.
 
 #### Task 1.2 — Config regression baseline
-- [ ] **File**: `tests/test_config_defaults.py`
+- [x] **File**: `tests/test_config_defaults.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Test that `load_config()` with zero env vars set and no TOML produces a `SearchConfig` whose every field matches the expected dataclass default.
