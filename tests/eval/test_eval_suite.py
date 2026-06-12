@@ -1,10 +1,10 @@
-"""End-to-end report-only eval smoke tests
-These tests exercise the full eval pipeline against the committed corpus and
-runtime config in calibration (report-only) mode. They never call
-``assert_thresholds`` — that is the job of gated tests.
+"""End-to-end eval smoke tests.
 
-The ``eval`` marker excludes these from the default pytest run; invoke them
-with ``-m eval`` (or ``pytest tests/eval/``).
+These tests exercise the full eval pipeline against the committed corpus and
+runtime config. They run in the default pytest suite (no marker exclusion).
+Report-only tests run unconditionally; gated tests (those that call
+``assert_thresholds``) require ``--thresholds-path`` which is wired into
+``addopts`` in ``pyproject.toml``.
 """
 from __future__ import annotations
 

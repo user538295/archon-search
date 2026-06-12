@@ -94,7 +94,7 @@ Opt-in and **disabled by default**. `writer.py` appends one JSONL line per call 
 
 ## Repository conventions
 
-- Default pytest run excludes `live`, `eval`, `benchmark`, `integration` markers. Coverage gate (`--cov-fail-under=85`) applies to the default single-run invocation. Split / matrix CI runs MUST `coverage combine` before applying the threshold; never bake `--no-cov` into `addopts`.
+- Default pytest run includes **all** markers — no `-m` exclusion filter in `addopts`. All tests run on every `uv run pytest`. `benchmark` tests are serialised via `xdist_group("benchmark")`; server-dependent ones auto-skip when unreachable. Gated `eval` tests skip gracefully without `--thresholds-path` (wired into `addopts`). `live`/`live_eval` tests skip when `ANTHROPIC_API_KEY` is absent. Coverage gate (`--cov-fail-under=85`) applies to the default single-run invocation. Split / matrix CI runs MUST `coverage combine` before applying the threshold; never bake `--no-cov` into `addopts`.
 - The package directory is `archon_search/` (underscore), the distribution is `archon-search` (hyphen). `pyproject.toml` `[tool.hatch.build.targets.wheel].packages` is explicit about this — don't "fix" it.
 - Breaking REST/MCP changes go in `BREAKING.md`.
 - Telemetry's no-raw-query guarantee is structural: do not add a `query` parameter to telemetry entry constructors.

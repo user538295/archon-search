@@ -11,33 +11,29 @@ Tests in `archon-search` are split across four pytest markers plus a default (un
 ## Principles
 
 1. **TDD-first.** Per `CLAUDE.md` (Code Style): write tests first, start with happy paths, then edge cases. Maintain 85%+ coverage. Resolve all warnings.
-2. **Default run is fast and hermetic.** No network, no real ML models, no running server. ONNX downloads and tokenizer subprocesses are stubbed in `tests/conftest.py` before pytest discovery.
-3. **Slower or environment-dependent tests are marker-gated.** `live`, `eval`, `benchmark`, `integration` are excluded from the default run (`pyproject.toml [tool.pytest.ini_options]`). Run them explicitly.
-4. **Eval is the retrieval-quality gate, not the unit-test tier.** Retrieval, reranking, and routing changes are validated by the `eval` marker with committed thresholds in `tests/eval/thresholds.toml`. Latency in the harness is a regression guard, not a production indicator. #Unverified (intent statement; consistent with `baseline.json` leaving latency metrics `null`, but not falsifiable from code alone)
+2. **Default run includes every test.** No `-m` exclusion filter in `addopts`. All markers run on every `uv run pytest`. Tests that need absent infrastructure skip gracefully (server-dependent benchmarks, `live`/`live_eval` tests without `ANTHROPIC_API_KEY`, gated eval without `--thresholds-path`). ONNX downloads and tokenizer subprocesses are stubbed in `tests/conftest.py` before pytest discovery.
+3. **Markers document intent, not exclusion.** `live`, `eval`, `benchmark`, `integration` are registered markers used for explicit targeted runs (e.g. `uv run pytest -m integration`) but are NOT excluded from the default run.
+4. **Eval is the retrieval-quality gate, not the unit-test tier.** Retrieval, reranking, and routing changes are validated by the `eval` marker with committed thresholds in `tests/eval/thresholds.toml`. Latency in the harness is a regression guard, not a production indicator.
 5. **Coverage gating is a single-run concept.** `--cov-fail-under=85` applies to the default single-run invocation. CI that runs multiple pytest invocations must accumulate coverage into a single dataset before applying the threshold — `.github/workflows/archon-search-pr.yml` does this by passing `--cov-append` to both the default and eval steps (writing into one `.coverage` file) and then running `coverage report --fail-under=85`. `coverage combine` is only needed when shards write parallel-mode files; the current PR workflow deliberately skips it. **Never bake `--no-cov` into `addopts`.**
 
 ## The pyramid
 
 ```mermaid
 flowchart TB
-  subgraph default[Default run — &#40;not live and not eval and not benchmark and not integration and not live_eval&#41;]
+  subgraph default[Default run — all markers included, no exclusion filter]
     U[Unit tests<br/>tests/**/test_*.py<br/>stubs from tests/_search_stubs.py]
-  end
-  subgraph gated[Marker-gated]
     I[integration<br/>real components<br/>local infra]
     E[eval<br/>tests/eval/<br/>deterministic backends]
-    B[benchmark<br/>requires running server<br/>auto-skips if unreachable]
-    L[live<br/>real network / external services]
-    LE[live_eval<br/>tests/eval/live/<br/>real model weights]
+    B[benchmark<br/>xdist_group serialised<br/>server tests auto-skip]
+    L[live / live_eval<br/>skip gracefully without<br/>ANTHROPIC_API_KEY]
   end
   default --> CI[CI: coverage gate ≥ 85%]
-  gated -.-> CI
 ```
 
 ### Default tier (unit)
 
 - Invocation: `uv run pytest`.
-- Selector (from `pyproject.toml`): `-m 'not live and not eval and not benchmark and not integration'`.
+- No marker selector — all tests run.
 - Parallelism: the default run uses `pytest-xdist` with `-n auto --dist=loadgroup`. `--dist=loadgroup` distributes ungrouped tests individually across workers; tests with `pytestmark = pytest.mark.xdist_group("mcp")` (16 files that mutate `sys.modules["fastmcp"]`) are co-located on one worker to prevent `sys.modules` contamination; tests with `xdist_group("install")` (3 files that compete on `~/.archon-search/.install.lock`) are co-located on another. The `connected_store` fixture is session-scoped (one `SearchStore` per xdist worker); `col_name` mints a UUID-suffixed name to prevent cross-test collision.
 - Test infra: `tests/conftest.py` installs ML stubs at module import time via `_search_stubs.install_stubs()`. It also injects `ARCHON_SEARCH_API_KEY = "0" * 64` so `create_app()` always sees a known key.
 - Serial escape hatch: `uv run pytest -n0` produces identical results in serial mode. Use `-n0 -x` for fail-fast isolation (xdist workers continue until their current test finishes) and `-n0 -s` for stdout passthrough (suppressed by xdist).
@@ -46,7 +42,7 @@ flowchart TB
 
 ### `integration` — `uv run pytest -m integration`
 
-Integration tests exercise real components against local infrastructure. They are excluded from the default run because they are slower and may require local setup. Use this marker when a test needs a real `SearchStore`, real LanceDB index on disk, or real OS service interactions — anything that the stubs in `conftest.py` deliberately replace.
+Integration tests exercise real components against local infrastructure. They run in the default suite. Use this marker when a test needs a real `SearchStore`, real LanceDB index on disk, or real OS service interactions — anything that the stubs in `conftest.py` deliberately replace.
 
 - CI triggers: `archon-search-pr.yml` runs the integration suite on every PR, and `archon-search-release.yml` re-runs it on every tag push (both with a disk-backed `--basetemp=/var/tmp/archon-search-it` because the GitHub-hosted runner's `/tmp` is tmpfs and crash-injection tests skip on tmpfs). Both workflows pass `-m integration tests/` with `--cov-append`, so integration coverage rolls into the same `.coverage` file as the default + eval steps before the `--fail-under=85` gate runs.
 
@@ -68,11 +64,11 @@ Performance benchmarks. The flagship file is `tests/benchmark_routing_latency.py
 
 ### `live` — `uv run pytest -m live`
 
-Tests that hit real network or external services. Excluded from the default run for the same reasons as `integration`, but specifically called out so reviewers know a test depends on something outside the sandbox.
+Tests that hit real network or external services. They run in the default suite but skip gracefully when the required infrastructure is absent (e.g. `ANTHROPIC_API_KEY` not set).
 
 ### `live_eval` — `uv run pytest -m live_eval tests/eval/live/ -v --no-cov`
 
-Runs the eval corpus through **real fastembed + cross-encoder model weights** — the same models used in production. Excluded from the default run because it requires model downloads (~200 MB) and GPU/CPU inference time.
+Runs the eval corpus through **real fastembed + cross-encoder model weights** — the same models used in production. Runs in the default suite but skips gracefully when `ANTHROPIC_API_KEY` is absent or model weights are unavailable.
 
 - Tests live under `tests/eval/live/`. The directory has its own `conftest.py` that no-ops the parent autouse fixture, ensuring `ARCHON_SEARCH_EVAL_BACKENDS` is never set to `"1"` (which would inject deterministic stubs).
 - Thresholds live in `tests/eval/live_thresholds.toml`. Until calibrated, the file is a comment-only stub and `load_live_thresholds()` returns `None`, making all runs **report-only** (no gates fire).
@@ -92,7 +88,7 @@ Runs the eval corpus through **real fastembed + cross-encoder model weights** �
 | You want to test...                                | Tier        | Marker                  | Notes                                                                                |
 | -------------------------------------------------- | ----------- | ----------------------- | ------------------------------------------------------------------------------------ |
 | A pure function or a route in isolation            | Unit        | none                    | Use `auth_headers`, `connected_store`, `col_name` fixtures from `conftest.py`.       |
-| Real LanceDB + real pipeline end-to-end            | Integration | `integration`           | Excluded from default to keep CI fast. #Unverified (marker registered and excluded; adoption in current tests not sampled) |
+| Real LanceDB + real pipeline end-to-end            | Integration | `integration`           | Runs in default suite. |
 | A retrieval / routing / reranking quality change   | Eval        | `eval`                  | Update `baseline.json` + `baseline.md` if measured metrics shift. See `tests/eval/README.md`. |
 | Latency regression on `POST /route`                | Benchmark   | `benchmark`             | Server must be running; auto-skips otherwise.                                        |
 | Behaviour that requires real network               | Live        | `live`                  | Justify the dependency in the PR description. #Unverified (marker registered; no in-tree `@pytest.mark.live` usage sampled) |
