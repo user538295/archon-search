@@ -271,7 +271,7 @@ Namespace from auth token (not a query param).
   - Checkpoint: `uv run pytest tests/test_config_jobs.py -v --no-cov -n0`
 
 #### Task 1.3 — `EXPORT_SCHEMA_VERSION` constant and archive utilities skeleton
-- [ ] **File**: `archon_search/jobs/export_archive.py` (new file)
+- [x] **File**: `archon_search/jobs/export_archive.py` (new file)
 - **Depends on**: Task 2.1
 - **Note**: `ImportArchiveReader.read_manifest()` calls `validate_archive_members()` which is implemented in Task 2.1. Place the stub call (or import with `from archon_search._path_safety import validate_archive_members`) at the top of `export_archive.py`. Task 2.1 must land first.
 - **Description**:
