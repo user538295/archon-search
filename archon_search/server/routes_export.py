@@ -3,6 +3,7 @@
 Task 4.1: export worker + prerequisite list_chunks_raw() in SearchStore.
 Task 4.2: POST /collections/{name}/export REST endpoint.
 Task 5.1: _import_task() worker.
+Task 5.2: POST /collections/{name}/import REST endpoint.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import importlib.metadata
 import json
 import logging
 import struct
+import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,9 +21,9 @@ from uuid import uuid4
 from fastapi import APIRouter
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from archon_search._path_safety import PathUnsafeError, validate_export_path
+from archon_search._path_safety import PathUnsafeError, validate_archive_members, validate_export_path
 from archon_search._types import ChunkRecord
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
@@ -403,4 +405,140 @@ async def export_collection(
         namespace=ns,
     )
 
+    return JSONResponse(job_to_dict(job), status_code=202)
+
+
+# ---------------------------------------------------------------------------
+# POST /collections/{name}/import
+# ---------------------------------------------------------------------------
+
+
+class ImportRequest(BaseModel):
+    path: str
+    force_overwrite: bool = False
+    ignore_schema_version: bool = False
+    on_error: str = "fail"
+
+    @field_validator("on_error")
+    @classmethod
+    def _validate_on_error(cls, v: str) -> str:
+        if v not in {"fail", "skip"}:
+            raise ValueError("on_error must be 'fail' or 'skip'")
+        return v
+
+
+@router.post(
+    "/{name}/import",
+    status_code=202,
+    response_model=JobResponse,
+    responses={
+        400: {"model": ErrorDetail, "description": "Path unsafe or invalid request"},
+        401: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        409: {"model": ErrorDetail, "description": "Collection already exists"},
+        422: {"model": ErrorDetail, "description": "Archive invalid or schema/model mismatch"},
+    },
+)
+async def import_collection(
+    name: str,
+    body: ImportRequest,
+    request: Request,
+) -> JobResponse | JSONResponse:
+    """Enqueue an import job for the named collection.
+
+    Returns 202 with a JobResponse (status=QUEUED). The job is dispatched by
+    the scheduler when a slot is available.
+    """
+    store: JobStore = request.app.state.job_store
+    search_store: SearchStore = request.app.state.search_store
+    ns: str = request.state.namespace
+    config: SearchConfig = request.app.state.config
+
+    # Step 1: Validate the archive path is within the allowed data directory
+    try:
+        validate_export_path(body.path, [get_data_dir()])
+    except PathUnsafeError as exc:
+        return JSONResponse({"error": "path_unsafe", "reason": exc.reason}, status_code=400)
+
+    # Step 2: Verify archive file exists
+    archive_path = Path(body.path)
+    if not archive_path.exists():
+        return JSONResponse(
+            {"error": "archive_not_found", "detail": f"Archive not found: {body.path}"},
+            status_code=422,
+        )
+
+    # Step 3: Pre-validate archive members (zip-slip guard)
+    try:
+        with tarfile.open(archive_path, "r:gz") as tf:
+            validate_archive_members(tf)
+    except PathUnsafeError as exc:
+        return JSONResponse(
+            {"error": "unsafe_archive", "reason": exc.reason},
+            status_code=422,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {"error": "invalid_archive", "detail": str(exc)},
+            status_code=422,
+        )
+
+    # Step 4: Read manifest to early-detect embedding model mismatch
+    try:
+        reader = ImportArchiveReader(archive_path)
+        manifest = reader.read_manifest()
+    except (ValueError, PathUnsafeError) as exc:
+        return JSONResponse(
+            {"error": "invalid_manifest", "detail": str(exc)},
+            status_code=422,
+        )
+
+    archive_model = manifest.get("active_embedding_model", "")
+    server_model = config.embedding_model
+    if archive_model != server_model:
+        return JSONResponse(
+            {
+                "error": "embedding_model_mismatch",
+                "detail": (
+                    f"archive uses model {archive_model!r}; "
+                    f"server is configured with {server_model!r}"
+                ),
+            },
+            status_code=422,
+        )
+
+    # Step 5: Check collection existence vs force_overwrite
+    existing_meta = await search_store.get_collection_meta(name, ns)
+    if existing_meta is not None and not body.force_overwrite:
+        return JSONResponse(
+            {"error": "collection_exists", "detail": f"Collection {name!r} already exists; use force_overwrite=true to overwrite"},
+            status_code=409,
+        )
+
+    # Step 6: Check schema_version mismatch (bypassable)
+    archive_schema = manifest.get("schema_version")
+    if not body.ignore_schema_version and archive_schema != EXPORT_SCHEMA_VERSION:
+        return JSONResponse(
+            {
+                "error": "schema_version_mismatch",
+                "detail": (
+                    f"archive has schema_version={archive_schema!r}; "
+                    f"server expects {EXPORT_SCHEMA_VERSION!r}; "
+                    "use ignore_schema_version=true to bypass"
+                ),
+            },
+            status_code=422,
+        )
+
+    # Step 7: Create the import job (status=QUEUED)
+    job = store.create_import(
+        collection=name,
+        archive_path=body.path,
+        force_overwrite=body.force_overwrite,
+        ignore_schema_version=body.ignore_schema_version,
+        on_error=body.on_error,
+        namespace=ns,
+    )
+
+    # Step 8: Return 202 with the job response
     return JSONResponse(job_to_dict(job), status_code=202)

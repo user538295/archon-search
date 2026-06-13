@@ -1,6 +1,9 @@
-"""Integration tests for POST /collections/{name}/export endpoint (Task 4.2)."""
+"""Integration tests for POST /collections/{name}/export and import endpoints (Tasks 4.2, 5.2)."""
 from __future__ import annotations
 
+import io
+import json
+import tarfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,6 +13,7 @@ from fastapi.testclient import TestClient
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION
 from archon_search.jobs.store import JobStore
 from archon_search.paths import get_data_dir
 from archon_search.server.app import create_app
@@ -152,3 +156,212 @@ def test_post_export_unauthenticated(tmp_path: Path, tmp_store: JobStore) -> Non
         json={"output_path": output_dir},
     )
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# POST /collections/{name}/import — helpers
+# ---------------------------------------------------------------------------
+
+_DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+
+
+def _make_valid_archive(
+    dest_dir: Path,
+    *,
+    schema_version: int = EXPORT_SCHEMA_VERSION,
+    embedding_model: str = _DEFAULT_EMBEDDING_MODEL,
+    collection: str = "my-collection",
+    doc_count: int = 0,
+) -> Path:
+    """Create a minimal valid .tar.gz export archive inside *dest_dir* and return its path.
+
+    *dest_dir* must be within ``get_data_dir()`` so that ``validate_export_path`` accepts
+    the resulting path.
+    """
+    manifest = {
+        "schema_version": schema_version,
+        "collection": collection,
+        "exported_at": "2024-01-01T00:00:00+00:00",
+        "doc_count": doc_count,
+        "active_embedding_model": embedding_model,
+        "description": "",
+        "archon_search_version": "dev",
+    }
+    manifest_bytes = json.dumps(manifest, ensure_ascii=False).encode()
+    docs_bytes = b""  # empty documents.jsonl
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = dest_dir / f"{collection}.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as tf:
+        # Add manifest.json
+        m_info = tarfile.TarInfo(name="manifest.json")
+        m_info.size = len(manifest_bytes)
+        tf.addfile(m_info, io.BytesIO(manifest_bytes))
+        # Add documents.jsonl
+        d_info = tarfile.TarInfo(name="documents.jsonl")
+        d_info.size = len(docs_bytes)
+        tf.addfile(d_info, io.BytesIO(docs_bytes))
+
+    return archive_path
+
+
+def _make_unsafe_archive(tmp_path: Path) -> Path:
+    """Create a tar.gz with a traversal member (zip-slip)."""
+    archive_path = tmp_path / "unsafe.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as tf:
+        evil_info = tarfile.TarInfo(name="../../etc/passwd")
+        evil_info.size = 0
+        tf.addfile(evil_info, io.BytesIO(b""))
+    return archive_path
+
+
+# ---------------------------------------------------------------------------
+# POST /collections/{name}/import — tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_post_import_returns_202(
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+    meta: CollectionMeta,
+    tmp_path: Path,
+) -> None:
+    """Valid archive against a non-existent collection returns 202 with QUEUED job."""
+    # Archive must live inside get_data_dir() to pass validate_export_path
+    archive = _make_valid_archive(get_data_dir() / "exports" / "test_import_202")
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = _DEFAULT_EMBEDDING_MODEL
+    app = create_app(config, tmp_store)
+    # Collection does NOT exist yet — get_collection_meta returns None
+    app.state.search_store = _make_mock_search_store(collection_meta=None)
+
+    c = TestClient(app, headers=auth_headers)
+    response = c.post(
+        "/collections/my-collection/import",
+        json={"path": str(archive)},
+    )
+    assert response.status_code == 202, response.text
+    data = response.json()
+    assert "job_id" in data
+    assert data["status"] == JobStatus.QUEUED.value
+
+
+@pytest.mark.integration
+def test_post_import_path_outside_allowed(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+) -> None:
+    """Path outside get_data_dir() returns 400 with error='path_unsafe'."""
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, tmp_store)
+    app.state.search_store = _make_mock_search_store(collection_meta=None)
+
+    c = TestClient(app, headers=auth_headers)
+    response = c.post(
+        "/collections/my-collection/import",
+        json={"path": "/tmp/evil.tar.gz"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "path_unsafe"
+
+
+@pytest.mark.integration
+def test_post_import_archive_not_found(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+) -> None:
+    """Non-existent archive path returns 422."""
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, tmp_store)
+    app.state.search_store = _make_mock_search_store(collection_meta=None)
+
+    missing = get_data_dir() / "exports" / "does-not-exist.tar.gz"
+    c = TestClient(app, headers=auth_headers)
+    response = c.post(
+        "/collections/my-collection/import",
+        json={"path": str(missing)},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"] == "archive_not_found"
+
+
+@pytest.mark.integration
+def test_post_import_collection_exists_no_force(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+    meta: CollectionMeta,
+) -> None:
+    """Importing into an existing collection without force_overwrite returns 409."""
+    archive = _make_valid_archive(get_data_dir() / "exports" / "test_import_exists_no_force")
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = _DEFAULT_EMBEDDING_MODEL
+    app = create_app(config, tmp_store)
+    # Collection EXISTS
+    app.state.search_store = _make_mock_search_store(collection_meta=meta)
+
+    c = TestClient(app, headers=auth_headers)
+    response = c.post(
+        "/collections/my-collection/import",
+        json={"path": str(archive), "force_overwrite": False},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"] == "collection_exists"
+
+
+@pytest.mark.integration
+def test_post_import_schema_version_mismatch_no_flag(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+) -> None:
+    """Archive with wrong schema_version returns 422 without ignore_schema_version flag."""
+    archive = _make_valid_archive(
+        get_data_dir() / "exports" / "test_import_schema_mismatch",
+        schema_version=99,
+    )
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = _DEFAULT_EMBEDDING_MODEL
+    app = create_app(config, tmp_store)
+    app.state.search_store = _make_mock_search_store(collection_meta=None)
+
+    c = TestClient(app, headers=auth_headers)
+    response = c.post(
+        "/collections/my-collection/import",
+        json={"path": str(archive)},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"] == "schema_version_mismatch"
+
+
+@pytest.mark.integration
+def test_post_import_invalid_on_error(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+) -> None:
+    """on_error value other than 'fail' or 'skip' returns 422 (Pydantic validation)."""
+    # The Pydantic validator fires before path/archive validation, so the archive
+    # path can be any string (validation fails first).
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, tmp_store)
+    app.state.search_store = _make_mock_search_store(collection_meta=None)
+
+    c = TestClient(app, headers=auth_headers)
+    response = c.post(
+        "/collections/my-collection/import",
+        json={"path": str(get_data_dir() / "exports" / "any.tar.gz"), "on_error": "invalid"},
+    )
+    assert response.status_code == 422

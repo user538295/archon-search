@@ -505,7 +505,7 @@ Namespace from auth token (not a query param).
   - Checkpoint: `uv run pytest tests/test_import_worker.py -v --no-cov -n0 -m integration`
 
 #### Task 5.2 — `POST /collections/{name}/import` REST endpoint
-- [ ] **File**: `archon_search/server/routes_export.py`
+- [x] **File**: `archon_search/server/routes_export.py`
 - **Depends on**: Task 5.1, Task 1.5
 - **Description**:
   - Pydantic request model: `class ImportRequest(BaseModel): path: str; force_overwrite: bool = False; ignore_schema_version: bool = False; on_error: str = "fail"`
