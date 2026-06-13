@@ -25,6 +25,63 @@
         "title": "AddCollectionRequest",
         "type": "object"
       },
+      "BackupStatusDetail": {
+        "description": "Scheduled-backup state for the caller's namespace (D2 Task 4.2).",
+        "properties": {
+          "collection_status": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CollectionBackupStatus"
+            },
+            "title": "Collection Status",
+            "type": "array"
+          },
+          "collections_excluded": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Collections Excluded",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "interval_hours": {
+            "title": "Interval Hours",
+            "type": "integer"
+          },
+          "last_tick_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tick At"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          }
+        },
+        "required": [
+          "enabled",
+          "interval_hours"
+        ],
+        "title": "BackupStatusDetail",
+        "type": "object"
+      },
       "BackupTriggerResponse": {
         "description": "Response body for POST /backup/trigger (D2 Task 4.1).",
         "properties": {
@@ -58,6 +115,36 @@
         ],
         "title": "CheckStatus",
         "type": "string"
+      },
+      "CollectionBackupStatus": {
+        "description": "Per-collection backup state surfaced under StatusResponse.backup (D2 Task 4.2).",
+        "properties": {
+          "archive_count": {
+            "default": 0,
+            "title": "Archive Count",
+            "type": "integer"
+          },
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "last_backup_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Backup At"
+          }
+        },
+        "required": [
+          "collection"
+        ],
+        "title": "CollectionBackupStatus",
+        "type": "object"
       },
       "CollectionDetail": {
         "properties": {
@@ -2028,6 +2115,16 @@
       },
       "StatusResponse": {
         "properties": {
+          "backup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "collections": {
             "items": {
               "$ref": "#/components/schemas/StatusCollectionEntry"

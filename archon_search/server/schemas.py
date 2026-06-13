@@ -77,12 +77,32 @@ class StatusCollectionEntry(BaseModel):
     warning: str | None = None
 
 
+class CollectionBackupStatus(BaseModel):
+    """Per-collection backup state surfaced under StatusResponse.backup (D2 Task 4.2)."""
+
+    collection: str
+    last_backup_at: str | None = None
+    archive_count: int = 0
+
+
+class BackupStatusDetail(BaseModel):
+    """Scheduled-backup state for the caller's namespace (D2 Task 4.2)."""
+
+    enabled: bool
+    interval_hours: int
+    last_tick_at: str | None = None
+    next_run_at: str | None = None
+    collections_excluded: list[str] = []
+    collection_status: list[CollectionBackupStatus] = []
+
+
 class StatusResponse(BaseModel):
     running: bool
     pid: int
     version: str
     collections: list[StatusCollectionEntry]
     readiness: ReadinessDetail | None = None
+    backup: BackupStatusDetail | None = None
 
 
 class IndexingStateCollectionEntry(BaseModel):

@@ -1,15 +1,26 @@
 """GET /status endpoint — rich operator-facing service status."""
 from __future__ import annotations
 
+import logging
 import os
+from datetime import datetime, timedelta
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 from fastapi import APIRouter, Request
 
 from archon_search.config import SearchConfig
 from archon_search.progress import compute_eta_seconds
 from archon_search.server.readiness import collect_readiness
-from archon_search.server.schemas import ErrorDetail, StatusCollectionEntry, StatusResponse
+from archon_search.server.schemas import (
+    BackupStatusDetail,
+    CollectionBackupStatus,
+    ErrorDetail,
+    StatusCollectionEntry,
+    StatusResponse,
+)
+
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 try:
@@ -87,10 +98,66 @@ async def status(request: Request) -> StatusResponse:
         )
 
     readiness = await collect_readiness(request.app.state, state)
+    backup_detail = _build_backup_status(request, config, ns, sorted(ns_names))
     return StatusResponse(
         running=True,
         pid=pid,
         version=_VERSION,
         collections=collection_entries,
         readiness=readiness,
+        backup=backup_detail,
+    )
+
+
+def _build_backup_status(
+    request: Request, config: SearchConfig, ns: str, ns_collection_names: list[str]
+) -> BackupStatusDetail | None:
+    """Populate the ``backup`` sub-object for the caller's namespace.
+
+    Returns ``None`` when no ``BackupLoop`` is wired on ``app.state`` — this
+    keeps the endpoint resilient to alternative app factories used in tests.
+    """
+    backup_loop = getattr(request.app.state, "backup_loop", None)
+    if backup_loop is None:
+        return None
+
+    interval_hours = config.backup.interval_hours
+    enabled = interval_hours > 0
+    last_tick_at = backup_loop._last_tick_at
+    next_run_at: str | None = None
+    if last_tick_at and interval_hours > 0:
+        try:
+            next_run_at = (
+                datetime.fromisoformat(last_tick_at) + timedelta(hours=interval_hours)
+            ).isoformat()
+        except ValueError:
+            # Defensive: a corrupt last_tick_at should not 500 the status endpoint.
+            logger.warning("Status: unparseable backup last_tick_at=%r", last_tick_at)
+            next_run_at = None
+
+    state_map = backup_loop._load_state()
+    ns_dir = Path(config.backup.output_dir) / ns
+
+    collection_status: list[CollectionBackupStatus] = []
+    for col in ns_collection_names:
+        last_backup_at = state_map.get(f"{ns}/{col}")
+        if ns_dir.exists():
+            archive_count = len(list(ns_dir.glob(f"{col}.backup.*.tar.gz")))
+        else:
+            archive_count = 0
+        collection_status.append(
+            CollectionBackupStatus(
+                collection=col,
+                last_backup_at=last_backup_at,
+                archive_count=archive_count,
+            )
+        )
+
+    return BackupStatusDetail(
+        enabled=enabled,
+        interval_hours=interval_hours,
+        last_tick_at=last_tick_at,
+        next_run_at=next_run_at,
+        collections_excluded=list(config.backup.exclude),
+        collection_status=collection_status,
     )

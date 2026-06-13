@@ -417,7 +417,7 @@ class BackupStatusDetail(BaseModel):
   - Checkpoint: `uv run pytest tests/test_routes_backup.py -x`
 
 #### Task 4.2 — `GET /status` backup extension + `BackupStatusDetail` schema
-- [ ] **File**: `archon_search/server/schemas.py`, `archon_search/server/routes_status.py`, `tests/server/openapi_snapshot.json`
+- [x] **File**: `archon_search/server/schemas.py`, `archon_search/server/routes_status.py`, `tests/server/openapi_snapshot.json`
 - **Depends on**: Task 3.2
 - **Description**:
   - `schemas.py`: add `CollectionBackupStatus(BaseModel)` with `collection: str`, `last_backup_at: str | None`, `archive_count: int`
