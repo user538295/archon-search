@@ -259,7 +259,7 @@ def test_two_workers_sharing_data_dir_contend(tmp_path: Path) -> None: ...
 
 #### Task 2.1 — Register `archon_unset_data_dir` marker in `pyproject.toml`
 
-- [ ] **File**: `pyproject.toml`
+- [x] **File**: `pyproject.toml`
 - **Depends on**: nothing (independent of Phase 1)
 - **Description**:
   - Append to the `[tool.pytest.ini_options].markers` array:
