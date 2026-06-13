@@ -381,7 +381,7 @@ Namespace from auth token (not a query param).
 > **Releasable**: Phase 3 is NOT independently releasable. Task 3.2 wires a no-op dispatch closure for testing only — the no-op transitions dispatched jobs to `FAILED` with `error='workers_not_deployed'` instead of silently leaving them in `RUNNING`. The scheduler must not be deployed to production until Phase 4 (Task 4.1) replaces the no-op with the real dispatch closure. Phase 3 + Phase 4 are releasable together after Task 4.2.
 
 #### Task 3.1 — `JobScheduler` class
-- [ ] **File**: `archon_search/jobs/scheduler.py` (new file)
+- [x] **File**: `archon_search/jobs/scheduler.py` (new file)
 - **Depends on**: Task 1.1, Task 1.4
 - **Description**:
   - `_SCHEDULER_TICK_SECONDS: int = 5` module constant
