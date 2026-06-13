@@ -2,6 +2,7 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 import click
 
+from archon_search.cli.backup_cmd import backup_cmd
 from archon_search.cli.collection import collection
 from archon_search.cli.config_cmd import config
 from archon_search.cli.export_cmd import export_cmd, import_cmd
@@ -38,6 +39,7 @@ main.add_command(collection)
 main.add_command(config)
 main.add_command(export_cmd)
 main.add_command(import_cmd)
+main.add_command(backup_cmd)
 
 
 if __name__ == "__main__":

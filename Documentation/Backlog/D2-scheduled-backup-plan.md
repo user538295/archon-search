@@ -454,7 +454,7 @@ class BackupStatusDetail(BaseModel):
 > **Releasable**: after Task 5.1 — `archon-search backup --now` and `archon-search backup status` are usable.
 
 #### Task 5.1 — `archon-search backup` Click group
-- [ ] **File**: `archon_search/cli/backup_cmd.py` (new), `archon_search/cli/main.py`
+- [x] **File**: `archon_search/cli/backup_cmd.py` (new), `archon_search/cli/main.py`
 - **Depends on**: Task 4.1, Task 4.2
 - **Description**:
   - New file `backup_cmd.py`:
