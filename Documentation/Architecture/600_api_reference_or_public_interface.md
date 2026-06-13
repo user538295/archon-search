@@ -52,7 +52,7 @@ The machine-readable contract is `GET /openapi.json`. Tables below trace every e
 
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
-| GET | `/status` | Operator-facing service status: PID, version, per-collection progress, ETA (namespace-filtered). | — | `StatusResponse` (`schemas.py`) |
+| GET | `/status` | Operator-facing service status: PID, version, per-collection progress, ETA (namespace-filtered). **D2** — Response now carries `backup: BackupStatusDetail \| null` summarising scheduled-backup state: `enabled`, `interval_hours`, `last_tick_at`, `next_run_at`, `collections_excluded`, and per-collection `collection_status` (`last_backup_at`, `archive_count`). `null` when no `BackupLoop` is attached. | — | `StatusResponse` (`schemas.py`) |
 
 ### `routes_search.py`
 
@@ -124,7 +124,7 @@ All paths under `/collections`. Namespace gating: cross-namespace access surface
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
 | POST | `/ingest` | Submit an ingest job; returns `202` immediately. When `path` is non-null it is validated by `_path_safety.validate_ingest_path`, returning `400` (`"path is unsafe: <reason>"`) on rejection (empty/whitespace-only/NUL/non-absolute/`..`-traversal); `path: null` documents-only ingest is unaffected. Returns `503` (body `{"error": "store_busy", ...}`, header `Retry-After: 30`) when a reindex holds the per-collection lock; ingest to a different collection is unaffected. The `ingested_by` field in the body is always overwritten server-side from the `X-Ingested-By` header (missing → `"http"`; legacy `"archon-search-cli"` → `"cli"`; unknown → `"http"` + WARNING log; truncated to 32 chars). `collection` is rejected only when empty string (whitespace-only is currently accepted; inconsistent with `SearchRequest`). | `IngestRequest` — `{collection, path?, documents?, ingested_by (overwritten)}` | `JobResponse` |
-| GET | `/jobs` | **D1/D2** — List all jobs visible to the caller's namespace, sorted by `created_at` descending. Supports cursor-based pagination and filtering by status and job kind. | Query: `status=` (repeatable, any `JobStatus` value), `kind=` (repeatable: `ingest`, `reindex`, `delete`, `export`, `import`), `limit=50` (max 200), `cursor=` (job_id of the last item from the previous page). | `{"items": list[JobResponse], "next_cursor": str \| null, "total": int}` |
+| GET | `/jobs` | **D1/D2** — List all jobs visible to the caller's namespace, sorted by `created_at` descending. Supports cursor-based pagination and filtering by status, job kind, and (D2) source. | Query: `status=` (repeatable, any `JobStatus` value), `kind=` (repeatable: `ingest`, `reindex`, `delete`, `export`, `import`), `source=` (repeatable: `user`, `backup`), `limit=50` (max 200), `cursor=` (job_id of the last item from the previous page). | `{"items": list[JobResponse], "next_cursor": str \| null, "total": int}` |
 | GET | `/jobs/{job_id}` | Read job status; `404` for cross-namespace IDs. `JobResponse` now includes `progress: dict \| null` (D1 addition — `null` for job types that don't set it). | — | `JobResponse` |
 | DELETE | `/jobs/{job_id}` | Cancel a job. Terminal jobs (`DONE`/`FAILED`/`CANCELLED`) return `200` (idempotent); `RUNNING`/`PENDING` transition to `CANCELLING` and return `202`; already-`CANCELLING` jobs also return `202`. | — | `JobResponse` |
 | POST | `/jobs/{job_id}/resume` | **D1/D2** — Resume a `FAILED` export or import job from its last checkpoint. Non-bulk jobs (`IngestJob`, `ReindexJob`, `DeleteJob`) return `409` with `{"error": "job_not_resumable"}`. Missing archive/tmp file returns `422`. On success, transitions the job to `QUEUED` and returns `202`. | — | `JobResponse` (status=`QUEUED`) |
@@ -135,6 +135,12 @@ All paths under `/collections`. Namespace gating: cross-namespace access surface
 | --- | --- | --- | --- | --- |
 | POST | `/collections/{name}/export` | Start an export job for the named collection. Returns `202` with the new job (status `QUEUED`). The job writes a `.tar.gz` archive to `output_path` (default: `get_data_dir() / "exports"`). `output_path` must be within `get_data_dir()` — paths outside return `400`. Collection not found → `404`. Collection locked (reindex in progress) → `409`. Poll `GET /jobs/{job_id}` for progress. | `{"output_path": str}` (optional; default: `get_data_dir() / "exports"`) | `JobResponse` (status=`QUEUED`) |
 | POST | `/collections/{name}/import` | Start an import job from a `.tar.gz` archive. Returns `202` with the new job. Archive must be within `get_data_dir()` (`400` otherwise). Archive not found → `422`. Unsafe tar members → `422`. Schema version mismatch (without `ignore_schema_version=true`) → `422`. Embedding model mismatch → `422` (always; not bypassable). Collection already exists (without `force_overwrite=true`) → `409`. | `{"path": str, "force_overwrite": bool = false, "ignore_schema_version": bool = false, "on_error": "fail"\|"skip" = "fail"}` | `JobResponse` (status=`QUEUED`) |
+
+### `routes_backup.py` (D2)
+
+| Method | Path | Purpose | Request schema | Response schema |
+| --- | --- | --- | --- | --- |
+| POST | `/backup/trigger` | **D2** — Trigger an immediate backup pass for every collection in the caller's namespace. Returns `202` with `BackupTriggerResponse` listing the `queued` job IDs and `skipped` collections (each with `reason` in `excluded` / `already_active` / `already_queued`). Jobs are created with `source="backup"` and dispatch via the standard `JobScheduler` behind any user-sourced bulk jobs. Archives land in `{backup.output_dir}/{namespace}/{collection}.backup.{timestamp}.tar.gz`. | — | `BackupTriggerResponse` — `{"queued": list[str], "skipped": list[{"collection": str, "reason": str}]}` |
 
 ### `routes_explain.py` (A4)
 
@@ -327,6 +333,21 @@ Entry point: `archon-search` (`archon_search/cli/main.py`, Click group). Most su
 | `config` | `set <section.field> <value>` | Write one dotted key (bool/int/float coercion). | `--config` |
 | `export` | — | **D1/D2** — Start an export job for a collection via `POST /collections/{collection}/export`. Prints the `job_id` and exits 0 by default. `--wait` polls until DONE/FAILED, printing progress updates and the resulting archive path. | `collection: str`, `--output-dir PATH`, `--wait / --no-wait`, `--api-url TEXT`, `--api-key TEXT` |
 | `import` | — | **D1/D2** — Start an import job from a `.tar.gz` archive via `POST /collections/{collection}/import`. `--wait` polls until DONE/FAILED, printing imported/skipped/total counts; warns when `skipped > 0`. Exits 1 on FAILED. | `collection: str`, `path: str`, `--force-overwrite / --no-force-overwrite`, `--ignore-schema-version / --no-ignore-schema-version`, `--on-error [fail\|skip]`, `--wait / --no-wait`, `--api-url TEXT`, `--api-key TEXT` |
+| `backup` | — | **D2** — Backup Click group. Bare invocation prints help. `--now` calls `POST /backup/trigger` and prints each queued `job_id` plus skipped collections with reason; `--wait` polls each job to DONE/FAILED (exits `1` on FAILED). | `--now`, `--wait`, `--api-url TEXT`, `--api-key TEXT` |
+| `backup` | `status` | **D2** — Print scheduled-backup state. Offline-capable: reads `.backup-state.json` and counts archives on disk; merges `last_tick_at` / `next_run_at` from `GET /status` when the server is reachable. `--json` emits a `BackupStatusDetail`-shaped payload. | `--json`, `--api-url TEXT`, `--api-key TEXT` |
+
+## `[backup]` config section (D2)
+
+Controls scheduled-backup behaviour. All fields have defaults that take effect when the section is absent from `archon-search.toml`. Disabled by default (`interval_hours = 0`).
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `interval_hours` | `int` | `0` | Hours between automatic backup ticks. `0` disables the trigger loop (completion loop still drains any in-flight jobs from prior sessions). |
+| `keep` | `int` | `7` | Number of archives to retain per collection. `0` = never rotate (archives accumulate; config loader logs a WARNING when paired with `interval_hours > 0`). |
+| `exclude` | `list[str]` | `[]` | Patterns to skip: bare `{col}` matches across namespaces, `{ns}/{col}` matches exactly one. |
+| `output_dir` | `str` | `get_data_dir() / "backups"` | Root directory for archives. Resolved at load time when empty. Config loader logs an ERROR and falls back to the default when the configured path has fewer than 3 components (guards against rotation scanning near-root directories). |
+
+**Backup lifecycle**: `BackupLoop` enumerates collections per namespace, deduplicates against `_in_flight` and `list_queued_bulk()`, then calls `job_store.create_export(..., source="backup")`. Jobs dispatch via the standard `JobScheduler` but `list_queued_bulk()` sorts `source="backup"` behind `source="user"` so manual operations always win. On DONE the completion loop updates `~/.archon-search/.backup-state.json` and runs rotation; FAILED leaves `last_backup_at` untouched.
 
 ## `[jobs]` config section (D1/D2 additions)
 

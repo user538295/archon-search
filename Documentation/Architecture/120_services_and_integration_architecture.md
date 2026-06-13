@@ -120,7 +120,16 @@ Routes that issue jobs: `POST /ingest`, `POST /collections/`, `POST /collections
 3. Promotes QUEUED jobs in FIFO (`created_at` ascending) order via `store.transition(job_id, {QUEUED}, RUNNING)`.
 4. Calls the dispatch closure for each promoted job; on dispatch failure, transitions the job to FAILED.
 
-The dispatch closure (wired at `run_server()` time) creates an asyncio.Task for `_export_task()` or `_import_task()` and calls `scheduler.register_task(task)`. Existing ingest/reindex/delete jobs are unaffected — they dispatch immediately via `asyncio.create_task()` without going through the scheduler.
+The dispatch closure is reassigned to `scheduler.dispatch_fn` inside `create_app()`'s lifespan (after `search_store`, `pipeline`, `embedder_cache`, and `job_store` are ready) so it can close over real runtime state instead of being a startup-time no-op. The closure creates an asyncio.Task for `_export_task()` or `_import_task()` and calls `scheduler.register_task(task)`. Existing ingest/reindex/delete jobs are unaffected — they dispatch immediately via `asyncio.create_task()` without going through the scheduler. `list_queued_bulk()` sorts by `(0 if source == "user" else 1, created_at)`, so backup-sourced jobs always yield to user-sourced jobs already in the queue.
+
+### Backup loop (D2)
+
+`archon_search/jobs/backup_loop.py` contains `BackupLoop`, an in-process orchestrator that turns the export pipeline into a scheduled backup feature. `create_app()` instantiates it in lifespan alongside `JobScheduler`, stores it on `app.state.backup_loop`, and starts `BackupLoop.run()` as a background task. `run()` is `await asyncio.gather(self._trigger_loop(), self._completion_loop())`:
+
+- **Trigger loop** — returns immediately when `backup.interval_hours <= 0` (no ticks, no overdue check). Otherwise reads `~/.archon-search/.backup-state.json`, fires an immediate tick if any persisted collection is overdue, then sleeps `interval_hours * 3600` seconds between ticks. Each tick enumerates collections via `SearchStore.list_collections()`, groups by namespace, filters with `_is_excluded()`, then runs a synchronous two-part dedup (`is_collection_in_flight()` + `JobStore.list_queued_bulk()` source=backup match) before calling `job_store.create_export(..., source="backup")` and `track(job_id, ns, col)`. The completion loop runs regardless so any in-flight jobs from a prior session drain.
+- **Completion loop** — every 60 seconds, iterates `_in_flight`, looks up each job, and on `DONE` updates `last_backup_at` in the state file and calls `_rotate(ns, col)` (keeps the most recent `backup.keep` archives, never rotates when `keep == 0`); on `FAILED` logs ERROR and removes the job from tracking without updating `last_backup_at`; on `CANCELLED` removes silently.
+
+`POST /backup/trigger` reuses the same dedup checks to enumerate-and-enqueue once on demand; `GET /status` reads `_last_tick_at` and the state file to expose `BackupStatusDetail`. The CLI `archon-search backup status` works offline by reading the state file directly.
 
 ## Sequence: watcher-triggered sync
 

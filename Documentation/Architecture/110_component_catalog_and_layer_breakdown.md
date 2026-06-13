@@ -95,6 +95,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/server/routes_explain.py` | `POST /explain` (A4). All schemas use `extra="forbid"`. Public Pydantic models: `ExplainRequest`, `ExplainResponse`, `ExplainResult`, `ExplainNearMiss` (no `text` field — structurally absent), `ExplainScoreBreakdown`, `RoutingExplain`, `RoutingCandidate`. `ExplainResponse.from_pipeline_result` is the seam between private `ScoredSearchCandidate` and the public wire schema. | `router`, `ExplainRequest`, `ExplainResponse`, `ExplainResult`, `ExplainNearMiss`, `ExplainScoreBreakdown`, `RoutingExplain`, `RoutingCandidate` |
 | `archon_search/server/_ingest_lock.py` | Shared helper for `POST /ingest` and `POST /collections/` to pre-acquire the per-collection ingest lock and return a `503` + `Retry-After` (`{"error": "store_busy", ...}`) when a reindex holds it. | `acquire_collection_lock_or_503` |
 | `archon_search/server/routes_telemetry.py` | `GET /telemetry/stats`, `GET /telemetry/entries`. | `router` |
+| `archon_search/server/routes_backup.py` | **D2** — `POST /backup/trigger`. Enumerates the caller's namespace collections, dedups against `BackupLoop._in_flight` and `JobStore.list_queued_bulk()`, then enqueues backup-sourced `ExportJob`s; returns `BackupTriggerResponse` with `queued` job IDs and `skipped` reasons. | `router`, `BackupTriggerResponse`, `SkippedItem` |
 | `archon_search/server/schemas.py` | REST response models: `HealthResponse`, `StatusCollectionEntry`, `StatusResponse`, `IndexingStateCollectionEntry`, `IndexingStateResponse`, `CollectionSummary`, `CollectionDetail`, `JobResponse`, `DeleteResponse`, `ErrorDetail`. | (Pydantic models) |
 | `archon_search/server/schemas_telemetry.py` | Pydantic models for telemetry routes. | see source: `archon_search/server/schemas_telemetry.py` |
 
@@ -102,7 +103,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 
 | Module | Purpose | Key public symbols |
 |---|---|---|
-| `archon_search/cli/main.py` | `archon-search` Click group; registers subcommands: `start`, `stop`, `status`, `serve`, `install`, `uninstall`, `ingest`, `sync`, `collection`, `config`. | `main` |
+| `archon_search/cli/main.py` | `archon-search` Click group; registers subcommands: `start`, `stop`, `status`, `serve`, `install`, `uninstall`, `ingest`, `sync`, `collection`, `config`, `export`, `import`, `backup`. | `main` |
 | `archon_search/cli/start.py` | `start` subcommand; validates config, delegates to `launchctl` / `systemctl --user`. | see source |
 | `archon_search/cli/stop.py` | `stop` subcommand. | see source |
 | `archon_search/cli/status.py` | `status` subcommand; hits the HTTP control plane. | see source |
@@ -112,6 +113,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/cli/sync.py` | `sync` subcommand; drives `SearchCollectionSync`. | see source |
 | `archon_search/cli/collection.py` | `collection` subgroup; list/add/remove/info/reindex. | see source |
 | `archon_search/cli/config_cmd.py` | `config` subgroup; show/edit `~/.archon-search/archon-search.toml`. | see source |
+| `archon_search/cli/backup_cmd.py` | **D2** — `backup` Click group. Bare invocation prints help. `--now` POSTs `/backup/trigger` and prints queued job IDs and skipped collections; `--wait` polls each job to terminal state. `backup status` subcommand reads `.backup-state.json` offline, counts archives on disk, and merges `last_tick_at`/`next_run_at` from `GET /status` when reachable; `--json` emits a `BackupStatusDetail`-shaped payload. | `backup_cmd` |
 | `archon_search/cli/_helpers.py` | Shared CLI infrastructure (auth header, base URL resolution, error printing). | internal |
 
 ## Platform
@@ -140,6 +142,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 |---|---|---|
 | `archon_search/jobs/store.py` | Persistent JSON-backed job store with atomic writes, 7-day eviction, RUNNING/CANCELLING crash-to-FAILED recovery, and `transition()` for atomic state changes. | `JobStore` |
 | `archon_search/jobs/model.py` | Re-exports `IngestJob`/`JobStatus`, exposes `get_jobs_file()` (lazy, honours `ARCHON_SEARCH_DATA_DIR`), provides `job_to_dict` for response shaping. | `IngestJob`, `JobStatus`, `get_jobs_file`, `job_to_dict` |
+| `archon_search/jobs/backup_loop.py` | **D2** — In-process scheduled-backup orchestrator. Two async loops (`_trigger_loop` enumerates collections per `interval_hours` and enqueues `ExportJob` with `source="backup"`; `_completion_loop` polls in-flight jobs, persists `last_backup_at` to `.backup-state.json`, and rotates archives per `keep`). Run together via `asyncio.gather`. | `BackupLoop` |
 
 ## Eval
 

@@ -105,6 +105,24 @@ Opt-in only. See [`06_telemetry.md`](./06_telemetry.md) for the full surface.
 
 Optional `string = string` mapping (`archon_search/config.py:225-233`). Entries must be string key / string value pairs or `ConfigError` is raised. See `Architecture/150_security_and_privacy_architecture.md` for namespace semantics.
 
+### `[backup]`
+
+Scheduled backup of every collection in every namespace via the in-process `BackupLoop`. Disabled by default. When enabled, the server periodically exports each collection (excluded patterns aside) to a `.tar.gz` archive and rotates older archives. Backup jobs are queued behind any user-initiated export/import jobs.
+
+| Key | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `interval_hours` | int | `0` | Hours between automatic backup ticks. `0` (or any non-positive value) disables periodic backups entirely; the completion loop still runs to drain any in-flight jobs from a prior session. |
+| `keep` | int | `7` | Number of archives to retain per collection. `0` = never rotate (archives accumulate; the config loader emits a WARNING when paired with `interval_hours > 0`). |
+| `exclude` | list[str] | `[]` | Collection patterns to skip. Bare `{col}` matches the collection across all namespaces; `{ns}/{col}` matches one namespace only. |
+| `output_dir` | string | `""` | Root directory for archives (resolved to `get_data_dir() / "backups"` when empty). Archives land at `{output_dir}/{namespace}/{collection}.backup.{timestamp}.tar.gz`. Paths with fewer than three components fall back to the default and log an ERROR. |
+
+Operator commands:
+
+- `archon-search backup --now` — call `POST /backup/trigger` and print the queued job IDs and any skipped collections (with reason: `excluded`, `already_active`, or `already_queued`). Add `--wait` to poll each job to a terminal state (exits `1` on FAILED).
+- `archon-search backup status` — offline-capable summary. Reads `~/.archon-search/.backup-state.json` and counts archive files on disk; merges `last_tick_at` and `next_run_at` from `GET /status` when the server is reachable. `--json` emits a `BackupStatusDetail` payload.
+
+See `Architecture/120_services_and_integration_architecture.md` for the trigger / completion loop design and `Architecture/600_api_reference_or_public_interface.md` for the full schema of `POST /backup/trigger` and the `backup` extension of `GET /status`.
+
 ## Authentication
 
 The API key is **not** stored in the TOML. The key manager (`archon_search/key_manager.py:load_or_generate_key`) resolves in this order:
