@@ -535,7 +535,7 @@ Namespace from auth token (not a query param).
 > **Releasable**: after Task 6.2; operators can list all jobs and resume crashed ones.
 
 #### Task 6.1 — `GET /jobs` list endpoint with cursor pagination
-- [ ] **File**: `archon_search/server/routes_jobs.py`
+- [x] **File**: `archon_search/server/routes_jobs.py`
 - **Depends on**: Task 1.4, Task 1.5
 - **Description**:
   - `JobListResponse(BaseModel)`: `items: list[JobResponse]`, `next_cursor: str | None`, `total: int`

@@ -1,4 +1,4 @@
-"""POST /ingest, GET /jobs/{job_id}, DELETE /jobs/{job_id} endpoints."""
+"""POST /ingest, GET /jobs, GET /jobs/{job_id}, DELETE /jobs/{job_id} endpoints."""
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
@@ -17,8 +17,8 @@ from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
-from archon_search.server.schemas import ErrorDetail, JobResponse
-from archon_search.types import ReindexJob
+from archon_search.server.schemas import ErrorDetail, JobListResponse, JobResponse
+from archon_search.types import DeleteJob, ExportJob, ImportJob, ReindexJob
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +392,64 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
     request.app.state._background_tasks.add(task)
     task.add_done_callback(request.app.state._background_tasks.discard)
     return JobResponse(**job_to_dict(job))
+
+
+_KIND_TYPE_MAP: dict[str, type] = {
+    "ingest": IngestJob,
+    "reindex": ReindexJob,
+    "delete": DeleteJob,
+    "export": ExportJob,
+    "import": ImportJob,
+}
+
+
+@router.get("/jobs", response_model=JobListResponse, responses={401: {"model": ErrorDetail}})
+async def list_jobs(
+    request: Request,
+    status: list[str] = Query(default=[]),
+    kind: list[str] = Query(default=[]),
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None),
+) -> JobListResponse:
+    store: JobStore = request.app.state.job_store
+    namespace: str = request.state.namespace
+
+    # Filter by namespace first
+    jobs = [j for j in store.list() if j.namespace == namespace]
+
+    # Filter by status (case-insensitive comparison via enum value)
+    if status:
+        status_upper = {s.upper() for s in status}
+        jobs = [j for j in jobs if j.status.value in status_upper]
+
+    # Filter by kind using exact type matching (not isinstance, since IngestJob is base class)
+    if kind:
+        kind_lower = {k.lower() for k in kind}
+        kind_types = {_KIND_TYPE_MAP[k] for k in kind_lower if k in _KIND_TYPE_MAP}
+        jobs = [j for j in jobs if type(j) in kind_types]
+
+    # Sort by created_at descending (newest first)
+    jobs.sort(key=lambda j: j.created_at, reverse=True)
+
+    total = len(jobs)
+
+    # Cursor pagination: find cursor position in sorted list
+    if cursor is not None:
+        cursor_index = next(
+            (i for i, j in enumerate(jobs) if j.job_id == cursor), None
+        )
+        if cursor_index is not None:
+            jobs = jobs[cursor_index + 1:]
+        # If cursor not found, return from the start
+
+    page = jobs[:limit]
+    next_cursor = page[-1].job_id if len(jobs) > limit else None
+
+    return JobListResponse(
+        items=[JobResponse(**job_to_dict(j)) for j in page],
+        next_cursor=next_cursor,
+        total=total,
+    )
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse, responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}})

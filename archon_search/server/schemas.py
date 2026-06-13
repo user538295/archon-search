@@ -135,6 +135,12 @@ class JobResponse(BaseModel):
     progress: dict | None = None
 
 
+class JobListResponse(BaseModel):
+    items: list[JobResponse]
+    next_cursor: str | None
+    total: int
+
+
 class DeleteResponse(BaseModel):
     name: str
     deleted: bool
