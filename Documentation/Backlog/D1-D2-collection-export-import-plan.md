@@ -616,7 +616,7 @@ Namespace from auth token (not a query param).
 > **Releasable**: after Task 8.2; operators can use `archon-search export` and `archon-search import` from the terminal.
 
 #### Task 8.1 — `archon-search export` CLI command
-- [ ] **File**: `archon_search/cli/export_cmd.py` (new file), `archon_search/cli/main.py`
+- [x] **File**: `archon_search/cli/export_cmd.py` (new file), `archon_search/cli/main.py`
 - **Depends on**: Task 4.2
 - **Description**:
   - `archon_search/cli/export_cmd.py`:
