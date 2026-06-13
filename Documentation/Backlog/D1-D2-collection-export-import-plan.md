@@ -272,7 +272,8 @@ Namespace from auth token (not a query param).
 
 #### Task 1.3 — `EXPORT_SCHEMA_VERSION` constant and archive utilities skeleton
 - [ ] **File**: `archon_search/jobs/export_archive.py` (new file)
-- **Depends on**: nothing
+- **Depends on**: Task 2.1
+- **Note**: `ImportArchiveReader.read_manifest()` calls `validate_archive_members()` which is implemented in Task 2.1. Place the stub call (or import with `from archon_search._path_safety import validate_archive_members`) at the top of `export_archive.py`. Task 2.1 must land first.
 - **Description**:
   - Define `EXPORT_SCHEMA_VERSION: int = 1` at module level
   - Add `ExportArchiveWriter` class:
@@ -284,8 +285,8 @@ Namespace from auth token (not a query param).
     - `__enter__`/`__exit__`: context manager; `__exit__` calls `cleanup()` on exception only
   - Add `ImportArchiveReader` class:
     - `__init__(self, archive_path: Path) -> None`: stores path; does not open yet
-    - `read_manifest(self) -> dict`: opens tar via `tarfile.open(archive_path, "r:gz", filter="data")`; calls `validate_archive_members(tf)` (Task 2.2); extracts `manifest.json` member content as UTF-8 JSON; validates required keys: `schema_version`, `collection`, `exported_at`, `doc_count`, `active_embedding_model`; raises `ValueError` with descriptive message if any key missing or malformed; returns the dict
-    - `iter_docs(self, skip: int = 0) -> Iterator[dict]`: opens tar, extracts `documents.jsonl` member as a text stream; skips first `skip` lines; parses each subsequent line as JSON; yields the dict; raises `ValueError(f"Corrupt line {lineno}: {exc}")` on parse failure
+    - `read_manifest(self) -> dict`: opens tar via `tarfile.open(archive_path, "r:gz")`; calls `validate_archive_members(tf)` (Task 2.1 — no `filter` arg is needed on `open()` since member selection is already validated by `validate_archive_members()`); extracts `manifest.json` member content via `tf.extractfile(member)` as UTF-8 JSON; validates required keys: `schema_version`, `collection`, `exported_at`, `doc_count`, `active_embedding_model`; raises `ValueError` with descriptive message if any key missing or malformed; returns the dict
+    - `iter_docs(self, skip: int = 0) -> Iterator[dict]`: opens tar, extracts `documents.jsonl` member as a text stream; skips first `skip` lines; parses each subsequent line as JSON; yields the dict; raises `ValueError(f"Corrupt line {lineno}: {exc}")` on parse failure. **Per-line schema** (`documents.jsonl`): each line is a JSON object with keys `doc_id`, `chunk_id`, `text`, `vector` (base64-encoded little-endian float32), `source_path`, `indexed_at`, `file_type`, `language`, `metadata`, `acl`, `custom_score`, `ingested_by`, and `updated_at`.
 - **Releasable**: after this task, archive writer and reader are unit-testable
 - **Tests (TDD)** — `tests/test_export_archive.py` (new file):
   - Unit: `test_writer_creates_valid_tar` — write 3 docs, finalize, open resulting tar, confirm exactly `manifest.json` + `documents.jsonl` members, line count = 3
@@ -304,7 +305,7 @@ Namespace from auth token (not a query param).
 - **Depends on**: Task 1.1
 - **Description**:
   - `_evict_old()` (lines 173–181): add a status guard — only evict jobs in `{JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}`; jobs in `QUEUED`, `PENDING`, `RUNNING`, `CANCELLING` are never evicted regardless of age
-  - `_serialize_job(job: IngestJob) -> dict`: extend the existing `isinstance` dispatch to handle `ExportJob` (sets `job_type="export"`, includes `collection`, `output_path`, `tmp_path`, `progress`) and `ImportJob` (sets `job_type="import"`, includes `collection`, `archive_path`, `force_overwrite`, `ignore_schema_version`, `on_error`, `progress`). For all job types, include `progress` in the serialized dict (value may be `None`).
+  - Serialization: extend the inline serialization logic inside `_write_atomic()` (lines 157–171 of `store.py`). The existing code has an `isinstance` dispatch that maps `ReindexJob` and `DeleteJob` to their `job_type` strings. Extend this dispatch to add `elif isinstance(job, ExportJob): job_type = 'export'` (including `collection`, `output_path`, `tmp_path` in the dict) and `elif isinstance(job, ImportJob): job_type = 'import'` (including `collection`, `archive_path`, `force_overwrite`, `ignore_schema_version`, `on_error` in the dict). For ALL job types, add `progress` to the serialized dict (value may be `None`). No separate `_serialize_job()` method needs to be created — extend the existing inline dispatch.
   - `_load()` deserialization: extend the `job_type` dispatch in `_load()` to handle `"export"` → `ExportJob(**item)` and `"import"` → `ImportJob(**item)`. Handle missing `progress` key with `.get("progress")` for backward compatibility with pre-D1 persisted jobs.
   - `create_export(self, collection: str, output_path: str, tmp_path: str, namespace: str = DEFAULT_NAMESPACE) -> ExportJob`: creates an `ExportJob` with `status=JobStatus.QUEUED`, UUID job_id, ISO timestamps, and the given fields; persists via `create_job()`; returns the job
   - `create_import(self, collection: str, archive_path: str, force_overwrite: bool, ignore_schema_version: bool, on_error: str, namespace: str = DEFAULT_NAMESPACE) -> ImportJob`: same pattern with `ImportJob` fields
@@ -377,7 +378,7 @@ Namespace from auth token (not a query param).
 ---
 
 ### Phase 3 — Bulk Job Scheduler
-> **Releasable**: after Task 3.2; the scheduler is wired into the FastAPI lifespan and promotes QUEUED bulk jobs automatically. No user-visible API yet.
+> **Releasable**: Phase 3 is NOT independently releasable. Task 3.2 wires a no-op dispatch closure for testing only — the no-op transitions dispatched jobs to `FAILED` with `error='workers_not_deployed'` instead of silently leaving them in `RUNNING`. The scheduler must not be deployed to production until Phase 4 (Task 4.1) replaces the no-op with the real dispatch closure. Phase 3 + Phase 4 are releasable together after Task 4.2.
 
 #### Task 3.1 — `JobScheduler` class
 - [ ] **File**: `archon_search/jobs/scheduler.py` (new file)
@@ -388,7 +389,7 @@ Namespace from auth token (not a query param).
     - `__init__(self, store: JobStore, max_concurrent: int, dispatch_fn: Callable[[ExportJob | ImportJob], None]) -> None`: stores args; `_active: set[asyncio.Task] = set()`
     - `active_count` property: returns `len(self._active)`
     - `async def run(self) -> None`: infinite loop with `asyncio.sleep(_SCHEDULER_TICK_SECONDS)` at the start of each iteration; on each tick, calls `_tick()`; handles `asyncio.CancelledError` cleanly (exits loop, logs at DEBUG)
-    - `def _tick(self) -> None`: calls `store.list_queued_bulk()`; calculates slots = `max(0, self._max_concurrent - self._active_count_running)`; for each job in FIFO order up to `slots`: calls `store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)`; if transition succeeds, calls `dispatch_fn(job)`
+    - `def _tick(self) -> None`: calls `store.list_queued_bulk()`; calculates slots = `max(0, self._max_concurrent - self._active_count_running)`; for each job in FIFO order up to `slots`: calls `store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)`; if transition succeeds, calls `dispatch_fn(job)` inside a try/except — on exception, transition the job from RUNNING to FAILED via `store.update(job.job_id, status=JobStatus.FAILED, error=f'dispatch_failed: {exc}')` and log at ERROR level; do NOT re-raise (the scheduler must continue its tick loop even if one dispatch fails)
     - `_active_count_running`: count of non-done tasks via `sum(1 for t in self._active if not t.done())`
     - `register_task(self, task: asyncio.Task) -> None`: adds to `_active`; adds a done-callback that discards from `_active`
   - Note: `dispatch_fn` is responsible for creating the asyncio.Task and calling `register_task(task)` back on the scheduler (passed via closure in the lifespan wiring — see Task 3.2)
@@ -410,9 +411,10 @@ Namespace from auth token (not a query param).
   - In lifespan startup (after `app.state.search_store` is connected): if `scheduler` is not None, create `task = asyncio.create_task(scheduler.run())`; add to `app.state._background_tasks`; store `app.state.scheduler = scheduler`
   - In lifespan shutdown: the existing `_background_tasks` cancellation covers the scheduler task
   - In the app factory in `server/app.py`'s `__main__` path or `run_server()`: construct `JobScheduler` from `config.jobs` and a dispatch closure (the closure will be implemented in Task 4.1/5.1 and passed in)
-  - For now: wire a no-op dispatch closure so the scheduler starts without workers
+  - For now: wire a no-op dispatch closure that transitions dispatched jobs to FAILED with `error='workers_not_deployed'`: `lambda job: store.update(job.job_id, status=JobStatus.FAILED, error='workers_not_deployed')` — this prevents QUEUED jobs from silently hanging in RUNNING state when no workers exist.
+  - The real closure is constructed in `run_server()` after Tasks 4.1 and 5.1 land: `def dispatch(job): task = asyncio.create_task(_export_task(job, store, search_store, config) if isinstance(job, ExportJob) else _import_task(job, store, search_store, pipeline, embedder_cache, config)); scheduler.register_task(task)`. This closure captures `store`, `search_store`, `pipeline`, `embedder_cache`, and `config` from the `run_server()` context. Task 3.2 is updated as part of Task 5.1 to replace the no-op with the real closure.
   - `app.state.scheduler` is accessible from request handlers for `register_task()` calls
-- **Releasable**: after this task, the scheduler runs in the background and promotes QUEUED jobs (though workers don't exist yet, the transition QUEUED → RUNNING fires)
+- **Releasable**: not independently releasable — the no-op dispatch closure transitions promoted jobs to FAILED rather than processing them. Deploy only together with Phase 4 (Task 4.1).
 - **Tests (TDD)** — `tests/test_scheduler_lifespan.py` (new file):
   - Integration: `test_scheduler_starts_with_app` — `create_app(scheduler=scheduler_instance)` lifespan starts the scheduler; `scheduler.active_count == 0` initially
   - Integration: `test_scheduler_cancelled_on_shutdown` — lifespan exit cancels scheduler task cleanly
@@ -425,15 +427,16 @@ Namespace from auth token (not a query param).
 
 #### Task 4.1 — `_export_task()` worker
 - [ ] **File**: `archon_search/server/routes_export.py` (new file)
-- **Depends on**: Task 1.3, Task 1.4, Task 2.1, Task 3.1
+- **Depends on**: Task 1.3, Task 1.4, Task 2.1, Task 3.1, Task 3.2
 - **Description**:
+  - **Prerequisite**: Add `async def list_chunks_raw(self, collection: str, namespace: str) -> AsyncIterator[dict]` to `SearchStore` in `archon_search/store.py`. This method scans the collection's LanceDB table and yields each row as a dict with all columns including the raw `vector` field (as a list of floats). Uses `await table.to_arrow()` or equivalent bulk read. Must include `doc_id`, `chunk_id`, `text`, `vector`, `source_path`, `indexed_at`, `file_type`, `language`, `metadata`, `acl`, `custom_score`, `ingested_by`, and `updated_at`. Add tests in `tests/test_store.py`: `test_list_chunks_raw_returns_all_chunks` and `test_list_chunks_raw_includes_vector`.
   - `async def _export_task(job: ExportJob, store: JobStore, search_store: SearchStore, config: SearchConfig) -> None`:
     1. Wrap all logic in try/except; on any exception: `store.update(job_id, status=FAILED, error=str(exc))`; return
     2. `archive_path = Path(job.output_path)` — already validated before job creation
     3. `tmp_path = Path(job.tmp_path)`
     4. Construct `writer = ExportArchiveWriter(tmp_path)`; open as context manager
-    5. `phase = "reading"`: count total docs via `await search_store.count_chunks(job.collection, DEFAULT_NAMESPACE)` → set as `total`
-    6. `phase = "writing"`: async-iterate all chunks from search_store (use `search_store.list_chunks_raw(job.collection, DEFAULT_NAMESPACE)` or equivalent — reads all chunk rows as dicts); for each chunk dict, serialize vector field as base64 little-endian float32; call `writer.write_doc(doc_dict)`; every `config.jobs.checkpoint_interval` docs, call `store.update_progress(job.job_id, writer.lines_written, total, "writing")`; check `store.get(job.job_id).status` — if `CANCELLING`, mark `CANCELLED` and call `writer.cleanup()`; return
+    5. `phase = "reading"`: count total docs via `await search_store.count_chunks(job.collection, job.namespace)` → set as `total`
+    6. `phase = "writing"`: async-iterate all chunks from search_store (use `search_store.list_chunks_raw(job.collection, job.namespace)` — reads all chunk rows as dicts); for each chunk dict, serialize vector field as base64 little-endian float32; the doc dict written via `writer.write_doc(doc_dict)` must include all fields: `doc_id`, `chunk_id`, `text`, `vector` (base64), `source_path`, `indexed_at`, `file_type`, `language`, `metadata`, `acl`, `custom_score`, `ingested_by`, and `updated_at`; call `writer.write_doc(doc_dict)`; every `config.jobs.checkpoint_interval` docs, call `store.update_progress(job.job_id, writer.lines_written, total, "writing")`; check `store.get(job.job_id).status` — if `CANCELLING`, mark `CANCELLED` and call `writer.cleanup()`; return
     7. `phase = "packaging"`: `store.update_progress(job.job_id, writer.lines_written, total, "packaging")`; build manifest dict; call `writer.finalize(manifest, archive_path)`
     8. On success: `store.update(job.job_id, status=DONE, result={"archive_path": str(archive_path)})`
   - Manifest dict: `{"archon_search_version": importlib.metadata.version("archon-search"), "schema_version": EXPORT_SCHEMA_VERSION, "collection": job.collection, "exported_at": <ISO UTC now>, "doc_count": writer.lines_written, "active_embedding_model": <from collection meta>, "description": <from collection meta>}`
@@ -443,7 +446,7 @@ Namespace from auth token (not a query param).
 - **Tests (TDD)** — `tests/test_export_worker.py` (new file):
   - Integration: `test_export_task_completes` — runs `_export_task()` against a real SearchStore with seeded data; job ends DONE; archive exists at expected path
   - Integration: `test_export_task_empty_collection` — empty collection produces valid archive with `doc_count=0`
-  - Integration: `test_export_task_cancellation` — transition job to CANCELLING mid-export; job ends CANCELLED; tmp file deleted; no archive on disk
+  - Integration: `test_export_task_cancellation` — seed a large collection (>200 docs to ensure the cancellation check is reached); start `_export_task()` as a task; use an `asyncio.Event` or short sleep to allow the worker to enter its writing loop, then call `store.transition(job_id, {JobStatus.RUNNING}, JobStatus.CANCELLING)`; await the task; assert job status is `CANCELLED`, tmp file is deleted, no archive on disk. Alternative simpler approach: write a custom `SearchStore` subclass that sets `CANCELLING` after yielding 50 chunks.
   - Integration: `test_export_task_store_error` — simulate read failure; job ends FAILED with error message
   - Integration: `test_export_task_checkpoint_progress` — after 100 docs, `progress.processed == 100`
   - Checkpoint: `uv run pytest tests/test_export_worker.py -v --no-cov -n0 -m integration`
@@ -478,15 +481,15 @@ Namespace from auth token (not a query param).
 
 #### Task 5.1 — `_import_task()` worker
 - [ ] **File**: `archon_search/server/routes_export.py`
-- **Depends on**: Task 1.3, Task 1.4, Task 2.1, Task 3.1
+- **Depends on**: Task 1.3, Task 1.4, Task 2.1, Task 3.1, Task 3.2
 - **Description**:
   - `async def _import_task(job: ImportJob, store: JobStore, search_store: SearchStore, pipeline: SearchPipeline, embedder_cache: EmbedderCache, config: SearchConfig) -> None`:
     1. Wrap all logic in try/except; on exception: `store.update(job_id, status=FAILED, error=str(exc))`; return
     2. `phase = "validating"`: open `ImportArchiveReader(Path(job.archive_path))`; call `reader.read_manifest()` → `manifest`; check `manifest["schema_version"] == EXPORT_SCHEMA_VERSION` (or `job.ignore_schema_version`); check `manifest["active_embedding_model"]` matches the importing collection's configured embedding model (or server default if collection doesn't exist yet) — raise `ValueError("embedding model mismatch: ...")` if mismatch (not bypassable); update progress with `phase="validating"`, `total=manifest["doc_count"]`
     3. If collection exists and not `job.force_overwrite`: raise `ValueError(f"collection '{job.collection}' already exists; use force_overwrite=true to overwrite")`; this should have been caught at the endpoint level, but double-check here
-    4. If collection exists and `job.force_overwrite`: delete all chunks via `await search_store.delete_collection(job.collection, namespace)` (or equivalent full-collection drop)
-    5. `phase = "ingesting"`: `processed = 0`; call `store.get(job.job_id).progress` to get the checkpoint (`skip = progress["processed"] if progress else 0`); iterate `reader.iter_docs(skip=skip)`; for each doc: decode `doc["vector"]` from base64 to list[float]; reconstruct `ChunkRecord` and call `await search_store.upsert_chunks(...)` in batches of `config.jobs.checkpoint_interval`; every checkpoint interval, call `store.update_progress(job.job_id, processed, manifest["doc_count"], "ingesting")`; on cancellation check, same pattern as export; handle corrupt lines per `job.on_error` ("fail" re-raises; "skip" increments `skipped` counter)
-    6. `phase = "indexing"`: `await search_store.rebuild_fts_index(job.collection, namespace)`; call `await pipeline.recompute_collection_meta(job.collection, embedder=embedder, namespace=namespace, force=True)`; write manifest collection metadata fields (description, active_embedding_model) to collection meta table
+    4. If collection exists and `job.force_overwrite`: (a) call `await search_store.drop_collection(job.collection)` to remove the LanceDB table; (b) call `await search_store.delete_collection_meta(job.collection, job.namespace)` to remove the metadata row. Note: verify these method names against `store.py` — the actual deletion code in `routes_collections.py` lines 315–318 is the authoritative reference.
+    5. `phase = "ingesting"`: `processed = 0`; call `store.get(job.job_id).progress` to get the checkpoint (`skip = progress["processed"] if progress else 0`); iterate `reader.iter_docs(skip=skip)`; for each doc: decode `doc["vector"]` from base64 to `list[float]` (using `import struct, base64; raw = base64.standard_b64decode(b64str); floats = list(struct.unpack(f"{len(raw)//4}f", raw))`); reconstruct `ChunkRecord(doc_id=doc['doc_id'], chunk_id=doc['chunk_id'], text=doc['text'], vector=floats, source_path=doc['source_path'], indexed_at=doc['indexed_at'], file_type=doc['file_type'], language=doc['language'], metadata=doc['metadata'], acl=doc.get('acl'), custom_score=doc.get('custom_score'), ingested_by=doc.get('ingested_by', 'import'), updated_at=doc.get('updated_at', ''))`; accumulate `ChunkRecord` objects in a batch of `config.jobs.checkpoint_interval`; call `await search_store.ingest_chunks(job.collection, batch, namespace=job.namespace)` (using the existing `ingest_chunks()` method — verify exact signature at `store.py:1208`; the per-collection lock is handled internally by `ingest_chunks()`); every checkpoint interval, call `store.update_progress(job.job_id, processed, manifest["doc_count"], "ingesting")`; on cancellation check, same pattern as export; handle corrupt lines per `job.on_error` ("fail" re-raises; "skip" increments `skipped` counter)
+    6. `phase = "indexing"`: `await search_store.rebuild_fts_index(job.collection, language=detected_language)` where `detected_language = manifest.get('language', '')` (v1 archives may not record a collection-level language; use `''` if absent — verify the `rebuild_fts_index` signature at `store.py:1279`); resolve the embedder: `global_embedder = await embedder_cache.get_or_load(manifest['active_embedding_model'])` (uses the manifest's `active_embedding_model`, already validated to match the server's configured model in step 2); call `await pipeline.recompute_collection_meta(job.collection, global_embedder, namespace=job.namespace, force=True)` (pass `global_embedder` positionally as the second argument — the actual signature is `recompute_collection_meta(self, collection: str, global_embedder: Embedder, ...)`); write manifest collection metadata fields (description, active_embedding_model) to collection meta table
     7. On success: `store.update(job.job_id, status=DONE, result={"imported": processed, "skipped": skipped, "total_in_archive": manifest["doc_count"]})`
   - Vector decode: `import struct, base64; raw = base64.standard_b64decode(b64str); floats = list(struct.unpack(f"{len(raw)//4}f", raw))`
 - **Releasable**: after this task, the import worker logic is unit-testable
@@ -498,7 +501,7 @@ Namespace from auth token (not a query param).
   - Integration: `test_import_task_embedding_model_mismatch_always_rejected` — embedding model mismatch always fails
   - Integration: `test_import_task_on_error_skip` — archive with one corrupt line; `on_error="skip"` completes DONE with `skipped=1`
   - Integration: `test_import_task_on_error_fail` — corrupt line with `on_error="fail"` → FAILED
-  - Integration: `test_import_task_resume_from_checkpoint` — simulate crash at line 50 of 100; resume picks up from 50
+  - Integration: `test_import_task_resume_from_checkpoint` — create a 200-doc archive (to ensure at least one checkpoint is written at doc 100); run `_import_task()` until checkpoint fires at doc 100; simulate crash by directly calling `store.update(job_id, status=JobStatus.FAILED)`; the job's `progress` is `{'processed': 100, 'total': 200, 'phase': 'ingesting'}`; call `_import_task()` again on the same job (it reads `progress.processed = 100` and calls `reader.iter_docs(skip=100)`); assert only 100 docs are written in the second run (not 200)
   - Checkpoint: `uv run pytest tests/test_import_worker.py -v --no-cov -n0 -m integration`
 
 #### Task 5.2 — `POST /collections/{name}/import` REST endpoint
@@ -538,7 +541,7 @@ Namespace from auth token (not a query param).
   - `JobListResponse(BaseModel)`: `items: list[JobResponse]`, `next_cursor: str | None`, `total: int`
   - `async def list_jobs(request: Request, status: list[str] = Query(default=[]), kind: list[str] = Query(default=[]), limit: int = Query(default=50, ge=1, le=200), cursor: str | None = Query(default=None)) -> JobListResponse`:
     - Namespace from `request.state.namespace`
-    - Fetches all jobs from `store.list()`, filters by namespace; filters by `status` (if non-empty); filters by `kind` (mapping: `"export"` → `ExportJob`, `"import"` → `ImportJob`, `"ingest"` → `IngestJob`, `"reindex"` → `ReindexJob`, `"delete"` → `DeleteJob`)
+    - Fetches all jobs from `store.list()`, filters by namespace; filters by `status` (if non-empty); filters by `kind` using **exact type matching** (not `isinstance`): `type(job) is IngestJob` for `"ingest"`, `type(job) is ReindexJob` for `"reindex"`, `type(job) is DeleteJob` for `"delete"`, `type(job) is ExportJob` for `"export"`, `type(job) is ImportJob` for `"import"`. Do NOT use `isinstance()` for `IngestJob` since it is the base class of all job types and would match everything.
     - Sorts by `created_at` descending
     - Cursor is the `job_id` of the last item returned; cursor-based pagination: find the cursor job's index, return the next `limit` items
     - `total` is the count of all matching jobs before pagination
@@ -553,8 +556,9 @@ Namespace from auth token (not a query param).
   - Integration: `test_list_jobs_filter_by_kind` — `?kind=export` returns only ExportJobs
   - Integration: `test_list_jobs_namespace_isolated` — jobs from other namespaces not returned
   - Integration: `test_list_jobs_cursor_pagination` — cursor advances through full list correctly
+  - Integration: `test_list_jobs_kind_ingest_excludes_export_import` — create one `IngestJob`, one `ExportJob`, one `ImportJob`; `?kind=ingest` returns only the `IngestJob` (verifies exact type matching excludes subclass instances)
   - Integration: `test_list_jobs_unauthenticated` — 401
-  - Checkpoint: `uv run pytest tests/test_jobs_list_resume.py::test_list_jobs_empty tests/test_jobs_list_resume.py::test_list_jobs_default_limit tests/test_jobs_list_resume.py::test_list_jobs_filter_by_status tests/test_jobs_list_resume.py::test_list_jobs_filter_by_kind tests/test_jobs_list_resume.py::test_list_jobs_namespace_isolated tests/test_jobs_list_resume.py::test_list_jobs_cursor_pagination tests/test_jobs_list_resume.py::test_list_jobs_unauthenticated -v --no-cov -n0 -m integration`
+  - Checkpoint: `uv run pytest tests/test_jobs_list_resume.py::test_list_jobs_empty tests/test_jobs_list_resume.py::test_list_jobs_default_limit tests/test_jobs_list_resume.py::test_list_jobs_filter_by_status tests/test_jobs_list_resume.py::test_list_jobs_filter_by_kind tests/test_jobs_list_resume.py::test_list_jobs_namespace_isolated tests/test_jobs_list_resume.py::test_list_jobs_cursor_pagination tests/test_jobs_list_resume.py::test_list_jobs_kind_ingest_excludes_export_import tests/test_jobs_list_resume.py::test_list_jobs_unauthenticated -v --no-cov -n0 -m integration`
 
 #### Task 6.2 — `POST /jobs/{job_id}/resume` endpoint
 - [ ] **File**: `archon_search/server/routes_jobs.py`
@@ -596,7 +600,7 @@ Namespace from auth token (not a query param).
     - Non-blocking: returns `JobResponse` dict immediately (job is QUEUED; client polls separately)
   - `import_collection(collection: str, path: str, force_overwrite: bool = False, ignore_schema_version: bool = False, on_error: str = "fail") -> dict`:
     - Same pattern; validates `on_error` is `"fail"` or `"skip"`; pre-validates archive; checks collection/schema/model; creates import job; returns `job_to_dict(job)`
-  - Both tools must extract namespace from MCP context (same as existing MCP tools do via `ctx` — check the existing `ingest_file` implementation for namespace resolution pattern)
+  - Both tools use `DEFAULT_NAMESPACE` for the namespace, matching the pattern of `ingest_file` and `ingest_directory` MCP tools which also use `DEFAULT_NAMESPACE` implicitly. Namespace-aware MCP is not in scope for this plan.
   - Update `BREAKING.md` to note 2 new MCP tools (additive, not breaking; but tool count is documented)
 - **Releasable**: after this task, MCP clients can trigger export/import
 - **Tests (TDD)** — `tests/test_mcp_export.py` (new file):
