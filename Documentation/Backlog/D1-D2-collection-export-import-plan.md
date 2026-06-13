@@ -328,7 +328,7 @@ Namespace from auth token (not a query param).
   - Checkpoint: `uv run pytest tests/test_job_store_queued.py -v --no-cov -n0`
 
 #### Task 1.5 — Update `job_to_dict()` and `JobResponse` to include `progress`
-- [ ] **Files**: `archon_search/jobs/model.py`, `archon_search/server/schemas.py`
+- [x] **Files**: `archon_search/jobs/model.py`, `archon_search/server/schemas.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - `archon_search/jobs/model.py` — `job_to_dict(job: IngestJob) -> dict`: add `"progress": job.progress` to the returned dict (value is `None` for existing job types that don't set it)

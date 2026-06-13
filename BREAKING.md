@@ -8,6 +8,17 @@
 
 ## Changelog
 
+### [next release] — D1 job contract: `progress` field on `JobResponse` and `QUEUED` status
+
+**Surface**: `GET /jobs/{job_id}` REST response (`JobResponse`), `JobStatus` enum.
+
+- `JobResponse` now includes an optional `progress` field (`dict | None`, default `null`). Existing callers that don't reference this field are unaffected; callers that use strict schema validation will now see `progress: null` for job types that don't set it.
+- `JobStatus` now includes `QUEUED` as a valid value (between `PENDING` and `RUNNING`). Clients that exhaustively switch on status strings must add a `QUEUED` case.
+
+**Migration**: no action needed for read-only callers. Add `QUEUED` to any exhaustive status switch/match.
+
+---
+
 ### [next release] — C7 MCP Pydantic responses: field-narrowing on collection and context tools
 
 **Surface**: MCP tools `list_collections`, `get_collections_meta`, `get_collection_meta`, `update_collection`, `search_with_context`.

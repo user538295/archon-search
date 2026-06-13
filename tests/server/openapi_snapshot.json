@@ -1076,6 +1076,18 @@
             "title": "Namespace",
             "type": "string"
           },
+          "progress": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
           "result": {
             "anyOf": [
               {

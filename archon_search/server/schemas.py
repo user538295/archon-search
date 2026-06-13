@@ -132,6 +132,7 @@ class JobResponse(BaseModel):
     result: str | None = None
     error: str | None = None
     namespace: str
+    progress: dict | None = None
 
 
 class DeleteResponse(BaseModel):

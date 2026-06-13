@@ -35,6 +35,7 @@ def job_to_dict(job: IngestJob) -> dict:
         "result": job.result,
         "error": job.error,
         "namespace": job.namespace,
+        "progress": job.progress,
     }
 
 
