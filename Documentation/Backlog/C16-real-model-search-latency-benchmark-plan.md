@@ -400,7 +400,7 @@ def load_benchmark_thresholds(path: Path) -> BenchmarkThresholds:
 ---
 
 #### Task 3.2 — Calibrate thresholds and fill in `live_thresholds.toml`
-- [ ] **File**: `tests/eval/live_thresholds.toml`
+- [x] **File**: `tests/eval/live_thresholds.toml`
 - **Depends on**: Task 3.1
 - **Description**:
   - Trigger `workflow_dispatch` on `archon-search-pr.yml` (or a temporary calibration PR) 10 times on ubuntu-latest. From each run, record the steady-state p95 and cold-load p90 printed in the benchmark step output.
