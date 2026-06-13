@@ -292,7 +292,7 @@ def test_two_workers_sharing_data_dir_contend(tmp_path: Path) -> None: ...
 
 #### Task 2.3 — Apply `@pytest.mark.archon_unset_data_dir` to the 5 default-fallback tests
 
-- [ ] **Files**:
+- [x] **Files**:
   - `tests/test_paths.py::test_default_returns_home_archon`
   - `tests/test_key_manager.py::TestGetKeyFile::test_get_key_file_default`
   - `tests/test_jobs_paths.py::test_get_jobs_file_default`

@@ -18,6 +18,7 @@ import pytest
 from archon_search.paths import get_data_dir
 
 
+@pytest.mark.archon_unset_data_dir
 def test_default_returns_home_archon() -> None:
     """No env var set → fall back to ``Path.home() / ".archon-search"``."""
     assert get_data_dir() == Path.home() / ".archon-search"

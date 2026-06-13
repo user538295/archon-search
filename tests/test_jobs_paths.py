@@ -19,6 +19,7 @@ from archon_search.jobs.model import get_jobs_file
 from archon_search.jobs.store import JobStore
 
 
+@pytest.mark.archon_unset_data_dir
 def test_get_jobs_file_default() -> None:
     """No env vars set → fall back to ``~/.archon-search/archon-search-jobs.json``."""
     assert get_jobs_file() == Path.home() / ".archon-search" / "archon-search-jobs.json"

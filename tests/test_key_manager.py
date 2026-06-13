@@ -311,6 +311,7 @@ class TestGetKeyFile:
     """Tests for `get_key_file()` — the lazy replacement for the old module-level
     `KEY_FILE` constant (C9 Task 2.3)."""
 
+    @pytest.mark.archon_unset_data_dir
     def test_get_key_file_default(self) -> None:
         """No env vars set → ``Path.home() / ".archon-search" / ".search.env"``."""
         assert km.get_key_file() == Path.home() / ".archon-search" / ".search.env"

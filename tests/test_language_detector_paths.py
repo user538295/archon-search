@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.archon_unset_data_dir
 def test_get_fasttext_models_dir_default() -> None:
     """No env vars set → fall back to ``~/.archon-search/models``."""
     from archon_search.language_detector import get_fasttext_models_dir
