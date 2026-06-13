@@ -17,9 +17,11 @@ from archon_search.config import SearchConfig
 from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttext_models_dir
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import EmbedderCache
+from archon_search.jobs.backup_loop import BackupLoop
 from archon_search.jobs.scheduler import JobScheduler
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import load_or_generate_key
+from archon_search.paths import get_data_dir
 from archon_search.logging_setup import configure_logging
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
@@ -215,6 +217,22 @@ def create_app(
             scheduler_task = asyncio.create_task(scheduler.run())
             app.state._background_tasks.add(scheduler_task)
         app.state.scheduler = scheduler
+
+        # Startup: instantiate BackupLoop and start it as a background task.
+        # The trigger loop self-exits when ``backup.interval_hours == 0``; the
+        # completion loop always runs to drain any in-flight jobs left from a
+        # previous session. Always present on ``app.state`` so observability
+        # endpoints (``GET /status``) can read its state unconditionally.
+        backup_loop = BackupLoop(
+            job_store=app.state.job_store,
+            search_store=app.state.search_store,
+            config=config.backup,
+            data_dir=get_data_dir(),
+        )
+        app.state.backup_loop = backup_loop
+        backup_task = asyncio.create_task(backup_loop.run())
+        app.state._background_tasks.add(backup_task)
+        backup_task.add_done_callback(app.state._background_tasks.discard)
 
         # Startup: initialise telemetry if enabled
         if config.telemetry.enabled:

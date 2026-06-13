@@ -346,7 +346,7 @@ class BackupStatusDetail(BaseModel):
   - Checkpoint: `uv run pytest tests/test_backup_loop.py -x`
 
 #### Task 3.2 — Wire `BackupLoop` in `create_app()` lifespan + `app.state.backup_loop`
-- [ ] **File**: `archon_search/server/app.py`
+- [x] **File**: `archon_search/server/app.py`
 - **Depends on**: Task 3.1, Task 2.1
 - **Description**:
   - In `create_app()` lifespan handler, after `search_store` and `job_store` are ready (and after dispatch_fn is reassigned):
