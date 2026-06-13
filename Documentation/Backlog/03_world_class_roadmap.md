@@ -95,9 +95,12 @@ Goal: ship the features users actually came for. Each item must show a measurabl
 
 ### Active backlog (post-Phase C, not yet sequenced into D/E/F)
 
-- [ ] **C8. Extended setup wizard with optional feature selection** — adds an interactive feature-selection step to the wizard so users can enable any optional feature at install time (including automatic `pip install archon-search[<extra>]` invocation). Task 1.1 (`WizardFeatures` dataclass) shipped; 11 tasks remain. [[investigation](./C8-wizard-optional-features-investigation.md), [plan](./C8-wizard-optional-features-plan.md)]
+- [x] **C8. Extended setup wizard with optional feature selection** — adds an interactive feature-selection step to the wizard so users can enable any optional feature at install time (including automatic `pip install archon-search[<extra>]` invocation). [[investigation](../Completed/C8-wizard-optional-features-investigation.md), [plan](../Completed/C8-wizard-optional-features-plan.md)]
 - [x] **C9. Container support (Docker + GHCR)** — `docker run` and `docker compose up` start `archon-search` configured purely via env vars; all runtime state on one mounted volume; CPU (`:latest`) and NVIDIA GPU (`:gpu`) images published to GHCR on tag push. [[brief](../Completed/C9-container-support-brief.md), [plan](../Completed/C9-container-support-plan.md)]
-- [ ] **C13. Test perf: bypass FTS rebuild in tests that don't query FTS** — adds `rebuild_fts: bool = True` to `SearchPipeline.ingest_directory()` (mirroring `ingest_file`); estimated 127s → 90–100s default-suite median wall time. Proposed (not yet scheduled). [[brief](./C13-fts-rebuild-test-bypass-brief.md)]
+- [x] **C13. Test perf: bypass FTS rebuild in tests that don't query FTS** — adds `rebuild_fts: bool = True` to `SearchPipeline.ingest_directory()` (mirroring `ingest_file`); median wall time improved from ~127s to ~71s. [[brief](../Completed/C13-fts-rebuild-test-bypass-brief.md), [plan](../Completed/C13-fts-rebuild-test-bypass-plan.md)]
+- [x] **C14. Wizard UX improvements** — `--dry-run` flag, `--next-steps` suppression, improved summary formatting, structured error output, consistent exit-code contract. [[brief](../Completed/C14-wizard-ux-improvements-brief.md), [plan](../Completed/C14-wizard-ux-improvements-plan.md)]
+- [x] **C15. Wizard configurability expansion** — `--host`, `--port`, `--server-key`, `--enable-hyde`, `--enable-rag-fusion`, and six other Tier-1 Click options; `_apply_wizard_features_to_toml()` write logic; prints full API key with source. [[brief](../Completed/C15-wizard-configurability-expansion-brief.md), [plan](../Completed/C15-wizard-configurability-expansion-plan.md)]
+- [x] **C16. Real-model search latency benchmark** — `live_benchmark` pytest marker; `BenchmarkThresholds` + `load_benchmark_thresholds()`; steady-state p95 (100-iter) and cold-load p90 (N=10) tests with real fastembed + cross-encoder; model-cache restore + prefetch in CI. [[brief](../Completed/C16-real-model-search-latency-benchmark-brief.md), [plan](../Completed/C16-real-model-search-latency-benchmark-plan.md)]
 
 ## Phase D — Operability and portability (becomes serious to run)
 
@@ -249,9 +252,12 @@ If only one ordering is used for planning, use this — each phase is a coherent
 23. ✅ C7. MCP responses behind Pydantic models (`API-4`).
 
 **Active backlog**
-24. ⬜ C8. Extended setup wizard with optional feature selection (Task 1.1 shipped; 11 tasks remain).
+24. ✅ C8. Extended setup wizard with optional feature selection.
 25. ✅ C9. Container support (Docker + GHCR).
-26. ⬜ C13. Test perf: bypass FTS rebuild in tests that don't query FTS (proposed).
+26. ✅ C13. Test perf: bypass FTS rebuild in tests that don't query FTS.
+27. ✅ C14. Wizard UX improvements (dry-run, summary, exit-code contract).
+28. ✅ C15. Wizard configurability expansion (host, port, server-key, hyde, rag-fusion flags).
+29. ✅ C16. Real-model search latency benchmark (live_benchmark CI gate).
 
 **Test-suite infrastructure (parallel to Phase C)**
 - ✅ C10. Test-suite speed — pytest-xdist + `--dist=loadfile`.
@@ -260,30 +266,30 @@ If only one ordering is used for planning, use this — each phase is a coherent
 - ✅ C17. Install-lock parallel-test isolation + `Path.home()` ratchet guard.
 
 **Phase D — Operability and portability**
-27. ⬜ D1. Job contract completion (item 2).
-28. ⬜ D2. Export / import / backup / restore (item 20).
-29. ⬜ D3. Schema migration tooling (item 21).
-30. ⬜ D4. Streaming / incremental chunking (item 18).
-31. ⬜ D5. Maintenance jobs and policies (item 26).
-32. ⬜ D6. Install-time / background provider validation (item 23).
-33. ⬜ D7. Multi-key auth with rotation (`SEC-1`).
-34. ⬜ D8. Hashed `doc_id` for telemetry (`SEC-2`).
+30. ⬜ D1. Job contract completion (item 2).
+31. ⬜ D2. Export / import / backup / restore (item 20).
+32. ⬜ D3. Schema migration tooling (item 21).
+33. ⬜ D4. Streaming / incremental chunking (item 18).
+34. ⬜ D5. Maintenance jobs and policies (item 26).
+35. ⬜ D6. Install-time / background provider validation (item 23).
+36. ⬜ D7. Multi-key auth with rotation (`SEC-1`).
+37. ⬜ D8. Hashed `doc_id` for telemetry (`SEC-2`).
 
 **Phase E — Surface and integrations**
-35. ⬜ E1. Streaming search results (item 27).
-36. ⬜ E2. Python SDK.
-37. ⬜ E3. TypeScript SDK.
-38. ⬜ E4. Per-collection access-control policies (item 30).
-39. ⬜ E5. Connector and federation architecture (item 15).
-40. ⬜ E6. Admin / debug UI (item 29). *A4 prerequisite met; not yet built.*
+38. ⬜ E1. Streaming search results (item 27).
+39. ⬜ E2. Python SDK.
+40. ⬜ E3. TypeScript SDK.
+41. ⬜ E4. Per-collection access-control policies (item 30).
+42. ⬜ E5. Connector and federation architecture (item 15).
+43. ⬜ E6. Admin / debug UI (item 29). *A4 prerequisite met; not yet built.*
 
 **Phase F — Advanced positioning**
-41. ⬜ F1. Salience and temporal weighting (item 31).
-42. ⬜ F2. Semantic memory tiers (item 32).
-43. ⬜ F3. GraphRAG (item 33).
-44. ⬜ F4. Richer multimodal retrieval (item 34).
-45. ⬜ F5. Reassess horizontal scaling (item 35).
-46. ⬜ F6. Reassess pluggable storage backends (item 36).
+44. ⬜ F1. Salience and temporal weighting (item 31).
+45. ⬜ F2. Semantic memory tiers (item 32).
+46. ⬜ F3. GraphRAG (item 33).
+47. ⬜ F4. Richer multimodal retrieval (item 34).
+48. ⬜ F5. Reassess horizontal scaling (item 35).
+49. ⬜ F6. Reassess pluggable storage backends (item 36).
 
 ## Recommendation
 
@@ -293,7 +299,7 @@ If the goal is **a full-featured world-class search system that is also safe to 
 2. ✅ **Phase A** — ship metadata + filters + explain (user wins), and close the most painful safety debt (path, SQL, locks, fsync) in the same release. Cheap, broad impact, unlocks every later phase. (Search-failure semantics is closed via A3; see `BREAKING.md`.)
 3. ✅ **Phase B** — observability + production-model eval lane first; then the server-side multi-collection refactor and stronger routing. Without B1/B6 the later ranking work has no story.
 4. ✅ **Phase C** — the ranking-leap features (per-collection model, multilingual, enrichment, HyDE, RAG Fusion) plus C0/C0b install + release polish and C6/C7 hardening. All gated by the eval harness or BREAKING.md.
-5. ⬜ **Active backlog (post-Phase C)** — C8 wizard rework (partial, Task 1.1 shipped), C13 test perf. C9 container support and C17 install-lock isolation are complete. Land remaining items before opening Phase D, since they unblock UX (C8) and developer iteration speed (C13).
+5. ✅ **Active backlog (post-Phase C)** — C8 wizard, C9 container support, C13 test perf, C16 real-model benchmark, C17 install-lock isolation are all complete. Phase D is now open.
 6. ⬜ **Phase D** — finish the job contract, export/import, key rotation; the system becomes operable end-to-end.
 7. ⬜ **Phase E and F** — surface (SDKs, UI, connectors) and differentiators (salience, GraphRAG, multimodal, scale). Only after A–D close.
 
