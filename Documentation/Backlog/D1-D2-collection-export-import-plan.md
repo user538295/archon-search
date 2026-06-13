@@ -426,7 +426,7 @@ Namespace from auth token (not a query param).
 > **Releasable**: after Task 4.2; `POST /collections/{name}/export` is live. Operators can trigger an export and poll for completion.
 
 #### Task 4.1 — `_export_task()` worker
-- [ ] **File**: `archon_search/server/routes_export.py` (new file)
+- [x] **File**: `archon_search/server/routes_export.py` (new file)
 - **Depends on**: Task 1.3, Task 1.4, Task 2.1, Task 3.1, Task 3.2
 - **Description**:
   - **Prerequisite**: Add `async def list_chunks_raw(self, collection: str, namespace: str) -> AsyncIterator[dict]` to `SearchStore` in `archon_search/store.py`. This method scans the collection's LanceDB table and yields each row as a dict with all columns including the raw `vector` field (as a list of floats). Uses `await table.to_arrow()` or equivalent bulk read. Must include `doc_id`, `chunk_id`, `text`, `vector`, `source_path`, `indexed_at`, `file_type`, `language`, `metadata`, `acl`, `custom_score`, `ingested_by`, and `updated_at`. Add tests in `tests/test_store.py`: `test_list_chunks_raw_returns_all_chunks` and `test_list_chunks_raw_includes_vector`.

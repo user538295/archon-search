@@ -37,6 +37,7 @@ except PackageNotFoundError:
 
 from archon_search.server.routes_collections import router as collections_router
 from archon_search.server.routes_explain import router as explain_router
+from archon_search.server.routes_export import router as export_router
 from archon_search.server.routes_health import router as health_router
 from archon_search.server.routes_jobs import router as jobs_router
 from archon_search.server.routes_ready import router as ready_router
@@ -257,6 +258,7 @@ def create_app(
             config.rag_fusion.model,
         )
     app.include_router(collections_router)
+    app.include_router(export_router, prefix="/collections")
     app.include_router(health_router)
     app.include_router(ready_router)
     app.include_router(jobs_router)

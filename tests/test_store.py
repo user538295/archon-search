@@ -6711,3 +6711,72 @@ async def test_get_dominant_language_all_unknown_returns_empty(
 
     dominant = await connected_store.get_dominant_language(col_name)
     assert dominant == ""
+
+
+# ---------------------------------------------------------------------------
+# list_chunks_raw — Task 4.1 prerequisite
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_raw_returns_all_chunks(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """list_chunks_raw yields one dict per chunk."""
+    doc_id = _doc_id()
+    await connected_store.ensure_collection(col_name, _DIM)
+    chunks = [_chunk(doc_id, i) for i in range(3)]
+    await connected_store.ingest_chunks(col_name, chunks)
+
+    results = []
+    async for row in connected_store.list_chunks_raw(col_name, "default"):
+        results.append(row)
+
+    assert len(results) == 3
+    chunk_ids = {r["chunk_id"] for r in results}
+    expected_ids = {c.chunk_id for c in chunks}
+    assert chunk_ids == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_raw_includes_vector(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """list_chunks_raw includes the vector field as a list of floats."""
+    doc_id = _doc_id()
+    await connected_store.ensure_collection(col_name, _DIM)
+    chunk = _chunk(doc_id, 0)
+    await connected_store.ingest_chunks(col_name, [chunk])
+
+    async for row in connected_store.list_chunks_raw(col_name, "default"):
+        assert "vector" in row
+        assert isinstance(row["vector"], list)
+        assert len(row["vector"]) == _DIM
+        assert all(isinstance(v, float) for v in row["vector"])
+        break
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_raw_empty_collection_yields_nothing(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """list_chunks_raw returns empty iterator for an empty collection."""
+    await connected_store.ensure_collection(col_name, _DIM)
+
+    results = []
+    async for row in connected_store.list_chunks_raw(col_name, "default"):
+        results.append(row)
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_raw_nonexistent_collection_yields_nothing(
+    connected_store: SearchStore,
+) -> None:
+    """list_chunks_raw returns empty iterator for a non-existent collection."""
+    results = []
+    async for row in connected_store.list_chunks_raw("no-such-collection-xyz123", "default"):
+        results.append(row)
+
+    assert results == []

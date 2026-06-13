@@ -10,7 +10,7 @@ import logging
 import math
 import re
 import time
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -1889,6 +1889,44 @@ class SearchStore:
         except ValueError:
             return 0
         return await table.count_rows()
+
+    async def list_chunks_raw(self, collection: str, namespace: str) -> AsyncIterator[dict]:
+        """Yield every chunk row in *collection* as a raw dict.
+
+        Includes all persisted fields: ``doc_id``, ``chunk_id``, ``text``,
+        ``vector`` (as a list of floats), ``source_path``, ``indexed_at``,
+        ``file_type``, ``language``, ``metadata``, ``acl``, ``custom_score``,
+        ``ingested_by``, and ``updated_at``.
+
+        The *namespace* parameter is accepted for API symmetry but does not
+        affect table-name resolution (the collection name is the table name).
+
+        Returns an empty async iterator if the collection does not exist.
+        Uses ``table.query().to_list()`` for a full bulk scan.
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return
+        rows = await table.query().to_list()
+        for r in rows:
+            yield {
+                "doc_id": r["doc_id"],
+                "chunk_id": r["chunk_id"],
+                "text": r["text"],
+                "vector": list(r["vector"]),
+                "source_path": r["source_path"],
+                "indexed_at": r["indexed_at"],
+                "file_type": r.get("file_type") or "",
+                "language": r.get("language") or "",
+                "metadata": r.get("metadata") or "{}",
+                "acl": list(r["acl"]) if isinstance(r.get("acl"), list) else None,
+                "custom_score": r.get("custom_score"),
+                "ingested_by": r.get("ingested_by") or "",
+                "updated_at": r.get("updated_at") or r["indexed_at"],
+            }
 
     async def count_untagged_language_chunks(self, collection: str) -> int:
         """Return the number of chunks in *collection* where ``language = ''``.
