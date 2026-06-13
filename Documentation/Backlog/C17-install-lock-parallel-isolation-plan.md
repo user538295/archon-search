@@ -214,7 +214,7 @@ def test_two_workers_sharing_data_dir_contend(tmp_path: Path) -> None: ...
 
 #### Task 1.2 — Add `tests/test_no_hardcoded_path_home.py::test_path_home_ratchet` scan + bidirectional assertion
 
-- [ ] **File**: `tests/test_no_hardcoded_path_home.py`
+- [x] **File**: `tests/test_no_hardcoded_path_home.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - Module-level constants: `PATTERN = re.compile(r"\bPath\.home\s*\(")`, `ROOT = Path(__file__).resolve().parent.parent / "archon_search"`, `ALLOWLIST_FILE = Path(__file__).resolve().parent / "path_home_allowlist.txt"`, `FILE_ALLOWLIST = {"paths.py"}`.
@@ -237,7 +237,7 @@ def test_two_workers_sharing_data_dir_contend(tmp_path: Path) -> None: ...
 
 #### Task 1.3 — Add meta-tests in `tests/test_no_hardcoded_path_home.py`
 
-- [ ] **File**: `tests/test_no_hardcoded_path_home.py`
+- [x] **File**: `tests/test_no_hardcoded_path_home.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - Adds 4 meta-tests that exercise `PATTERN` directly against in-memory fixtures (no codebase scan). Mirrors `tests/test_no_fstring_sql.py` lines 31–80.
