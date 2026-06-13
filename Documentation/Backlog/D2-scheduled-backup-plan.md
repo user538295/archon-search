@@ -381,7 +381,7 @@ class BackupStatusDetail(BaseModel):
 > **Releasable**: after Task 4.2 — operators can trigger backups via REST and inspect backup state via `GET /status`.
 
 #### Task 4.1 — `POST /backup/trigger` endpoint + new schemas
-- [ ] **File**: `archon_search/server/routes_backup.py` (new), `archon_search/server/schemas.py`, `archon_search/server/app.py`, `tests/server/openapi_snapshot.json`
+- [x] **File**: `archon_search/server/routes_backup.py` (new), `archon_search/server/schemas.py`, `archon_search/server/app.py`, `tests/server/openapi_snapshot.json`
 - **Depends on**: Task 3.2
 - **Description**:
   - `schemas.py`: add `SkippedItem(BaseModel)` with `collection: str` and `reason: str`

@@ -162,6 +162,20 @@ class ExcludedCollectionSchema(BaseModel):
     reason: str
 
 
+class SkippedItem(BaseModel):
+    """One entry in BackupTriggerResponse.skipped — collection + machine-readable reason."""
+
+    collection: str
+    reason: str
+
+
+class BackupTriggerResponse(BaseModel):
+    """Response body for POST /backup/trigger (D2 Task 4.1)."""
+
+    queued: list[str]
+    skipped: list[SkippedItem]
+
+
 class PatchCollectionBody(BaseModel):
     embedding_model: str
 

@@ -25,6 +25,31 @@
         "title": "AddCollectionRequest",
         "type": "object"
       },
+      "BackupTriggerResponse": {
+        "description": "Response body for POST /backup/trigger (D2 Task 4.1).",
+        "properties": {
+          "queued": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Queued",
+            "type": "array"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/SkippedItem"
+            },
+            "title": "Skipped",
+            "type": "array"
+          }
+        },
+        "required": [
+          "queued",
+          "skipped"
+        ],
+        "title": "BackupTriggerResponse",
+        "type": "object"
+      },
       "CheckStatus": {
         "description": "Storage check result for readiness probes.",
         "enum": [
@@ -1800,6 +1825,25 @@
         "title": "SearchResultSchema",
         "type": "object"
       },
+      "SkippedItem": {
+        "description": "One entry in BackupTriggerResponse.skipped \u2014 collection + machine-readable reason.",
+        "properties": {
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection",
+          "reason"
+        ],
+        "title": "SkippedItem",
+        "type": "object"
+      },
       "StatsResponse": {
         "properties": {
           "by_collection": {
@@ -2098,6 +2142,40 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/backup/trigger": {
+      "post": {
+        "description": "Enqueue backup export jobs for every eligible collection in the caller's namespace.",
+        "operationId": "trigger_backup_backup_trigger_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupTriggerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Trigger Backup"
+      }
+    },
     "/collections/": {
       "get": {
         "description": "List all known collections with basic metadata.",
