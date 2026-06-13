@@ -194,6 +194,80 @@ def test_list_jobs_kind_ingest_excludes_export_import(
 
 
 @pytest.mark.integration
+def test_get_jobs_source_filter_backup(client: TestClient, tmp_store: JobStore) -> None:
+    """?source=backup returns only backup-sourced jobs."""
+    tmp_store.create_export(
+        collection="u",
+        output_path="/tmp/u.tar.gz",
+        tmp_path="/tmp/u.jsonl.tmp",
+        namespace=DEFAULT_NAMESPACE,
+        source="user",
+    )
+    backup_job = tmp_store.create_export(
+        collection="b",
+        output_path="/tmp/b.tar.gz",
+        tmp_path="/tmp/b.jsonl.tmp",
+        namespace=DEFAULT_NAMESPACE,
+        source="backup",
+    )
+
+    response = client.get("/jobs?source=backup")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["job_id"] == backup_job.job_id
+
+
+@pytest.mark.integration
+def test_get_jobs_source_filter_user(client: TestClient, tmp_store: JobStore) -> None:
+    """?source=user returns only user-sourced jobs."""
+    user_job = tmp_store.create_export(
+        collection="u",
+        output_path="/tmp/u.tar.gz",
+        tmp_path="/tmp/u.jsonl.tmp",
+        namespace=DEFAULT_NAMESPACE,
+        source="user",
+    )
+    tmp_store.create_export(
+        collection="b",
+        output_path="/tmp/b.tar.gz",
+        tmp_path="/tmp/b.jsonl.tmp",
+        namespace=DEFAULT_NAMESPACE,
+        source="backup",
+    )
+
+    response = client.get("/jobs?source=user")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["job_id"] == user_job.job_id
+
+
+@pytest.mark.integration
+def test_get_jobs_source_filter_combined(client: TestClient, tmp_store: JobStore) -> None:
+    """?source=user&source=backup returns both."""
+    tmp_store.create_export(
+        collection="u",
+        output_path="/tmp/u.tar.gz",
+        tmp_path="/tmp/u.jsonl.tmp",
+        namespace=DEFAULT_NAMESPACE,
+        source="user",
+    )
+    tmp_store.create_export(
+        collection="b",
+        output_path="/tmp/b.tar.gz",
+        tmp_path="/tmp/b.jsonl.tmp",
+        namespace=DEFAULT_NAMESPACE,
+        source="backup",
+    )
+
+    response = client.get("/jobs?source=user&source=backup")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+
+
+@pytest.mark.integration
 def test_list_jobs_unauthenticated(tmp_path: Path, tmp_store: JobStore) -> None:
     """GET /jobs without a bearer token returns 401."""
     config = SearchConfig()

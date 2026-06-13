@@ -408,6 +408,7 @@ async def list_jobs(
     request: Request,
     status: list[str] = Query(default=[]),
     kind: list[str] = Query(default=[]),
+    source: list[str] = Query(default=[]),
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None),
 ) -> JobListResponse:
@@ -421,6 +422,12 @@ async def list_jobs(
     if status:
         status_upper = {s.upper() for s in status}
         jobs = [j for j in jobs if j.status.value in status_upper]
+
+    # Filter by source (only meaningful for ExportJob/ImportJob; other job types
+    # have no `source` attribute and are excluded when the filter is active).
+    if source:
+        source_set = {s.lower() for s in source}
+        jobs = [j for j in jobs if getattr(j, "source", None) in source_set]
 
     # Filter by kind using exact type matching (not isinstance, since IngestJob is base class)
     if kind:

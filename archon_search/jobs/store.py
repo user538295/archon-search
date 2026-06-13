@@ -163,13 +163,18 @@ class JobStore:
         self.update(job_id, progress={"processed": processed, "total": total, "phase": phase})
 
     def list_queued_bulk(self) -> list[ExportJob | ImportJob]:
-        """Return QUEUED ExportJob/ImportJob instances sorted by created_at ascending (FIFO)."""
+        """Return QUEUED ExportJob/ImportJob instances sorted by (source_priority, created_at).
+
+        User-sourced jobs (``source="user"``) sort before backup-sourced jobs
+        (``source="backup"``). Within each tier, FIFO is preserved by
+        ``created_at`` ascending.
+        """
         bulk = [
             job
             for job in self._jobs.values()
             if isinstance(job, (ExportJob, ImportJob)) and job.status == JobStatus.QUEUED
         ]
-        bulk.sort(key=lambda j: j.created_at)
+        bulk.sort(key=lambda j: (0 if j.source == "user" else 1, j.created_at))
         return bulk  # type: ignore[return-value]
 
     def count_by_status(self) -> dict[JobStatus, int]:

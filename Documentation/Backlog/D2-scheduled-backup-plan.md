@@ -190,7 +190,7 @@ class BackupStatusDetail(BaseModel):
   - Checkpoint: `uv run pytest tests/test_job_source_field.py -x`
 
 #### Task 1.3 — `list_queued_bulk()` priority sort + `GET /jobs?source` filter
-- [ ] **File**: `archon_search/jobs/store.py`, `archon_search/server/routes_jobs.py`
+- [x] **File**: `archon_search/jobs/store.py`, `archon_search/server/routes_jobs.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - `list_queued_bulk()`: change sort key from `lambda j: j.created_at` to `lambda j: (0 if j.source == "user" else 1, j.created_at)`. User-sourced jobs sort before backup-sourced jobs; FIFO is preserved within each tier. This is the `JobStore` API contract change noted in the brief.
