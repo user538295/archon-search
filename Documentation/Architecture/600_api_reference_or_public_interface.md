@@ -124,8 +124,17 @@ All paths under `/collections`. Namespace gating: cross-namespace access surface
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
 | POST | `/ingest` | Submit an ingest job; returns `202` immediately. When `path` is non-null it is validated by `_path_safety.validate_ingest_path`, returning `400` (`"path is unsafe: <reason>"`) on rejection (empty/whitespace-only/NUL/non-absolute/`..`-traversal); `path: null` documents-only ingest is unaffected. Returns `503` (body `{"error": "store_busy", ...}`, header `Retry-After: 30`) when a reindex holds the per-collection lock; ingest to a different collection is unaffected. The `ingested_by` field in the body is always overwritten server-side from the `X-Ingested-By` header (missing → `"http"`; legacy `"archon-search-cli"` → `"cli"`; unknown → `"http"` + WARNING log; truncated to 32 chars). `collection` is rejected only when empty string (whitespace-only is currently accepted; inconsistent with `SearchRequest`). | `IngestRequest` — `{collection, path?, documents?, ingested_by (overwritten)}` | `JobResponse` |
-| GET | `/jobs/{job_id}` | Read job status; `404` for cross-namespace IDs. | — | `JobResponse` |
+| GET | `/jobs` | **D1/D2** — List all jobs visible to the caller's namespace, sorted by `created_at` descending. Supports cursor-based pagination and filtering by status and job kind. | Query: `status=` (repeatable, any `JobStatus` value), `kind=` (repeatable: `ingest`, `reindex`, `delete`, `export`, `import`), `limit=50` (max 200), `cursor=` (job_id of the last item from the previous page). | `{"items": list[JobResponse], "next_cursor": str \| null, "total": int}` |
+| GET | `/jobs/{job_id}` | Read job status; `404` for cross-namespace IDs. `JobResponse` now includes `progress: dict \| null` (D1 addition — `null` for job types that don't set it). | — | `JobResponse` |
 | DELETE | `/jobs/{job_id}` | Cancel a job. Terminal jobs (`DONE`/`FAILED`/`CANCELLED`) return `200` (idempotent); `RUNNING`/`PENDING` transition to `CANCELLING` and return `202`; already-`CANCELLING` jobs also return `202`. | — | `JobResponse` |
+| POST | `/jobs/{job_id}/resume` | **D1/D2** — Resume a `FAILED` export or import job from its last checkpoint. Non-bulk jobs (`IngestJob`, `ReindexJob`, `DeleteJob`) return `409` with `{"error": "job_not_resumable"}`. Missing archive/tmp file returns `422`. On success, transitions the job to `QUEUED` and returns `202`. | — | `JobResponse` (status=`QUEUED`) |
+
+### `routes_export.py` (D1/D2)
+
+| Method | Path | Purpose | Request schema | Response schema |
+| --- | --- | --- | --- | --- |
+| POST | `/collections/{name}/export` | Start an export job for the named collection. Returns `202` with the new job (status `QUEUED`). The job writes a `.tar.gz` archive to `output_path` (default: `get_data_dir() / "exports"`). `output_path` must be within `get_data_dir()` — paths outside return `400`. Collection not found → `404`. Collection locked (reindex in progress) → `409`. Poll `GET /jobs/{job_id}` for progress. | `{"output_path": str}` (optional; default: `get_data_dir() / "exports"`) | `JobResponse` (status=`QUEUED`) |
+| POST | `/collections/{name}/import` | Start an import job from a `.tar.gz` archive. Returns `202` with the new job. Archive must be within `get_data_dir()` (`400` otherwise). Archive not found → `422`. Unsafe tar members → `422`. Schema version mismatch (without `ignore_schema_version=true`) → `422`. Embedding model mismatch → `422` (always; not bypassable). Collection already exists (without `force_overwrite=true`) → `409`. | `{"path": str, "force_overwrite": bool = false, "ignore_schema_version": bool = false, "on_error": "fail"\|"skip" = "fail"}` | `JobResponse` (status=`QUEUED`) |
 
 ### `routes_explain.py` (A4)
 
@@ -263,7 +272,7 @@ When telemetry is disabled, both endpoints return `DisabledResponse` (`schemas_t
 
 ## MCP tools
 
-Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mounts at `/mcp` and is wrapped with the same `APIKeyMiddleware`; only `/health` is exempt.
+Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mounts at `/mcp` and is wrapped with the same `APIKeyMiddleware`; only `/health` is exempt. **13 tools total** as of D1/D2.
 
 | Tool name | Purpose | Arguments | Returns |
 | --- | --- | --- | --- |
@@ -278,6 +287,8 @@ Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mount
 | `list_documents` | List documents in a collection, validated through `DocumentInfoSchema`. | `collection?`, `limit: int = 100` | `list[DocumentInfoSchema dict]` — fields: `doc_id`, `source_path`, `chunk_count`, `indexed_at` |
 | `delete_document` | Delete all chunks for one document, validated through `DeleteDocumentSchema`. | `doc_id: str`, `collection?` | `{"deleted": int}` |
 | `update_collection` | **C1** — Update the embedding model for a collection. Implements the same per-collection model state machine as `PATCH /collections/{name}`. Validated through `CollectionDetailSchema`. | `collection_name: str`, `embedding_model: str` | `CollectionDetailSchema dict` or `{error, code: "not_found" \| "conflict" \| "validation_error" \| "internal_error"}`. See `BREAKING.md` C7 entry. |
+| `export_collection` | **D1/D2** — Start an export job for a collection. Non-blocking: returns a `JobResponse` dict immediately (job is `QUEUED`); client polls `GET /jobs/{job_id}` for progress. Uses `DEFAULT_NAMESPACE`. | `collection: str`, `output_path: str = ""` | `job_to_dict(job)` on success. `{error, code: "path_unsafe"}` on unsafe path. `{error, code: "not_found"}` if collection missing. |
+| `import_collection` | **D1/D2** — Start an import job from a `.tar.gz` archive. Non-blocking: returns a `JobResponse` dict immediately (job is `QUEUED`). Pre-validates archive (schema version, embedding model match, tar safety). Uses `DEFAULT_NAMESPACE`. | `collection: str`, `path: str`, `force_overwrite: bool = False`, `ignore_schema_version: bool = False`, `on_error: str = "fail"` | `job_to_dict(job)` on success. `{error, code}` on validation failure. |
 
 **Breaking-change note (from [`/BREAKING.md`](../../BREAKING.md)):**
 
@@ -314,6 +325,19 @@ Entry point: `archon-search` (`archon_search/cli/main.py`, Click group). Most su
 | `config` | `show` | Print effective config (defaults when no file exists) (`cli/config_cmd.py`). | `--config` |
 | `config` | `get <section.field>` | Read one dotted key. Requires exactly a two-part `section.field` key; other formats error out. | `--config` |
 | `config` | `set <section.field> <value>` | Write one dotted key (bool/int/float coercion). | `--config` |
+| `export` | — | **D1/D2** — Start an export job for a collection via `POST /collections/{collection}/export`. Prints the `job_id` and exits 0 by default. `--wait` polls until DONE/FAILED, printing progress updates and the resulting archive path. | `collection: str`, `--output-dir PATH`, `--wait / --no-wait`, `--api-url TEXT`, `--api-key TEXT` |
+| `import` | — | **D1/D2** — Start an import job from a `.tar.gz` archive via `POST /collections/{collection}/import`. `--wait` polls until DONE/FAILED, printing imported/skipped/total counts; warns when `skipped > 0`. Exits 1 on FAILED. | `collection: str`, `path: str`, `--force-overwrite / --no-force-overwrite`, `--ignore-schema-version / --no-ignore-schema-version`, `--on-error [fail\|skip]`, `--wait / --no-wait`, `--api-url TEXT`, `--api-key TEXT` |
+
+## `[jobs]` config section (D1/D2 additions)
+
+Controls bulk job (export/import) concurrency and checkpoint granularity. All fields have defaults that take effect when the section is absent from `archon-search.toml`. Existing ingest/reindex/delete jobs are unaffected — they dispatch immediately regardless of this section.
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `max_concurrent_bulk` | `int` | `1` | Maximum number of export/import jobs running concurrently. Must be ≥ 1 (config load raises `ConfigError` otherwise). |
+| `checkpoint_interval` | `int` | `100` | Documents written between progress checkpoints. Lower = more granular progress + finer resume granularity; higher = less write amplification. Must be ≥ 1. |
+
+**Bulk job lifecycle**: export and import jobs are created with status `QUEUED`. The `JobScheduler` (5-second tick) promotes QUEUED bulk jobs to `RUNNING` when a slot is available (up to `max_concurrent_bulk`). QUEUED jobs are never evicted by the 7-day eviction guard; only terminal jobs (`DONE`, `FAILED`, `CANCELLED`) are evicted.
 
 ## `[routing]` config section (B4 additions)
 

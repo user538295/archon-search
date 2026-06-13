@@ -158,6 +158,13 @@ See `150_security_and_privacy_architecture.md` for the full auth model, includin
 - `[search].top_k_retrieve`, `[search].top_k_return` — pipeline shortlist and final cut-off.
 - `[server].host`, `[server].port` — defaults bind to `127.0.0.1`.
 - `[telemetry].enabled` — opt-in, default off. `[telemetry].export_enabled = true` is coerced to `false` at config load with a warning in v1 (reserved for a future release).
+- `[jobs].max_concurrent_bulk` (D1/D2) — maximum concurrent export/import jobs; default 1.
+- `[jobs].checkpoint_interval` (D1/D2) — documents between progress checkpoints; default 100.
+
+**Queued D1/D2 BREAKING.md entries for the next release:**
+- `JobResponse` now includes optional `progress: dict | null` (default `null` for all existing job types).
+- `JobStatus` now includes `QUEUED` as a valid value. Clients that exhaustively switch on status must add a `QUEUED` case.
+- Two new MCP tools added: `export_collection`, `import_collection` (tool count 11 → 13; additive).
 
 ## Compatibility Contract
 

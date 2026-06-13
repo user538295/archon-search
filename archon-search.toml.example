@@ -104,6 +104,15 @@ collections = []
 # Set interactively via `archon-search wizard` or with the `--watch / --no-watch` flag.
 watch = false
 
+[jobs]
+# Maximum number of export/import jobs that may run concurrently.
+# Existing ingest/reindex/delete jobs are unaffected — they dispatch immediately.
+max_concurrent_bulk = 1
+# Number of documents written between progress checkpoints.
+# Lower values produce more granular progress updates and finer resume granularity;
+# higher values reduce write amplification on the job store.
+checkpoint_interval = 100
+
 [logging]
 level = "INFO"
 # Set to "" to disable file logging (stderr only — useful in containers).

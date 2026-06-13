@@ -30,7 +30,8 @@ Built by `archon_search.server.app.create_app`. The lifespan handler connects `S
 | Search | `server/routes_search.py` | `POST /search` (single-collection or multi-collection fan-out — see below) |
 | Route | `server/routes_route.py` | `POST /route` |
 | Collections | `server/routes_collections.py` | `GET /collections/`, `POST /collections/` (202), `GET /collections/{name}`, `DELETE /collections/{name}`, `PATCH /collections/{name}`, `POST /collections/{name}/reindex` (202) |
-| Jobs / Ingest | `server/routes_jobs.py` | `POST /ingest` (202), `GET /jobs/{job_id}`, `DELETE /jobs/{job_id}` |
+| Jobs / Ingest | `server/routes_jobs.py` | `POST /ingest` (202), `GET /jobs` (D1/D2), `GET /jobs/{job_id}`, `DELETE /jobs/{job_id}`, `POST /jobs/{job_id}/resume` (202, D1/D2) |
+| Export / Import | `server/routes_export.py` | `POST /collections/{name}/export` (202, D1/D2), `POST /collections/{name}/import` (202, D1/D2) |
 | Telemetry | `server/routes_telemetry.py` | `GET /telemetry/stats`, `GET /telemetry/entries` |
 
 Error envelopes use `schemas.ErrorDetail`. 401 returns `WWW-Authenticate: Bearer` from the middleware. Job-issuing routes return `schemas.JobResponse`.
@@ -77,6 +78,8 @@ Tools registered in `server/mcp.py` (verified against source):
 | `list_documents` | `SearchPipeline.list_documents` | |
 | `delete_document` | `SearchPipeline.delete_document` | |
 | `update_collection` | `SearchStore.update_collection_meta` (direct) | **C1** — 11th tool. Accepts `collection_name: str` and `embedding_model: str`; implements the per-collection model state machine (same logic as `PATCH /collections/{name}`). Returns the updated `CollectionMeta` dict or `{error, code}`. |
+| `export_collection` | `JobStore.create_export` (direct) | **D1/D2** — 12th tool. Non-blocking; creates a QUEUED export job. Returns `job_to_dict(job)` or `{error, code}`. |
+| `import_collection` | `JobStore.create_import` (direct) | **D1/D2** — 13th tool. Non-blocking; pre-validates archive and creates a QUEUED import job. Returns `job_to_dict(job)` or `{error, code}`. |
 
 > **Discrepancy with CLAUDE.md:** the project description names MCP tools such as `search_status`, `search_start`, `search_stop`, `search_ingest`, `search_collection_{list,add,remove,info,reindex}`. The current `server/mcp.py` does not register those names. The list above is what the running server actually exposes. See source: `archon_search/server/mcp.py`.
 
@@ -104,9 +107,20 @@ Failure modes (see source: `archon_search/watcher.py`):
 
 ### Job store
 
-`archon_search/jobs/store.py` is the durable state machine for long-running work. `JobStatus` values are `PENDING`, `RUNNING`, `DONE`, `FAILED`, `CANCELLING`, `CANCELLED` — there is no `SUCCEEDED`. The `types.py` module defines `IngestJob` plus `ReindexJob` and `DeleteJob` subclasses, but the persistent `JobStore` is hard-coded to reconstruct every record as `IngestJob` on load; `ReindexJob` / `DeleteJob` are unused by the running REST paths (the reindex route creates an `IngestJob`). Jobs are serialised as JSON to `~/.archon-search/archon-search-jobs.json` with atomic-rename writes. Crash recovery: any `RUNNING` or `CANCELLING` job loaded from disk is rewritten to `FAILED` with `error="process_restart"`. Jobs older than 7 days are evicted on every write (and on load). `JobStore.transition(job_id, from_statuses, to_status)` exists and enforces a from-status guard, but only `DELETE /jobs/{job_id}` uses it; the ingest lifecycle wrapper (`_default_ingest_task`) moves `PENDING -> RUNNING -> DONE/FAILED/CANCELLED` via plain `store.update(...)`.
+`archon_search/jobs/store.py` is the durable state machine for long-running work. `JobStatus` values are `PENDING`, `QUEUED` (D1/D2 — bulk jobs waiting for a scheduler slot), `RUNNING`, `DONE`, `FAILED`, `CANCELLING`, `CANCELLED` — there is no `SUCCEEDED`. The `types.py` module defines `IngestJob` as the base, plus `ReindexJob`, `DeleteJob`, `ExportJob` (D1/D2), and `ImportJob` (D1/D2) subclasses. Jobs are serialised as JSON to `~/.archon-search/archon-search-jobs.json` with atomic-rename writes. Crash recovery: any `RUNNING` or `CANCELLING` job loaded from disk is rewritten to `FAILED` with `error="process_restart"`; `QUEUED` jobs survive crashes (they re-enter the scheduler queue on next tick). Jobs older than 7 days are evicted — but only terminal jobs (`DONE`, `FAILED`, `CANCELLED`); non-terminal jobs (including `QUEUED`, `PENDING`, `RUNNING`, `CANCELLING`) are never evicted regardless of age (D1/D2 eviction guard). `JobStore.transition(job_id, from_statuses, to_status)` exists and enforces a from-status guard. `update_progress(job_id, processed, total, phase)` updates the `progress: dict | null` field on any job.
 
-Routes that issue jobs: `POST /ingest`, `POST /collections/`, `POST /collections/{name}/reindex`. The client then polls `GET /jobs/{job_id}`.
+Routes that issue jobs: `POST /ingest`, `POST /collections/`, `POST /collections/{name}/reindex`, `POST /collections/{name}/export` (D1/D2), `POST /collections/{name}/import` (D1/D2). The client then polls `GET /jobs/{job_id}` or lists all jobs with `GET /jobs` (D1/D2). A FAILED export or import job can be resumed via `POST /jobs/{job_id}/resume` (D1/D2).
+
+### Bulk job scheduler (D1/D2)
+
+`archon_search/jobs/scheduler.py` contains `JobScheduler`, a background service that promotes QUEUED bulk jobs (export/import) to RUNNING when concurrency slots are available. It runs a 5-second tick loop as an `asyncio.Task` in the FastAPI lifespan, alongside the existing `SearchStore` connection and `EmbedderCache`. On each tick, the scheduler:
+
+1. Counts active (non-done) bulk tasks.
+2. Computes available slots: `max(0, max_concurrent_bulk - active_running)`.
+3. Promotes QUEUED jobs in FIFO (`created_at` ascending) order via `store.transition(job_id, {QUEUED}, RUNNING)`.
+4. Calls the dispatch closure for each promoted job; on dispatch failure, transitions the job to FAILED.
+
+The dispatch closure (wired at `run_server()` time) creates an asyncio.Task for `_export_task()` or `_import_task()` and calls `scheduler.register_task(task)`. Existing ingest/reindex/delete jobs are unaffected — they dispatch immediately via `asyncio.create_task()` without going through the scheduler.
 
 ## Sequence: watcher-triggered sync
 

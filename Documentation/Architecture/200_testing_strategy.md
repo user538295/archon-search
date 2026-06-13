@@ -47,6 +47,7 @@ flowchart TB
 Integration tests exercise real components against local infrastructure. They run in the default suite. Use this marker when a test needs a real `SearchStore`, real LanceDB index on disk, or real OS service interactions — anything that the stubs in `conftest.py` deliberately replace.
 
 - CI triggers: `archon-search-pr.yml` runs the integration suite on every PR, and `archon-search-release.yml` re-runs it on every tag push (both with a disk-backed `--basetemp=/var/tmp/archon-search-it` because the GitHub-hosted runner's `/tmp` is tmpfs and crash-injection tests skip on tmpfs). Both workflows pass `-m integration tests/` with `--cov-append`, so integration coverage rolls into the same `.coverage` file as the default + eval steps before the `--fail-under=85` gate runs.
+- **D1/D2 export/import tests** are marked `integration`: `tests/test_routes_export.py`, `tests/test_jobs_list_resume.py`, `tests/test_mcp_export.py`, `tests/test_export_worker.py`, and `tests/test_import_worker.py`. These use a real `SearchStore` and LanceDB on disk. Unit-only tests (`tests/test_job_store_queued.py`, `tests/test_export_archive.py`, `tests/test_scheduler.py`, `tests/test_path_safety_export.py`, `tests/test_cli_export.py`) are unmarked and run in the default tier with stubs.
 
 ### `eval` — `uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/`
 

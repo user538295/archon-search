@@ -653,7 +653,7 @@ Namespace from auth token (not a query param).
 ### Final Phase — Verification & Documentation
 
 #### Task 9.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, API docs, architecture docs, user guides, `CLAUDE.md`, `CHANGELOG`) and update every file whose content is affected by D1+D2:

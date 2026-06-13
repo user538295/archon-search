@@ -77,7 +77,7 @@ The runtime is a layered pipeline; understanding the seam between these modules 
 - `jobs/` is the async job store (model + store) used by long-running ingest/reindex operations exposed over the API.
 - `key_manager.py` owns the API-key bootstrap (auto-generates the key file with mode 600 on first start; `ARCHON_SEARCH_API_KEY` env overrides; `ARCHON_SEARCH_KEY_FILE` redirects the path; otherwise the file lives at `get_data_dir() / ".search.env"` — see `paths.py`).
 - `paths.py` is the single source of truth for the runtime data directory: `get_data_dir()` reads `ARCHON_SEARCH_DATA_DIR` and falls back to `~/.archon-search/`. All path accessors (`key_manager.get_key_file()`, `jobs.get_jobs_file()`, `language_detector.get_fasttext_models_dir()`, `cli/ingest.py` history default, `config.load_config()` overrides for `db_path`/`log_file`/`telemetry.log_dir`) derive from it, so a single env var relocates the entire runtime tree — used by the Docker image to mount everything under `/data`.
-- `config.py` + `constants.py` load `~/.archon-search/archon-search.toml` (see `archon-search.toml.example`). `load_config()` accepts env-var overrides for `ARCHON_SEARCH_HOST`, `ARCHON_SEARCH_PORT`, and `ARCHON_SEARCH_DATA_DIR`, and a `serve: bool` kwarg that flips the host default to `0.0.0.0` (used by `archon-search serve`).
+- `config.py` + `constants.py` load `~/.archon-search/archon-search.toml` (see `archon-search.toml.example`). `load_config()` accepts env-var overrides for `ARCHON_SEARCH_HOST`, `ARCHON_SEARCH_PORT`, and `ARCHON_SEARCH_DATA_DIR`, and a `serve: bool` kwarg that flips the host default to `0.0.0.0` (used by `archon-search serve`). The `[jobs]` TOML section configures bulk job concurrency: `max_concurrent_bulk` (default `1`) and `checkpoint_interval` (default `100`).
 - `logging_setup.configure_logging()` attaches a `StreamHandler(sys.stderr)` to the `archon_search` logger when `ARCHON_SEARCH_CONTAINER=1`, so `docker logs` captures application output even with an empty `log_file`.
 - `platform/` (`runtime.py`, `service.py`, `macos.py`, `linux.py`, `windows.py`) handles OS-specific service install/uninstall; `install.py` + `cli/install_cmd.py` wire it to the CLI.
 
@@ -85,13 +85,13 @@ The runtime is a layered pipeline; understanding the seam between these modules 
 
 `app.py` builds the FastAPI app; `mcp.py` exposes the same control-plane tools over MCP using the shared auth middleware (`middleware_auth.py`). All endpoints except `GET /health` require a `Bearer` token.
 
-Routes are split per resource: `routes_health.py`, `routes_state.py`, `routes_status.py`, `routes_search.py`, `routes_route.py`, `routes_collections.py`, `routes_jobs.py`, `routes_telemetry.py`, `routes_explain.py`. `schemas.py` + `schemas_telemetry.py` are the Pydantic request/response models. `GET /openapi.json` is the authoritative API contract — keep it in sync, and record breaking changes in `BREAKING.md`.
+Routes are split per resource: `routes_health.py`, `routes_state.py`, `routes_status.py`, `routes_search.py`, `routes_route.py`, `routes_collections.py`, `routes_jobs.py`, `routes_export.py`, `routes_telemetry.py`, `routes_explain.py`. `schemas.py` + `schemas_telemetry.py` are the Pydantic request/response models. `GET /openapi.json` is the authoritative API contract — keep it in sync, and record breaking changes in `BREAKING.md`.
 
-MCP tools (registered in `mcp.py`, 10 total): `search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document`. They share the REST auth layer but their names do not mirror the REST routes 1:1 — consult `mcp.py` as the source of truth.
+MCP tools (registered in `mcp.py`, 13 total): `search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document`, `update_collection`, `export_collection`, `import_collection`. They share the REST auth layer but their names do not mirror the REST routes 1:1 — consult `mcp.py` as the source of truth.
 
 ### CLI (`archon_search/cli/`)
 
-`main.py` is the `archon-search` entry point (Click). Subcommands: `start`, `stop`, `status`, `serve`, `ingest`, `sync`, `collection`, `config_cmd`, `install_cmd`. `_helpers.py` is shared CLI infrastructure. `serve.py` is the container / direct-run entry point: it loads config with `serve=True` (so the host default is `0.0.0.0`), then calls `run_server(config)` in the foreground — it never touches `launchd`/`systemd`.
+`main.py` is the `archon-search` entry point (Click). Subcommands: `start`, `stop`, `status`, `serve`, `ingest`, `sync`, `collection`, `config_cmd`, `install_cmd`, `export`, `import`. `_helpers.py` is shared CLI infrastructure. `serve.py` is the container / direct-run entry point: it loads config with `serve=True` (so the host default is `0.0.0.0`), then calls `run_server(config)` in the foreground — it never touches `launchd`/`systemd`.
 
 ### Telemetry (`archon_search/telemetry/`)
 
