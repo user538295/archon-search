@@ -404,7 +404,7 @@ Namespace from auth token (not a query param).
   - Checkpoint: `uv run pytest tests/test_scheduler.py -v --no-cov -n0`
 
 #### Task 3.2 — Register `JobScheduler` in FastAPI lifespan
-- [ ] **File**: `archon_search/server/app.py`
+- [x] **File**: `archon_search/server/app.py`
 - **Depends on**: Task 3.1, Task 1.2
 - **Description**:
   - In `create_app()`, accept `scheduler: JobScheduler | None = None` parameter (constructed externally so it can be injected in tests)

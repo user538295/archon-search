@@ -160,6 +160,11 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "max_requests_per_minute": 60,
             "num_queries": 2,
         },
+        # [jobs]
+        "jobs": {
+            "max_concurrent_bulk": 1,
+            "checkpoint_interval": 100,
+        },
     }
 
     # Keyset guard — fails when a new top-level field is added to SearchConfig

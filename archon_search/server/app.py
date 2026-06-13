@@ -17,6 +17,7 @@ from archon_search.config import SearchConfig
 from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttext_models_dir
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import EmbedderCache
+from archon_search.jobs.scheduler import JobScheduler
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import load_or_generate_key
 from archon_search.logging_setup import configure_logging
@@ -133,6 +134,7 @@ def create_app(
     config: SearchConfig,
     job_store: JobStore,
     config_path: Path | str | None = None,
+    scheduler: JobScheduler | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application instance."""
     _check_multilingual_deps(config)
@@ -167,6 +169,12 @@ def create_app(
                 "update the constant or requests with >%d collections will be rejected",
                 config.max_fanout, _FANOUT_VALIDATION_LIMIT, _FANOUT_VALIDATION_LIMIT,
             )
+
+        # Startup: start job scheduler if provided
+        if scheduler is not None:
+            scheduler_task = asyncio.create_task(scheduler.run())
+            app.state._background_tasks.add(scheduler_task)
+        app.state.scheduler = scheduler
 
         # Startup: initialise telemetry if enabled
         if config.telemetry.enabled:
@@ -266,5 +274,19 @@ def run_server(config: SearchConfig) -> None:
     """Create JobStore, build the app, and start the uvicorn server."""
     configure_logging(config)
     job_store = JobStore()
-    app = create_app(config, job_store)
+
+    # No-op dispatch closure: transitions dispatched jobs to FAILED so that
+    # QUEUED jobs do not silently hang in RUNNING state before real workers land
+    # (Tasks 4.1 and 5.1 replace this closure with the real export/import tasks).
+    from archon_search.types import ExportJob, ImportJob, JobStatus  # noqa: PLC0415
+
+    def _no_op_dispatch(job: ExportJob | ImportJob) -> None:
+        job_store.update(job.job_id, status=JobStatus.FAILED, error="workers_not_deployed")
+
+    scheduler = JobScheduler(
+        store=job_store,
+        max_concurrent=config.jobs.max_concurrent_bulk,
+        dispatch_fn=_no_op_dispatch,
+    )
+    app = create_app(config, job_store, scheduler=scheduler)
     uvicorn.run(app, host=config.host, port=config.port)
