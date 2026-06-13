@@ -23,8 +23,10 @@
 | Eval-harness retrieval latency       | p50 / p95 captured per run                                                                                                      | `tests/eval/baselines/baseline.json`                | **Report-only** — latency ceilings are intentionally unset in `tests/eval/thresholds.toml` for v1 (see header note). |
 | Routing latency over HTTP            | p50 ≤ 30 ms, p95 ≤ 150 ms over localhost, 100 iterations, `POST /route`                                                          | `tests/benchmark_routing_latency.py`                | **Regression guard** for the benchmark itself. Not a production SLA. |
 | Routing latency in-process           | Reported alongside HTTP latency; difference is the HTTP transport overhead.                                                      | `tests/benchmark_routing_latency.py`                | Same — regression guard.            |
+| Real-model search steady-state p95   | Asserted ≤ `steady_state_p95_ms` in `live_thresholds.toml` (`[real_model_search]`)                                              | `tests/eval/live_benchmark/test_real_model_search_benchmark.py` | **Hard CI gate** — fails PR if regression detected. Uses real fastembed + cross-encoder ONNX. |
+| Real-model cold-load p90             | Asserted ≤ `cold_load_p90_ms` in `live_thresholds.toml` (`[real_model_search]`)                                                 | `tests/eval/live_benchmark/test_real_model_search_benchmark.py` | **Hard CI gate** — measures ONNX session construction cost (N=10, p90). |
 
-Both numbers are measured against **deterministic eval backends and localhost transport**. Do not quote them to callers and do not compare them to live-server measurements taken in a different environment.
+Eval-harness numbers are measured against **deterministic eval backends**; do not quote them to callers. Real-model benchmark numbers are measured on CI runners (ubuntu-latest) using actual ONNX inference. They guard against regressions in the fastembed/ONNX path that the deterministic harness cannot detect.
 
 If the benchmark reports `p95 > 150 ms`, the recorded mitigation is the **co-located embedder** pattern: the host application embeds the query locally and posts the vector to `/route`, removing the embedding round-trip inside the server. The decision must be recorded in `Documentation/ADRs/` (see the printed message in `benchmark_routing_latency.py`).
 
@@ -61,6 +63,25 @@ In-process `MultiCollectionRouter` vs `POST /route` over 100 iterations with 3 w
 ### Eval harness latency capture
 
 `tests/eval/` records p50 / p95 alongside quality metrics for every run. These are stored in `baselines/baseline.json` and currently *not* gated (latency ceilings unset). They are useful for trending across PRs even though they do not fail a build.
+
+### Real-model latency gate (`live_benchmark` marker, C16)
+
+`tests/eval/live_benchmark/` contains two **hard CI gates** that run the real fastembed BAAI/bge-small-en-v1.5 embedder and Xenova/ms-marco-MiniLM-L-6-v2 cross-encoder reranker — the same ONNX models used in production. Unlike the deterministic eval harness, these tests catch regressions in ONNX session configuration, fastembed version upgrades, and reranker path changes.
+
+**Two thresholds (both in `tests/eval/live_thresholds.toml` under `[real_model_search]`)**:
+- `steady_state_p95_ms` — end-to-end p95 of 100 `pipeline.search()` calls after 5 warmups. Guards the hot-path: embedding → vector+FTS retrieval → RRF → rerank.
+- `cold_load_p90_ms` — p90 of 10 fresh embedder+reranker constructions (ONNX session creation only). Guards against ONNX initialization regressions; N=10 uses p90 instead of p95 to avoid fitting to the single worst value.
+
+**Calibration procedure**:
+1. Trigger `workflow_dispatch` on `archon-search-pr.yml` (or a dedicated calibration PR) 10 times on ubuntu-latest. Record the printed p95/p90 from each run.
+2. Compute `steady_state_p95_ms = median × 2` and `cold_load_p90_ms = median × 3`. The 2× / 3× multipliers absorb CI noise while still blocking large regressions.
+3. Add a provenance comment (date, runner, 10 raw samples) above the values in `live_thresholds.toml`.
+
+**Important**: calibration must be done on ubuntu-latest. Darwin/aarch64 (Apple Silicon) ONNX is 2–5× faster; thresholds derived from it will be too tight for CI runners. The current placeholders in `live_thresholds.toml` include a provenance comment documenting the measurement source.
+
+These thresholds are loaded by `load_benchmark_thresholds(path: Path) -> BenchmarkThresholds` from `archon_search/eval/runner.py`. Unlike `load_live_thresholds()`, this function raises `ValueError` if the `[real_model_search]` section is absent — the gate cannot operate in report-only mode; explicit thresholds are required.
+
+The CI step (`archon-search-pr.yml`, `Run real-model latency benchmark`) runs with `timeout-minutes: 3`, uses `--no-cov` (coverage overhead biases latency), and is followed by a `Verify benchmark tests ran` step that fails if the model cache was missing and all tests were skipped.
 
 ### In-process stage-latency measurement (B1)
 

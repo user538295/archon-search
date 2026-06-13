@@ -424,7 +424,7 @@ def load_benchmark_thresholds(path: Path) -> BenchmarkThresholds:
 ### Phase 4 — Documentation
 
 #### Task 4.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Spawn an agent to update every documentation file affected by C16:

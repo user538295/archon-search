@@ -226,6 +226,93 @@ Before lowering a live threshold, check:
 
 Live latency numbers are measured on ephemeral GitHub Actions runners under shared CPU, model download cache, and OS scheduling noise. Latency thresholds derived from CI baselines may not reflect local or production performance. Set latency ceilings generously (1.5×) and treat them as regression guards rather than SLAs.
 
+## Live benchmark lane (C16)
+
+The `live_benchmark` pytest marker runs two hard-gated latency benchmarks using **real fastembed BAAI/bge-small-en-v1.5 and Xenova/ms-marco-MiniLM-L-6-v2 ONNX models** on every PR. This is the only marker excluded from the default `uv run pytest` run — see below.
+
+### Directory structure
+
+```
+tests/eval/
+  live_benchmark/
+    __init__.py
+    conftest.py                         # stub removal, thread reset, model-cache skip hook
+    test_real_model_search_benchmark.py # two benchmark tests
+  live_thresholds.toml                  # [real_model_search] section for live_benchmark
+                                        # [quality_floors] section for live_eval
+```
+
+### Conftest isolation and stub removal
+
+`tests/eval/live_benchmark/conftest.py` performs three actions at module load time (before any test import):
+
+1. **Stub removal** — removes `fastembed`, `fastembed.rerank`, and `fastembed.rerank.cross_encoder` from `sys.modules` so that `from fastembed import TextEmbedding` resolves to the real package, not the `_FakeTextEmbedding` installed by `tests/_search_stubs.py`.
+2. **Thread reset** — sets `ORT_NUM_THREADS`, `OMP_NUM_THREADS`, and related env vars to `os.cpu_count()`, overriding the single-threaded values from the root conftest.
+3. **Shadow fixture** — defines `_activate_deterministic_eval_backends` as a function-scoped autouse no-op, shadowing the parent `tests/eval/conftest.py` autouse fixture that would otherwise set `ARCHON_SEARCH_EVAL_BACKENDS=1` and inject deterministic stubs into the pipeline.
+
+Because step 1 runs at module level (unconditionally at conftest import), the `live_benchmark` conftest cannot safely co-exist in the same process as the default test suite. This is why `not live_benchmark` is in `addopts` — it is process-isolation, not mere convenience.
+
+### Model-cache skip hook
+
+A session-scoped autouse fixture `_require_model_cache` skips the entire session if either `*bge-small*` or `*ms-marco-MiniLM*` blobs are absent from the fastembed cache directory (`$FASTEMBED_CACHE_PATH` or `~/.cache/fastembed`). On developer machines without a prefetched cache, the session skips rather than fails.
+
+This is defense-in-depth. The primary protection is the `not live_benchmark` in `addopts` — a developer running `uv run pytest` never loads this conftest at all.
+
+### Running locally
+
+```bash
+# Will skip gracefully if model cache is absent (no model download triggered)
+uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
+
+# Force-run a single test (still skips if cache absent)
+uv run pytest tests/eval/live_benchmark/test_real_model_search_benchmark.py::test_real_model_search_steady_state_p95 -v --no-cov
+```
+
+To prefetch models locally:
+
+```python
+from fastembed import TextEmbedding
+from fastembed.rerank.cross_encoder import TextCrossEncoder
+TextEmbedding("BAAI/bge-small-en-v1.5")
+TextCrossEncoder("Xenova/ms-marco-MiniLM-L-6-v2")
+```
+
+### Calibration procedure
+
+The thresholds in `tests/eval/live_thresholds.toml` under `[real_model_search]` must be calibrated on ubuntu-latest CI runners. Darwin/aarch64 (Apple Silicon) is 2–5× faster — do not use local measurements as the source of truth.
+
+1. Trigger `workflow_dispatch` on `archon-search-pr.yml` 10 times on ubuntu-latest. Read the p95/p90 values printed in the `Run real-model latency benchmark` step output for each run.
+2. Compute calibrated thresholds:
+   - `steady_state_p95_ms = median_of_10_runs × 2`
+   - `cold_load_p90_ms = median_of_10_runs × 3`
+3. Update `tests/eval/live_thresholds.toml`:
+   - Replace the values under `[real_model_search]`.
+   - Add a provenance comment block with date, runner type, and 10 raw samples.
+4. Run `uv run pytest tests/eval/test_runner.py -k "live_thresholds_toml" -v` to confirm the file parses correctly.
+
+### Updating thresholds after a legitimate regression
+
+If a fastembed upgrade or model change legitimately increases latency:
+
+1. Calibrate new thresholds using the procedure above (10 CI runs, median × multiplier).
+2. Update `[real_model_search]` in `live_thresholds.toml` with new values and updated provenance comment.
+3. Note the change in the PR description: what changed, why the threshold increased, and which CI run was used for calibration.
+
+### What the gate catches vs. what it does not
+
+**Catches**:
+- Regressions in fastembed version upgrades (model download path, API changes)
+- ONNX session configuration regressions (thread count, execution provider)
+- Accidental re-introduction of `sys.modules` stubs in the search path
+- Large latency regressions (threshold = 2× / 3× CI median, so 2× the measured latency will fail)
+
+**Does not catch**:
+- Isolated embedder-only or reranker-only regressions (the steady-state test measures the full pipeline)
+- Embedding batching regressions (single-query benchmark; batching is an ingest-path concern)
+- GPU-specific regressions (CI uses CPU-only ONNX; GPU path requires a GPU runner)
+- Memory footprint regressions
+- Fresh-process startup cost (the cold-load test re-constructs backends within one process; ONNX shared libraries persist)
+
 ## Routing fixture schema (B4)
 
 `routing/collections.jsonl` — one JSON object per line:

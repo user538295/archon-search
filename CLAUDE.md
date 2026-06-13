@@ -46,6 +46,9 @@ uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/te
 # - benchmark: serialized via xdist_group("benchmark"); server-dependent tests auto-skip
 # - eval: report-only tests always run; gated tests skip gracefully without --thresholds-path
 # - live / live_eval: skip gracefully when live infrastructure is absent
+# - live_benchmark: EXCLUDED from addopts by design (module-level sys.modules mutation);
+#   run separately: uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
+#   (skips gracefully if fastembed model cache absent)
 
 # Cut a release (tag + push; CI runs eval + publishes to PyPI via OIDC)
 bash release.sh           # interactive

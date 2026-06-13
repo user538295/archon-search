@@ -11,8 +11,8 @@ Tests in `archon-search` are split across four pytest markers plus a default (un
 ## Principles
 
 1. **TDD-first.** Per `CLAUDE.md` (Code Style): write tests first, start with happy paths, then edge cases. Maintain 85%+ coverage. Resolve all warnings.
-2. **Default run includes every test.** No `-m` exclusion filter in `addopts`. All markers run on every `uv run pytest`. Tests that need absent infrastructure skip gracefully (server-dependent benchmarks, `live`/`live_eval` tests without `ANTHROPIC_API_KEY`, gated eval without `--thresholds-path`). ONNX downloads and tokenizer subprocesses are stubbed in `tests/conftest.py` before pytest discovery.
-3. **Markers document intent, not exclusion.** `live`, `eval`, `benchmark`, `integration` are registered markers used for explicit targeted runs (e.g. `uv run pytest -m integration`) but are NOT excluded from the default run.
+2. **Default run includes every test except `live_benchmark`.** `addopts` in `pyproject.toml` sets `-m "not live_benchmark"` — this is the one intentional marker exclusion. `live_benchmark` tests perform module-level `sys.modules` mutation to remove fastembed stubs; running them in the same process as the default suite would poison `sys.modules` for regular tests. They run in a dedicated CI step instead. All other markers (`live`, `eval`, `benchmark`, `integration`, `live_eval`) run on every `uv run pytest` and skip gracefully when the required infrastructure is absent (server-dependent benchmarks, `live`/`live_eval` tests without `ANTHROPIC_API_KEY`, gated eval without `--thresholds-path`). ONNX downloads and tokenizer subprocesses are stubbed in `tests/conftest.py` before pytest discovery.
+3. **Markers document intent, not exclusion — with one exception.** `live`, `eval`, `benchmark`, `integration` are registered markers used for explicit targeted runs (e.g. `uv run pytest -m integration`) but are NOT excluded from the default run. `live_benchmark` is the sole exception (see principle 2).
 4. **Eval is the retrieval-quality gate, not the unit-test tier.** Retrieval, reranking, and routing changes are validated by the `eval` marker with committed thresholds in `tests/eval/thresholds.toml`. Latency in the harness is a regression guard, not a production indicator.
 5. **Coverage gating is a single-run concept.** `--cov-fail-under=85` applies to the default single-run invocation. CI that runs multiple pytest invocations must accumulate coverage into a single dataset before applying the threshold — `.github/workflows/archon-search-pr.yml` does this by passing `--cov-append` to both the default and eval steps (writing into one `.coverage` file) and then running `coverage report --fail-under=85`. `coverage combine` is only needed when shards write parallel-mode files; the current PR workflow deliberately skips it. **Never bake `--no-cov` into `addopts`.**
 
@@ -20,14 +20,16 @@ Tests in `archon-search` are split across four pytest markers plus a default (un
 
 ```mermaid
 flowchart TB
-  subgraph default[Default run — all markers included, no exclusion filter]
+  subgraph default[Default run — all markers included except live_benchmark]
     U[Unit tests<br/>tests/**/test_*.py<br/>stubs from tests/_search_stubs.py]
     I[integration<br/>real components<br/>local infra]
     E[eval<br/>tests/eval/<br/>deterministic backends]
     B[benchmark<br/>xdist_group serialised<br/>server tests auto-skip]
     L[live / live_eval<br/>skip gracefully without<br/>ANTHROPIC_API_KEY]
   end
+  LB[live_benchmark<br/>dedicated CI step<br/>real fastembed + ONNX<br/>skips without model cache]
   default --> CI[CI: coverage gate ≥ 85%]
+  LB --> CI2[CI: benchmark step<br/>p95/p90 gate]
 ```
 
 ### Default tier (unit)
@@ -75,6 +77,20 @@ Runs the eval corpus through **real fastembed + cross-encoder model weights** �
 - The live baseline (`tests/eval/live_baselines/baseline.json`) is absent until the first calibration run. See `tests/eval/README.md` for the calibration procedure and threshold formula (quality floors: −0.02 pp; latency ceiling: 1.5× baseline).
 - CI triggers: `archon-search-eval-live.yml` runs on every tag push (concurrently with the release workflow) and on manual `workflow_dispatch`. The test step uses `continue-on-error: true` and uploads the report artifact regardless of outcome — pre-calibration report-only mode must never block a release.
 
+### `live_benchmark` — `uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov`
+
+CI-gated latency benchmark using **real fastembed BAAI/bge-small-en-v1.5 and Xenova/ms-marco-MiniLM-L-6-v2 ONNX models** — the production code path through fastembed and cross-encoder inference. This is the only marker **excluded from the default `addopts` run** (see principle 2).
+
+- Tests live under `tests/eval/live_benchmark/`. Two benchmark tests:
+  - `test_real_model_search_steady_state_p95` — 100-iteration steady-state p95 latency for `pipeline.search()` end-to-end.
+  - `test_real_model_search_cold_load_p90` — N=10 cold-load p90 latency for ONNX session construction (embedder + reranker together).
+- **`xdist_group("live_benchmark")`** serialises both tests onto the same xdist worker, preventing concurrent ONNX session construction from inflating cold-load measurements.
+- **Model-cache skip hook**: `tests/eval/live_benchmark/conftest.py` has a session-scoped autouse fixture `_require_model_cache` that calls `pytest.skip(...)` if the fastembed cache directory does not contain `bge-small*` and `ms-marco-MiniLM*` blobs. On developer machines without the cache, the entire session skips gracefully rather than failing.
+- **Module-level stub removal**: the conftest removes `fastembed`, `fastembed.rerank`, and `fastembed.rerank.cross_encoder` from `sys.modules` at module load time, before any test import. This is why the marker cannot be included in the default suite — the `sys.modules.pop` runs unconditionally at conftest import, which would poison the stub state for all tests that run after it in the same process.
+- Thresholds in `tests/eval/live_thresholds.toml` under `[real_model_search]`. Loaded by `load_benchmark_thresholds()` from `archon_search/eval/runner.py`. Unlike `load_live_thresholds()`, this function raises `ValueError` if the section is absent — the gate always requires explicit thresholds.
+- CI step: `archon-search-pr.yml` runs `pytest -o addopts= ... -n0 -m live_benchmark` with `timeout-minutes: 3` after the integration step and before the coverage enforcement step. Uses `--no-cov` to avoid per-call coverage overhead biasing latency measurements. A `Verify benchmark tests ran` step after it parses the JUnit XML and fails if all tests were skipped (guards against a silently empty model cache).
+- See `tests/eval/README.md` (live benchmark lane section) for calibration procedure and threshold update policy.
+
 ## Coverage
 
 `pyproject.toml [tool.pytest.ini_options] addopts` includes `--cov=archon_search --cov-report=term-missing --cov-fail-under=85`.
@@ -93,6 +109,7 @@ Runs the eval corpus through **real fastembed + cross-encoder model weights** �
 | Latency regression on `POST /route`                | Benchmark   | `benchmark`             | Server must be running; auto-skips otherwise.                                        |
 | Behaviour that requires real network               | Live        | `live`                  | Justify the dependency in the PR description. #Unverified (marker registered; no in-tree `@pytest.mark.live` usage sampled) |
 | Quality regression with real model weights         | Live eval   | `live_eval`             | Runs on tag push via `archon-search-eval-live.yml`. Requires model weight download. See `tests/eval/README.md` (live eval lane section). |
+| Latency regression in real fastembed/ONNX path     | Live benchmark | `live_benchmark`     | Runs in dedicated CI step with model cache; skips on developer machines without cache. Excluded from default `addopts` due to module-level `sys.modules` mutation. See `tests/eval/live_benchmark/`. |
 
 ## Parallel-test isolation (`archon_unset_data_dir` marker + `_archon_isolated_data_dir` autouse)
 
