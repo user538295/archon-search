@@ -12,12 +12,17 @@ from pathlib import Path
 from archon_search._durable_io import atomic_write_json
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import IngestJob, JobStatus, get_jobs_file
-from archon_search.types import DeleteJob, ReindexJob
+from archon_search.types import DeleteJob, ExportJob, ImportJob, ReindexJob
 
 logger = logging.getLogger(__name__)
 
 _CRASH_STATUSES = {JobStatus.RUNNING, JobStatus.CANCELLING}
+# QUEUED is intentionally excluded from crash statuses: QUEUED bulk jobs survive
+# a server restart and will be re-dispatched by the scheduler on next tick.
 _EVICTION_DAYS = 7
+# Only terminal jobs are eligible for eviction; non-terminal jobs (PENDING, QUEUED,
+# RUNNING, CANCELLING) are retained regardless of age.
+_TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
 
 
 def _now_iso() -> str:
@@ -102,6 +107,66 @@ class JobStore:
     def list(self) -> list[IngestJob]:
         return list(self._jobs.values())
 
+    def create_export(
+        self,
+        collection: str,
+        output_path: str,
+        tmp_path: str,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> ExportJob:
+        """Create an ExportJob with QUEUED status and persist it."""
+        now = _now_iso()
+        job = ExportJob(
+            job_id=str(uuid.uuid4()),
+            status=JobStatus.QUEUED,
+            created_at=now,
+            updated_at=now,
+            namespace=namespace,
+            collection=collection,
+            output_path=output_path,
+            tmp_path=tmp_path,
+        )
+        return self.create_job(job)  # type: ignore[return-value]
+
+    def create_import(
+        self,
+        collection: str,
+        archive_path: str,
+        force_overwrite: bool,
+        ignore_schema_version: bool,
+        on_error: str,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> ImportJob:
+        """Create an ImportJob with QUEUED status and persist it."""
+        now = _now_iso()
+        job = ImportJob(
+            job_id=str(uuid.uuid4()),
+            status=JobStatus.QUEUED,
+            created_at=now,
+            updated_at=now,
+            namespace=namespace,
+            collection=collection,
+            archive_path=archive_path,
+            force_overwrite=force_overwrite,
+            ignore_schema_version=ignore_schema_version,
+            on_error=on_error,
+        )
+        return self.create_job(job)  # type: ignore[return-value]
+
+    def update_progress(self, job_id: str, processed: int, total: int, phase: str) -> None:
+        """Set the progress dict on a job."""
+        self.update(job_id, progress={"processed": processed, "total": total, "phase": phase})
+
+    def list_queued_bulk(self) -> list[ExportJob | ImportJob]:
+        """Return QUEUED ExportJob/ImportJob instances sorted by created_at ascending (FIFO)."""
+        bulk = [
+            job
+            for job in self._jobs.values()
+            if isinstance(job, (ExportJob, ImportJob)) and job.status == JobStatus.QUEUED
+        ]
+        bulk.sort(key=lambda j: j.created_at)
+        return bulk  # type: ignore[return-value]
+
     def count_by_status(self) -> dict[JobStatus, int]:
         """Return a count of jobs for every JobStatus member, zero-filled.
 
@@ -131,9 +196,15 @@ class JobStore:
             modified = False
             for item in raw:
                 item["status"] = JobStatus(item["status"])
+                # Backward compatibility: pre-D1 jobs lack a "progress" key.
+                item.setdefault("progress", None)
                 job_type = item.pop("job_type", "ingest")
-                if job_type == "reindex":
-                    job: IngestJob = ReindexJob(**item)
+                if job_type == "export":
+                    job: IngestJob = ExportJob(**item)
+                elif job_type == "import":
+                    job = ImportJob(**item)
+                elif job_type == "reindex":
+                    job = ReindexJob(**item)
                 elif job_type == "delete":
                     job = DeleteJob(**item)
                 else:
@@ -161,7 +232,11 @@ class JobStore:
         for job in self._jobs.values():
             item = dataclasses.asdict(job)
             item["status"] = item["status"].value if hasattr(item["status"], "value") else item["status"]
-            if isinstance(job, ReindexJob):
+            if isinstance(job, ExportJob):
+                item["job_type"] = "export"
+            elif isinstance(job, ImportJob):
+                item["job_type"] = "import"
+            elif isinstance(job, ReindexJob):
                 item["job_type"] = "reindex"
             elif isinstance(job, DeleteJob):
                 item["job_type"] = "delete"
@@ -175,7 +250,8 @@ class JobStore:
         to_remove = [
             job_id
             for job_id, job in self._jobs.items()
-            if datetime.fromisoformat(job.updated_at) < cutoff
+            if job.status in _TERMINAL_STATUSES
+            and datetime.fromisoformat(job.updated_at) < cutoff
         ]
         for job_id in to_remove:
             del self._jobs[job_id]

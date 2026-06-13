@@ -301,7 +301,7 @@ Namespace from auth token (not a query param).
   - Checkpoint: `uv run pytest tests/test_export_archive.py -v --no-cov -n0`
 
 #### Task 1.4 — Update `JobStore`: eviction fix, factory methods, serialization, `update_progress()`
-- [ ] **File**: `archon_search/jobs/store.py`
+- [x] **File**: `archon_search/jobs/store.py`
 - **Depends on**: Task 1.1
 - **Description**:
   - `_evict_old()` (lines 173–181): add a status guard — only evict jobs in `{JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}`; jobs in `QUEUED`, `PENDING`, `RUNNING`, `CANCELLING` are never evicted regardless of age
