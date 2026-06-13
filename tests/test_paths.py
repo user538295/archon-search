@@ -102,6 +102,7 @@ def test_tilde_env_var_with_home_unset_raises_valueerror(
         get_data_dir()
 
 
+@pytest.mark.archon_unset_data_dir
 def test_home_unset_raises_valueerror(monkeypatch: pytest.MonkeyPatch) -> None:
     """If ``Path.home()`` raises (HOME unset) AND no env var is set,
     surface a ``ValueError`` mentioning ``HOME is not set`` so the operator

@@ -3,14 +3,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from archon_search.cli.ingest import ingest
 
 
-def test_default_ingest_path(monkeypatch: "pytest.MonkeyPatch") -> None:  # type: ignore[name-defined]
+@pytest.mark.archon_unset_data_dir
+def test_default_ingest_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default ingest path must be ~/.archon-search/history/sessions."""
-    import pytest
     runner = CliRunner()
 
     captured_paths: list[Path] = []

@@ -275,7 +275,7 @@ def test_two_workers_sharing_data_dir_contend(tmp_path: Path) -> None: ...
 
 #### Task 2.2 — `tests/conftest.py`: replace `_clear_archon_env_vars` with the two-fixture pattern
 
-- [ ] **File**: `tests/conftest.py`
+- [x] **File**: `tests/conftest.py`
 - **Depends on**: Task 2.1 (marker must be registered before the autouse references it by string)
 - **Description**:
   - Remove the existing `_clear_archon_env_vars(monkeypatch)` autouse (currently at lines 74–88 — verify exact range before editing).

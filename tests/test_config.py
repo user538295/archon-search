@@ -14,7 +14,8 @@ def test_load_config_defaults_when_no_file(tmp_path: Path) -> None:
     assert config.port == 8765
 
 
-def test_load_config_from_file(tmp_path: Path) -> None:
+def test_load_config_from_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     toml_file = tmp_path / "archon-search.toml"
     toml_file.write_text(
         "[server]\nhost = \"0.0.0.0\"\nport = 9000\n\n[database]\ndb_path = \"/custom/db\"\n",
@@ -43,7 +44,8 @@ def test_db_path_tilde_preserved() -> None:
     assert "~" in config.db_path
 
 
-def test_db_path_tilde_preserved_from_file(tmp_path: Path) -> None:
+def test_db_path_tilde_preserved_from_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     toml_file = tmp_path / "t.toml"
     toml_file.write_text('[database]\ndb_path = "~/my/db"\n', encoding="utf-8")
     config = load_config(path=toml_file)
@@ -72,7 +74,8 @@ def test_load_config_collections_section(tmp_path: Path) -> None:
     assert config.watch is True
 
 
-def test_load_config_logging_section(tmp_path: Path) -> None:
+def test_load_config_logging_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     toml_file = tmp_path / "archon-search.toml"
     toml_file.write_text(
         '[logging]\nlevel = "DEBUG"\nlog_file = "/tmp/search.log"\n',
@@ -248,8 +251,9 @@ def test_save_config_round_trip(tmp_path: Path) -> None:
     assert reloaded.pinned_collections == ["/pinned/x"]
 
 
-def test_save_config_preserves_other_sections(tmp_path: Path) -> None:
+def test_save_config_preserves_other_sections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """save_config only touches [collections] keys; other TOML sections are preserved."""
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     toml_file = tmp_path / "archon-search.toml"
     toml_file.write_text(
         "[server]\nhost = \"0.0.0.0\"\nport = 9000\n\n[database]\ndb_path = \"/custom/db\"\n",
@@ -299,8 +303,9 @@ def test_c11_13_search_config_no_args_all_defaults_valid() -> None:
     assert config.namespaces == {}
 
 
-def test_c11_14_nonexistent_path_returns_defaults(tmp_path: Path) -> None:
+def test_c11_14_nonexistent_path_returns_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """C11.14: non-existent path → returns SearchConfig() defaults."""
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     config = load_config(path=tmp_path / "does_not_exist.toml")
     defaults = SearchConfig()
     assert config == defaults
@@ -315,8 +320,9 @@ def test_c11_15_invalid_toml_raises_config_error_with_cause(tmp_path: Path) -> N
     assert exc_info.value.__cause__ is not None
 
 
-def test_c11_16_all_four_sections_populated(tmp_path: Path) -> None:
+def test_c11_16_all_four_sections_populated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """C11.16: TOML with all 4 sections ([server], [database], [routing], [collections]) → all fields populated."""
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     toml_file = tmp_path / "full.toml"
     toml_file.write_text(
         "[server]\n"
@@ -788,7 +794,8 @@ def test_logging_backup_count_parsed(tmp_path: Path) -> None:
     assert config.backup_count == 14
 
 
-def test_logging_log_file_empty_string_allowed(tmp_path: Path) -> None:
+def test_logging_log_file_empty_string_allowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     toml_file = tmp_path / "cfg.toml"
     toml_file.write_text('[logging]\nlog_file = ""\n', encoding="utf-8")
     config = load_config(path=toml_file)

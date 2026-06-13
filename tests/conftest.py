@@ -71,22 +71,41 @@ def connected_store(tmp_path_factory: pytest.TempPathFactory):  # type: ignore[n
     asyncio.run(store.disconnect())
 
 
+@pytest.fixture(scope="session")
+def _archon_worker_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Per-worker isolated DATA_DIR. One per pytest session per xdist worker.
+
+    Mirrors the connected_store and three_page_pdf session-scoped fixtures that
+    use tmp_path_factory.mktemp to give each worker a private scratch directory.
+    """
+    return tmp_path_factory.mktemp("archon-data")
+
+
 @pytest.fixture(autouse=True)
-def _clear_archon_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent env var leakage between tests for container/data-dir-related vars.
+def _archon_isolated_data_dir(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    _archon_worker_data_dir: Path,
+) -> None:
+    """Replaces _clear_archon_env_vars. Sets ARCHON_SEARCH_DATA_DIR per-worker
+    unless the test is marked @pytest.mark.archon_unset_data_dir, in which case
+    the env var is unset so the Path.home() default-fallback is exercised.
 
     `ARCHON_SEARCH_API_KEY` is intentionally NOT cleared — it is set globally above
-    (line 35) for auth test infrastructure and must remain set for all tests.
+    for auth test infrastructure and must remain set for all tests.
     """
     for var in (
         "ARCHON_SEARCH_HOST",
         "ARCHON_SEARCH_PORT",
-        "ARCHON_SEARCH_DATA_DIR",
         "ARCHON_SEARCH_CONTAINER",
         "ARCHON_SEARCH_KEY_FILE",
         "ARCHON_SEARCH_CONFIG",
     ):
         monkeypatch.delenv(var, raising=False)
+    if "archon_unset_data_dir" in request.keywords:
+        monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
+    else:
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(_archon_worker_data_dir))
 
 
 @pytest.fixture

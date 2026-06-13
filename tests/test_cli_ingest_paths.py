@@ -47,6 +47,7 @@ def _invoke_ingest_capturing_default_path() -> str:
     return result.output
 
 
+@pytest.mark.archon_unset_data_dir
 def test_default_history_path() -> None:
     """No env vars set → default ingest path is ``~/.archon-search/history/sessions``."""
     output = _invoke_ingest_capturing_default_path()

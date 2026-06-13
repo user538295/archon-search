@@ -163,6 +163,7 @@ def test_list_returns_all_jobs(store: JobStore) -> None:
     assert len(store.list()) == 2
 
 
+@pytest.mark.archon_unset_data_dir
 def test_jobs_file_default_path() -> None:
     assert get_jobs_file() == Path.home() / ".archon-search" / "archon-search-jobs.json"
 

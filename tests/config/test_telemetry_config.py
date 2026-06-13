@@ -38,7 +38,8 @@ retention_days = 7
     assert cfg.telemetry.retention_days == 7
 
 
-def test_telemetry_config_missing_section_uses_defaults(tmp_path: Path) -> None:
+def test_telemetry_config_missing_section_uses_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     path = _write(tmp_path, "[server]\nhost = \"127.0.0.1\"\n")
     cfg = load_config(path)
     assert cfg.telemetry.enabled is False
@@ -59,7 +60,8 @@ def test_telemetry_config_rejects_non_bool_enabled(tmp_path: Path) -> None:
         load_config(path)
 
 
-def test_telemetry_config_parses_log_dir_override(tmp_path: Path) -> None:
+def test_telemetry_config_parses_log_dir_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     path = _write(tmp_path, '[telemetry]\nlog_dir = "/custom/path"\n')
     cfg = load_config(path)
     assert cfg.telemetry.log_dir == "/custom/path"

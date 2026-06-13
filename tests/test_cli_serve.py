@@ -237,6 +237,7 @@ def test_serve_no_warning_when_both_data_dir_and_config_set(
     ), f"Did not expect container-limitation warning, got: {[r.message for r in caplog.records]}"
 
 
+@pytest.mark.archon_unset_data_dir
 def test_serve_no_warning_when_data_dir_unset(
     runner: CliRunner,
     caplog: pytest.LogCaptureFixture,
