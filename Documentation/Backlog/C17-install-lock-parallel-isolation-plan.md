@@ -337,7 +337,7 @@ def test_two_workers_sharing_data_dir_contend(tmp_path: Path) -> None: ...
 
 #### Task 2.5 — Add `tests/test_install_lock_per_worker_isolation.py` (isolation + regression)
 
-- [ ] **File**: `tests/test_install_lock_per_worker_isolation.py`
+- [x] **File**: `tests/test_install_lock_per_worker_isolation.py`
 - **Depends on**: Task 2.2 (autouse fixture in place so the parent's DATA_DIR is well-defined; children explicitly override it)
 - **Description**:
   - Module imports: `multiprocessing`, `os`, `pytest`, `pathlib.Path`.
