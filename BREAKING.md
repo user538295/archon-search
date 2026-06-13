@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — D1/D2 MCP tools: `export_collection` and `import_collection` added (tool count 11 → 13)
+
+**Surface**: MCP tool registry (`create_app`).
+
+- Two new tools registered: `export_collection(collection, output_path="")` and `import_collection(collection, path, force_overwrite=False, ignore_schema_version=False, on_error="fail")`.
+- Both tools are **additive** — existing MCP tool consumers are unaffected.
+- MCP clients that enumerate the tool list will now see 13 tools instead of 11.
+
+**Migration**: none required.
+
+---
+
 ### [next release] — D1 job contract: `progress` field on `JobResponse` and `QUEUED` status
 
 **Surface**: `GET /jobs/{job_id}` REST response (`JobResponse`), `JobStatus` enum.

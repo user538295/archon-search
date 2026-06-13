@@ -14,7 +14,9 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from archon_search._path_safety import PathUnsafeError, validate_ingest_path
+import tarfile
+
+from archon_search._path_safety import PathUnsafeError, validate_archive_members, validate_export_path, validate_ingest_path
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.filters import SearchFilters
 from archon_search.hyde import resolve_hyde_vector
@@ -43,7 +45,10 @@ from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
 from archon_search.embedder_cache import EmbedderCache
+from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION, ImportArchiveReader
+from archon_search.jobs.model import job_to_dict
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
+from archon_search.paths import get_data_dir
 from archon_search.server.mcp_schemas import (
     CollectionDetailSchema,
     CollectionListItemSchema,
@@ -162,7 +167,7 @@ def create_app(
     hyde_generator: "HyDEGenerator | None" = None,
     rag_fusion_generator: "RAGFusionGenerator | None" = None,
 ) -> FastMCP:
-    """Create a FastMCP app with 11 RAG tools registered.
+    """Create a FastMCP app with 13 RAG tools registered.
 
     ``config`` is required only for the collectionless ``explain`` routing path;
     when omitted, ``explain`` without a collection falls back to
@@ -1085,6 +1090,148 @@ def create_app(
         except Exception as exc:
             logger.exception("update_collection failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
+
+    @app.tool()
+    async def export_collection(
+        collection: str,
+        output_path: str = "",
+    ) -> dict[str, Any]:
+        """Enqueue an export job for a collection. Returns immediately with a QUEUED job dict.
+
+        The MCP client can poll GET /jobs/{job_id} for progress.
+        ``output_path`` must be an absolute path inside the server's data directory.
+        If omitted, defaults to ``<data_dir>/exports/``.
+        """
+        if job_store is None:
+            return McpErrorResponse(error="job store not configured", code="internal_error")
+
+        exports_dir = get_data_dir() / "exports"
+        raw_output = output_path if output_path else str(exports_dir)
+
+        try:
+            resolved_dir = validate_export_path(raw_output, [get_data_dir()])
+        except PathUnsafeError as exc:
+            return McpErrorResponse(
+                error=_path_unsafe_message(exc.reason), code="path_unsafe"
+            )
+
+        meta = await pipeline.store.get_collection_meta(collection, DEFAULT_NAMESPACE)
+        if meta is None:
+            return McpErrorResponse(
+                error=f"Collection {collection!r} not found", code="not_found"
+            )
+
+        from datetime import datetime, timezone  # noqa: PLC0415
+        from uuid import uuid4  # noqa: PLC0415
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        job_uuid = str(uuid4())
+        archive_path = resolved_dir / f"{collection}-{timestamp}.tar.gz"
+        tmp_path_val = resolved_dir / f".export-{job_uuid}.jsonl.tmp"
+
+        job = job_store.create_export(
+            collection=collection,
+            output_path=str(archive_path),
+            tmp_path=str(tmp_path_val),
+            namespace=DEFAULT_NAMESPACE,
+        )
+        return job_to_dict(job)
+
+    @app.tool()
+    async def import_collection(
+        collection: str,
+        path: str,
+        force_overwrite: bool = False,
+        ignore_schema_version: bool = False,
+        on_error: str = "fail",
+    ) -> dict[str, Any]:
+        """Enqueue an import job for a collection from a .tar.gz archive.
+
+        Returns immediately with a QUEUED job dict; poll GET /jobs/{job_id} for progress.
+        ``path`` must be an absolute path to the archive, inside the server's data directory.
+        ``on_error`` must be ``"fail"`` (abort on corrupt line) or ``"skip"`` (skip corrupt lines).
+        """
+        if job_store is None:
+            return McpErrorResponse(error="job store not configured", code="internal_error")
+
+        if on_error not in {"fail", "skip"}:
+            return McpErrorResponse(
+                error="on_error must be 'fail' or 'skip'", code="validation_error"
+            )
+
+        try:
+            validate_export_path(path, [get_data_dir()])
+        except PathUnsafeError as exc:
+            return McpErrorResponse(
+                error=_path_unsafe_message(exc.reason), code="path_unsafe"
+            )
+
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        archive_path = _Path(path)
+        if not archive_path.exists():
+            return McpErrorResponse(
+                error=f"Archive not found: {path}", code="not_found"
+            )
+
+        try:
+            with tarfile.open(archive_path, "r:gz") as tf:
+                validate_archive_members(tf)
+        except PathUnsafeError as exc:
+            return McpErrorResponse(
+                error=f"unsafe archive: {exc.reason}", code="path_unsafe"
+            )
+        except Exception as exc:  # noqa: BLE001
+            return McpErrorResponse(
+                error=f"invalid archive: {exc}", code="validation_error"
+            )
+
+        try:
+            reader = ImportArchiveReader(archive_path)
+            manifest = reader.read_manifest()
+        except (ValueError, PathUnsafeError) as exc:
+            return McpErrorResponse(
+                error=f"invalid manifest: {exc}", code="validation_error"
+            )
+
+        archive_model = manifest.get("active_embedding_model", "")
+        server_model = config.embedding_model if config is not None else ""
+        if archive_model != server_model:
+            return McpErrorResponse(
+                error=(
+                    f"embedding model mismatch: archive has {archive_model!r}, "
+                    f"server is configured with {server_model!r}"
+                ),
+                code="embedding_model_mismatch",
+            )
+
+        existing_meta = await pipeline.store.get_collection_meta(collection, DEFAULT_NAMESPACE)
+        if existing_meta is not None and not force_overwrite:
+            return McpErrorResponse(
+                error=f"collection {collection!r} already exists; use force_overwrite=True to overwrite",
+                code="collection_exists",
+            )
+
+        archive_schema = manifest.get("schema_version")
+        if not ignore_schema_version and archive_schema != EXPORT_SCHEMA_VERSION:
+            return McpErrorResponse(
+                error=(
+                    f"archive has schema_version={archive_schema!r}; "
+                    f"server expects {EXPORT_SCHEMA_VERSION!r}; "
+                    "use ignore_schema_version=True to bypass"
+                ),
+                code="schema_version_mismatch",
+            )
+
+        job = job_store.create_import(
+            collection=collection,
+            archive_path=path,
+            force_overwrite=force_overwrite,
+            ignore_schema_version=ignore_schema_version,
+            on_error=on_error,
+            namespace=DEFAULT_NAMESPACE,
+        )
+        return job_to_dict(job)
 
     @app.custom_route("/health", methods=["GET"])
     async def health_check(request: Request) -> JSONResponse:

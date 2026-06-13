@@ -590,7 +590,7 @@ Namespace from auth token (not a query param).
 > **Releasable**: after Task 7.1; MCP clients can export and import collections via the protocol.
 
 #### Task 7.1 — `export_collection` and `import_collection` MCP tools
-- [ ] **File**: `archon_search/server/mcp.py`
+- [x] **File**: `archon_search/server/mcp.py`
 - **Depends on**: Task 4.2, Task 5.2
 - **Description**:
   - Follow the exact `@app.tool()` pattern from `ingest_file` (lines 793–835):
