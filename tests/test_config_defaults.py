@@ -20,6 +20,7 @@ import pytest
 
 from archon_search.config import SearchConfig, load_config
 from archon_search.constants import DEFAULT_FAST_MODEL, DEFAULT_ROUTING_DESCRIPTION_WEIGHT
+from archon_search.paths import get_data_dir
 
 
 @pytest.fixture
@@ -164,6 +165,13 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "jobs": {
             "max_concurrent_bulk": 1,
             "checkpoint_interval": 100,
+        },
+        # [backup]
+        "backup": {
+            "interval_hours": 0,
+            "keep": 7,
+            "exclude": [],
+            "output_dir": str(get_data_dir() / "backups"),
         },
     }
 

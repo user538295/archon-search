@@ -58,6 +58,17 @@ class JobsConfig:
     checkpoint_interval: int = 100
 
 
+_BACKUP_OUTPUT_DIR_MIN_PARTS: int = 3
+
+
+@dataclass
+class BackupConfig:
+    interval_hours: int = 0
+    keep: int = 7
+    exclude: list[str] = field(default_factory=list)
+    output_dir: str = ""  # empty → resolved to get_data_dir() / "backups" at load time
+
+
 @dataclass
 class SearchConfig:
     # [server]
@@ -114,6 +125,8 @@ class SearchConfig:
     rag_fusion: RAGFusionConfig = field(default_factory=RAGFusionConfig)
     # [jobs]
     jobs: JobsConfig = field(default_factory=JobsConfig)
+    # [backup]
+    backup: BackupConfig = field(default_factory=BackupConfig)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -220,6 +233,7 @@ def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfi
         _apply_toml(config, doc)
 
     _apply_env_overrides(config)
+    _post_process_backup(config)
     return config
 
 
@@ -485,6 +499,53 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             raise ConfigError(f"[jobs].checkpoint_interval must be > 0, got {checkpoint_interval}")
         jobs.checkpoint_interval = checkpoint_interval
     config.jobs = jobs
+
+    backup_cfg = doc.get("backup", {})
+    backup = BackupConfig()
+    if "interval_hours" in backup_cfg:
+        interval_hours = _coerce_int(backup_cfg["interval_hours"], "[backup].interval_hours")
+        if interval_hours < 0:
+            raise ConfigError(f"[backup].interval_hours must be >= 0, got {interval_hours}")
+        backup.interval_hours = interval_hours
+    if "keep" in backup_cfg:
+        keep = _coerce_int(backup_cfg["keep"], "[backup].keep")
+        if keep < 0:
+            raise ConfigError(f"[backup].keep must be >= 0, got {keep}")
+        backup.keep = keep
+    if "exclude" in backup_cfg:
+        backup.exclude = [str(p) for p in backup_cfg["exclude"]]
+    if "output_dir" in backup_cfg:
+        backup.output_dir = _coerce_str(backup_cfg["output_dir"], "[backup].output_dir")
+    config.backup = backup
+
+
+def _post_process_backup(config: SearchConfig) -> None:
+    """Resolve and validate backup config after TOML + env overrides are applied."""
+    default_output_dir = str(get_data_dir() / "backups")
+
+    # Resolve empty output_dir to the default path.
+    if not config.backup.output_dir:
+        config.backup.output_dir = default_output_dir
+
+    # Guard against near-root paths that could cause rotation to scan root-level dirs.
+    output_path = Path(config.backup.output_dir)
+    if len(output_path.parts) < _BACKUP_OUTPUT_DIR_MIN_PARTS:
+        _logger.error(
+            "[backup].output_dir %r has fewer than %d path components; "
+            "falling back to default %r to prevent near-root directory scanning",
+            config.backup.output_dir,
+            _BACKUP_OUTPUT_DIR_MIN_PARTS,
+            default_output_dir,
+        )
+        config.backup.output_dir = default_output_dir
+
+    # Warn when rotation is effectively disabled while backups are enabled.
+    if config.backup.interval_hours > 0 and config.backup.keep == 0:
+        _logger.warning(
+            "[backup] interval_hours=%d but keep=0: rotation is disabled; "
+            "backup archives will accumulate without limit (unbounded disk growth risk)",
+            config.backup.interval_hours,
+        )
 
 
 def _apply_env_overrides(config: SearchConfig) -> None:

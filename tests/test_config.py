@@ -304,10 +304,16 @@ def test_c11_13_search_config_no_args_all_defaults_valid() -> None:
 
 
 def test_c11_14_nonexistent_path_returns_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """C11.14: non-existent path → returns SearchConfig() defaults."""
+    """C11.14: non-existent path → returns SearchConfig() defaults (with post-processed backup.output_dir)."""
+    from archon_search.config import BackupConfig
+    from archon_search.paths import get_data_dir
+
     monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     config = load_config(path=tmp_path / "does_not_exist.toml")
+    # BackupConfig.output_dir is resolved from "" to the data dir path by load_config post-processing.
+    # Build expected defaults with the resolved output_dir to match.
     defaults = SearchConfig()
+    defaults.backup = BackupConfig(output_dir=str(get_data_dir() / "backups"))
     assert config == defaults
 
 

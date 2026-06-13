@@ -204,6 +204,33 @@ max_requests_per_minute = 60
 # NOTE: num_queries = 1 incurs LLM overhead for minimal benefit; consider using 2 or more.
 num_queries = 2
 
+[backup]
+# Automated periodic backup of all collections.
+# Disabled by default (interval_hours = 0).
+#
+# When interval_hours > 0, the server automatically exports each collection to
+# a .tar.gz archive in output_dir/{namespace}/ at the configured interval.
+# Archives are named {collection}.backup.{timestamp}.tar.gz and the `keep` most
+# recent are retained; older archives are deleted automatically (rotation).
+#
+# Set interval_hours = 0 to disable scheduled backups entirely.
+# interval_hours = 0
+#
+# Number of archive files to retain per collection. 0 = never rotate (archives accumulate).
+# WARNING: interval_hours > 0 and keep = 0 will cause unbounded disk growth.
+# keep = 7
+#
+# Collections to exclude from automatic backup. Accepts bare names (matches across
+# all namespaces) or qualified namespace/collection names.
+# exclude = []
+# exclude = ["scratch", "tenants/staging"]
+#
+# Directory where backup archives are written.
+# Empty string (the default) resolves to ~/.archon-search/backups/ at runtime.
+# Must have at least 3 path components (e.g. /mnt/nfs/backups) to prevent
+# rotation from scanning near-root directories.
+# output_dir = ""
+
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #
