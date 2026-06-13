@@ -53,6 +53,12 @@ class ObservabilityConfig:
 
 
 @dataclass
+class JobsConfig:
+    max_concurrent_bulk: int = 1
+    checkpoint_interval: int = 100
+
+
+@dataclass
 class SearchConfig:
     # [server]
     host: str = "127.0.0.1"
@@ -106,6 +112,8 @@ class SearchConfig:
     hyde: HyDEConfig = field(default_factory=HyDEConfig)
     # [rag_fusion]
     rag_fusion: RAGFusionConfig = field(default_factory=RAGFusionConfig)
+    # [jobs]
+    jobs: JobsConfig = field(default_factory=JobsConfig)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -463,6 +471,20 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             )
         rag_fusion.num_queries = num_queries
     config.rag_fusion = rag_fusion
+
+    jobs_cfg = doc.get("jobs", {})
+    jobs = JobsConfig()
+    if "max_concurrent_bulk" in jobs_cfg:
+        max_concurrent_bulk = _coerce_int(jobs_cfg["max_concurrent_bulk"], "[jobs].max_concurrent_bulk")
+        if max_concurrent_bulk <= 0:
+            raise ConfigError(f"[jobs].max_concurrent_bulk must be > 0, got {max_concurrent_bulk}")
+        jobs.max_concurrent_bulk = max_concurrent_bulk
+    if "checkpoint_interval" in jobs_cfg:
+        checkpoint_interval = _coerce_int(jobs_cfg["checkpoint_interval"], "[jobs].checkpoint_interval")
+        if checkpoint_interval <= 0:
+            raise ConfigError(f"[jobs].checkpoint_interval must be > 0, got {checkpoint_interval}")
+        jobs.checkpoint_interval = checkpoint_interval
+    config.jobs = jobs
 
 
 def _apply_env_overrides(config: SearchConfig) -> None:

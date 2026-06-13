@@ -253,7 +253,7 @@ Namespace from auth token (not a query param).
   - Checkpoint: `uv run pytest tests/test_types_queued.py -v --no-cov -n0`
 
 #### Task 1.2 — Add `[jobs]` config section to `SearchConfig`
-- [ ] **File**: `archon_search/config.py`
+- [x] **File**: `archon_search/config.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `@dataclass class JobsConfig:` with `max_concurrent_bulk: int = 1` and `checkpoint_interval: int = 100`
