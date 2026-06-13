@@ -171,8 +171,47 @@ def create_app(
                 config.max_fanout, _FANOUT_VALIDATION_LIMIT, _FANOUT_VALIDATION_LIMIT,
             )
 
-        # Startup: start job scheduler if provided
+        # Startup: install the real export/import dispatch closure on the
+        # scheduler and start it. The placeholder dispatch passed to
+        # ``JobScheduler(...)`` in ``run_server()`` is replaced here, once
+        # ``app.state.search_store``, ``pipeline``, and ``embedder_cache`` are
+        # ready. Without this reassignment the scheduler would either fail
+        # outright or mark every dispatched job FAILED.
         if scheduler is not None:
+            from archon_search.server.routes_export import (  # noqa: PLC0415
+                _export_task,
+                _import_task,
+            )
+            from archon_search.types import ExportJob, ImportJob  # noqa: PLC0415
+
+            def _real_dispatch(job: ExportJob | ImportJob) -> None:
+                if isinstance(job, ExportJob):
+                    task = asyncio.create_task(
+                        _export_task(
+                            job,
+                            app.state.job_store,
+                            app.state.search_store,
+                            config,
+                        )
+                    )
+                elif isinstance(job, ImportJob):
+                    task = asyncio.create_task(
+                        _import_task(
+                            job,
+                            app.state.job_store,
+                            app.state.search_store,
+                            app.state.pipeline,
+                            app.state.embedder_cache,
+                            config,
+                        )
+                    )
+                else:
+                    raise TypeError(
+                        f"_real_dispatch: unsupported job type {type(job).__name__}"
+                    )
+                scheduler.register_task(task)
+
+            scheduler.dispatch_fn = _real_dispatch
             scheduler_task = asyncio.create_task(scheduler.run())
             app.state._background_tasks.add(scheduler_task)
         app.state.scheduler = scheduler
@@ -277,18 +316,23 @@ def run_server(config: SearchConfig) -> None:
     configure_logging(config)
     job_store = JobStore()
 
-    # No-op dispatch closure: transitions dispatched jobs to FAILED so that
-    # QUEUED jobs do not silently hang in RUNNING state before real workers land
-    # (Tasks 4.1 and 5.1 replace this closure with the real export/import tasks).
-    from archon_search.types import ExportJob, ImportJob, JobStatus  # noqa: PLC0415
+    # Defensive placeholder dispatch: the lifespan handler in ``create_app()``
+    # reassigns ``scheduler.dispatch_fn`` to the real export/import closure as
+    # soon as app state is ready. This placeholder should never run in practice
+    # — if it does, something dispatched before startup completed.
+    from archon_search.types import ExportJob, ImportJob  # noqa: PLC0415
 
-    def _no_op_dispatch(job: ExportJob | ImportJob) -> None:
-        job_store.update(job.job_id, status=JobStatus.FAILED, error="workers_not_deployed")
+    def _placeholder_dispatch(job: ExportJob | ImportJob) -> None:
+        logger.warning(
+            "JobScheduler placeholder dispatch invoked before lifespan startup "
+            "completed for job %s; this should not happen",
+            job.job_id,
+        )
 
     scheduler = JobScheduler(
         store=job_store,
         max_concurrent=config.jobs.max_concurrent_bulk,
-        dispatch_fn=_no_op_dispatch,
+        dispatch_fn=_placeholder_dispatch,
     )
     app = create_app(config, job_store, scheduler=scheduler)
     uvicorn.run(app, host=config.host, port=config.port)

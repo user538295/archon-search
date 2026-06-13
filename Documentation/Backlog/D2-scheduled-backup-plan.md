@@ -239,7 +239,7 @@ class BackupStatusDetail(BaseModel):
 > **Releasable**: after Task 2.1 — export and import jobs actually execute end-to-end.
 
 #### Task 2.1 — Wire real dispatch closure in `create_app()` lifespan
-- [ ] **File**: `archon_search/server/app.py`, `archon_search/jobs/scheduler.py`
+- [x] **File**: `archon_search/server/app.py`, `archon_search/jobs/scheduler.py`
 - **Depends on**: Task 1.2
 - **Description**:
   - `JobScheduler`: make `dispatch_fn` a reassignable instance attribute. Change `__init__` to store it as `self.dispatch_fn` (already an attribute; just ensure `_tick()` reads `self.dispatch_fn` not a closed-over local). No type signature change needed — it was always an attribute.

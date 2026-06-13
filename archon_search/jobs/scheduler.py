@@ -31,7 +31,11 @@ class JobScheduler:
     ) -> None:
         self._store = store
         self._max_concurrent = max_concurrent
-        self._dispatch_fn = dispatch_fn
+        # ``dispatch_fn`` is a public, reassignable attribute so the FastAPI
+        # lifespan can install the real export/import dispatch closure once
+        # ``app.state`` (search_store, pipeline, embedder_cache) is ready.
+        # ``_tick()`` reads it via attribute access, not a closed-over local.
+        self.dispatch_fn = dispatch_fn
         self._active: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------
@@ -76,7 +80,7 @@ class JobScheduler:
                 # Another tick or concurrent caller beat us — skip this job.
                 continue
             try:
-                self._dispatch_fn(job)
+                self.dispatch_fn(job)
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "JobScheduler: dispatch_fn raised for job %s — marking FAILED: %s",
