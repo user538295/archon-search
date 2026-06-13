@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Literal
 
 from archon_search.constants import DEFAULT_NAMESPACE
 
@@ -44,6 +45,7 @@ class ExportJob(IngestJob):
     collection: str = ""
     output_path: str = ""   # final .tar.gz path (set on DONE)
     tmp_path: str = ""      # .export-<job_id>.jsonl.tmp path
+    source: Literal["user", "backup"] = "user"
 
 
 @dataclass
@@ -53,6 +55,7 @@ class ImportJob(IngestJob):
     force_overwrite: bool = False
     ignore_schema_version: bool = False
     on_error: str = "fail"  # "fail" | "skip"
+    source: Literal["user", "backup"] = "user"
 
 
 @dataclass

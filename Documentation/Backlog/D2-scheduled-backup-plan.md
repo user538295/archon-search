@@ -168,7 +168,7 @@ class BackupStatusDetail(BaseModel):
   - Checkpoint: `uv run pytest tests/test_config_backup.py tests/test_config_defaults.py -x`
 
 #### Task 1.2 — `source` field on `ExportJob`/`ImportJob` + `create_export()`/`create_import()` + `_load()` backward compat
-- [ ] **File**: `archon_search/types.py`, `archon_search/jobs/store.py`
+- [x] **File**: `archon_search/types.py`, `archon_search/jobs/store.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `source: Literal["user", "backup"] = "user"` to `ExportJob` dataclass (after existing fields)

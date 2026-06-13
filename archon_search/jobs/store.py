@@ -8,6 +8,7 @@ import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 
 from archon_search._durable_io import atomic_write_json
 from archon_search.constants import DEFAULT_NAMESPACE
@@ -113,6 +114,7 @@ class JobStore:
         output_path: str,
         tmp_path: str,
         namespace: str = DEFAULT_NAMESPACE,
+        source: Literal["user", "backup"] = "user",
     ) -> ExportJob:
         """Create an ExportJob with QUEUED status and persist it."""
         now = _now_iso()
@@ -125,6 +127,7 @@ class JobStore:
             collection=collection,
             output_path=output_path,
             tmp_path=tmp_path,
+            source=source,
         )
         return self.create_job(job)  # type: ignore[return-value]
 
@@ -136,6 +139,7 @@ class JobStore:
         ignore_schema_version: bool,
         on_error: str,
         namespace: str = DEFAULT_NAMESPACE,
+        source: Literal["user", "backup"] = "user",
     ) -> ImportJob:
         """Create an ImportJob with QUEUED status and persist it."""
         now = _now_iso()
@@ -150,6 +154,7 @@ class JobStore:
             force_overwrite=force_overwrite,
             ignore_schema_version=ignore_schema_version,
             on_error=on_error,
+            source=source,
         )
         return self.create_job(job)  # type: ignore[return-value]
 
@@ -200,8 +205,12 @@ class JobStore:
                 item.setdefault("progress", None)
                 job_type = item.pop("job_type", "ingest")
                 if job_type == "export":
+                    # Backward compat: pre-D2 export jobs lack a "source" key.
+                    item.setdefault("source", "user")
                     job: IngestJob = ExportJob(**item)
                 elif job_type == "import":
+                    # Backward compat: pre-D2 import jobs lack a "source" key.
+                    item.setdefault("source", "user")
                     job = ImportJob(**item)
                 elif job_type == "reindex":
                     job = ReindexJob(**item)
