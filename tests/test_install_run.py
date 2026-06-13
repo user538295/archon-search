@@ -494,9 +494,9 @@ def test_run_creates_log_directory(tmp_path: Path) -> None:
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
 
-    # Patch Path.home() to redirect log dir creation to tmp_path
-    fake_home = tmp_path / "home"
-    fake_home.mkdir()
+    # Patch get_data_dir() to redirect log dir creation to tmp_path
+    fake_data_dir = tmp_path / "data"
+    fake_data_dir.mkdir()
 
     with (
         patch("archon_search.install.get_default_config_path", return_value=config_path),
@@ -504,7 +504,7 @@ def test_run_creates_log_directory(tmp_path: Path) -> None:
         patch("archon_search.install._remove_legacy_service"),
         patch("archon_search.install._prewarm_models"),
         patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.Path.home", return_value=fake_home),
+        patch("archon_search.install.get_data_dir", return_value=fake_data_dir),
         patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(SearchInstaller, "validate_providers", return_value=False),
         patch.object(SearchInstaller, "configure_providers"),
@@ -520,7 +520,7 @@ def test_run_creates_log_directory(tmp_path: Path) -> None:
             skip_preload=True,
         )
 
-    expected_log_dir = fake_home / ".archon-search" / "logs"
+    expected_log_dir = fake_data_dir / "logs"
     assert expected_log_dir.exists()
 
 

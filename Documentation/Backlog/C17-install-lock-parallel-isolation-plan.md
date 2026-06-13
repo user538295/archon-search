@@ -376,7 +376,7 @@ def test_two_workers_sharing_data_dir_contend(tmp_path: Path) -> None: ...
 
 #### Task 3.1 — Migrate `install.py:48/377/1508` to `get_data_dir()` and shrink `path_home_allowlist.txt`
 
-- [ ] **Files**:
+- [x] **Files**:
   - `archon_search/install.py` (lines 48, 377, 1508 + imports)
   - `tests/path_home_allowlist.txt` (drop 3 entries)
   - `tests/test_install_lock_per_worker_isolation.py` (remove `xfail` from Task 2.5)

@@ -66,10 +66,6 @@ def _child_acquire(
 # ---------------------------------------------------------------------------
 
 @pytest.mark.xdist_group("install")
-@pytest.mark.xfail(
-    reason="requires C17 Phase 3 install.py migration to get_data_dir()",
-    strict=False,
-)
 def test_two_workers_with_distinct_data_dirs_both_acquire(tmp_path: Path) -> None:
     """Two processes with distinct DATA_DIRs must both acquire the lock without contention.
 

@@ -25,6 +25,7 @@ import tomlkit
 from archon_search._durable_io import atomic_write_bytes
 from archon_search.config import SearchConfig, get_default_config_path, load_config
 from archon_search.key_manager import get_key_file, load_or_generate_key
+from archon_search.paths import get_data_dir
 from archon_search.pipeline import create_pipeline
 from archon_search.platform.runtime import get_runtime, get_search_service
 from archon_search.platform.types import GpuType
@@ -45,7 +46,7 @@ class InstallLockError(Exception):
 
 
 def _install_lock_path() -> Path:
-    return Path.home() / ".archon-search" / ".install.lock"
+    return get_data_dir() / ".install.lock"
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -374,7 +375,7 @@ class InstallError(Exception):
 def _check_disk_space(profile: InstallProfile, base_path: Path | None = None) -> None:
     """Raise InstallError if the filesystem has insufficient free space for *profile*."""
     if base_path is None:
-        base_path = Path.home() / ".archon-search"
+        base_path = get_data_dir()
 
     check_path = base_path
     while not check_path.exists():
@@ -1505,7 +1506,7 @@ class SearchInstaller:
             legacy = _legacy_service_path()
             if legacy.exists():
                 _remove_legacy_service(legacy)
-            log_dir = Path.home() / ".archon-search" / "logs"
+            log_dir = get_data_dir() / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
 
             # Before Step 1: resolve multilingual via interactive prompt
