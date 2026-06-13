@@ -26,7 +26,7 @@ Last reviewed: 2026-05-31 / Next review: 2026-08-31
 | [`Architecture/140_error_handling_strategy.md`](./140_error_handling_strategy.md) | Status code conventions, retry semantics, failure modes. |
 | [`Architecture/150_security_and_privacy_architecture.md`](./150_security_and_privacy_architecture.md) | Bearer auth, namespaces, ACL, telemetry privacy invariants. |
 | [`Architecture/160_operational_readiness_monitoring_and_reliability.md`](./160_operational_readiness_monitoring_and_reliability.md) | Health, status, telemetry, alerts, on-call. |
-| [`Architecture/200_testing_strategy.md`](./200_testing_strategy.md) | Test pyramid, markers (`live`, `eval`, `integration`, `benchmark`), coverage gate. |
+| [`Architecture/200_testing_strategy.md`](./200_testing_strategy.md) | Test pyramid, markers (`live`, `eval`, `integration`, `benchmark`, `archon_unset_data_dir`), coverage gate, parallel isolation autouse, `Path.home()` ratchet. |
 | [`Architecture/210_performance_and_scalability.md`](./210_performance_and_scalability.md) | Latency budgets, eval baselines, scaling considerations. |
 | [`Architecture/220_accessibility_and_internationalization.md`](./220_accessibility_and_internationalization.md) | CLI accessibility posture and internationalization scope (English-only by design). |
 | [`Architecture/500_development_workflows_and_conventions.md`](./500_development_workflows_and_conventions.md) | `uv`, pytest, lint, commit and branch conventions. |

@@ -94,6 +94,27 @@ Runs the eval corpus through **real fastembed + cross-encoder model weights** �
 | Behaviour that requires real network               | Live        | `live`                  | Justify the dependency in the PR description. #Unverified (marker registered; no in-tree `@pytest.mark.live` usage sampled) |
 | Quality regression with real model weights         | Live eval   | `live_eval`             | Runs on tag push via `archon-search-eval-live.yml`. Requires model weight download. See `tests/eval/README.md` (live eval lane section). |
 
+## Parallel-test isolation (`archon_unset_data_dir` marker + `_archon_isolated_data_dir` autouse)
+
+Every test runs under a per-worker, session-scoped `ARCHON_SEARCH_DATA_DIR` provided by the autouse fixture chain in `tests/conftest.py`:
+
+- **`_archon_worker_data_dir` (session-scoped)** — calls `tmp_path_factory.mktemp("archon-data")` once per xdist worker. The result is a fresh temporary directory that is unique to that worker's lifetime.
+- **`_archon_isolated_data_dir` (function-scoped, autouse)** — always clears `ARCHON_SEARCH_HOST`, `ARCHON_SEARCH_PORT`, `ARCHON_SEARCH_CONTAINER`, `ARCHON_SEARCH_KEY_FILE`, `ARCHON_SEARCH_CONFIG`. By default it also sets `ARCHON_SEARCH_DATA_DIR` to `str(_archon_worker_data_dir)`, directing every path accessor (`get_data_dir()`, `key_manager.get_key_file()`, `jobs.get_jobs_file()`, etc.) to an isolated temporary tree. Tests that need to exercise the `Path.home() / ".archon-search"` default-fallback codepath (e.g. `test_default_returns_home_archon`) must opt out by applying `@pytest.mark.archon_unset_data_dir`; the fixture then deletes `ARCHON_SEARCH_DATA_DIR` from the environment instead of setting it.
+
+The **`archon_unset_data_dir` marker** is registered in `[tool.pytest.ini_options].markers` in `pyproject.toml`. It is intentionally narrow: apply it only to tests that explicitly assert on the `Path.home() / ".archon-search"` default. The exact set of authorized tests is enforced by `test_archon_unset_data_dir_marker_scope` in `tests/test_no_hardcoded_path_home.py` (see below); any test outside the `MARKER_ALLOWLIST` that acquires this marker will fail CI.
+
+### `Path.home()` ratchet (`tests/test_no_hardcoded_path_home.py`)
+
+`tests/test_no_hardcoded_path_home.py` is a structural CI ratchet that prevents new hardcoded `Path.home()` callsites from being introduced under `archon_search/` outside `archon_search/paths.py` (the one legitimate caller). Three test functions:
+
+1. **`test_path_home_ratchet`** — scans every `*.py` under `archon_search/` (excluding `paths.py`) for `Path.home(` via a line-level regex. Performs a *bidirectional assertion* against `tests/path_home_allowlist.txt` (one `<relative_path>:<line_no>:<sha256>` entry per allowlisted callsite): forward direction catches new unallowlisted callsites; reverse direction catches dead or hash-mismatched allowlist entries. A cosmetic edit to any grandfathered line changes its SHA-256, triggering the reverse direction and forcing an explicit allowlist update.
+
+2. **Meta-tests** (`test_meta_positive_match`, `test_meta_no_parens_negative`, `test_meta_lowercase_negative`, `test_meta_string_literal_positive`) — exercise the regex against in-memory fixtures so a pattern weakening (e.g. dropping `\b` or `\s*\(`) fails immediately, independent of the codebase scan.
+
+3. **`test_archon_unset_data_dir_marker_scope`** — AST-walks `tests/` and asserts that `@pytest.mark.archon_unset_data_dir` appears on exactly the tests named in `MARKER_ALLOWLIST`. Paired with `test_meta_ast_finds_pytest_mark_decorator`, which validates the AST walker itself.
+
+Grandfathered callsites (those in `archon_search/install.py` lines 1214, 1215, 1358, 1547; `archon_search/config.py:144`; `archon_search/platform/linux.py` and `archon_search/platform/macos.py`) are pinned in `tests/path_home_allowlist.txt`. Lines 48, 377, and 1508 of `install.py` were migrated to `get_data_dir()` in C17 and removed from the allowlist. The sibling ratchet for SQL f-string injection is `tests/test_no_fstring_sql.py` + `store.py` guard (see `Architecture/130_data_architecture_and_persistence.md`).
+
 ## See also
 
 - `tests/eval/README.md` — authoritative maintenance guide for the eval harness (fixtures, thresholds, baselines, waivers).

@@ -1,7 +1,7 @@
 # C17 — Install-Lock Parallel-Test Isolation + `Path.home()` Ratchet Guard
 **Purpose**: Eliminate xdist install-lock collisions and add a CI ratchet that fails any new hardcoded `Path.home()` callsite added to `archon_search/` outside `paths.py`.
 **Audience**: archon-search contributors implementing C17; reviewers of the resulting PRs.
-**Status**: To Do
+**Status**: Complete
 
 ---
 
@@ -401,7 +401,7 @@ def test_two_workers_sharing_data_dir_contend(tmp_path: Path) -> None: ...
 
 #### Task 4.1 — Final verification & documentation update
 
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: Task 3.1
 - **Description**:
   - Spawn an agent to discover all documentation in the project (READMEs, ADRs, API docs, architecture docs, user guides, `CLAUDE.md`, `CHANGELOG`) and update every file whose content is affected by C17:
