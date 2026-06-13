@@ -67,7 +67,7 @@ def test_steady_state_p95_assertion_fires_on_regression() -> None:
     # Build a times list where the 95th percentile exceeds the threshold
     times_ms = [1.0] * 94 + [999.0, 999.0, 999.0, 999.0, 999.0, 999.0]  # 100 values
     assert len(times_ms) == 100
-    p95 = sorted(times_ms)[int(math.ceil(0.95 * len(times_ms))) - 1]
+    p95 = sorted(times_ms)[int(math.ceil(0.95 * _STEADY_STATE_ITERS)) - 1]
     assert p95 == 999.0
     threshold = 500.0
     with pytest.raises(AssertionError, match="Steady-state p95"):
@@ -109,10 +109,10 @@ def test_cold_load_p90_assertion_fires_on_regression() -> None:
 
 async def _run_steady_state_benchmark(
     tmp_path: Path,
-) -> tuple[float, float]:
+) -> float:
     """Set up pipeline, ingest corpus, warm up, measure p95, tear down.
 
-    Returns (p95_ms, threshold_ms) for assertion outside the event loop.
+    Returns p95_ms for assertion outside the event loop.
     All LanceDB operations run in a single event loop — no cross-loop issues.
     """
     from archon_search.chunker import DocumentChunker
