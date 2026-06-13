@@ -8,6 +8,29 @@
 
 ## Changelog
 
+### [next release] — D2 job contract: `JobResponse` gains bulk-job subclass fields
+
+**Surface**: `GET /jobs/{job_id}` and `GET /jobs` REST responses (`JobResponse`).
+
+- `JobResponse` now includes four optional nullable fields: `source` (`"user" | "backup" | null`), `collection` (`str | null`), `output_path` (`str | null`), `archive_path` (`str | null`).
+- These fields are populated for `ExportJob` and `ImportJob` records; base `IngestJob`, `ReindexJob`, and `DeleteJob` records return them as `null`.
+- Additive change. Strict-schema clients will see four new keys; permissive clients are unaffected.
+
+**Migration**: no action required for read-only callers. Add the four keys to client schema definitions if strict validation is in use.
+
+---
+
+### [next release] — D2 status contract: `StatusResponse` will gain a `backup` object
+
+**Surface**: `GET /status` REST response (`StatusResponse`).
+
+- `StatusResponse` will gain an optional `backup: BackupStatusDetail | null` field describing scheduled-backup state (enabled flag, interval, last/next tick, per-collection backup status). Added in a later D2 task; documented here to give clients a heads-up.
+- Additive change. Existing callers that ignore unknown fields are unaffected.
+
+**Migration**: no action required for read-only callers. Add the `backup` key to client schema definitions if strict validation is in use, once the field ships.
+
+---
+
 ### [next release] — D1/D2 MCP tools: `export_collection` and `import_collection` added (tool count 11 → 13)
 
 **Surface**: MCP tool registry (`create_app`).

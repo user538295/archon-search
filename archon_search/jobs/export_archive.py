@@ -7,15 +7,34 @@ Provides:
 """
 from __future__ import annotations
 
+import importlib.metadata
 import io
 import json
+import logging
 import tarfile
 from pathlib import Path
 from typing import IO, Iterator
 
 from archon_search._path_safety import validate_archive_members
 
+logger = logging.getLogger(__name__)
+
 EXPORT_SCHEMA_VERSION: int = 1
+
+
+def get_lancedb_version() -> str | None:
+    """Resolve the installed lancedb package version for export manifests.
+
+    Returns the version string on success, or ``None`` if the package is not
+    installed (in which case a WARNING is logged). Added in D2-1.4 so the
+    export manifest records the LanceDB version it was produced against for
+    forensic / migration purposes.
+    """
+    try:
+        return importlib.metadata.version("lancedb")
+    except importlib.metadata.PackageNotFoundError:
+        logger.warning("Could not determine lancedb version")
+        return None
 
 # Required keys in the manifest dict.
 _REQUIRED_MANIFEST_KEYS = frozenset({

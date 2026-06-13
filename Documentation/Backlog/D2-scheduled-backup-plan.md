@@ -208,7 +208,7 @@ class BackupStatusDetail(BaseModel):
   - Checkpoint: `uv run pytest tests/test_job_priority_sort.py tests/test_jobs_list_resume.py -x`
 
 #### Task 1.4 — `job_to_dict()` refactor + `JobResponse` new fields + `lancedb_version` in manifest
-- [ ] **File**: `archon_search/jobs/model.py`, `archon_search/server/schemas.py`, `archon_search/jobs/export_archive.py`, `tests/server/openapi_snapshot.json`, `BREAKING.md`
+- [x] **File**: `archon_search/jobs/model.py`, `archon_search/server/schemas.py`, `archon_search/jobs/export_archive.py`, `tests/server/openapi_snapshot.json`, `BREAKING.md`
 - **Depends on**: Task 1.2
 - **Description**:
   - `job_to_dict()`: add four new nullable fields using `getattr`:

@@ -32,6 +32,7 @@ from archon_search.jobs.export_archive import (
     EXPORT_SCHEMA_VERSION,
     ExportArchiveWriter,
     ImportArchiveReader,
+    get_lancedb_version,
 )
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
@@ -126,6 +127,9 @@ async def _export_task(
                 "doc_count": writer.lines_written,
                 "active_embedding_model": active_model,
                 "description": description,
+                # D2-1.4: record the LanceDB version this archive was produced
+                # against. Null on PackageNotFoundError.
+                "lancedb_version": get_lancedb_version(),
             }
             writer.finalize(manifest, archive_path)
 

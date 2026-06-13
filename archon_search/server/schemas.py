@@ -133,6 +133,13 @@ class JobResponse(BaseModel):
     error: str | None = None
     namespace: str
     progress: dict | None = None
+    # D2-1.4 bulk-job subclass fields. All nullable and additive: base
+    # IngestJob instances serialize them as None; ExportJob/ImportJob carry
+    # the real values.
+    source: str | None = None
+    collection: str | None = None
+    output_path: str | None = None
+    archive_path: str | None = None
 
 
 class JobListResponse(BaseModel):

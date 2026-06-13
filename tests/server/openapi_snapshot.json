@@ -1125,6 +1125,28 @@
       },
       "JobResponse": {
         "properties": {
+          "archive_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Path"
+          },
+          "collection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
@@ -1148,6 +1170,17 @@
             "title": "Namespace",
             "type": "string"
           },
+          "output_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Path"
+          },
           "progress": {
             "anyOf": [
               {
@@ -1170,6 +1203,17 @@
               }
             ],
             "title": "Result"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
           },
           "status": {
             "title": "Status",
