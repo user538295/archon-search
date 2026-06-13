@@ -348,7 +348,7 @@ Namespace from auth token (not a query param).
 > **Releasable**: after Task 2.2; archive path checks and zip-slip protection are callable. REST endpoints (Phase 4–5) depend on these.
 
 #### Task 2.1 — `validate_export_path()` and `validate_archive_members()` in `_path_safety.py`
-- [ ] **File**: `archon_search/_path_safety.py`
+- [x] **File**: `archon_search/_path_safety.py`
 - **Depends on**: nothing
 - **Description**:
   - `validate_export_path(raw: str, allowed_base_dirs: list[Path]) -> Path`:
