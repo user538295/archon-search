@@ -452,7 +452,7 @@ Namespace from auth token (not a query param).
   - Checkpoint: `uv run pytest tests/test_export_worker.py -v --no-cov -n0 -m integration`
 
 #### Task 4.2 — `POST /collections/{name}/export` REST endpoint
-- [ ] **File**: `archon_search/server/routes_export.py`
+- [x] **File**: `archon_search/server/routes_export.py`
 - **Depends on**: Task 4.1, Task 1.5
 - **Description**:
   - Pydantic request model: `class ExportRequest(BaseModel): output_path: str = ""`
