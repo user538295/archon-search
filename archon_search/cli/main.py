@@ -4,7 +4,7 @@ import click
 
 from archon_search.cli.collection import collection
 from archon_search.cli.config_cmd import config
-from archon_search.cli.export_cmd import export_cmd
+from archon_search.cli.export_cmd import export_cmd, import_cmd
 from archon_search.cli.ingest import ingest
 from archon_search.cli.install_cmd import install, uninstall, wizard
 from archon_search.cli.serve import serve
@@ -37,6 +37,7 @@ main.add_command(sync)
 main.add_command(collection)
 main.add_command(config)
 main.add_command(export_cmd)
+main.add_command(import_cmd)
 
 
 if __name__ == "__main__":

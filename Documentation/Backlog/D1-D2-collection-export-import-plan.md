@@ -633,7 +633,7 @@ Namespace from auth token (not a query param).
   - Checkpoint: `uv run pytest tests/test_cli_export.py -v --no-cov -n0`
 
 #### Task 8.2 — `archon-search import` CLI command
-- [ ] **File**: `archon_search/cli/export_cmd.py`, `archon_search/cli/main.py`
+- [x] **File**: `archon_search/cli/export_cmd.py`, `archon_search/cli/main.py`
 - **Depends on**: Task 5.2, Task 8.1
 - **Description**:
   - `@click.command("import")` with arguments: `collection: str`, `path: str`; options: `--force-overwrite / --no-force-overwrite`, `--ignore-schema-version / --no-ignore-schema-version`, `--on-error [fail|skip]` (default: fail), `--wait / --no-wait`, `--api-url TEXT`, `--api-key TEXT`

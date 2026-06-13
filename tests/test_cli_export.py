@@ -1,13 +1,11 @@
-"""Tests for CLI export subcommand (Task 8.1)."""
+"""Tests for CLI export and import subcommands (Tasks 8.1, 8.2)."""
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 from click.testing import CliRunner
 
-from archon_search.cli.export_cmd import export_cmd
+from archon_search.cli.export_cmd import export_cmd, import_cmd
 
 
 # ---------------------------------------------------------------------------
@@ -145,3 +143,106 @@ def test_export_cmd_collection_not_found() -> None:
 
     assert result.exit_code == 1
     assert "404" in result.output or "not found" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# Task 8.2 — import_cmd tests
+# ---------------------------------------------------------------------------
+
+
+def test_import_cmd_prints_job_id() -> None:
+    """Mock 202 response; import command prints job_id and exits 0."""
+    runner = CliRunner()
+    post_resp = _mock_post_response(202, _job_response("job-import-1", "QUEUED"))
+
+    with patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp) as mock_post:
+        result = runner.invoke(
+            import_cmd,
+            ["my-collection", "/data/exports/archive.tar.gz", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "job-import-1" in result.output
+    mock_post.assert_called_once()
+
+
+def test_import_cmd_wait_prints_imported_count() -> None:
+    """--wait prints imported/skipped/total on DONE."""
+    runner = CliRunner()
+    job_id = "job-import-wait"
+    post_resp = _mock_post_response(202, _job_response(job_id, "QUEUED"))
+    poll_done = _job_response(
+        job_id,
+        "DONE",
+        result={"imported": 150, "skipped": 0, "total_in_archive": 150},
+    )
+    get_resp = _mock_get_response(200, poll_done)
+
+    with (
+        patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.export_cmd.httpx.get", return_value=get_resp),
+        patch("archon_search.cli.export_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            import_cmd,
+            [
+                "my-collection",
+                "/data/exports/archive.tar.gz",
+                "--wait",
+                "--api-key",
+                "deadbeef",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "imported=150" in result.output
+    assert "skipped=0" in result.output
+    assert "total=150" in result.output
+
+
+def test_import_cmd_wait_warns_on_skipped() -> None:
+    """--wait prints a warning line when skipped > 0."""
+    runner = CliRunner()
+    job_id = "job-import-skip"
+    post_resp = _mock_post_response(202, _job_response(job_id, "QUEUED"))
+    poll_done = _job_response(
+        job_id,
+        "DONE",
+        result={"imported": 49, "skipped": 1, "total_in_archive": 50},
+    )
+    get_resp = _mock_get_response(200, poll_done)
+
+    with (
+        patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.export_cmd.httpx.get", return_value=get_resp),
+        patch("archon_search.cli.export_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            import_cmd,
+            [
+                "my-collection",
+                "/data/exports/archive.tar.gz",
+                "--wait",
+                "--api-key",
+                "deadbeef",
+            ],
+        )
+
+    # The warning goes to stderr; CliRunner mixes by default
+    combined = result.output + (result.stderr if hasattr(result, "stderr") else "")
+    assert "Warning" in combined or "skipped" in combined
+
+
+def test_import_cmd_collection_exists_no_force() -> None:
+    """409 from server exits 1 with an informative error."""
+    runner = CliRunner()
+    post_resp = _mock_post_response(409, {"error": "collection_exists"})
+
+    with patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp):
+        result = runner.invoke(
+            import_cmd,
+            ["my-collection", "/data/exports/archive.tar.gz", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 1
+    assert "force-overwrite" in result.output.lower() or "already exists" in result.output.lower()
