@@ -91,11 +91,12 @@ Goal: ship the features users actually came for. Each item must show a measurabl
 - [x] **C10. Test-suite speed — pytest-xdist + `--dist=loadfile`** — `pytest-xdist` dev-dep, parallel `addopts`, `-n0` in CI for `--cov-append` correctness; baseline test wall-time win. [[brief](../Completed/C10-test-suite-speed-brief.md), [plan](../Completed/C10-test-suite-speed-plan.md)]
 - [x] **C11. Split `test_pipeline.py`** — break the monolithic 4 000-line `test_pipeline.py` into `tests/pipeline/{test_pipeline_ingest,test_pipeline_search,test_pipeline_multi}.py` with shared helpers in `tests/pipeline/conftest.py`. [[brief](../Completed/C11-split-test-pipeline-brief.md), [plan](../Completed/C11-split-test-pipeline-plan.md)]
 - [x] **C12. Switch xdist to `--dist=loadgroup` with session-scoped store** — session-scoped `connected_store`, `xdist_group("mcp")` on 16 MCP-stub files, `xdist_group("install")` on 3 install-lock files; median wall time on a 14-core machine ≈ 127s with thread caps (from 6.5 min before C10). [[brief](../Completed/C12-dist-load-session-store-brief.md), [plan](../Completed/C12-dist-load-session-store-plan.md)]
+- [x] **C17. Install-lock parallel-test isolation + `Path.home()` ratchet guard** — per-worker `ARCHON_SEARCH_DATA_DIR` autouse fixture eliminates xdist install-lock collisions; `test_no_hardcoded_path_home.py` ratchet prevents new `Path.home()` callsites outside `paths.py`; 3 `install.py` callsites migrated to `get_data_dir()`. [[brief](../Completed/C17-install-lock-parallel-isolation-brief.md), [plan](../Completed/C17-install-lock-parallel-isolation-plan.md)]
 
 ### Active backlog (post-Phase C, not yet sequenced into D/E/F)
 
 - [ ] **C8. Extended setup wizard with optional feature selection** — adds an interactive feature-selection step to the wizard so users can enable any optional feature at install time (including automatic `pip install archon-search[<extra>]` invocation). Task 1.1 (`WizardFeatures` dataclass) shipped; 11 tasks remain. [[investigation](./C8-wizard-optional-features-investigation.md), [plan](./C8-wizard-optional-features-plan.md)]
-- [ ] **C9. Container support (Docker + GHCR)** — `docker run` and `docker compose up` start `archon-search` configured purely via env vars; all runtime state on one mounted volume; CPU (`:latest`) and NVIDIA GPU (`:gpu`) images published to GHCR on tag push. [[brief](./C9-container-support-brief.md), [plan](./C9-container-support-plan.md)]
+- [x] **C9. Container support (Docker + GHCR)** — `docker run` and `docker compose up` start `archon-search` configured purely via env vars; all runtime state on one mounted volume; CPU (`:latest`) and NVIDIA GPU (`:gpu`) images published to GHCR on tag push. [[brief](../Completed/C9-container-support-brief.md), [plan](../Completed/C9-container-support-plan.md)]
 - [ ] **C13. Test perf: bypass FTS rebuild in tests that don't query FTS** — adds `rebuild_fts: bool = True` to `SearchPipeline.ingest_directory()` (mirroring `ingest_file`); estimated 127s → 90–100s default-suite median wall time. Proposed (not yet scheduled). [[brief](./C13-fts-rebuild-test-bypass-brief.md)]
 
 ## Phase D — Operability and portability (becomes serious to run)
@@ -249,13 +250,14 @@ If only one ordering is used for planning, use this — each phase is a coherent
 
 **Active backlog**
 24. ⬜ C8. Extended setup wizard with optional feature selection (Task 1.1 shipped; 11 tasks remain).
-25. ⬜ C9. Container support (Docker + GHCR).
+25. ✅ C9. Container support (Docker + GHCR).
 26. ⬜ C13. Test perf: bypass FTS rebuild in tests that don't query FTS (proposed).
 
 **Test-suite infrastructure (parallel to Phase C)**
 - ✅ C10. Test-suite speed — pytest-xdist + `--dist=loadfile`.
 - ✅ C11. Split `test_pipeline.py` into focused files.
 - ✅ C12. Switch xdist to `--dist=loadgroup` with session-scoped store (median wall time ≈ 127s).
+- ✅ C17. Install-lock parallel-test isolation + `Path.home()` ratchet guard.
 
 **Phase D — Operability and portability**
 27. ⬜ D1. Job contract completion (item 2).
@@ -291,7 +293,7 @@ If the goal is **a full-featured world-class search system that is also safe to 
 2. ✅ **Phase A** — ship metadata + filters + explain (user wins), and close the most painful safety debt (path, SQL, locks, fsync) in the same release. Cheap, broad impact, unlocks every later phase. (Search-failure semantics is closed via A3; see `BREAKING.md`.)
 3. ✅ **Phase B** — observability + production-model eval lane first; then the server-side multi-collection refactor and stronger routing. Without B1/B6 the later ranking work has no story.
 4. ✅ **Phase C** — the ranking-leap features (per-collection model, multilingual, enrichment, HyDE, RAG Fusion) plus C0/C0b install + release polish and C6/C7 hardening. All gated by the eval harness or BREAKING.md.
-5. ⬜ **Active backlog (post-Phase C)** — C8 wizard rework (partial), C9 container support, C13 test perf. Land before opening Phase D, since they unblock UX (C8), operator deployments (C9), and developer iteration speed (C13).
+5. ⬜ **Active backlog (post-Phase C)** — C8 wizard rework (partial, Task 1.1 shipped), C13 test perf. C9 container support and C17 install-lock isolation are complete. Land remaining items before opening Phase D, since they unblock UX (C8) and developer iteration speed (C13).
 6. ⬜ **Phase D** — finish the job contract, export/import, key rotation; the system becomes operable end-to-end.
 7. ⬜ **Phase E and F** — surface (SDKs, UI, connectors) and differentiators (salience, GraphRAG, multimodal, scale). Only after A–D close.
 
