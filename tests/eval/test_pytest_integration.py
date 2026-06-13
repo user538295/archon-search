@@ -42,7 +42,15 @@ def _addopts_str() -> str:
 def test_eval_pytest_marker_included_in_default_run() -> None:
     addopts = _addopts_str()
     assert "not eval" not in addopts, "eval marker must not be excluded from the default run"
-    assert "not live" not in addopts, "live marker must not be excluded from the default run"
+    # live_benchmark IS excluded from addopts by design (module-level sys.modules mutation
+    # requires process isolation). Check that only live_benchmark is excluded, not live.
+    # We match on word-boundary equivalents: "not live " or "not live\"" excludes the live
+    # marker, but "not live_benchmark" does not exclude the live marker.
+    import re
+    assert not re.search(r'not live(?!_)', addopts), (
+        "live marker must not be excluded from the default run "
+        "(only live_benchmark is excluded by design)"
+    )
 
 
 def test_package_pytest_config_uses_strict_markers_and_config() -> None:

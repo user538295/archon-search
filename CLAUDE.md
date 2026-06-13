@@ -23,7 +23,7 @@ uv run archon-search
 # Does not invoke launchd/systemd; blocks until SIGTERM/Ctrl-C.
 uv run archon-search serve
 
-# Full test suite — ALL tests, no marker exclusions (default addopts enforce --cov-fail-under=85)
+# Full test suite — all markers except live_benchmark (excluded by addopts; requires model cache)
 uv run pytest
 
 # Serial execution — required for fail-fast (-x) and stdout passthrough (-s)
@@ -100,7 +100,7 @@ Opt-in and **disabled by default**. `writer.py` appends one JSONL line per call 
 
 ## Repository conventions
 
-- Default pytest run includes **all** markers — no `-m` exclusion filter in `addopts`. All tests run on every `uv run pytest`. `benchmark` tests are serialised via `xdist_group("benchmark")`; server-dependent ones auto-skip when unreachable. Gated `eval` tests skip gracefully without `--thresholds-path` (wired into `addopts`). `live`/`live_eval` tests skip when `ANTHROPIC_API_KEY` is absent. Coverage gate (`--cov-fail-under=85`) applies to the default single-run invocation. Split / matrix CI runs MUST `coverage combine` before applying the threshold; never bake `--no-cov` into `addopts`.
+- Default pytest run includes **all** markers except `live_benchmark`. `addopts` in `pyproject.toml` sets `-m "not live_benchmark"` — this is the one intentional marker exclusion. `live_benchmark` tests perform module-level `sys.modules` mutation to remove fastembed stubs; running them in the same process as the default suite would poison `sys.modules` for regular tests. They run in a dedicated CI step instead. All other markers run on every `uv run pytest`. `benchmark` tests are serialised via `xdist_group("benchmark")`; server-dependent ones auto-skip when unreachable. Gated `eval` tests skip gracefully without `--thresholds-path` (wired into `addopts`). `live`/`live_eval` tests skip when `ANTHROPIC_API_KEY` is absent. Coverage gate (`--cov-fail-under=85`) applies to the default single-run invocation. Split / matrix CI runs MUST `coverage combine` before applying the threshold; never bake `--no-cov` into `addopts`.
 - The package directory is `archon_search/` (underscore), the distribution is `archon-search` (hyphen). `pyproject.toml` `[tool.hatch.build.targets.wheel].packages` is explicit about this — don't "fix" it.
 - Breaking REST/MCP changes go in `BREAKING.md`.
 - Telemetry's no-raw-query guarantee is structural: do not add a `query` parameter to telemetry entry constructors.

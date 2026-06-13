@@ -1,10 +1,15 @@
 # Live eval thresholds — populated post-calibration.
 #
-# This file is intentionally empty. load_live_thresholds() returns None when
-# required sections ([quality_floors]) are absent, enabling report-only mode
-# until a maintainer commits calibrated values after the first live eval run.
+# Sections in this file:
+#   [quality_floors]   — used by tests/eval/live/ (live_eval marker); gated quality metrics.
+#                        load_live_thresholds() returns None when this section is absent,
+#                        enabling report-only mode until calibrated values are committed.
+#   [real_model_search] — used by tests/eval/live_benchmark/ (live_benchmark marker);
+#                         real-model latency thresholds for fastembed ONNX pipeline.
+#                         load_benchmark_thresholds() raises ValueError if this section
+#                         is absent (the benchmark gate always requires explicit thresholds).
 #
-# After calibration, add sections like:
+# After calibration for quality_floors, add sections like:
 #   [quality_floors]
 #   recall_at_1 = 0.XX
 #   recall_at_3 = 0.XX
@@ -13,3 +18,19 @@
 #   [latency_ceilings]
 #   latency_p50_ms = XXX.0
 #   latency_p95_ms = XXX.0
+
+# [real_model_search] — real-model (fastembed BAAI/bge-small-en-v1.5 + Xenova/ms-marco-MiniLM-L-6-v2)
+# latency thresholds for tests/eval/live_benchmark/test_real_model_search_benchmark.py.
+#
+# Calibration procedure:
+#   1. Run `workflow_dispatch` on archon-search-pr.yml (or a dedicated calibration workflow)
+#      on ubuntu-latest 10 times. Record the p95/p90 printed by the benchmark step.
+#   2. Set steady_state_p95_ms = CI_measured_p95 × 2
+#      Set cold_load_p90_ms    = CI_measured_p90 × 3
+#   3. Add a provenance comment: date, runner type, 10 raw samples.
+#   4. Replace the 999999.0 placeholders below.
+#
+# Calibration MUST be done on ubuntu-latest; darwin/aarch64 ONNX is 2-5× faster.
+[real_model_search]
+steady_state_p95_ms = 999999.0  # CALIBRATE_ME: CI_measured_p95 × 2
+cold_load_p90_ms    = 999999.0  # CALIBRATE_ME: CI_measured_p90 × 3  (p90: N=10 nearest-rank)

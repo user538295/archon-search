@@ -32,8 +32,36 @@ jobs:
       - name: Verify pytest-cov plugin is importable
         run: uv run python -c "import pytest_cov"
 
+      - name: Restore fastembed + HuggingFace model cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/fastembed
+            ~/.cache/huggingface
+          # Update the key suffix (v1→v2 etc.) if model names change.
+          key: model-cache-bge-small-en-v1.5-ms-marco-MiniLM-L-6-v2-v1
+          restore-keys: model-cache-bge-small-en-v1.5-ms-marco-MiniLM-L-6-v2-
+
+      - name: Prefetch models (3 attempts, exponential backoff)
+        run: |
+          prefetch_ok=false
+          for attempt in 1 2 3; do
+            uv run python -c "
+          from fastembed import TextEmbedding
+          from fastembed.rerank.cross_encoder import TextCrossEncoder
+          TextEmbedding('BAAI/bge-small-en-v1.5')
+          TextCrossEncoder('Xenova/ms-marco-MiniLM-L-6-v2')
+          print('Models prefetched')
+          " && { prefetch_ok=true; break; }
+            echo "Attempt $attempt failed; retrying in $((attempt * 5))s..."
+            sleep $((attempt * 5))
+          done
+          if [ "$prefetch_ok" != "true" ]; then
+            echo "All prefetch attempts failed"; exit 1
+          fi
+
       - name: Run default suite with coverage (no fail-under)
-        run: uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append -n0 -m "not live and not eval and not benchmark and not integration and not live_eval"
+        run: uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append -n0 -m "not live and not eval and not benchmark and not integration and not live_eval and not live_benchmark"
 
       - name: Run eval slice with thresholds, coverage append, runxfail
         run: uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append --runxfail -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/
@@ -45,6 +73,13 @@ jobs:
 
       - name: Run integration suite on disk-backed basetemp, coverage append
         run: uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append -m integration tests/
+
+      - name: Run real-model latency benchmark
+        timeout-minutes: 3
+        run: uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m live_benchmark --junitxml=benchmark-results.xml tests/eval/live_benchmark/
+
+      - name: Verify benchmark tests ran (not just skipped)
+        run: uv run python -c "import xml.etree.ElementTree as ET; t=ET.parse('benchmark-results.xml').getroot(); tests=int(t.attrib.get('tests',0)); skips=int(t.attrib.get('skipped',0)); assert tests-skips>0, f'All {tests} benchmark tests were skipped or none ran — check model cache prefetch step'"
 
       - name: Enforce coverage fail-under=85
         # The two pytest steps above both use --cov-append, which writes to a

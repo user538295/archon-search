@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 
 from archon_search.eval.runner import (
+    BenchmarkThresholds,
     EvalLatencyCeilings,
     EvalQualityFloors,
     EvalRuntimeConfig,
     EvalThresholds,
+    load_benchmark_thresholds,
     load_runtime_config,
     load_thresholds,
     validate_routing_contract,
@@ -1586,3 +1588,90 @@ async def test_hybrid_router_receives_metas_with_populated_description_embedding
         "Hybrid router should receive metas with populated description_embedding, "
         f"but got: {[m.description_embedding for m in received_metas_for_hybrid]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# BenchmarkThresholds + load_benchmark_thresholds (Task 1.2)
+# ---------------------------------------------------------------------------
+
+class TestLoadBenchmarkThresholds:
+    """Unit tests for load_benchmark_thresholds()."""
+
+    def test_load_benchmark_thresholds_valid(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "live_thresholds.toml"
+        toml_file.write_text(
+            "[real_model_search]\n"
+            "steady_state_p95_ms = 500.0\n"
+            "cold_load_p90_ms = 3000.0\n"
+        )
+        result = load_benchmark_thresholds(toml_file)
+        assert isinstance(result, BenchmarkThresholds)
+        assert result.steady_state_p95_ms == 500.0
+        assert result.cold_load_p90_ms == 3000.0
+
+    def test_load_benchmark_thresholds_missing_file(self, tmp_path: Path) -> None:
+        missing = tmp_path / "nonexistent.toml"
+        with pytest.raises(ValueError, match=str(missing)):
+            load_benchmark_thresholds(missing)
+
+    def test_load_benchmark_thresholds_invalid_toml(self, tmp_path: Path) -> None:
+        bad_file = tmp_path / "bad.toml"
+        bad_file.write_text("this is [not valid toml \n\n[real_model_search")
+        with pytest.raises(ValueError, match="Invalid TOML"):
+            load_benchmark_thresholds(bad_file)
+
+    def test_load_benchmark_thresholds_missing_section(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "no_section.toml"
+        toml_file.write_text("[other_section]\nsome_key = 1.0\n")
+        with pytest.raises(ValueError, match="real_model_search"):
+            load_benchmark_thresholds(toml_file)
+
+    def test_load_benchmark_thresholds_missing_key(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "missing_key.toml"
+        toml_file.write_text(
+            "[real_model_search]\n"
+            "steady_state_p95_ms = 500.0\n"
+            # cold_load_p90_ms is absent
+        )
+        with pytest.raises(ValueError, match="cold_load_p90_ms"):
+            load_benchmark_thresholds(toml_file)
+
+    def test_load_benchmark_thresholds_zero_value(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "zero.toml"
+        toml_file.write_text(
+            "[real_model_search]\n"
+            "steady_state_p95_ms = 0.0\n"
+            "cold_load_p90_ms = 3000.0\n"
+        )
+        with pytest.raises(ValueError, match="steady_state_p95_ms"):
+            load_benchmark_thresholds(toml_file)
+
+    def test_load_benchmark_thresholds_negative_value(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "negative.toml"
+        toml_file.write_text(
+            "[real_model_search]\n"
+            "steady_state_p95_ms = 500.0\n"
+            "cold_load_p90_ms = -1.0\n"
+        )
+        with pytest.raises(ValueError, match="cold_load_p90_ms"):
+            load_benchmark_thresholds(toml_file)
+
+    def test_load_benchmark_thresholds_non_numeric(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "non_numeric.toml"
+        toml_file.write_text(
+            "[real_model_search]\n"
+            'steady_state_p95_ms = "fast"\n'
+            "cold_load_p90_ms = 3000.0\n"
+        )
+        with pytest.raises(ValueError, match="steady_state_p95_ms"):
+            load_benchmark_thresholds(toml_file)
+
+
+class TestLoadBenchmarkThresholdsFromLiveThresholdsToml:
+    """Integration test: load from the actual live_thresholds.toml (Task 1.3)."""
+
+    def test_load_benchmark_thresholds_from_live_thresholds_toml(self) -> None:
+        result = load_benchmark_thresholds(Path("tests/eval/live_thresholds.toml"))
+        assert isinstance(result, BenchmarkThresholds)
+        assert result.steady_state_p95_ms > 0
+        assert result.cold_load_p90_ms > 0

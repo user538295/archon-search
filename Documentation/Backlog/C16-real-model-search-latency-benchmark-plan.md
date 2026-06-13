@@ -116,7 +116,7 @@ def load_benchmark_thresholds(path: Path) -> BenchmarkThresholds:
 > **Releasable**: after Task 1.3; infrastructure in place but no benchmark tests yet.
 
 #### Task 1.1 — Register `live_benchmark` marker in `pyproject.toml`
-- [ ] **File**: `pyproject.toml`
+- [x] **File**: `pyproject.toml`
 - **Depends on**: nothing
 - **Description**:
   - Add entry to `[tool.pytest.ini_options].markers` list:
@@ -131,7 +131,7 @@ def load_benchmark_thresholds(path: Path) -> BenchmarkThresholds:
 ---
 
 #### Task 1.2 — `BenchmarkThresholds` dataclass + `load_benchmark_thresholds()` in `archon_search/eval/runner.py`
-- [ ] **File**: `archon_search/eval/runner.py`
+- [x] **File**: `archon_search/eval/runner.py`
 - **Depends on**: nothing
 - **Description**:
   - Add `BenchmarkThresholds` dataclass immediately after the existing `EvalThresholds` dataclass (around line 72):
@@ -165,7 +165,7 @@ def load_benchmark_thresholds(path: Path) -> BenchmarkThresholds:
 ---
 
 #### Task 1.3 — Add `[real_model_search]` section to `tests/eval/live_thresholds.toml`
-- [ ] **File**: `tests/eval/live_thresholds.toml`
+- [x] **File**: `tests/eval/live_thresholds.toml`
 - **Depends on**: Task 1.2
 - **Description**:
   - Append the new section below the existing header comment. Use `999999.0` as placeholder values so the gate trivially passes until calibrated. Include a comment block above the section:
@@ -198,7 +198,7 @@ def load_benchmark_thresholds(path: Path) -> BenchmarkThresholds:
 > **Releasable**: after Task 2.3; both benchmark tests can be run locally with `uv run pytest -m live_benchmark --no-cov` when the model cache is present.
 
 #### Task 2.1 — `tests/eval/live_benchmark/conftest.py`: stub removal, thread reset, model-cache skip hook
-- [ ] **File**: `tests/eval/live_benchmark/conftest.py` (new file; creates the `tests/eval/live_benchmark/` directory implicitly via the empty `__init__.py` in Task 2.2)
+- [x] **File**: `tests/eval/live_benchmark/conftest.py` (new file; creates the `tests/eval/live_benchmark/` directory implicitly via the empty `__init__.py` in Task 2.2)
 - **Depends on**: Task 1.1
 - **Description**:
   - Module-level (not inside a fixture) — remove all three fastembed stub entries from `sys.modules` before any test import can resolve them:
@@ -253,7 +253,7 @@ def load_benchmark_thresholds(path: Path) -> BenchmarkThresholds:
 ---
 
 #### Task 2.2 — Module-scoped ingest fixture + `test_real_model_search_steady_state_p95`
-- [ ] **File**: `tests/eval/live_benchmark/test_real_model_search_benchmark.py` (new file) + `tests/eval/live_benchmark/__init__.py` (empty new file)
+- [x] **File**: `tests/eval/live_benchmark/test_real_model_search_benchmark.py` (new file) + `tests/eval/live_benchmark/__init__.py` (empty new file)
 - **Depends on**: Task 2.1, Task 1.2, Task 1.3
 - **Description**:
   - Create empty `tests/eval/live_benchmark/__init__.py` so pytest treats the directory as a package (consistent with rest of `tests/eval/`).
@@ -311,7 +311,7 @@ def load_benchmark_thresholds(path: Path) -> BenchmarkThresholds:
 ---
 
 #### Task 2.3 — `test_real_model_search_cold_load_p90`
-- [ ] **File**: `tests/eval/live_benchmark/test_real_model_search_benchmark.py`
+- [x] **File**: `tests/eval/live_benchmark/test_real_model_search_benchmark.py`
 - **Depends on**: Task 2.2
 - **Description**:
   - Add to the existing test file:
@@ -343,7 +343,7 @@ def load_benchmark_thresholds(path: Path) -> BenchmarkThresholds:
 > **Releasable**: after Task 3.1; the PR gate is active. Calibrate thresholds (Task 3.2) to make it meaningful.
 
 #### Task 3.1 — Update `archon-search-pr.yml`: marker exclusion + cache + prefetch + benchmark step
-- [ ] **File**: `.github/workflows/archon-search-pr.yml`
+- [x] **File**: `.github/workflows/archon-search-pr.yml`
 - **Depends on**: Task 2.3
 - **Description**:
   - **Change 1** — add `and not live_benchmark` to the default test step's `-m` marker filter:

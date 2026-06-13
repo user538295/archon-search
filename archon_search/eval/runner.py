@@ -71,9 +71,57 @@ class EvalThresholds:
     max_floor_drop_without_waiver: float = 0.05
 
 
+@dataclass
+class BenchmarkThresholds:
+    """Real-model latency benchmark thresholds loaded from live_thresholds.toml."""
+
+    steady_state_p95_ms: float
+    cold_load_p90_ms: float  # p90: N=10 nearest-rank gives index 8 = 90th percentile
+
+
 # ---------------------------------------------------------------------------
-# Loader
+# Loaders
 # ---------------------------------------------------------------------------
+
+def load_benchmark_thresholds(path: Path) -> BenchmarkThresholds:
+    """Parse ``[real_model_search]`` from *path* into :class:`BenchmarkThresholds`.
+
+    Raises :class:`ValueError` if: file absent, TOML invalid, ``[real_model_search]``
+    section missing, required keys missing, values not float-coercible, or any
+    value ≤ 0.
+    """
+    if not path.exists():
+        raise ValueError(f"Benchmark thresholds file not found: {path}")
+
+    try:
+        data = tomllib.loads(path.read_text())
+    except Exception as exc:
+        raise ValueError(f"Invalid TOML in {path}: {exc}") from exc
+
+    if "real_model_search" not in data:
+        raise ValueError(f"[real_model_search] section missing in {path}")
+
+    section = data["real_model_search"]
+
+    _BENCHMARK_KEYS = ("steady_state_p95_ms", "cold_load_p90_ms")
+    for key in _BENCHMARK_KEYS:
+        if key not in section:
+            raise ValueError(f"{key} missing in [real_model_search]")
+        val = section[key]
+        if not isinstance(val, (int, float)):
+            raise ValueError(
+                f"{key} must be a positive number, got {val!r}"
+            )
+        if float(val) <= 0:
+            raise ValueError(
+                f"{key} must be a positive number, got {val}"
+            )
+
+    return BenchmarkThresholds(
+        steady_state_p95_ms=float(section["steady_state_p95_ms"]),
+        cold_load_p90_ms=float(section["cold_load_p90_ms"]),
+    )
+
 
 def load_thresholds(config_path: Path) -> EvalThresholds:
     """Parse *config_path* (a TOML file) into :class:`EvalThresholds`.

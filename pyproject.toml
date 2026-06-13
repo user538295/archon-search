@@ -78,7 +78,7 @@ testpaths = ["tests"]
 # only on the combined report run, not on intermediate invocations.
 # `--no-cov` is a local-only override developers can pass on the CLI when
 # iterating; it must never be baked into addopts here.
-addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n auto --dist=loadgroup --thresholds-path tests/eval/thresholds.toml"
+addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n auto --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark\""
 markers = [
     "benchmark: latency benchmark — serialized via xdist_group('benchmark'); server-dependent tests auto-skip when server is unreachable",
     "integration: integration tests requiring live infrastructure",
@@ -87,6 +87,7 @@ markers = [
     "live_eval: full live-model eval suite; skip gracefully when infrastructure is absent",
     "docker: tests that require a running Docker daemon and perform a real image build; excluded from default run, opt in with `-m docker`",
     "archon_unset_data_dir: opt out of the autouse ARCHON_SEARCH_DATA_DIR isolation; the test exercises the Path.home() default-fallback path. Apply to the pinned MARKER_ALLOWLIST in tests/test_no_hardcoded_path_home.py only.",
+    "live_benchmark: real-model latency benchmark; requires fastembed model cache; serialised via xdist_group('live_benchmark'); excluded from default suite",
 ]
 
 [tool.uv]
