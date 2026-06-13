@@ -480,7 +480,7 @@ Namespace from auth token (not a query param).
 > **Releasable**: after Task 5.2; `POST /collections/{name}/import` is live. Export + import round-trip is fully operational.
 
 #### Task 5.1 — `_import_task()` worker
-- [ ] **File**: `archon_search/server/routes_export.py`
+- [x] **File**: `archon_search/server/routes_export.py`
 - **Depends on**: Task 1.3, Task 1.4, Task 2.1, Task 3.1, Task 3.2
 - **Description**:
   - `async def _import_task(job: ImportJob, store: JobStore, search_store: SearchStore, pipeline: SearchPipeline, embedder_cache: EmbedderCache, config: SearchConfig) -> None`:
