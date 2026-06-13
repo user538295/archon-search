@@ -463,6 +463,65 @@ async def get_job(job_id: str, request: Request) -> JobResponse:
     return JobResponse(**job_to_dict(job))
 
 
+@router.post(
+    "/jobs/{job_id}/resume",
+    status_code=202,
+    response_model=JobResponse,
+    responses={
+        202: {"model": JobResponse},
+        401: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        409: {"model": ErrorDetail},
+        422: {"model": ErrorDetail},
+    },
+)
+async def resume_job(job_id: str, request: Request) -> JobResponse | JSONResponse:
+    """Transition a FAILED export or import job back to QUEUED so the scheduler can retry it."""
+    store: JobStore = request.app.state.job_store
+    job = store.get(job_id)
+
+    # 404 if missing or from a different namespace
+    if job is None or job.namespace != request.state.namespace:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+
+    # Only bulk jobs (ExportJob, ImportJob) support resume
+    if not isinstance(job, (ExportJob, ImportJob)):
+        return JSONResponse(
+            {"error": "job_not_resumable", "reason": "only export and import jobs support resume"},
+            status_code=409,
+        )
+
+    # Job must be in FAILED state
+    if job.status != JobStatus.FAILED:
+        return JSONResponse(
+            {"error": "job_not_failed", "current_status": job.status.value},
+            status_code=409,
+        )
+
+    # Validate that the required file(s) still exist
+    if isinstance(job, ExportJob):
+        # tmp file missing AND there is a checkpoint → can't resume from where we left off
+        if job.progress is not None and not Path(job.tmp_path).exists():
+            return JSONResponse({"error": "source_not_found"}, status_code=422)
+    elif isinstance(job, ImportJob):
+        if not Path(job.archive_path).exists():
+            return JSONResponse({"error": "source_not_found"}, status_code=422)
+
+    # Atomically transition FAILED → QUEUED
+    updated = store.transition(job_id, {JobStatus.FAILED}, JobStatus.QUEUED)
+    if updated is None:
+        # Race: status changed between our check and transition
+        job = store.get(job_id)
+        if job is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse(
+            {"error": "job_not_failed", "current_status": job.status.value},
+            status_code=409,
+        )
+
+    return JSONResponse(job_to_dict(updated), status_code=202)
+
+
 @router.delete(
     "/jobs/{job_id}",
     response_model=JobResponse,

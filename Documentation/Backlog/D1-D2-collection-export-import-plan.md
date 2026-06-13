@@ -561,7 +561,7 @@ Namespace from auth token (not a query param).
   - Checkpoint: `uv run pytest tests/test_jobs_list_resume.py::test_list_jobs_empty tests/test_jobs_list_resume.py::test_list_jobs_default_limit tests/test_jobs_list_resume.py::test_list_jobs_filter_by_status tests/test_jobs_list_resume.py::test_list_jobs_filter_by_kind tests/test_jobs_list_resume.py::test_list_jobs_namespace_isolated tests/test_jobs_list_resume.py::test_list_jobs_cursor_pagination tests/test_jobs_list_resume.py::test_list_jobs_kind_ingest_excludes_export_import tests/test_jobs_list_resume.py::test_list_jobs_unauthenticated -v --no-cov -n0 -m integration`
 
 #### Task 6.2 — `POST /jobs/{job_id}/resume` endpoint
-- [ ] **File**: `archon_search/server/routes_jobs.py`
+- [x] **File**: `archon_search/server/routes_jobs.py`
 - **Depends on**: Task 6.1, Task 4.1, Task 5.1
 - **Description**:
   - `async def resume_job(job_id: str, request: Request) -> JobResponse | JSONResponse`:

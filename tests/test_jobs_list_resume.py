@@ -1,4 +1,4 @@
-"""Integration tests for GET /jobs list endpoint (Task 6.1)."""
+"""Integration tests for GET /jobs list endpoint (Task 6.1) and POST /jobs/{id}/resume (Task 6.2)."""
 from __future__ import annotations
 
 import time
@@ -204,3 +204,125 @@ def test_list_jobs_unauthenticated(tmp_path: Path, tmp_store: JobStore) -> None:
     client = TestClient(app)  # no auth headers
     response = client.get("/jobs")
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# POST /jobs/{job_id}/resume — Task 6.2
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_resume_failed_export_job(client: TestClient, tmp_store: JobStore, tmp_path: Path) -> None:
+    """A FAILED ExportJob with no progress (no checkpoint) transitions to QUEUED; returns 202."""
+    # Create a tmp file so the existence check passes (no progress means no tmp check)
+    job = tmp_store.create_export(
+        collection="col",
+        output_path=str(tmp_path / "out.tar.gz"),
+        tmp_path=str(tmp_path / "out.jsonl.tmp"),
+        namespace=DEFAULT_NAMESPACE,
+    )
+    tmp_store.update(job.job_id, status=JobStatus.FAILED)
+
+    response = client.post(f"/jobs/{job.job_id}/resume")
+    assert response.status_code == 202
+    data = response.json()
+    assert data["status"] == "QUEUED"
+    assert data["job_id"] == job.job_id
+
+
+@pytest.mark.integration
+def test_resume_failed_import_job(client: TestClient, tmp_store: JobStore, tmp_path: Path) -> None:
+    """A FAILED ImportJob transitions to QUEUED when archive exists; returns 202."""
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"fake")
+    job = tmp_store.create_import(
+        collection="col",
+        archive_path=str(archive),
+        force_overwrite=False,
+        ignore_schema_version=False,
+        on_error="fail",
+        namespace=DEFAULT_NAMESPACE,
+    )
+    tmp_store.update(job.job_id, status=JobStatus.FAILED)
+
+    response = client.post(f"/jobs/{job.job_id}/resume")
+    assert response.status_code == 202
+    data = response.json()
+    assert data["status"] == "QUEUED"
+    assert data["job_id"] == job.job_id
+
+
+@pytest.mark.integration
+def test_resume_non_failed_job(client: TestClient, tmp_store: JobStore, tmp_path: Path) -> None:
+    """A RUNNING ExportJob returns 409 with error=job_not_failed."""
+    job = tmp_store.create_export(
+        collection="col",
+        output_path=str(tmp_path / "out.tar.gz"),
+        tmp_path=str(tmp_path / "out.jsonl.tmp"),
+        namespace=DEFAULT_NAMESPACE,
+    )
+    tmp_store.update(job.job_id, status=JobStatus.RUNNING)
+
+    response = client.post(f"/jobs/{job.job_id}/resume")
+    assert response.status_code == 409
+    data = response.json()
+    assert data["error"] == "job_not_failed"
+    assert data["current_status"] == "RUNNING"
+
+
+@pytest.mark.integration
+def test_resume_missing_archive(client: TestClient, tmp_store: JobStore, tmp_path: Path) -> None:
+    """A FAILED ImportJob whose archive is gone returns 422."""
+    job = tmp_store.create_import(
+        collection="col",
+        archive_path=str(tmp_path / "nonexistent.tar.gz"),
+        force_overwrite=False,
+        ignore_schema_version=False,
+        on_error="fail",
+        namespace=DEFAULT_NAMESPACE,
+    )
+    tmp_store.update(job.job_id, status=JobStatus.FAILED)
+
+    response = client.post(f"/jobs/{job.job_id}/resume")
+    assert response.status_code == 422
+    data = response.json()
+    assert data["error"] == "source_not_found"
+
+
+@pytest.mark.integration
+def test_resume_ingest_job_not_resumable(client: TestClient, tmp_store: JobStore) -> None:
+    """A FAILED IngestJob returns 409 with error=job_not_resumable."""
+    job = tmp_store.create(namespace=DEFAULT_NAMESPACE)
+    tmp_store.update(job.job_id, status=JobStatus.FAILED)
+
+    response = client.post(f"/jobs/{job.job_id}/resume")
+    assert response.status_code == 409
+    data = response.json()
+    assert data["error"] == "job_not_resumable"
+    assert "only export and import jobs" in data["reason"]
+
+
+@pytest.mark.integration
+def test_resume_wrong_namespace(tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]) -> None:
+    """A job in a different namespace returns 404."""
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.namespaces = {DEFAULT_NAMESPACE: DEFAULT_NAMESPACE, "other": "other"}
+    app = create_app(config, tmp_store)
+    app.state.search_store = _make_mock_search_store()
+
+    # Create job in "other" namespace
+    job = tmp_store.create_export(
+        collection="col",
+        output_path=str(tmp_path / "out.tar.gz"),
+        tmp_path=str(tmp_path / "out.jsonl.tmp"),
+        namespace="other",
+    )
+    tmp_store.update(job.job_id, status=JobStatus.FAILED)
+
+    # Request uses DEFAULT_NAMESPACE token — cannot see "other" namespace job
+    client = TestClient(app, headers=auth_headers)
+    response = client.post(f"/jobs/{job.job_id}/resume")
+    assert response.status_code == 404
+    data = response.json()
+    assert data["error"] == "not_found"
