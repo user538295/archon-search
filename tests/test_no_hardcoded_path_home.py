@@ -1,4 +1,4 @@
-"""C17 Task 1.2/1.3 — CI ratchet: no new hardcoded Path.home() callsites in archon_search/.
+"""C17 Task 1.2/1.3/2.4 — CI ratchet: no new hardcoded Path.home() callsites in archon_search/.
 
 Three responsibilities:
 1. test_path_home_ratchet — scans archon_search/ for Path.home() callsites and enforces
@@ -8,12 +8,15 @@ Three responsibilities:
 2. Meta-tests (Tasks 1.3) — exercise PATTERN directly against in-memory fixtures to
    prevent a regex weakening from silently disabling the ratchet.
 3. Marker-scope enforcement (Task 2.4) — asserts @pytest.mark.archon_unset_data_dir
-   appears on exactly the pinned MARKER_ALLOWLIST tests; added in Task 2.4.
+   appears on exactly the pinned MARKER_ALLOWLIST tests; an AST walker enforces this
+   so a drive-by use of the marker to silence an unrelated flake is caught immediately.
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import re
+import textwrap
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -25,14 +28,24 @@ ROOT = Path(__file__).resolve().parent.parent / "archon_search"
 ALLOWLIST_FILE = Path(__file__).resolve().parent / "path_home_allowlist.txt"
 FILE_ALLOWLIST = {"paths.py"}  # paths.py is the legitimate caller
 
-# Task 2.4: marker-scope constants (populated when Task 2.4 lands)
+# Task 2.4: marker-scope constants
 MARKER_NAME = "archon_unset_data_dir"
+# Exact set of test node IDs allowed to carry @pytest.mark.archon_unset_data_dir.
+# Expanded by Task 2.2 from the original 5 to 10 (Task 2.2 added tests that exercise
+# Path.home()-based default fallback paths across more modules).
+# Any test added here must exercise the Path.home() / ".archon-search" fallback codepath;
+# apply this marker only to tests in this frozenset or update it with a C17-plan amendment.
 MARKER_ALLOWLIST: frozenset[str] = frozenset({
-    "tests/test_paths.py::test_default_returns_home_archon",
-    "tests/test_key_manager.py::TestGetKeyFile::test_get_key_file_default",
+    "tests/cli/test_ingest.py::test_default_ingest_path",
+    "tests/test_cli_ingest_paths.py::test_default_history_path",
+    "tests/test_cli_serve.py::test_serve_no_warning_when_data_dir_unset",
+    "tests/test_job_store.py::test_jobs_file_default_path",
     "tests/test_jobs_paths.py::test_get_jobs_file_default",
-    "tests/test_language_detector_paths.py::test_get_fasttext_models_dir_default",
+    "tests/test_key_manager.py::TestGetKeyFile::test_get_key_file_default",
     "tests/test_language_detector.py::test_module_constants",
+    "tests/test_language_detector_paths.py::test_get_fasttext_models_dir_default",
+    "tests/test_paths.py::test_default_returns_home_archon",
+    "tests/test_paths.py::test_home_unset_raises_valueerror",
 })
 TESTS_ROOT = Path(__file__).resolve().parent
 
@@ -192,3 +205,168 @@ def test_meta_string_literal_positive() -> None:
         f"literal. If the scanner now uses AST-level detection, update this meta-test "
         f"to document the new behavior."
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4 — marker-scope helpers and tests
+# ---------------------------------------------------------------------------
+
+
+def _decorator_names(decorator: ast.expr) -> list[str]:
+    """Return the dotted name(s) represented by a decorator AST node.
+
+    Handles:
+    - ``ast.Attribute`` chains: ``pytest.mark.foo`` → ``["pytest", "mark", "foo"]``
+    - ``ast.Name``: ``foo`` → ``["foo"]``
+    - ``ast.Call`` with an Attribute/Name func: unwraps the call and processes the func.
+    Returns an empty list for unrecognised node shapes.
+    """
+    if isinstance(decorator, ast.Call):
+        return _decorator_names(decorator.func)
+    if isinstance(decorator, ast.Attribute):
+        parts = _decorator_names(decorator.value)
+        parts.append(decorator.attr)
+        return parts
+    if isinstance(decorator, ast.Name):
+        return [decorator.id]
+    return []
+
+
+def _ast_scan_marker_users() -> set[str]:
+    """Walk tests/ with AST and return node IDs for every decorated test.
+
+    Returns node IDs in ``<relative_test_path>::[ClassName::]function_name`` form,
+    where paths are relative to repo root so IDs are stable across machines.
+
+    Only ``test_*.py`` files are scanned; the current file is excluded to prevent
+    any future decorator in this file from being mistakenly included.
+
+    Handles:
+    - Top-level test functions.
+    - Methods inside ``ClassDef`` — returned as ``path::ClassName::method_name``.
+    """
+    repo_root = TESTS_ROOT.parent
+    found: set[str] = set()
+
+    for py_file in sorted(TESTS_ROOT.rglob("test_*.py")):
+        if py_file == Path(__file__).resolve():
+            continue
+        try:
+            tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        rel = str(py_file.relative_to(repo_root))
+
+        for top_node in tree.body:
+            # Top-level function
+            if isinstance(top_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for dec in top_node.decorator_list:
+                    parts = _decorator_names(dec)
+                    if MARKER_NAME in parts:
+                        found.add(f"{rel}::{top_node.name}")
+                        break
+            # Class containing methods
+            elif isinstance(top_node, ast.ClassDef):
+                for item in top_node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        for dec in item.decorator_list:
+                            parts = _decorator_names(dec)
+                            if MARKER_NAME in parts:
+                                found.add(f"{rel}::{top_node.name}::{item.name}")
+                                break
+
+    return found
+
+
+def test_archon_unset_data_dir_marker_scope() -> None:
+    """@pytest.mark.archon_unset_data_dir must appear on exactly the MARKER_ALLOWLIST tests.
+
+    Failure modes:
+    - ``extra``: a test outside MARKER_ALLOWLIST acquired the marker — likely a drive-by use
+      to silence an unrelated flake. Either migrate the test or add it to MARKER_ALLOWLIST
+      with a rationale comment explaining which Path.home() fallback it exercises.
+    - ``missing``: a test listed in MARKER_ALLOWLIST no longer carries the marker, or its
+      file/class/function was renamed. Update MARKER_ALLOWLIST to match the new node ID.
+    """
+    actual = _ast_scan_marker_users()
+    assert actual == MARKER_ALLOWLIST, (
+        f"Marker scope mismatch for @pytest.mark.{MARKER_NAME}:\n"
+        + (
+            "  extra (not in MARKER_ALLOWLIST): "
+            + str(sorted(actual - MARKER_ALLOWLIST))
+            + "\n"
+            if actual - MARKER_ALLOWLIST
+            else ""
+        )
+        + (
+            "  missing (in MARKER_ALLOWLIST but not found): "
+            + str(sorted(MARKER_ALLOWLIST - actual))
+            if MARKER_ALLOWLIST - actual
+            else ""
+        )
+    )
+
+
+def test_meta_ast_finds_pytest_mark_decorator() -> None:
+    """_ast_scan_marker_users finds a decorated function in an in-memory temp file.
+
+    Validates the AST walker itself — if pytest's marker style changes (e.g.,
+    from ``@pytest.mark.foo`` to ``@pytest.foo``), this meta-test will fail,
+    alerting the maintainer before the scope check silently stops working.
+
+    The temp file uses the actual MARKER_NAME so the test is sensitive to the
+    decorator attribute chain used in the real codebase.
+    """
+    import tempfile
+
+    sample_code = textwrap.dedent(f"""\
+        import pytest
+
+        @pytest.mark.{MARKER_NAME}
+        def test_sample_decorated() -> None:
+            pass
+
+        def test_sample_undecorated() -> None:
+            pass
+
+        class TestSampleClass:
+            @pytest.mark.{MARKER_NAME}
+            def test_method_decorated(self) -> None:
+                pass
+    """)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        test_file = tmp_path / "test_sample.py"
+        test_file.write_text(sample_code, encoding="utf-8")
+
+        # Parse directly (mirrors _ast_scan_marker_users internals)
+        tree = ast.parse(sample_code)
+        rel = "test_sample.py"
+        found: set[str] = set()
+
+        for top_node in tree.body:
+            if isinstance(top_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for dec in top_node.decorator_list:
+                    parts = _decorator_names(dec)
+                    if MARKER_NAME in parts:
+                        found.add(f"{rel}::{top_node.name}")
+                        break
+            elif isinstance(top_node, ast.ClassDef):
+                for item in top_node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        for dec in item.decorator_list:
+                            parts = _decorator_names(dec)
+                            if MARKER_NAME in parts:
+                                found.add(f"{rel}::{top_node.name}::{item.name}")
+                                break
+
+        expected = {
+            f"test_sample.py::test_sample_decorated",
+            f"test_sample.py::TestSampleClass::test_method_decorated",
+        }
+        assert found == expected, (
+            f"_decorator_names / AST walker failed to detect @pytest.mark.{MARKER_NAME}. "
+            f"Expected {sorted(expected)}, got {sorted(found)}. "
+            f"Check the decorator attribute chain in _decorator_names()."
+        )

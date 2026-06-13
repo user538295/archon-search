@@ -311,7 +311,7 @@ def test_two_workers_sharing_data_dir_contend(tmp_path: Path) -> None: ...
 
 #### Task 2.4 — Add marker-scope enforcement to `tests/test_no_hardcoded_path_home.py`
 
-- [ ] **File**: `tests/test_no_hardcoded_path_home.py`
+- [x] **File**: `tests/test_no_hardcoded_path_home.py`
 - **Depends on**: Task 2.3 (the 5 tests must already carry the marker), Task 1.3 (file exists)
 - **Description**:
   - Add module-level constants:
