@@ -7,9 +7,15 @@ Module-level operations (before any fixture fires):
 These run at module load time so that when pytest imports the test file,
 real fastembed/ONNX code paths are active.
 
-The primary exclusion from the default ``uv run pytest`` run is
-``not live_benchmark`` in ``addopts`` (pyproject.toml). The
-``_require_model_cache`` fixture below is defense-in-depth only.
+Exclusion from the default ``uv run pytest`` run is enforced at two levels:
+1. ``norecursedirs = ["tests/eval/live_benchmark"]`` in pyproject.toml prevents
+   pytest from auto-traversing this directory, so this conftest is never imported
+   unless the path is passed explicitly on the command line.
+2. ``-m "not live_benchmark"`` in ``addopts`` is a secondary guard that filters
+   out any test items that do get collected with the marker.
+
+The ``_require_model_cache`` fixture below is defense-in-depth for the
+explicit-path case (skips gracefully when the fastembed model cache is absent).
 """
 from __future__ import annotations
 

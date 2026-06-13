@@ -72,6 +72,23 @@ packages = ["archon_search"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+# live_benchmark conftest removes fastembed stubs at module-level (required so the
+# test file can `import fastembed` and get the real package). Traversing this directory
+# during default collection poisons sys.modules["fastembed"] in every xdist worker,
+# breaking all tests that rely on the stubs.  norecursedirs prevents the auto-traverse;
+# explicit `uv run pytest tests/eval/live_benchmark/` still works (pytest always
+# collects explicitly-passed paths regardless of norecursedirs).
+norecursedirs = [
+    # pytest defaults (preserved explicitly because specifying norecursedirs replaces them)
+    "*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}",
+    # live_benchmark conftest removes fastembed stubs at module-level (required so the
+    # test file can `import fastembed` and get the real package). Traversing this directory
+    # during default collection poisons sys.modules["fastembed"] in every xdist worker,
+    # breaking all tests that rely on the stubs.  norecursedirs prevents the auto-traverse;
+    # explicit `uv run pytest tests/eval/live_benchmark/` still works (pytest always
+    # collects explicitly-passed paths regardless of norecursedirs).
+    "tests/eval/live_benchmark",
+]
 # --cov-fail-under=85 is intended for the default single-run invocation.
 # Split / matrix CI runs MUST combine coverage data (coverage combine) before
 # applying the fail-under threshold; otherwise the threshold should be passed

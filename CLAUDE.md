@@ -46,8 +46,11 @@ uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/te
 # - benchmark: serialized via xdist_group("benchmark"); server-dependent tests auto-skip
 # - eval: report-only tests always run; gated tests skip gracefully without --thresholds-path
 # - live / live_eval: skip gracefully when live infrastructure is absent
-# - live_benchmark: EXCLUDED from addopts by design (module-level sys.modules mutation);
-#   run separately: uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
+# - live_benchmark: EXCLUDED at two levels — (1) norecursedirs in pyproject.toml prevents
+#   pytest from auto-traversing tests/eval/live_benchmark/ so its conftest (which removes
+#   fastembed stubs at module-level) is never imported during default runs; (2) -m "not
+#   live_benchmark" in addopts filters any items that do get collected. Run separately:
+#   uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
 #   (skips gracefully if fastembed model cache absent)
 
 # Cut a release (tag + push; CI runs eval + publishes to PyPI via OIDC)
@@ -103,7 +106,7 @@ Opt-in and **disabled by default**. `writer.py` appends one JSONL line per call 
 
 ## Repository conventions
 
-- Default pytest run includes **all** markers except `live_benchmark`. `addopts` in `pyproject.toml` sets `-m "not live_benchmark"` — this is the one intentional marker exclusion. `live_benchmark` tests perform module-level `sys.modules` mutation to remove fastembed stubs; running them in the same process as the default suite would poison `sys.modules` for regular tests. They run in a dedicated CI step instead. All other markers run on every `uv run pytest`. `benchmark` tests are serialised via `xdist_group("benchmark")`; server-dependent ones auto-skip when unreachable. Gated `eval` tests skip gracefully without `--thresholds-path` (wired into `addopts`). `live`/`live_eval` tests skip when `ANTHROPIC_API_KEY` is absent. Coverage gate (`--cov-fail-under=85`) applies to the default single-run invocation. Split / matrix CI runs MUST `coverage combine` before applying the threshold; never bake `--no-cov` into `addopts`.
+- Default pytest run includes **all** markers except `live_benchmark`. `live_benchmark` is excluded at **two levels**: (1) `norecursedirs = ["tests/eval/live_benchmark"]` in `pyproject.toml` prevents pytest from auto-traversing that directory so its conftest (which removes fastembed stubs at module-level) is **never imported** during default collection — the critical isolation; (2) `-m "not live_benchmark"` in `addopts` is a secondary guard. Without `norecursedirs`, every xdist worker would import `live_benchmark/conftest.py` during collection and poison `sys.modules["fastembed"]` for all subsequent tests. All other markers run on every `uv run pytest`. `benchmark` tests are serialised via `xdist_group("benchmark")`; server-dependent ones auto-skip when unreachable. Gated `eval` tests skip gracefully without `--thresholds-path` (wired into `addopts`). `live`/`live_eval` tests skip when `ANTHROPIC_API_KEY` is absent. Coverage gate (`--cov-fail-under=85`) applies to the default single-run invocation. Split / matrix CI runs MUST `coverage combine` before applying the threshold; never bake `--no-cov` into `addopts`.
 - The package directory is `archon_search/` (underscore), the distribution is `archon-search` (hyphen). `pyproject.toml` `[tool.hatch.build.targets.wheel].packages` is explicit about this — don't "fix" it.
 - Breaking REST/MCP changes go in `BREAKING.md`.
 - Telemetry's no-raw-query guarantee is structural: do not add a `query` parameter to telemetry entry constructors.
