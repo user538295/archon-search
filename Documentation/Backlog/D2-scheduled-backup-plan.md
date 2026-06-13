@@ -282,7 +282,7 @@ class BackupStatusDetail(BaseModel):
 > **Releasable**: after Task 3.2 — scheduled backups fire automatically; state file maintained; rotation works.
 
 #### Task 3.1 — `BackupLoop` class
-- [ ] **File**: `archon_search/jobs/backup_loop.py`
+- [x] **File**: `archon_search/jobs/backup_loop.py`
 - **Depends on**: Task 1.2, Task 2.1
 - **Description**:
   - New module `archon_search/jobs/backup_loop.py`
