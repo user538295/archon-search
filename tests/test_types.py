@@ -19,7 +19,7 @@ from archon_search.types import (
 
 def test_job_status_all_values():
     values = {s.value for s in JobStatus}
-    assert values == {"PENDING", "RUNNING", "DONE", "FAILED", "CANCELLED", "CANCELLING"}
+    assert values == {"PENDING", "QUEUED", "RUNNING", "DONE", "FAILED", "CANCELLED", "CANCELLING"}
 
 
 def test_ingest_job_instantiation():

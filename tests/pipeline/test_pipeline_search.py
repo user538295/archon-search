@@ -1707,9 +1707,9 @@ def test_telemetry_entry_no_query_parameter() -> None:
 
 
 def test_job_status_enum_values_unchanged() -> None:
-    """JobStatus must have exactly: PENDING, RUNNING, DONE, FAILED, CANCELLED, CANCELLING."""
+    """JobStatus must have exactly: PENDING, QUEUED, RUNNING, DONE, FAILED, CANCELLED, CANCELLING."""
     from archon_search.types import JobStatus
-    expected = {"PENDING", "RUNNING", "DONE", "FAILED", "CANCELLED", "CANCELLING"}
+    expected = {"PENDING", "QUEUED", "RUNNING", "DONE", "FAILED", "CANCELLED", "CANCELLING"}
     actual = {m.name for m in JobStatus}
     assert actual == expected, f"JobStatus members changed: {actual}"
 

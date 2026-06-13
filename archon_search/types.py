@@ -9,6 +9,7 @@ from archon_search.constants import DEFAULT_NAMESPACE
 
 class JobStatus(str, Enum):
     PENDING = "PENDING"
+    QUEUED = "QUEUED"       # bulk job waiting for a scheduler slot
     RUNNING = "RUNNING"
     DONE = "DONE"
     FAILED = "FAILED"
@@ -25,6 +26,7 @@ class IngestJob:
     result: dict | None = None
     error: str | None = None
     namespace: str = DEFAULT_NAMESPACE
+    progress: dict | None = None  # {"processed": int, "total": int, "phase": str}
 
 
 @dataclass
@@ -35,6 +37,22 @@ class ReindexJob(IngestJob):
 @dataclass
 class DeleteJob(IngestJob):
     deleted_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ExportJob(IngestJob):
+    collection: str = ""
+    output_path: str = ""   # final .tar.gz path (set on DONE)
+    tmp_path: str = ""      # .export-<job_id>.jsonl.tmp path
+
+
+@dataclass
+class ImportJob(IngestJob):
+    collection: str = ""
+    archive_path: str = ""
+    force_overwrite: bool = False
+    ignore_schema_version: bool = False
+    on_error: str = "fail"  # "fail" | "skip"
 
 
 @dataclass

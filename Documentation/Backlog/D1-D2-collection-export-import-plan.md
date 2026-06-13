@@ -234,7 +234,7 @@ Namespace from auth token (not a query param).
 > **Releasable**: after Task 1.5; the data model is complete and all existing tests still pass. Nothing user-visible yet.
 
 #### Task 1.1 — Add `QUEUED` to `JobStatus` and `ExportJob`/`ImportJob` to `types.py`
-- [ ] **File**: `archon_search/types.py`
+- [x] **File**: `archon_search/types.py`
 - **Depends on**: nothing
 - **Description**:
   - Insert `QUEUED = "QUEUED"` into `JobStatus` between `PENDING` and `RUNNING`
