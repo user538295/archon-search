@@ -208,7 +208,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
 > **Releasable**: after Task 2.1 (export/import round-trip); after Task 2.2 (backup trigger verified on disk)
 
 #### Task 2.1 — Export/import job dispatch integration
-- [ ] **File**: `tests/integration/test_dispatch_scheduler_e2e.py`
+- [x] **File**: `tests/integration/test_dispatch_scheduler_e2e.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_export_job_reaches_done_with_archive_on_disk`: POST `/collections/{name}/export` against real app with real `JobScheduler` (real `dispatch_fn`, not mocked). Poll `GET /jobs/{id}` until `status == 'done'`. Assert `.tar.gz` exists at `archive_path` and contains a valid manifest JSON.
