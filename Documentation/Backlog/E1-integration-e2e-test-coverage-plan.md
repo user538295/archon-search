@@ -379,7 +379,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_container_env_integration.py -v`
 
 #### Task 6.3 — Health/status and observability integration
-- [ ] **File**: `tests/integration/test_observability_integration.py`
+- [x] **File**: `tests/integration/test_observability_integration.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_get_status_storage_connected_with_real_store`: Create real app (real `SearchStore`, real LanceDB). GET `/status`. Assert `readiness.storage_connected == true` (not mocked ping). Verifies B2 health contract.
