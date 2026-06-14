@@ -293,7 +293,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_cli_e2e.py -v`
 
 #### Task 4.2 — Wizard configurability e2e
-- [ ] **File**: `tests/integration/test_wizard_e2e.py`
+- [x] **File**: `tests/integration/test_wizard_e2e.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_wizard_db_path_not_writable_exits_nonzero`: Pass `--db-path /nonexistent/path/db`. Assert exit code non-zero and error message in output.
