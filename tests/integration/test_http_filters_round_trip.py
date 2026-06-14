@@ -45,7 +45,13 @@ def _make_chunk(doc_id: str, idx: int, text: str, source_path: str, *, language:
 
 
 def _doc_id(path: str) -> str:
-    """Return the SHA-256 hex digest of *path* — mirrors store.py's doc_id derivation."""
+    """Return the SHA-256 hex digest of *path* — generates a unique doc_id for test purposes.
+
+    Note: the pipeline derives doc_id as ``sha256(str(path.resolve()).encode()).hexdigest()``
+    (using the resolved absolute path).  This helper does NOT call ``resolve()`` because the
+    paths used in direct-injection tests are synthetic strings, not real filesystem paths.
+    The function is only used to produce collision-free identifiers for ``ChunkRecord``.
+    """
     return hashlib.sha256(path.encode()).hexdigest()
 
 
@@ -87,30 +93,40 @@ def test_source_path_prefix_special_chars_round_trip_via_http(
     r"""POST /search with source_path_prefix containing %, _, \, and '.
 
     Verifies ``build_where()`` / ``escape_like()`` SQL-escaping through the
-    full HTTP→LanceDB path.  Three documents are injected:
+    full HTTP→LanceDB path.  Four documents are injected:
 
     - ``matching_path``: starts exactly with the special-char prefix (must appear).
-    - ``false_positive_path``: would match the unescaped LIKE pattern (``%`` as
-      wildcard) but must NOT appear once ``%`` is escaped to a literal.
+    - ``fp_percent_path``: would match the unescaped LIKE pattern if ``%`` acted as
+      a wildcard but must NOT appear once ``%`` is escaped to a literal.
+    - ``fp_underscore_path``: would match the unescaped LIKE pattern if ``_`` acted as
+      a single-char wildcard but must NOT appear once ``_`` is escaped to a literal.
+      In the prefix ``/data/back\\slash_corpus_%/…``, the ``_`` before ``corpus``
+      is a LIKE metacharacter when unescaped (matches any single char).  This path
+      replaces that ``_`` with ``X`` (``/data/back\\slashXcorpus_…``); if ``_``
+      is not properly escaped, the ``_`` wildcard in the pattern would match ``X``
+      and leak this document into results.
     - ``other_path``: unrelated path that must never appear.
-
-    The ``false_positive_path`` is the critical correctness probe: if
-    ``escape_like()`` were a no-op, the ``%`` in the prefix would act as a
-    SQL wildcard and ``false_positive_path`` would be returned, causing the
-    test to fail.
     """
     col = "test-src-prefix-special"
     # Prefix contains all four SQL-special chars: %, _, \, and '
     # Backslash is a valid character in Unix path strings (not a path separator).
     special_prefix = "/data/back\\slash_corpus_%/sec'tion"
     matching_path = f"{special_prefix}/match.md"
-    # This path would match the UNESCAPED LIKE pattern (% acts as wildcard, _ as any char).
-    # With proper escaping, %, _ and \ become literals and this path must NOT be returned.
-    false_positive_path = "/data/back\\slash_corpus_Xfoo/sec'tion/should_not_match.md"
+
+    # % probe: "Xfoo" sits where "%" was in the prefix segment.
+    # If % is not escaped (acts as wildcard), "%" matches "Xfoo" → false positive leaks.
+    fp_percent_path = "/data/back\\slash_corpus_Xfoo/sec'tion/should_not_match_percent.md"
+
+    # _ probe: the underscore separator before "corpus" is replaced by "X".
+    # In the prefix the LIKE pattern contains "_corpus"; if _ is not escaped (acts as
+    # wildcard), that _ matches any single char including "X" → false positive leaks.
+    fp_underscore_path = "/data/back\\slashXcorpus_%/sec'tion/should_not_match_underscore.md"
+
     other_path = "/data/other/no_match.md"
 
     match_id = _doc_id(matching_path)
-    fp_id = _doc_id(false_positive_path)
+    fp_pct_id = _doc_id(fp_percent_path)
+    fp_us_id = _doc_id(fp_underscore_path)
     other_id = _doc_id(other_path)
 
     with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
@@ -118,7 +134,8 @@ def test_source_path_prefix_special_chars_round_trip_via_http(
 
         chunks = [
             _make_chunk(match_id, 0, "matching document content special prefix", matching_path),
-            _make_chunk(fp_id, 0, "false positive content would match unescaped wildcard", false_positive_path),
+            _make_chunk(fp_pct_id, 0, "percent probe content would match unescaped percent wildcard", fp_percent_path),
+            _make_chunk(fp_us_id, 0, "underscore probe content would match unescaped underscore wildcard", fp_underscore_path),
             _make_chunk(other_id, 0, "other document content no prefix match", other_path),
         ]
         asyncio.run(_inject_chunks(store, col, chunks, embedding_model=cfg.embedding_model))
@@ -129,6 +146,7 @@ def test_source_path_prefix_special_chars_round_trip_via_http(
             json={
                 "collection": col,
                 "query": "document content",
+                "top_k": 10,
                 "filters": {"source_path_prefix": special_prefix},
             },
             headers=headers,
@@ -142,9 +160,14 @@ def test_source_path_prefix_special_chars_round_trip_via_http(
                 f"prefix {special_prefix!r}"
             )
         result_paths = {item["source_path"] for item in items}
-        # The false-positive path must NOT appear — this proves SQL escaping is applied
-        assert false_positive_path not in result_paths, (
-            f"false-positive path appeared in results — SQL escaping is likely broken. "
+        # The % probe must NOT appear — proves % is treated as a literal, not a wildcard.
+        assert fp_percent_path not in result_paths, (
+            f"percent-probe path appeared in results — '%' SQL escaping is broken. "
+            f"Got: {result_paths}"
+        )
+        # The _ probe must NOT appear — proves _ is treated as a literal, not a wildcard.
+        assert fp_underscore_path not in result_paths, (
+            f"underscore-probe path appeared in results — '_' SQL escaping is broken. "
             f"Got: {result_paths}"
         )
         assert other_path not in result_paths, (
