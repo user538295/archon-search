@@ -256,7 +256,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_mcp_error_paths.py -v`
 
 #### Task 3.2 — MCP schema contract after real ingest
-- [ ] **File**: `tests/integration/test_mcp_schema_contract.py`
+- [x] **File**: `tests/integration/test_mcp_schema_contract.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_mcp_search_real_pipeline_result_passes_pydantic_gate`: Real ingest via `pipeline.ingest_file`. Call `pipeline.search()`. Pass result through `McpSearchResultSchema.from_result()`. Assert no `ValidationError` and output dict has exactly the public contract fields.
