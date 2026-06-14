@@ -365,7 +365,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_fts_delete_no_phantom.py -v`
 
 #### Task 6.2 — Container env and disk I/O integration
-- [ ] **File**: `tests/integration/test_container_env_integration.py`
+- [x] **File**: `tests/integration/test_container_env_integration.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_data_dir_env_routes_log_file_to_derived_path`: `load_config()` + `configure_logging()` in sequence with `DATA_DIR=<tmp_path>`. Assert file handler path is under `tmp_path`, not `~/.archon-search/`.
