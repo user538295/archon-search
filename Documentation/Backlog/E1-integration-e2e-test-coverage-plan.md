@@ -349,7 +349,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
 > **Releasable**: after each task independently
 
 #### Task 6.1 — FTS delete with no phantom hits
-- [ ] **File**: `tests/integration/test_fts_delete_no_phantom.py`
+- [x] **File**: `tests/integration/test_fts_delete_no_phantom.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_ingest_directory_optimize_fts_called_not_rebuild_when_index_exists`: Real FTS-indexed collection. Call `pipeline.ingest_directory`. Assert `store.optimize_fts` called (monkeypatch spy), `store.rebuild_fts_index` NOT called. Verifies C6 O(delta) path.
