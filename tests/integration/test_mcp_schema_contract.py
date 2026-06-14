@@ -143,6 +143,19 @@ _CONTEXT_CHUNK_PUBLIC_FIELDS = {
 
 _CONTEXT_CHUNK_EXCLUDED_FIELDS = {"vector", "start_offset", "end_offset", "custom_score"}
 
+_COLLECTION_INTERNAL_FIELDS = {
+    "centroid_sum_json",
+    "centroid_sum",
+    "namespace",
+    "needs_reindex",
+    "reindex_job_id",
+    "mutations_since_recompute",
+    "active_embedding_model",
+    "needs_recompute",
+    "described_at_doc_count",
+    "description_embedding",
+}
+
 
 # ---------------------------------------------------------------------------
 # Test 1 — McpSearchResultSchema.from_result() passes Pydantic gate
@@ -181,21 +194,21 @@ async def test_mcp_search_real_pipeline_result_passes_pydantic_gate(
             filters=SearchFilters(),
         )
 
-    assert result_obj.results, "expected at least one search result"
+        assert result_obj.results, "expected at least one search result"
 
-    for r in result_obj.results:
-        try:
-            schema = McpSearchResultSchema.from_result(r)
-        except ValidationError as exc:
-            pytest.fail(f"McpSearchResultSchema.from_result() raised ValidationError: {exc}")
+        for r in result_obj.results:
+            try:
+                schema = McpSearchResultSchema.from_result(r)
+            except ValidationError as exc:
+                pytest.fail(f"McpSearchResultSchema.from_result() raised ValidationError: {exc}")
 
-        serialized = schema.model_dump(mode="json")
-        actual_keys = set(serialized.keys())
+            serialized = schema.model_dump(mode="json")
+            actual_keys = set(serialized.keys())
 
-        missing = _SEARCH_RESULT_PUBLIC_FIELDS - actual_keys
-        extra = actual_keys - _SEARCH_RESULT_PUBLIC_FIELDS
-        assert not missing, f"missing required public fields: {missing}"
-        assert not extra, f"unexpected extra fields leaked: {extra}"
+            missing = _SEARCH_RESULT_PUBLIC_FIELDS - actual_keys
+            extra = actual_keys - _SEARCH_RESULT_PUBLIC_FIELDS
+            assert not missing, f"missing required public fields: {missing}"
+            assert not extra, f"unexpected extra fields leaked: {extra}"
 
 
 # ---------------------------------------------------------------------------
@@ -228,44 +241,31 @@ async def test_mcp_list_collections_real_pipeline_result_field_rename(
         pipeline = client.app.state.pipeline
         all_meta = await pipeline.get_all_collections_meta()
 
-    assert all_meta, "expected at least one collection after ingest"
+        assert all_meta, "expected at least one collection after ingest"
 
-    _INTERNAL_FIELDS = {
-        "centroid_sum_json",
-        "centroid_sum",
-        "namespace",
-        "needs_reindex",
-        "reindex_job_id",
-        "mutations_since_recompute",
-        "active_embedding_model",
-        "needs_recompute",
-        "described_at_doc_count",
-        "description_embedding",
-    }
+        for meta in all_meta:
+            try:
+                schema = CollectionListItemSchema.from_result(meta)
+            except ValidationError as exc:
+                pytest.fail(f"CollectionListItemSchema.from_result() raised ValidationError: {exc}")
 
-    for meta in all_meta:
-        try:
-            schema = CollectionListItemSchema.from_result(meta)
-        except ValidationError as exc:
-            pytest.fail(f"CollectionListItemSchema.from_result() raised ValidationError: {exc}")
+            serialized = schema.model_dump(mode="json")
+            actual_keys = set(serialized.keys())
 
-        serialized = schema.model_dump(mode="json")
-        actual_keys = set(serialized.keys())
+            # Renamed field must be present under the public name.
+            assert "embedding_model" in actual_keys, (
+                f"expected 'embedding_model' key in serialized output, got: {actual_keys}"
+            )
 
-        # Renamed field must be present under the public name.
-        assert "embedding_model" in actual_keys, (
-            f"expected 'embedding_model' key in serialized output, got: {actual_keys}"
-        )
+            # Internal fields must not leak.
+            leaked = _COLLECTION_INTERNAL_FIELDS & actual_keys
+            assert not leaked, f"internal fields leaked into public schema: {leaked}"
 
-        # Internal fields must not leak.
-        leaked = _INTERNAL_FIELDS & actual_keys
-        assert not leaked, f"internal fields leaked into public schema: {leaked}"
-
-        # Exact public contract shape.
-        missing = _COLLECTION_LIST_PUBLIC_FIELDS - actual_keys
-        extra = actual_keys - _COLLECTION_LIST_PUBLIC_FIELDS
-        assert not missing, f"missing required public fields: {missing}"
-        assert not extra, f"unexpected extra fields: {extra}"
+            # Exact public contract shape.
+            missing = _COLLECTION_LIST_PUBLIC_FIELDS - actual_keys
+            extra = actual_keys - _COLLECTION_LIST_PUBLIC_FIELDS
+            assert not missing, f"missing required public fields: {missing}"
+            assert not extra, f"unexpected extra fields: {extra}"
 
 
 # ---------------------------------------------------------------------------
@@ -336,37 +336,37 @@ async def test_mcp_search_with_context_excludes_transient_chunk_fields(
             filters=SearchFilters(),
         )
 
-    assert swc_result.results, "expected at least one result from search_with_context"
+        assert swc_result.results, "expected at least one result from search_with_context"
 
-    # Collect all context chunks across all results.
-    all_chunks = []
-    for item in swc_result.results:
-        all_chunks.extend(item["context_before"])
-        all_chunks.extend(item["context_after"])
+        # Collect all context chunks across all results.
+        all_chunks = []
+        for item in swc_result.results:
+            all_chunks.extend(item["context_before"])
+            all_chunks.extend(item["context_after"])
 
-    assert all_chunks, (
-        "expected adjacent context chunks from a ~1600-char doc with default chunk_size=512; "
-        "verify the document content produces multiple chunks"
-    )
+        assert all_chunks, (
+            "expected adjacent context chunks from a ~4900-char doc with default chunk_size=512; "
+            "verify the document content produces multiple chunks"
+        )
 
-    for chunk in all_chunks:
-        try:
-            schema = ContextChunkSchema.from_result(chunk)
-        except ValidationError as exc:
-            pytest.fail(f"ContextChunkSchema.from_result() raised ValidationError: {exc}")
+        for chunk in all_chunks:
+            try:
+                schema = ContextChunkSchema.from_result(chunk)
+            except ValidationError as exc:
+                pytest.fail(f"ContextChunkSchema.from_result() raised ValidationError: {exc}")
 
-        serialized = schema.model_dump(mode="json")
-        actual_keys = set(serialized.keys())
+            serialized = schema.model_dump(mode="json")
+            actual_keys = set(serialized.keys())
 
-        # Transient fields must be absent.
-        for excluded in _CONTEXT_CHUNK_EXCLUDED_FIELDS:
-            assert excluded not in actual_keys, (
-                f"transient field {excluded!r} leaked into ContextChunkSchema output"
-            )
+            # Transient fields must be absent.
+            for excluded in _CONTEXT_CHUNK_EXCLUDED_FIELDS:
+                assert excluded not in actual_keys, (
+                    f"transient field {excluded!r} leaked into ContextChunkSchema output"
+                )
 
-        # Public fields must be present.
-        missing = _CONTEXT_CHUNK_PUBLIC_FIELDS - actual_keys
-        assert not missing, f"missing required public fields: {missing}"
+            # Public fields must be present.
+            missing = _CONTEXT_CHUNK_PUBLIC_FIELDS - actual_keys
+            assert not missing, f"missing required public fields: {missing}"
 
 
 # ---------------------------------------------------------------------------
