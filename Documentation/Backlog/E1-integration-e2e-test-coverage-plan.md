@@ -328,7 +328,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_centroid_integration.py -v`
 
 #### Task 5.2 — Routing integration and e2e
-- [ ] **File**: `tests/integration/test_routing_integration.py`
+- [x] **File**: `tests/integration/test_routing_integration.py`
 - **Depends on**: Task 5.1
 - **Description**:
   - `test_incremental_vs_recomputed_routing_equivalence`: Three real collections with distinct corpora. Run 10 queries. Assert `MultiCollectionRouter.rank()` top-K results are identical whether centroids were maintained incrementally or force-recomputed. Verifies routing correctness after B5.
