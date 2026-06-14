@@ -241,7 +241,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
 > **Releasable**: after Task 3.1; each test file independently runnable
 
 #### Task 3.1 — MCP search/explain validation and typed-exception mapping
-- [ ] **File**: `tests/integration/test_mcp_error_paths.py`
+- [x] **File**: `tests/integration/test_mcp_error_paths.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_mcp_search_both_collection_fields_returns_validation_error`: Call MCP `search` tool with both `collection` and `collections` set. Assert tool returns `is_error=True` with message referencing mutual exclusivity.
