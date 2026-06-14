@@ -13,12 +13,13 @@ Run with:
 from __future__ import annotations
 
 import contextlib
+import os
 from pathlib import Path
 from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 
 pytestmark = pytest.mark.integration
 
@@ -59,15 +60,13 @@ def _run_wizard(
     extra_args: list[str] | None = None,
     *,
     dry_run: bool = True,
-) -> object:
+) -> Result:
     """Invoke wizard via CliRunner on a clean tmp_path.
 
     Patches _acquire_install_lock, _prewarm_models, _check_disk_space, and
     heavy SearchInstaller methods so tests run without real model downloads
-    or service operations.
-
-    When dry_run=False a mock for load_or_generate_key is also applied so
-    Step 17 does not try to read a real key file.
+    or service operations.  load_or_generate_key is always patched to avoid
+    touching real key files on disk.
 
     Callers that need env var isolation (e.g., ANTHROPIC_API_KEY) must call
     monkeypatch.setenv() in the test function itself before invoking this helper.
@@ -90,7 +89,6 @@ def _run_wizard(
     if extra_args:
         args.extend(extra_args)
 
-    # Patch load_or_generate_key used in Step 17 (non-dry-run only)
     _mock_key = ("fake_api_key_for_tests", "file")
 
     install_patches: dict = {
@@ -115,47 +113,42 @@ def _run_wizard(
 
 @pytest.mark.xdist_group("install")
 def test_wizard_db_path_not_writable_exits_nonzero(tmp_path: Path) -> None:
-    """wizard --db-path /nonexistent/path/db exits non-zero with an error message.
+    """wizard --db-path pointing to an unwritable path exits non-zero with an error.
 
-    The wizard attempts to create and write-check the provided db_path.
-    A path under /nonexistent is not creatable, so mkdir raises OSError and
-    the wizard prints an error and returns exit code 1.
+    Creates a read-only directory inside tmp_path so the OS rejects mkdir on a
+    subdirectory of it.  Uses a portable approach rather than /nonexistent so
+    the test works even in root-privilege environments (e.g., some CI containers).
     """
-    from archon_search.cli.main import main
-    from archon_search.install import SearchInstaller
+    # Create a read-only parent dir; the wizard will try to mkdir a child of it.
+    ro_parent = tmp_path / "readonly"
+    ro_parent.mkdir()
+    os.chmod(ro_parent, 0o555)  # read+execute, no write
+    bad_db_path = str(ro_parent / "db")
 
-    config_path = tmp_path / "archon-search.toml"
-    runner = CliRunner()
-
-    # /nonexistent/path/db cannot be created — OS will reject the mkdir.
-    bad_db_path = "/nonexistent/path/db"
-
-    with patch.multiple(
-        "archon_search.install",
-        _prewarm_models=MagicMock(),
-        _check_disk_space=MagicMock(),
-        _legacy_service_path=MagicMock(return_value=tmp_path / "fake.plist"),
-        _remove_legacy_service=MagicMock(),
-        _acquire_install_lock=_noop_install_lock,
-        load_or_generate_key=MagicMock(return_value=("fake_key", "file")),
-    ):
-        with patch.multiple(SearchInstaller, **_base_wizard_patches()):
-            result = runner.invoke(main, [
-                "wizard",
-                "--non-interactive",
-                "--profile", "minimal",
-                "--skip-preload",
-                "--dry-run",
-                "--config", str(config_path),
-                "--db-path", bad_db_path,
-            ])
+    try:
+        result = _run_wizard(
+            tmp_path,
+            extra_args=["--db-path", bad_db_path],
+            dry_run=True,
+        )
+    finally:
+        # Restore write permission so pytest can clean up tmp_path.
+        os.chmod(ro_parent, 0o755)
 
     assert result.exit_code != 0, (
         f"expected non-zero exit for non-writable --db-path, got {result.exit_code}.\n"
         f"Output:\n{result.output}"
     )
+    # An unexpected exception (e.g., missing patch) would give a traceback that
+    # typically does not mention the bad path — detect this by re-raising the
+    # exception rather than treating it as an intentional error.
+    if result.exception is not None and not isinstance(result.exception, SystemExit):
+        raise AssertionError(
+            f"wizard raised an unexpected exception instead of a clean error exit:\n"
+            f"{result.exception!r}\nOutput:\n{result.output}"
+        ) from result.exception
     combined = result.output + (str(result.exception) if result.exception else "")
-    assert "Error" in combined or "error" in combined or "nonexistent" in combined, (
+    assert "Error" in combined or "error" in combined or "readonly" in combined, (
         f"expected error message referencing the bad path, got:\n{combined}"
     )
 
@@ -310,3 +303,31 @@ def test_wizard_summary_contains_next_steps_block(
         f"Expected 'Next steps' block in wizard output, but not found.\n"
         f"Full output:\n{result.output}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — --enable-hyde/--enable-rag-fusion require ANTHROPIC_API_KEY
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xdist_group("install")
+def test_wizard_hyde_and_rag_fusion_require_anthropic_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """wizard --enable-hyde/--enable-rag-fusion exit non-zero without ANTHROPIC_API_KEY.
+
+    The wizard CLI guard raises UsageError when either LLM-backed feature flag is
+    requested but ANTHROPIC_API_KEY is absent from the environment.  Validates both
+    flags independently.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    for flag in ("--enable-hyde", "--enable-rag-fusion"):
+        result = _run_wizard(tmp_path, extra_args=[flag], dry_run=True)
+        assert result.exit_code != 0, (
+            f"wizard {flag} should exit non-zero without ANTHROPIC_API_KEY, "
+            f"got {result.exit_code}.\nOutput:\n{result.output}"
+        )
+        assert "ANTHROPIC_API_KEY" in result.output, (
+            f"Expected ANTHROPIC_API_KEY error message for {flag}, got:\n{result.output}"
+        )
