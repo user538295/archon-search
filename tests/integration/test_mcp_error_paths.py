@@ -187,11 +187,7 @@ async def test_mcp_search_fanout_timeout_returns_timeout_code() -> None:
     """
     from archon_search.pipeline import FanoutTimeoutError
 
-    pipeline = MagicMock()
-    pipeline.search_many = AsyncMock(side_effect=FanoutTimeoutError())
-    embedder = MagicMock()
-    embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
-    pipeline._global_embedder = embedder
+    pipeline = _make_pipeline_with_search_many_raising(FanoutTimeoutError())
 
     app = _make_mcp_app(pipeline)
 
@@ -238,6 +234,10 @@ async def test_mcp_explain_rerank_false_multi_collections_returns_error() -> Non
         f"expected validation_error for rerank=False+multi-collection, got: {result}"
     )
     assert "error" in result
+    error_msg = result["error"].lower()
+    assert any(
+        kw in error_msg for kw in ("rerank", "reranking", "multi-collection", "disabled")
+    ), f"expected rerank/multi-collection constraint message, got: {result['error']!r}"
 
 
 # ---------------------------------------------------------------------------
