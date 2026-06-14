@@ -42,6 +42,31 @@ flowchart TB
 - Coverage combining: `pytest-cov` natively supports xdist. Workers write `.coverage.workerN` files which the main process combines before applying `--cov-fail-under=85`. This applies to single-invocation runs only; CI requires `-n0` to avoid interference with multi-step `--cov-append` accumulation.
 - Adding a test: place it under `tests/`, do not add a marker — the default selector will pick it up. Pipeline tests live under `tests/pipeline/` (`test_pipeline_ingest.py`, `test_pipeline_search.py`, `test_pipeline_multi.py`); shared helpers are in `tests/pipeline/conftest.py`.
 
+### `tests/integration/` — multi-component integration and e2e tests
+
+`tests/integration/` contains tests that exercise multiple real components collaborating end-to-end: real `SearchPipeline`, real `SearchStore`, real LanceDB in `tmp_path`, `TestClient` against a real FastAPI app. These are distinct from unit tests in `tests/` which rely on the ML stubs in `tests/conftest.py`.
+
+**Why a separate directory?** Unit tests stub fastembed and the cross-encoder at `sys.modules` level (`tests/conftest.py`), which is correct for fast isolated testing but leaves the wiring between HTTP→middleware→route→pipeline→store→JSON serialization untested. `tests/integration/` fills that gap: each test exercises a real component chain without mocking the system under test.
+
+All integration tests run in the default `uv run pytest` suite (no extra flags required) and are marked `integration` so they can also be run in isolation with `uv run pytest -m integration tests/integration/`.
+
+**The six cross-cutting gap themes addressed** (from plan E1, which added 19 test files under `tests/integration/`):
+
+1. **HTTP layer** (phases 1.1–1.6) — `SearchResultSchema.from_result()` wiring, filter SQL-escaping, multi-collection search, per-collection embedding model lifecycle, content-enrichment metadata in responses, HyDE/RAG-Fusion kill-switch and dependency-absent errors.
+2. **Job dispatch & scheduler** (phases 2.1–2.2) — real `JobScheduler` dispatch through a full `create_app` lifespan: export/import round-trip, backup trigger with on-disk `.tar.gz` verification, user-before-backup job priority.
+3. **MCP tool error paths** (phases 3.1–3.2) — validation errors, typed-exception mapping (`FanoutTimeoutError`, dependency-absent errors), and schema-contract tests (`McpSearchResultSchema`, `CollectionListItemSchema`, transient-field exclusion).
+4. **CLI e2e** (phases 4.1–4.2) — real Click wiring: path safety enforcement, container serve path, `DATA_DIR` key-file routing, `configure_logging` stderr handler, wizard dry-run idempotency, TOML config output.
+5. **Centroid and routing** (phases 5.1–5.2) — multi-batch accumulation correctness, reingest net-zero, delete centroid update, incremental vs. recomputed routing equivalence, hybrid routing end-to-end.
+6. **Feature-specific cross-cutting** (phases 6.1–6.5) — FTS delete with no phantom hits, container env + disk I/O (`atomic_write_json`, `JobStore` JSON roundtrip, key-file mode 600), health/status/observability (`X-Request-Id`, stage timings, telemetry drain, no-raw-query invariant at HTTP wiring level), ACL/namespace isolation, collection lifecycle deletion.
+
+**Shared helpers** live in `tests/integration/conftest.py` (never modify `tests/conftest.py` from this directory):
+
+- `make_real_app(tmp_path, monkeypatch, *, backup_enabled=False, namespaces=None)` — returns `(TestClient, config, api_key)` backed by real `SearchStore` + `SearchPipeline` in `tmp_path`. Uses `monkeypatch.setenv` for both `ARCHON_SEARCH_DATA_DIR` and `ARCHON_SEARCH_API_KEY` to auto-revert env vars after each test.
+- `ingest_doc(client, col, text, path, *, timeout_s=10)` — POST ingest + poll until job DONE.
+- `ingest_file_via_path(client, col, path, *, timeout_s=10)` — POST ingest by filesystem path + poll until DONE.
+- `search(client, col, query, **filters)` — POST `/search`, assert 200, return items.
+- `make_real_pipeline(tmp_path, monkeypatch)` — async helper that creates a real connected `SearchStore` + `SearchPipeline` for direct async pipeline/store calls without going through `TestClient`.
+
 ### `integration` — `uv run pytest -m integration`
 
 Integration tests exercise real components against local infrastructure. They run in the default suite. Use this marker when a test needs a real `SearchStore`, real LanceDB index on disk, or real OS service interactions — anything that the stubs in `conftest.py` deliberately replace.

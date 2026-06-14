@@ -155,6 +155,20 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/eval/fixtures.py` | Load `documents.jsonl`, `queries.jsonl`, `labels.jsonl`, `corpus/`. | `EvalDocument`, `EvalQuery`, `RelevanceLabel`, `EvalCorpus`, `load_eval_corpus`, `build_doc_collection_map` |
 | `archon_search/eval/types.py`, `_hashing.py`, `_tracing.py` | Shared eval types, hashing helpers, trace capture. | see source |
 
+## Test Infrastructure
+
+`tests/integration/conftest.py` provides shared helpers used across the 19 integration/e2e test modules added by plan E1. These helpers are not production code and must not be imported from `archon_search/`. They depend on `tests/conftest.py` stubs being installed at collection time.
+
+| Helper | Purpose | Signature |
+|---|---|---|
+| `make_real_app` | Build a `TestClient` backed by real `SearchStore` + `SearchPipeline` in `tmp_path`. Uses `monkeypatch.setenv` for `ARCHON_SEARCH_DATA_DIR` + `ARCHON_SEARCH_API_KEY` so env vars auto-revert after each test. Creates a real `JobScheduler` so export/import/backup dispatch works without mocking. | `make_real_app(tmp_path, monkeypatch, *, backup_enabled=False, namespaces=None) -> tuple[TestClient, config, api_key]` |
+| `ingest_doc` | POST ingest with inline text + poll `GET /jobs/{id}` until `status == 'done'` (max 10s, 100ms intervals). | `ingest_doc(client, col, text, path, *, timeout_s=10)` |
+| `ingest_file_via_path` | POST ingest by filesystem path + poll until DONE. | `ingest_file_via_path(client, col, path, *, timeout_s=10)` |
+| `search` | POST `/search`, assert 200, return items list. | `search(client, col, query, **filters)` |
+| `make_real_pipeline` | Async helper — creates a real connected `SearchStore` + `SearchPipeline` for direct pipeline/store method calls without going through `TestClient`. Calls `await store.connect()`. | `async def make_real_pipeline(tmp_path, monkeypatch) -> tuple[SearchStore, SearchPipeline]` |
+
+Do NOT modify `tests/conftest.py` when adding tests to `tests/integration/` — that file controls the global ML stub state shared across all workers.
+
 ## Cross-cutting
 
 | Module | Purpose | Key public symbols |

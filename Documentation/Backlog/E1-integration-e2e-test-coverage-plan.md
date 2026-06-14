@@ -433,7 +433,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
 ### Final Phase — Verification & Documentation
 
 #### Task 7.1 — Final verification & documentation update
-- [ ] **File**: N/A (agent task)
+- [x] **File**: N/A (agent task)
 - **Depends on**: all prior tasks
 - **Description**:
   - Run full test suite and assert zero failures: `uv run pytest --no-cov` (verifies zero failures without slow coverage overhead). Then run: `uv run pytest` (without `--no-cov`) to verify the coverage gate (`--cov-fail-under=85`) still passes with the new tests included.
