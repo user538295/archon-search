@@ -312,7 +312,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
 > **Releasable**: after Task 5.1 (correctness); after Task 5.2 (routing equivalence)
 
 #### Task 5.1 — Incremental centroid correctness
-- [ ] **File**: `tests/integration/test_centroid_integration.py`
+- [x] **File**: `tests/integration/test_centroid_integration.py`
 - **Depends on**: nothing
 - **Description**:
   **All tests in this file must be defined as `async def`** — they call async pipeline and store methods (`pipeline.ingest_file`, `pipeline.delete_document`, `store.get_collection_meta`, `recompute_collection_meta`). Since `pyproject.toml` sets `asyncio_mode = 'auto'`, no `@pytest.mark.asyncio` decorator is needed — just define as `async def test_...`.
