@@ -244,6 +244,20 @@ def test_reindex_task_vectors_intact_after_failure(
             f"active_embedding_model must remain {_MODEL_A!r} after failure; "
             f"got: {active!r}"
         )
+        # needs_reindex and pending_embedding_model must stay set — the operator
+        # must still be able to retry.  reindex_job_id is cleared so a new POST
+        # /reindex is not blocked by a stale FAILED job reference.
+        assert get_data["needs_reindex"] is True, (
+            "needs_reindex must remain True after a failed reindex (retry is required)"
+        )
+        assert get_data["pending_embedding_model"] == _MODEL_B, (
+            f"pending_embedding_model must remain {_MODEL_B!r} after failure; "
+            f"got: {get_data['pending_embedding_model']!r}"
+        )
+        assert get_data["reindex_job_id"] is None, (
+            f"reindex_job_id must be cleared after a FAILED job; "
+            f"got: {get_data['reindex_job_id']!r}"
+        )
 
         # Documents must still be searchable.
         results_after = search(client, col_name, "resilience content", api_key=api_key)
@@ -399,4 +413,159 @@ def test_search_remains_available_during_reindex_and_model_updates_after_done(
         assert get_data["pending_embedding_model"] is None, (
             f"expected pending_embedding_model=None after DONE, "
             f"got: {get_data['pending_embedding_model']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — 409 guard: second POST /reindex while first is in-progress
+# ---------------------------------------------------------------------------
+
+
+def test_reindex_409_when_already_in_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /reindex returns 409 while a reindex job is already RUNNING.
+
+    Uses a slow _reindex_task (same pattern as Test 3) to hold the job in
+    RUNNING state, then issues a second POST and asserts 409.
+    """
+    col_dir = tmp_path / "col-409"
+    col_dir.mkdir()
+    doc = col_dir / "guard.md"
+    doc.write_text("# 409 guard\n\nContent to ensure chunk_count > 0.\n" * 6)
+
+    col_name = path_to_collection_name(str(col_dir))
+
+    started_event = threading.Event()
+    release_event = threading.Event()
+
+    async def _blocking_reindex_task(**kwargs):
+        job_id = kwargs["job_id"]
+        job_store = kwargs["job_store"]
+        store = kwargs["store"]
+        collection = kwargs["collection"]
+        namespace = kwargs.get("namespace", "default")
+
+        job_store.update(job_id, status=JobStatus.RUNNING)
+        started_event.set()
+        await asyncio.to_thread(release_event.wait, 30.0)
+
+        meta = await store.get_collection_meta(collection, namespace)
+        if meta is not None:
+            meta.active_embedding_model = _MODEL_B
+            meta.pending_embedding_model = None
+            meta.needs_reindex = False
+            meta.reindex_job_id = None
+            await store.update_collection_meta(meta)
+        job_store.update(job_id, status=JobStatus.DONE)
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        cfg.collections.append(str(col_dir))
+
+        ingest_file_via_path(client, col_name, str(doc), api_key=api_key)
+
+        with patch.object(
+            _routes_collections,
+            "validate_embedding_model",
+            return_value=_STUB_DIM,
+        ):
+            client.patch(
+                f"/collections/{col_name}",
+                json={"embedding_model": _MODEL_B},
+                headers=_auth(api_key),
+            )
+
+        # Start first reindex (slow).
+        with patch.object(
+            _routes_collections,
+            "_reindex_task",
+            side_effect=_blocking_reindex_task,
+        ):
+            first_resp = client.post(
+                f"/collections/{col_name}/reindex",
+                headers=_auth(api_key),
+            )
+        assert first_resp.status_code == 202
+
+        # Wait until the task is actually RUNNING before issuing the second POST.
+        started = started_event.wait(timeout=10.0)
+        assert started, "blocking reindex task did not start within 10s"
+
+        # Second POST while first is RUNNING — must return 409.
+        second_resp = client.post(
+            f"/collections/{col_name}/reindex",
+            headers=_auth(api_key),
+        )
+        assert second_resp.status_code == 409, (
+            f"expected 409 when reindex already in progress, "
+            f"got {second_resp.status_code}: {second_resp.text}"
+        )
+
+        # Unblock the slow task so the app can shut down cleanly.
+        release_event.set()
+        _poll_job_until_terminal(client, first_resp.json()["job_id"], api_key)
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — Empty collection: PATCH promotes model immediately (no reindex)
+# ---------------------------------------------------------------------------
+
+
+def test_patch_empty_collection_promotes_model_immediately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PATCH on a collection with zero chunks promotes the model immediately.
+
+    No reindex job is needed — chunk_count == 0 means there is nothing to
+    re-embed.  The response must show needs_reindex=False and
+    active_embedding_model == new model.
+
+    Strategy: ingest a document so that collection meta exists (PATCH returns 404
+    without meta), then monkeypatch SearchStore.count_chunks to return 0 on the
+    PATCH call — simulating a collection whose documents were all deleted.
+    """
+    col_dir = tmp_path / "col-empty"
+    col_dir.mkdir()
+    doc = col_dir / "empty-test.md"
+    doc.write_text("# Empty test\n\nSeed document — will be simulated-deleted.\n" * 4)
+
+    col_name = path_to_collection_name(str(col_dir))
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        cfg.collections.append(str(col_dir))
+
+        # Ingest to create collection meta (PATCH requires meta to exist).
+        ingest_file_via_path(client, col_name, str(doc), api_key=api_key)
+
+        # Simulate all documents deleted: count_chunks returns 0 so the
+        # PATCH handler takes the immediate-promotion branch.
+        search_store = client.app.state.search_store
+        with (
+            patch.object(search_store, "count_chunks", new=AsyncMock(return_value=0)),
+            patch.object(
+                _routes_collections,
+                "validate_embedding_model",
+                return_value=_STUB_DIM,
+            ),
+        ):
+            patch_resp = client.patch(
+                f"/collections/{col_name}",
+                json={"embedding_model": _MODEL_B},
+                headers=_auth(api_key),
+            )
+
+        assert patch_resp.status_code == 200, (
+            f"PATCH expected 200, got {patch_resp.status_code}: {patch_resp.text}"
+        )
+        data = patch_resp.json()
+        assert data["needs_reindex"] is False, (
+            f"empty collection must not need reindex; got needs_reindex={data['needs_reindex']}"
+        )
+        assert data["active_embedding_model"] == _MODEL_B, (
+            f"active_embedding_model must be immediately promoted for empty collection; "
+            f"got: {data['active_embedding_model']!r}"
+        )
+        assert data["pending_embedding_model"] is None, (
+            f"pending_embedding_model must be None after immediate promotion; "
+            f"got: {data['pending_embedding_model']!r}"
         )
