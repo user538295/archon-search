@@ -414,7 +414,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_acl_namespace_integration.py -v`
 
 #### Task 6.5 — Collection lifecycle integration tests
-- [ ] **File**: `tests/integration/test_collection_lifecycle_integration.py`
+- [x] **File**: `tests/integration/test_collection_lifecycle_integration.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_delete_collection_drops_table_and_removes_meta`: Ingest into a real collection. DELETE `/collections/{name}` via TestClient. Assert 200. GET `/collections` — name absent. Assert LanceDB table no longer exists: check BOTH `store.list_collections()` (verifies store internal tracking) AND that the LanceDB directory under `tmp_path` for the collection is absent (verifies actual disk cleanup). Checking only one is insufficient — `drop_collection` could fail silently while meta is deleted.
