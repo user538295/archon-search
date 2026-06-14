@@ -277,7 +277,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
 > **Releasable**: after Task 4.1; each task independently runnable
 
 #### Task 4.1 — Ingest path safety and container env e2e
-- [ ] **File**: `tests/integration/test_cli_e2e.py`
+- [x] **File**: `tests/integration/test_cli_e2e.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_e2e_ingest_path_safety_full_flow`: POST `/ingest {path: '/foo/../bar'}` with valid auth via TestClient. Assert 400, detail starts with `'path is unsafe:'`, no job created (GET `/jobs` returns empty list).
