@@ -125,7 +125,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_http_metadata_fields.py -v`
 
 #### Task 1.2 — Metadata filter HTTP round-trips
-- [ ] **File**: `tests/integration/test_http_filters_round_trip.py`
+- [x] **File**: `tests/integration/test_http_filters_round_trip.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_source_path_prefix_special_chars_round_trip_via_http`: POST `/search` with `source_path_prefix` containing `%`, `_`, `\`, `'`. Assert only matching docs returned. Verifies `build_where()` SQL-escaping through the full HTTP→LanceDB path.
