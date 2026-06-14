@@ -80,7 +80,12 @@ def test_markdown_heading_flows_through_to_search_response(
             f"headings found: {headings}"
         )
 
-        # Verify the fields are present in the metadata dict (not absent)
+        # Verify the fields are present in the metadata dict (not absent).
+        # The stub embedder returns identical zero-vectors for all chunks, so
+        # search may return any chunk depending on internal ordering. We verify
+        # field presence (not specific path hierarchy) to remain deterministic
+        # under the stub embedder. Hierarchy correctness is covered by unit tests
+        # for MarkdownEnricher.
         for item in items:
             assert "_heading" in item["metadata"], (
                 f"_heading key missing from metadata: {item['metadata']}"
@@ -140,18 +145,31 @@ def test_code_symbol_metadata_in_search_response(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Ingest a Python source file. POST /search with include_metadata=true.
-    Assert results carry metadata._symbol_type and either
-    metadata._containing_function or metadata._containing_class.
+    Assert results carry metadata._symbol_type and at least one result carries
+    either metadata._containing_function or metadata._containing_class.
 
     Verifies C3c (CodeEnricher) enrichment wiring through the full HTTP path.
     The test file contains a class definition so _symbol_type should appear.
+
+    Skips gracefully when tree-sitter grammar is unavailable (optional [code]
+    extra not installed): CodeEnricher returns only _module_path in that case.
     """
+    try:
+        import tree_sitter_python  # noqa: F401  # type: ignore[import-untyped]
+    except ImportError:
+        pytest.skip("tree-sitter-python not installed — code enrichment skipped")
+
+    # The file contains NO module-level code — all content is inside DataProcessor.
+    # This guarantees that every chunk (regardless of which one the stub embedder
+    # returns) has _containing_class='DataProcessor' and _symbol_type in
+    # {"class", "method"}, making the assertions deterministic.
     py_file = tmp_path / "example.py"
     py_file.write_text(
-        '"""Example module for testing code enrichment."""\n\n'
         "class DataProcessor:\n"
-        '    """Process and transform incoming data.\n\n'
-        "    This class handles the core data transformation pipeline.\n"
+        '    """Process and transform incoming data through multiple stages.\n\n'
+        "    This class handles the core data transformation pipeline used across\n"
+        "    the system for batch and streaming workloads. It supports chained\n"
+        "    transformations and custom validators.\n"
         '    """\n\n'
         "    def process(self, data: list) -> list:\n"
         '        """Process a list of data items and return transformed results."""\n'
@@ -162,35 +180,48 @@ def test_code_symbol_metadata_in_search_response(
         "        return result\n\n"
         "    def _transform(self, item):\n"
         '        """Apply transformation to a single data item."""\n'
-        "        return str(item).strip().upper()\n\n\n"
-        "def standalone_function(value: str) -> str:\n"
-        '    """A standalone function outside any class."""\n'
-        "    return value.lower().replace(' ', '_')\n"
+        "        return str(item).strip().upper()\n\n"
+        "    def validate(self, data: list) -> bool:\n"
+        '        """Validate that all items in data are non-empty strings."""\n'
+        "        return all(isinstance(x, str) and x.strip() for x in data)\n"
     )
 
     with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
         col = "test-enrichment-code"
         ingest_file_via_path(client, col, str(py_file), api_key=api_key)
 
-        items = _search_with_metadata(client, col, "class DataProcessor", api_key=api_key)
+        items = _search_with_metadata(client, col, "process data items transform result", api_key=api_key)
         assert items, "expected at least one search result after Python file ingest"
 
-        # Every item must have _symbol_type in metadata (CodeEnricher always sets it)
+        # Every item must have _symbol_type in metadata.
+        # CodeEnricher sets _symbol_type when the tree-sitter parse succeeds;
+        # the import guard above ensures the grammar is available.
         for item in items:
             assert "_symbol_type" in item["metadata"], (
                 f"_symbol_type key missing from metadata: {item['metadata']}"
             )
 
-        # The _symbol_type values must be valid code scope types
-        valid_symbol_types = {"function", "method", "class", "module"}
+        # Every chunk is inside DataProcessor so _symbol_type must be "class" or "method".
+        # "module" is excluded because the file has no module-level code.
+        valid_symbol_types = {"method", "class"}
         for item in items:
             symbol_type = item["metadata"]["_symbol_type"]
             assert symbol_type in valid_symbol_types, (
                 f"unexpected _symbol_type value: {symbol_type!r}; "
-                f"expected one of {valid_symbol_types}"
+                f"expected one of {valid_symbol_types} (file has no module-level code)"
             )
 
-        # _module_path must be present (always set by CodeEnricher)
+        # Every chunk is inside DataProcessor, so every item must carry
+        # _containing_class='DataProcessor'. This verifies the _containing_class
+        # field is wired through the full HTTP → pipeline → LanceDB → response path.
+        for item in items:
+            assert item["metadata"].get("_containing_class") == "DataProcessor", (
+                f"expected _containing_class='DataProcessor'; "
+                f"metadata: {item['metadata']}"
+            )
+
+        # _module_path must be present in every item (CodeEnricher always sets it
+        # when the module path is derivable, even when tree-sitter is unavailable).
         for item in items:
             assert "_module_path" in item["metadata"], (
                 f"_module_path key missing from metadata: {item['metadata']}"
