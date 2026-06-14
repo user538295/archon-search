@@ -161,6 +161,21 @@ async def test_incremental_vs_recomputed_routing_equivalence(
         assert meta_b_inc is not None and meta_b_inc.centroid is not None
         assert meta_c_inc is not None and meta_c_inc.centroid is not None
 
+        # Assert centroid_sum VALUES (not just centroid) so off-by-one accumulation bugs
+        # are caught. centroid_sum must equal STUB_VEC * chunk_count for each collection.
+        assert meta_a_inc.centroid_sum is not None, "centroid_sum must be persisted after ingest"
+        assert meta_b_inc.centroid_sum is not None, "centroid_sum must be persisted after ingest"
+        assert meta_c_inc.centroid_sum is not None, "centroid_sum must be persisted after ingest"
+        _assert_vectors_close(
+            meta_a_inc.centroid_sum, [v * meta_a_inc.chunk_count for v in _STUB_VEC]
+        )
+        _assert_vectors_close(
+            meta_b_inc.centroid_sum, [v * meta_b_inc.chunk_count for v in _STUB_VEC]
+        )
+        _assert_vectors_close(
+            meta_c_inc.centroid_sum, [v * meta_c_inc.chunk_count for v in _STUB_VEC]
+        )
+
         incremental_collections = [meta_a_inc, meta_b_inc, meta_c_inc]
 
         # Force-recompute all three
@@ -197,6 +212,14 @@ async def test_incremental_vs_recomputed_routing_equivalence(
         inc_names = [m.name for m in ranked_inc]
         rc_names = [m.name for m in ranked_rc]
 
+        # Guard against a false-positive where both routers return [] (e.g., confidence
+        # gate fired): [] == [] would pass but provide no signal about routing correctness.
+        assert len(inc_names) == 3, (
+            f"Incremental router returned {len(inc_names)} collections, expected 3: {inc_names}"
+        )
+        assert len(rc_names) == 3, (
+            f"Recomputed router returned {len(rc_names)} collections, expected 3: {rc_names}"
+        )
         assert inc_names == rc_names, (
             f"Incremental vs recomputed ranking mismatch: {inc_names} vs {rc_names}"
         )
@@ -386,6 +409,10 @@ async def test_e2e_incremental_centroid_survives_reconnect(
         assert meta_before_disconnect is not None
         assert meta_before_disconnect.centroid_sum is not None
         assert meta_before_disconnect.chunk_count == chunks_batch1
+        # Verify the persisted centroid_sum VALUE (not just non-None) so a bug that
+        # stores all-zeros or wrong sum is caught before the reconnect leg runs.
+        expected_sum_batch1 = [v * chunks_batch1 for v in _STUB_VEC]
+        _assert_vectors_close(meta_before_disconnect.centroid_sum, expected_sum_batch1)
 
     finally:
         # Disconnect the store — simulates a process restart
