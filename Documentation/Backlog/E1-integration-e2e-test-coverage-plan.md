@@ -187,7 +187,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_http_enrichment_metadata.py -v`
 
 #### Task 1.6 — HyDE and RAG-Fusion HTTP integration
-- [ ] **File**: `tests/integration/test_http_hyde_rag_fusion.py`
+- [x] **File**: `tests/integration/test_http_hyde_rag_fusion.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_hyde_kill_switch_returns_hyde_applied_false`: Config `hyde.enabled=false` (kill-switch). POST `/search {hyde: true}`. Assert 200 and `response.hyde_applied == false`.
