@@ -1,8 +1,8 @@
 """Task 1.3 — Multi-collection search and routing HTTP integration.
 
 Exercises the full HTTP layer for multi-collection search fan-out, missing
-collection 404, explain rerank validation, and POST /route with hybrid
-routing strategy.
+collection 404, explain rerank validation (positive and negative), single-
+collection-via-collections boundary, and POST /route with hybrid routing strategy.
 
 Run with:
     uv run pytest tests/integration/test_http_multi_collection.py -v
@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 import archon_search.server.routes_route as _routes_route
+from archon_search.collection_meta import CollectionMeta
 from archon_search.router import MultiCollectionRouter
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
@@ -116,6 +117,9 @@ def test_e2e_multi_collection_missing_collection_returns_404(
         assert resp.status_code == 404, (
             f"expected 404 for missing collection, got {resp.status_code}: {resp.text}"
         )
+        assert "collection" in resp.json().get("detail", "").lower(), (
+            f"404 detail should mention 'collection': {resp.text}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -148,18 +152,105 @@ def test_explain_request_rerank_false_multi_collections_is_422(
 
 
 # ---------------------------------------------------------------------------
+# Test 3b — /explain with rerank=true and two real collections returns 200
+# ---------------------------------------------------------------------------
+
+def test_explain_multi_collection_rerank_true_returns_200(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /explain with collections=['a','b'] and rerank=true (default) returns 200.
+
+    Exercises the positive path complementing the 422 test: verifies that the
+    multi-collection fan-out explain path succeeds and returns the expected
+    response shape when reranking is enabled.
+    """
+    doc_a = tmp_path / "explain_a.md"
+    doc_a.write_text(
+        "# Corpus Alpha\n\nThis document belongs to collection alpha.\n" * 6
+    )
+    doc_b = tmp_path / "explain_b.md"
+    doc_b.write_text(
+        "# Corpus Beta\n\nThis document belongs to collection beta.\n" * 6
+    )
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        col_a = "exp-alpha"
+        col_b = "exp-beta"
+
+        ingest_file_via_path(client, col_a, str(doc_a), api_key=api_key)
+        ingest_file_via_path(client, col_b, str(doc_b), api_key=api_key)
+
+        resp = client.post(
+            "/explain",
+            json={
+                "query": "corpus document collection",
+                "collections": [col_a, col_b],
+                "rerank": True,
+            },
+            headers=_auth(api_key),
+        )
+        assert resp.status_code == 200, (
+            f"expected 200 from multi-collection explain with rerank=true, "
+            f"got {resp.status_code}: {resp.text}"
+        )
+        data = resp.json()
+        assert "results" in data, f"'results' key missing from explain response: {data}"
+
+
+# ---------------------------------------------------------------------------
+# Test 3c — /search with single-element collections list succeeds
+# ---------------------------------------------------------------------------
+
+def test_search_single_collection_via_collections_list_returns_200(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /search with collections=['col'] (single-element list) returns 200.
+
+    Boundary test: a one-element collections list should behave identically to
+    using the single-collection 'collection' field.
+    """
+    doc = tmp_path / "single_col.md"
+    doc.write_text("# Single Collection\n\nContent for single collection boundary test.\n" * 6)
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        col = "mc-single"
+        ingest_file_via_path(client, col, str(doc), api_key=api_key)
+
+        resp = client.post(
+            "/search",
+            json={
+                "collections": [col],
+                "query": "single collection content",
+                "top_k": 5,
+            },
+            headers=_auth(api_key),
+        )
+        assert resp.status_code == 200, (
+            f"expected 200 for single-element collections list, "
+            f"got {resp.status_code}: {resp.text}"
+        )
+        items = resp.json()["results"]
+        assert items, "expected non-empty results for single-collection fan-out"
+        for item in items:
+            assert item["collection"] == col, (
+                f"expected all results from '{col}', got: {item['collection']}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Test 4 — POST /route with hybrid strategy returns 200 and routable collections
 # ---------------------------------------------------------------------------
 
 def test_post_route_hybrid_strategy_returns_200_and_uses_blended_ranking(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Config routing_strategy='hybrid'. Ingest two corpora. POST /route returns 200.
+    """POST /route returns 200 with a hybrid router; both ingested collections appear in routable_names.
 
     Verifies the hybrid routing config is wired end-to-end through the HTTP layer:
-    - The route handler reads routing_strategy from config and passes it to _build_router.
+    - _build_router is called exactly once by the route handler (confirmed via call_count).
     - The returned RouteResponse has the correct shape.
     - Both ingested collections appear in routable_names (Tier 1: ≤3 routable, all returned).
+    - decomposer_invoked is False (Tier 1 does not invoke the decomposer).
     - The hybrid _score_collections path is exercised directly via router.rank() to confirm
       the blending code runs without error when centroid data is present.
 
@@ -170,6 +261,10 @@ def test_post_route_hybrid_strategy_returns_200_and_uses_blended_ranking(
     MultiCollectionRouter.fetch_metadata() makes an HTTP call to the MCP endpoint which
     is unreachable in TestClient ASGI transport. We pre-seed the router with
     initial_metadata from the real store to avoid the network hop.
+
+    Note: cfg.routing_strategy is NOT set here because _build_router is fully replaced by
+    the patch — the config's routing_strategy field is never read by the route handler
+    during this test. The strategy="hybrid" is injected directly by _patched_build_router.
     """
     doc_a = tmp_path / "route_corpus_a.md"
     doc_a.write_text(
@@ -181,8 +276,6 @@ def test_post_route_hybrid_strategy_returns_200_and_uses_blended_ranking(
     )
 
     with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
-        cfg.routing_strategy = "hybrid"
-
         col_a = "route-ml"
         col_b = "route-db"
 
@@ -213,12 +306,19 @@ def test_post_route_hybrid_strategy_returns_200_and_uses_blended_ranking(
                 description_weight=config.routing_description_weight,
             )
 
-        with patch.object(_routes_route, "_build_router", side_effect=_patched_build_router):
+        mock_build_router = MagicMock(side_effect=_patched_build_router)
+        with patch.object(_routes_route, "_build_router", mock_build_router):
             resp = client.post(
                 "/route",
                 json={"query": "machine learning neural networks"},
                 headers=_auth(api_key),
             )
+
+        # Confirm the route handler actually called _build_router
+        assert mock_build_router.call_count == 1, (
+            f"expected _build_router to be called exactly once, "
+            f"got call_count={mock_build_router.call_count}"
+        )
 
         assert resp.status_code == 200, (
             f"expected 200 from /route with hybrid strategy, "
@@ -226,10 +326,16 @@ def test_post_route_hybrid_strategy_returns_200_and_uses_blended_ranking(
         )
         data = resp.json()
 
-        # Response must have the RouteResponse shape
+        # Response must have the RouteResponse shape with correct types
         assert "routable_names" in data, f"routable_names missing from /route response: {data}"
         assert "pinned_names" in data, f"pinned_names missing from /route response: {data}"
         assert "decomposer_invoked" in data, f"decomposer_invoked missing: {data}"
+
+        # Tier 1 (≤3 routable): decomposer is NOT invoked
+        assert data["decomposer_invoked"] is False, (
+            f"expected decomposer_invoked=False for Tier 1 (2 collections), "
+            f"got: {data['decomposer_invoked']}"
+        )
 
         # Both collections were ingested; with ≤3 routable (Tier 1) all must appear
         routable = set(data["routable_names"])
@@ -255,8 +361,15 @@ def test_post_route_hybrid_strategy_returns_200_and_uses_blended_ranking(
             return hybrid_router.rank(query_vector, all_meta)
 
         ranked = asyncio.run(_embed_and_rank())
-        # rank() returns a list of CollectionMeta (possibly empty if confidence gate trims all)
-        # The call itself must not raise — that is the primary assertion
+        # rank() returns a list of CollectionMeta; confidence_threshold=0.0 ensures no gate trim
         assert isinstance(ranked, list), (
             f"hybrid router.rank() must return a list, got: {type(ranked)}"
+        )
+        assert all(isinstance(m, CollectionMeta) for m in ranked), (
+            f"hybrid router.rank() elements must be CollectionMeta, got: {[type(m) for m in ranked]}"
+        )
+        ranked_names = {m.name for m in ranked}
+        assert col_a in ranked_names and col_b in ranked_names, (
+            f"expected both ingested collections in hybrid rank() result; "
+            f"got: {ranked_names}"
         )
