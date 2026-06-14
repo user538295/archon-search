@@ -171,7 +171,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_http_per_collection_model.py -v`
 
 #### Task 1.5 — Content enrichment metadata in HTTP responses
-- [ ] **File**: `tests/integration/test_http_enrichment_metadata.py`
+- [x] **File**: `tests/integration/test_http_enrichment_metadata.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_markdown_heading_flows_through_to_search_response`: Ingest a Markdown file with headings. POST `/search`. Assert response items carry `metadata._heading` and `metadata._section_path` fields.
