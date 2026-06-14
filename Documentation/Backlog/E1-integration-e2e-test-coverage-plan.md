@@ -399,7 +399,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_observability_integration.py -v`
 
 #### Task 6.4 — ACL and namespace isolation integration tests
-- [ ] **File**: `tests/integration/test_acl_namespace_integration.py`
+- [x] **File**: `tests/integration/test_acl_namespace_integration.py`
 - **Depends on**: nothing
 - **Description**:
   **Multi-namespace setup**: These tests require the app to be configured with two distinct API keys mapped to two namespace names. Use `make_real_app` with a custom config override: `config.namespaces = {"key_hex_a": "ns-a", "key_hex_b": "ns-b"}` (use `secrets.token_hex(32)` for each key in tests). Requests for namespace-A use `Authorization: Bearer key_hex_a`; namespace-B use `Authorization: Bearer key_hex_b`. Note: ACL (`acl.py`) is chunk-level access control within a namespace (different from namespace-level isolation). The first two tests verify namespace isolation (collection visibility scoped by bearer token); the third tests ACL field persistence through export/import (data integrity, not enforcement). A test for ACL enforcement post-import (namespace-B cannot see ACL-restricted chunks after import) should be added in a follow-up ACL plan.
