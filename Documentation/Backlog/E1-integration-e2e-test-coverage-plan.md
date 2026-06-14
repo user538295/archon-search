@@ -157,7 +157,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_http_multi_collection.py -v`
 
 #### Task 1.4 — Per-collection embedding model HTTP lifecycle
-- [ ] **File**: `tests/integration/test_http_per_collection_model.py`
+- [x] **File**: `tests/integration/test_http_per_collection_model.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_full_lifecycle_patch_reindex_get`: PATCH `/collections/{name}` to set `active_embedding_model`. Assert 200 with `needs_reindex=True`. POST reindex job. Poll until DONE. GET `/collections/{name}`. Assert `active_embedding_model` promoted from pending.
