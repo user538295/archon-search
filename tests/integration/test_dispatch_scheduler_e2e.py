@@ -32,7 +32,7 @@ from pathlib import Path
 import pytest
 
 import archon_search.jobs.scheduler as _scheduler_module
-from archon_search.types import JobStatus
+from archon_search.types import ImportJob, IngestJob, JobStatus
 from tests.integration.conftest import ingest_file_via_path, make_real_app, search
 
 pytestmark = pytest.mark.integration
@@ -57,7 +57,7 @@ def _poll_job_store(
     job_id: str,
     *,
     timeout_s: float = 30.0,
-) -> object:
+) -> IngestJob:
     """Poll ``job_store.get(job_id)`` until the job reaches a terminal status.
 
     Returns the final job dataclass instance.  Calls ``pytest.fail`` on timeout
@@ -140,16 +140,16 @@ def test_export_job_reaches_done_with_archive_on_disk(
         assert archive_path.exists(), (
             f"expected archive file at {archive_path}; file does not exist"
         )
-        assert archive_path.suffix == ".gz" and ".tar" in archive_path.name, (
+        assert archive_path.name.endswith(".tar.gz"), (
             f"expected a .tar.gz file, got: {archive_path}"
         )
 
         # Open archive and validate manifest.
         with tarfile.open(archive_path, "r:gz") as tf:
             member = tf.getmember("manifest.json")
-            f = tf.extractfile(member)
-            assert f is not None, "manifest.json is not extractable"
-            manifest = json.loads(f.read().decode("utf-8"))
+            with tf.extractfile(member) as f:
+                assert f is not None, "manifest.json is not extractable"
+                manifest = json.loads(f.read().decode("utf-8"))
 
         assert isinstance(manifest, dict), "manifest must be a JSON object"
         assert manifest.get("collection") == col, (
@@ -396,11 +396,10 @@ def test_post_import_unsafe_tar_member_returns_422(
         )
 
         # Confirm no import job was created for this collection.
-        from archon_search.types import ImportJob as _ImportJob
         all_jobs = job_store.list()
         import_jobs_for_col = [
             j for j in all_jobs
-            if isinstance(j, _ImportJob) and j.collection == col
+            if isinstance(j, ImportJob) and j.collection == col
         ]
         assert not import_jobs_for_col, (
             f"expected no import job created for rejected import; "
