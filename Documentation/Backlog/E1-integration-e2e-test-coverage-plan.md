@@ -224,7 +224,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_dispatch_scheduler_e2e.py -v`
 
 #### Task 2.2 — Backup trigger and on-disk verification
-- [ ] **File**: `tests/integration/test_backup_dispatch_e2e.py`
+- [x] **File**: `tests/integration/test_backup_dispatch_e2e.py`
 - **Depends on**: Task 2.1
 - **Description**:
   - `test_backup_trigger_queued_jobs_eventually_complete`: POST `/backup/trigger` against real app with real `SearchStore` and real `dispatch_fn`. **Note on timing**: Apply `monkeypatch.setattr(archon_search.jobs.backup_loop, '_BACKUP_COMPLETION_POLL_SECONDS', 0.1)` BEFORE calling `make_real_app(backup_enabled=True)` — if applied after, the completion loop may already be sleeping 60s before the monkeypatch takes effect. The completion loop sleeps `_BACKUP_COMPLETION_POLL_SECONDS` (default 60s) between drain cycles; reducing to 100ms allows the test to complete within its timeout. Poll `GET /jobs` (max 15s, 100ms interval) until all backup jobs reach `status == 'done'`. Assert `.tar.gz` files appear under the configured `output_dir`.
