@@ -141,7 +141,7 @@ Shared helpers go in `tests/integration/conftest.py` (new file only — do NOT m
   - Checkpoint: `uv run pytest tests/integration/test_http_filters_round_trip.py -v`
 
 #### Task 1.3 — Multi-collection search and routing HTTP integration
-- [ ] **File**: `tests/integration/test_http_multi_collection.py`
+- [x] **File**: `tests/integration/test_http_multi_collection.py`
 - **Depends on**: nothing
 - **Description**:
   - `test_e2e_multi_collection_search_full_stack`: Ingest into two real collections. POST `/search {collections: ['col_a', 'col_b'], query: '...'}`. Assert 200, every result has non-empty `collection` field, results from both collections present.
