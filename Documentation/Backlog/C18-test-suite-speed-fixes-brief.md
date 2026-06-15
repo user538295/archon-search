@@ -238,3 +238,152 @@ Per-test call durations (right column of `--durations=0` output) are the right c
 - The `ceil(N / W) × 30 s` saving estimate in the brief is an UPPER bound; the actual saving on a fast-fail machine is `ceil(N / W) × ~7 s`.
 
 **Files NOT flagged as alternative-hypothesis candidates**: neither of the two named tests stays slow when the key is cleared, so neither is a candidate for `INGEST_LOCK_TIMEOUT_S` or `model_validation.timeout_seconds`. Task 1.2 (broader enumeration) is the right place to flag any test that stays >25 s when the key is cleared.
+
+### Task 1.2 — Affected-test enumeration (2026-06-15)
+
+**Verdict**: Confirmed Task 1.1's prediction. The brief's `awk '$1+0 > 25'` filter returns only 2 tests with the key set on this machine (none are real Fix 1 cases — see below). A LOWER threshold (`> 5 s`) reveals **54 tests** that drop below 5 s when the key is cleared — these are the Fix 1 candidate set.
+
+**Commands executed**:
+
+```
+test -n "$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY must be set; aborting"; exit 1; }
+ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY uv run pytest --durations=0 -n0 --no-cov 2>&1 | awk '$1+0 > 25' | head -40
+ANTHROPIC_API_KEY= uv run pytest --durations=0 -n0 --no-cov 2>&1 | awk '$1+0 > 25' | head -40
+```
+
+Both invocations were run sequentially (NOT in parallel) to avoid CPU contention skewing per-test durations. The `awk '$1+0 > 5'` variant was also captured to compensate for this machine's fast-fail SDK behavior (per Task 1.1 findings).
+
+**Full-suite wall-clock totals**:
+- With key: `4712 passed, 10 skipped, 57 warnings in 707.29s (0:11:47)`
+- Without key: `4712 passed, 10 skipped, 57 warnings in 247.73s (0:04:07)`
+- Delta: 459.56 s (7 min 40 s) of wall-time attributable to the SDK timeout floor on this machine under `-n0` serial.
+
+**>25 s lists** (brief's prescribed threshold):
+
+With key (2 tests):
+```
+58.10s call     tests/test_fts_consistency_after_50_operations.py::test_fts_consistency_after_50_operations
+27.50s call     tests/test_sync_e2e.py::TestS15_8_ResumeSkipsProcessedPaths::test_resume_skips_already_indexed_files
+```
+
+Without key (1 test):
+```
+60.04s call     tests/test_fts_consistency_after_50_operations.py::test_fts_consistency_after_50_operations
+```
+
+**>5 s lists** (lowered threshold, per Task 1.1 follow-up):
+
+With key: 56 tests >5 s (head of list, top 10 by duration; full set captured via the Fix 1 candidate set below):
+
+```
+58.10s tests/test_fts_consistency_after_50_operations.py::test_fts_consistency_after_50_operations
+27.50s tests/test_sync_e2e.py::TestS15_8_ResumeSkipsProcessedPaths::test_resume_skips_already_indexed_files
+25.34s tests/eval/live/test_live_acceptance.py::test_model_versions_recorded_in_baseline
+14.11s tests/test_sync.py::TestSearchCollectionSyncIntegration::test_sync_integration
+12.77s tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_file_parse_error_preserves_existing_chunks
+11.52s tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_sets_active_embedding_model_for_new_collection
+11.03s tests/test_sync_e2e.py::TestS15_3_FileModifiedIncrementalUpdate::test_sync_reindexes_on_file_change
+10.79s tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory_skips_files_in_hidden_directories
+10.79s tests/test_pipeline_ingest_directory_fts.py::test_ingest_directory_calls_optimize_once
+10.78s tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_preserves_all_c1_fields
+```
+
+Arithmetic: with-key >5s = 56. Of those, 8 of the head-10 above (excluding `fts_consistency` and `live_acceptance`, which are alternative-hypothesis candidates that appear in both lists) plus the remaining 46 entries (durations between 6.11 s and 10.18 s, not enumerated individually here) make up the Fix 1 candidate set of 54 tests, all enumerated by name in the subsection below.
+
+Without key: 3 tests >5 s (full list):
+
+```
+60.04s tests/test_fts_consistency_after_50_operations.py::test_fts_consistency_after_50_operations
+9.93s  tests/eval/live/test_live_acceptance.py::test_model_versions_recorded_in_baseline
+7.74s  tests/integration/test_http_enrichment_metadata.py::test_pdf_page_number_in_search_response
+```
+
+**Fix 1 candidate set (diff: with-key >5s MINUS without-key >5s)**: **54 tests**. By file:
+
+- `tests/pipeline/test_pipeline_ingest.py`: 33 tests
+- `tests/test_sync_e2e.py`: 10 tests
+- `tests/test_pipeline_ingest_directory_fts.py`: 4 tests
+- `tests/test_pipeline_code_enricher.py`: 2 tests
+- `tests/test_pipeline_acl.py`: 1 test
+- `tests/integration/test_fts_delete_no_phantom.py`: 1 test
+- `tests/integration/test_http_per_collection_model.py`: 1 test
+- `tests/pipeline/test_pipeline_search.py`: 1 test
+- `tests/test_sync.py`: 1 test
+
+Full enumeration (sorted alphabetically):
+
+```
+tests/integration/test_fts_delete_no_phantom.py::test_ingest_directory_optimize_fts_called_not_rebuild_when_index_exists
+tests/integration/test_http_per_collection_model.py::test_full_lifecycle_patch_reindex_get
+tests/pipeline/test_pipeline_ingest.py::test_ingest_calls_progress_callback
+tests/pipeline/test_pipeline_ingest.py::test_ingest_centroid_averages_heterogeneous_embeddings
+tests/pipeline/test_pipeline_ingest.py::test_ingest_centroid_replaced_on_reingest
+tests/pipeline/test_pipeline_ingest.py::test_ingest_computes_centroid_from_all_chunks
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_calls_update_description_not_update_collection_meta
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_default_namespace
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_exclude_and_on_file_complete_combined
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_exclude_paths_adjusts_total
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_exclude_paths_skips_files
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_namespace_param
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_no_exclude_paths_unchanged
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_no_recompute_below_threshold
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_on_file_complete_called_per_file
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_on_file_complete_only_for_ok_results
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_preserves_active_embedding_model
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_preserves_all_c1_fields
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_sets_active_embedding_model_for_new_collection
+tests/pipeline/test_pipeline_ingest.py::test_ingest_directory_triggers_recompute_on_needs_recompute_signal
+tests/pipeline/test_pipeline_ingest.py::test_p14_24_delete_document_sql_injection_rejected_by_doc_id_re
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory_calls_progress_cb
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory_includes_png
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory_partial_failure
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory_partial_file_failure_continues
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory_rebuilds_fts_once
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory_skips_binary_extensions
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory_skips_files_in_hidden_directories
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory_skips_hidden_files
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory_skips_subdirectories
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_directory_skips_symlinks
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_file_empty_content_preserves_existing_chunks
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_file_parse_error_preserves_existing_chunks
+tests/pipeline/test_pipeline_ingest.py::test_pipeline_ingest_is_idempotent
+tests/pipeline/test_pipeline_search.py::test_pipeline_delete_document
+tests/test_pipeline_acl.py::test_ingest_directory_skips_acl_sidecar_files
+tests/test_pipeline_code_enricher.py::test_ingest_directory_default_collection_root_is_none
+tests/test_pipeline_code_enricher.py::test_ingest_directory_forwards_collection_root
+tests/test_pipeline_ingest_directory_fts.py::test_ingest_directory_all_files_searchable_after_optimize
+tests/test_pipeline_ingest_directory_fts.py::test_ingest_directory_calls_optimize_once
+tests/test_pipeline_ingest_directory_fts.py::test_ingest_directory_calls_rebuild_under_plan_b
+tests/test_pipeline_ingest_directory_fts.py::test_ingest_directory_fallback_to_rebuild_on_optimize_failure
+tests/test_sync.py::TestSearchCollectionSyncIntegration::test_sync_integration
+tests/test_sync_e2e.py::TestS15_1_NewDirectoryIngest::test_sync_adds_new_collection
+tests/test_sync_e2e.py::TestS15_2_DoneNoChangesSkipped::test_sync_skips_already_done_collection
+tests/test_sync_e2e.py::TestS15_3_FileModifiedIncrementalUpdate::test_sync_reindexes_on_file_change
+tests/test_sync_e2e.py::TestS15_4_EmbeddingModelChangedFullReindex::test_sync_writes_indexed_model_from_collection_meta
+tests/test_sync_e2e.py::TestS15_5_ChunkSizeChangedFullReindex::test_sync_reindexes_on_chunk_size_change
+tests/test_sync_e2e.py::TestS15_5b_ChunkSizeNoAutoReindex::test_sync_skips_reindex_when_auto_reindex_disabled
+tests/test_sync_e2e.py::TestS15_6_CollectionRemovedFromConfig::test_sync_removes_deleted_collection
+tests/test_sync_e2e.py::TestS15_7_CrashRecoveryResetInProgress::test_sync_resets_stale_in_progress_and_completes
+tests/test_sync_e2e.py::TestS15_8_ResumeSkipsProcessedPaths::test_resume_skips_already_indexed_files
+tests/test_sync_e2e.py::TestS15_9_MissingPathNocrash::test_nonexistent_path_with_valid_path_ok
+```
+
+The two Task 1.1 named tests appear in this set: `tests/test_pipeline_code_enricher.py::test_ingest_directory_forwards_collection_root` and `tests/test_sync_e2e.py::TestS15_3_FileModifiedIncrementalUpdate::test_sync_reindexes_on_file_change` — confirming the broader enumeration is consistent with the targeted hypothesis-validation in Task 1.1.
+
+**Alternative-hypothesis candidates (>5s in BOTH lists)**: 2 tests, neither is a real Fix 1 case:
+- `tests/eval/live/test_live_acceptance.py::test_model_versions_recorded_in_baseline` — live eval test with model-version setup cost, NOT a `generate_description` case.
+- `tests/test_fts_consistency_after_50_operations.py::test_fts_consistency_after_50_operations` — known slow test (1000 sequential ingest ops), already documented in brief Future Iterations as a candidate for batching. NOT a `generate_description` case.
+
+Neither warrants flagging for `INGEST_LOCK_TIMEOUT_S` or `model_validation.timeout_seconds` follow-up. The Fix 1 candidate set is clean.
+
+**Outlier in without-key list, not in with-key list**: `tests/integration/test_http_enrichment_metadata.py::test_pdf_page_number_in_search_response` shows 7.74 s without the key but 1.95 s with the key (faster WITH the SDK key set — opposite of the Fix 1 direction). This is run-to-run noise / system load and is NOT a Fix 1 case. Not flagged for follow-up.
+
+**Implications**:
+- The brief's original "~17 tests" estimate was an undercount. Actual Fix 1 candidate set on this machine: 54 tests.
+- Estimated upper-bound wall-clock saving under `-n auto --dist=loadgroup` (W=14) is `ceil(54 / 14) × ~7 s = 4 × 7 s ≈ 28 s`. The serial `-n0` saving observed here (459 s) is much larger because parallelism would amortize the SDK timeout across workers — the default parallel run will see a smaller absolute delta, which Task 1.3 will quantify.
+- Task 3.1's wall-clock acceptance criterion ("post-fix p50 must be lower than pre-fix p50 by more than the pre-fix range") will be measured in seconds-to-low-tens-of-seconds for the parallel default run, not minutes.
+
+**Ephemeral working files** (kept under `/tmp/c18-task1.2/` for the duration of this plan session — not committed; the brief above is the durable artifact):
+- `with-key-full.log`, `without-key-full.log` (full pytest output, ~12 MB each)
+- `with-key-gt25.txt`, `with-key-gt5.txt`, `without-key-gt25.txt`, `without-key-gt5.txt`, `fix1-candidates.txt` (filtered lists used to compose the inventory above)

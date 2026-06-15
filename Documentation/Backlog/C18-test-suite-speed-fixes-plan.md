@@ -166,7 +166,7 @@ No new modules, classes, functions, config keys, env vars, or API surface change
 - **Checkpoint**: above command run; per-test wall time recorded.
 
 #### Task 1.2 — Enumerate affected tests (real list, with and without key)
-- [ ] **File**: N/A (verification command; output captured as plan artifact)
+- [x] **File**: N/A (verification command; output captured as plan artifact)
 - **Depends on**: nothing
 - **Description**:
   - A real `ANTHROPIC_API_KEY` is REQUIRED for the with-key invocation. Fake keys may fail-fast at the SDK level and produce no enumeration (brief: "SDK fast-fail vs hang for fake/malformed keys").
