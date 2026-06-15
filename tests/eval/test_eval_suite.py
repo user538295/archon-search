@@ -483,6 +483,7 @@ def test_eval_includes_page_provenance_query() -> None:
 
 
 @pytest.mark.eval
+@pytest.mark.xdist_group("docling")
 async def test_eval_page_provenance_pdf_has_page_metadata(tmp_path: Path) -> None:
     """The page_provenance_001 PDF document produces chunks with _page_start metadata after ingest.
 

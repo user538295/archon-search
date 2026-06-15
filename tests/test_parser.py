@@ -354,6 +354,7 @@ def test_parse_with_docling_kwarg_passes_page_break_marker(
 
 
 @pytest.mark.integration
+@pytest.mark.xdist_group("docling")
 def test_parse_with_docling_emits_page_marker(three_page_pdf: Path) -> None:
     """Integration: parser output from a real three-page PDF contains at least one PAGE_BREAK_MARKER.
 

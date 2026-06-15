@@ -100,6 +100,7 @@ def test_markdown_heading_flows_through_to_search_response(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docling")
 def test_pdf_page_number_in_search_response(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -233,6 +234,7 @@ def test_code_symbol_metadata_in_search_response(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("docling")
 def test_image_file_assigns_page_start_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
