@@ -93,6 +93,8 @@ def _archon_isolated_data_dir(
 
     `ARCHON_SEARCH_API_KEY` is intentionally NOT cleared — it is set globally above
     for auth test infrastructure and must remain set for all tests.
+    `ANTHROPIC_API_KEY` IS cleared by a separate block below — see the inline
+    comment for the SDK-timeout motivation.
     """
     for var in (
         "ARCHON_SEARCH_HOST",
@@ -102,6 +104,24 @@ def _archon_isolated_data_dir(
         "ARCHON_SEARCH_CONFIG",
     ):
         monkeypatch.delenv(var, raising=False)
+
+    # ANTHROPIC_API_KEY is a third-party vendor key (not archon-namespace).
+    # When developers have it exported in their shell, every test that calls
+    # `ingest_directory` on a new collection triggers `generate_description`,
+    # which then sits in a 30 s asyncio.wait_for around the Claude SDK.
+    # Clearing it here lets `description_generator.generate_description`,
+    # `hyde.HyDEGenerator.generate`, and `rag_fusion.RAGFusionGenerator.generate_variants`
+    # short-circuit on their early-exit guards (each module has an
+    # `os.environ.get("ANTHROPIC_API_KEY")` check that returns early when the key
+    # is unset). Tests that need the key set use `monkeypatch.setenv` themselves —
+    # setenv runs after this delenv, so the per-test override wins.
+    # Uses raising=False so this is a no-op when the key is absent (CI, fresh
+    # shells, tests that already cleared it themselves). Downside: if the SDK
+    # ever renames ANTHROPIC_API_KEY upstream, this line becomes dead and the
+    # 30 s floor returns — the guard-existence test in
+    # tests/test_anthropic_key_guards.py mitigates that risk.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
     if "archon_unset_data_dir" in request.keywords:
         monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
     else:

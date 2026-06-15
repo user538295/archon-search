@@ -245,7 +245,7 @@ No new modules, classes, functions, config keys, env vars, or API surface change
 > **Releasable**: after Task 2.1, developer wall-clock benefits from Fix 1 when `ANTHROPIC_API_KEY` is exported in the shell. The 30 s SDK floor is removed by the autouse `delenv` on every test; the three production guards in `description_generator.py:76`, `hyde.py:101`, `rag_fusion.py:138` short-circuit immediately. After Task 2.2, regression tests protect this contract: three parametrized tests assert each production early-exit guard still exists, a post-condition check (catches regressions only when the key is set in the developer's shell) plus a genuine composition-rule test that works in all environments — together they ensure a silent regression in either layer fails CI loudly.
 
 #### Task 2.1 — Add `ANTHROPIC_API_KEY` delenv block to `_archon_isolated_data_dir`
-- [ ] **File**: `tests/conftest.py`
+- [x] **File**: `tests/conftest.py`
 - **Depends on**: Task 1.1, Task 1.2, Task 1.3, Task 1.4 (per the brief: "Steps 1-4 MUST complete BEFORE making any code change")
 - **Description**:
   - In the existing autouse fixture body (currently lines 84–108), add a dedicated block AFTER the 5-tuple `for var in (...)` loop (line 97–104) and BEFORE the `if "archon_unset_data_dir" in request.keywords` branch (line 105).
