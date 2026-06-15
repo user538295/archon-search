@@ -387,3 +387,50 @@ Neither warrants flagging for `INGEST_LOCK_TIMEOUT_S` or `model_validation.timeo
 **Ephemeral working files** (kept under `/tmp/c18-task1.2/` for the duration of this plan session — not committed; the brief above is the durable artifact):
 - `with-key-full.log`, `without-key-full.log` (full pytest output, ~12 MB each)
 - `with-key-gt25.txt`, `with-key-gt5.txt`, `without-key-gt25.txt`, `without-key-gt5.txt`, `fix1-candidates.txt` (filtered lists used to compose the inventory above)
+
+### Task 1.3 — Pre-fix baseline wall-clock, default parallel mode (2026-06-15)
+
+**Verdict**: Baseline captured. p50 = 167.59 s; run-to-run range = 57.78 s. The range is large relative to the estimated Fix 1 saving (~28 s upper bound per Task 1.2), which means Task 3.1's "delta > range" acceptance gate is going to be hard to clear honestly — see Implications below.
+
+**Machine**: M-series Apple Silicon, 14 logical CPUs. Running inside the Claude Code agent harness. `ANTHROPIC_API_KEY` set in shell. No other heavy processes running. Default `addopts` from `pyproject.toml` apply (`-n auto --dist=loadgroup`, coverage disabled via `--no-cov` per the protocol).
+
+**Command** (per Measurement Protocol, with the brief's precondition guard):
+
+```
+test -n "$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY must be set; aborting"; exit 1; }
+ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY uv run pytest --no-cov 2>&1 | tail -3
+```
+
+**Runs** (1 warm-up discarded; 5 measured):
+
+| Run | Wall-clock | Outcome |
+|---|---|---|
+| Warm-up (discarded) | 176.88 s | 1 failed (flake: `test_full_lifecycle_patch_reindex_get`), 4712 passed, 9 skipped |
+| 1 | 148.57 s | 4713 passed, 9 skipped |
+| 2 | 167.59 s | 4713 passed, 9 skipped |
+| 3 | 206.35 s | 1 failed (same flake), 4712 passed, 9 skipped |
+| 4 | 165.92 s | 4713 passed, 9 skipped |
+| 5 | 189.66 s | 4713 passed, 9 skipped |
+
+**Statistics over the 5 measured runs** (sorted: 148.57, 165.92, 167.59, 189.66, 206.35):
+
+- min: 148.57 s
+- max: 206.35 s
+- **p50 (median): 167.59 s**
+- **range (max − min): 57.78 s**
+- mean: 175.62 s
+
+**Pre-existing flake observation**: `tests/integration/test_http_per_collection_model.py::test_full_lifecycle_patch_reindex_get` failed in 2 of the 6 runs (warm-up + run 3) at `pipeline.py:429` with `job did not reach a terminal state within 15.0s`. Same failure mode both times. This is a pre-existing timing race in the test, unrelated to Fix 1 and outside this plan's scope (the brief's "Out of Scope" section already excludes pre-existing flakiness fixes). The flake adds wall-clock variance but does not invalidate the baseline measurements — both failing runs ran the entire suite and reported a wall-clock total. **Note for Task 3.1**: Run 3 (206.35 s) is the max of the 5 measured runs and contains the flake; its 15 s job-timeout plus collection / teardown overhead likely contribute to the elevated wall-clock. If the same flake reproduces in post-fix runs, the post-fix range will similarly inflate. The honest comparison is across runs that exhibit the same flake count — Task 3.1 should record per-run flake outcomes and, if the flake count differs between pre-fix and post-fix, document the asymmetry rather than papering over it.
+
+**Implications for Task 3.1's wall-clock acceptance criterion**:
+
+- The pre-fix range (57.78 s) is roughly **2× the Task 1.2 upper-bound saving estimate (~28 s)**. The acceptance gate "post-fix p50 LOWER than pre-fix p50 by MORE than the pre-fix range" therefore demands a >57.78 s improvement from a fix whose theoretical upper-bound saving is ~28 s on this machine — structurally unlikely to clear.
+- This is the brief's intended behavior: the protocol prefers an honest "noisy, no signal" outcome over an over-claimed improvement. If Task 3.1's post-fix p50 lands within the noise band, the documented outcome is "wall-clock outcome INCONCLUSIVE for this acceptance criterion" (Task 3.1 spec line 362) and the remaining criteria (collected count, pass-count, coverage, diff scope, docs) still gate the task.
+- The noise floor of 57.78 s is dominated by run-to-run variance in the default parallel run, NOT by the SDK timeout. The Task 1.2 serial measurement (459 s saving under `-n0`) is amortized across 14 workers under `-n auto`, and the per-worker variance from CPU scheduling, model-cache warmth, and the flake recovery in run 3 (the warm-up was discarded and does not contribute to the 5-run range) dominates the per-test saving.
+- The acceptance gate may need to be supplemented with a post-fix p50 + range check that explicitly accounts for this 57.78 s noise floor. Task 3.1's spec already covers this: "If post-fix range exceeds 30s, capture 5 more runs to reduce dispersion before claiming improvement. If after 10 total post-fix runs the range still exceeds 30s, record the wall-clock outcome as INCONCLUSIVE for this acceptance criterion and proceed with the remaining Task 3.1 criteria."
+
+**Implication for noise gate**: pre-fix range (57.78 s) is itself > 30 s, so the task spec already anticipates this — the wall-clock gate is INCONCLUSIVE territory before Task 3.1 even runs.
+
+**Ephemeral working files** (kept under `/tmp/c18-task1.3/` for the duration of this plan session — not committed; the brief above is the durable artifact):
+- `warmup.log`, `run1.log`, `run2.log`, `run3.log`, `run4.log`, `run5.log` (full pytest stdout per run)
+- `warmup-start.txt`, `warmup-end.txt`, `run{1..5}-{start,end}.txt` (epoch timestamps recorded around each invocation; cross-check against pytest's self-reported wall-clock)

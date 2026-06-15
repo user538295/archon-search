@@ -187,7 +187,7 @@ No new modules, classes, functions, config keys, env vars, or API surface change
 - **Checkpoint**: both outputs captured (in full, not truncated) and saved into the plan artifact referenced by Task 3.1.
 
 #### Task 1.3 — Capture baseline wall-clock (1 warm-up + 5 measured runs, p50)
-- [ ] **File**: N/A (verification command; output captured as plan artifact)
+- [x] **File**: N/A (verification command; output captured as plan artifact)
 - **Depends on**: nothing
 - **Description**:
   - Per the brief's Measurement Protocol:
