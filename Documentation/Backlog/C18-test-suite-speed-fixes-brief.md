@@ -434,3 +434,71 @@ ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY uv run pytest --no-cov 2>&1 | tail -3
 **Ephemeral working files** (kept under `/tmp/c18-task1.3/` for the duration of this plan session — not committed; the brief above is the durable artifact):
 - `warmup.log`, `run1.log`, `run2.log`, `run3.log`, `run4.log`, `run5.log` (full pytest stdout per run)
 - `warmup-start.txt`, `warmup-end.txt`, `run{1..5}-{start,end}.txt` (epoch timestamps recorded around each invocation; cross-check against pytest's self-reported wall-clock)
+
+### Task 1.4 — Pre-change collected count, pass count, targeted pass/skip, coverage baseline (2026-06-15)
+
+**Verdict**: All four pre-change baselines captured. Task 3.1 will use these as the exact-equality / bounded-delta gates.
+
+**Machine**: M-series Apple Silicon, 14 logical CPUs. Running inside the Claude Code agent harness. `ANTHROPIC_API_KEY` set in shell.
+
+**Total collected count**:
+
+Command:
+```
+uv run pytest --collect-only -q 2>&1 | tail -3
+```
+
+Output (trailing line): `4722 tests collected in 6.08s`
+
+**Baseline: 4722 tests collected.** Task 3.1's collected-count gate is `4722 + 5 = 4727` (the 5 added by Task 2.2: 3 parametrized guard tests + 2 composition tests).
+
+**Full-suite passed count** (extracted from Task 1.3 run 2 — the p50 run, per plan Task 1.4 instructions: "Extract this from one of the 5 Task 1.3 measured runs — DO NOT run the full suite again"):
+
+Task 1.3 run 2 trailing summary: `4713 passed, 9 skipped`. The same `4713 passed, 9 skipped` result was observed in runs 1, 2, 4, and 5 (4 of the 5 measured runs); run 3 and the warm-up had the pre-existing `test_full_lifecycle_patch_reindex_get` flake and reported `1 failed, 4712 passed, 9 skipped`. The 4713-passed line is the modal pass count.
+
+**Baseline: 4713 passed, 9 skipped.** Task 3.1's pass-count band is `[4713, 4713 + 5] = [4713, 4718]`:
+- +5 for the 3 guard tests + 2 composition tests added by Task 2.2 (all pass).
+- −5 for the 5 `test_live_rag_fusion.py` tests at lines 137, 181, 241, 376, 441 that gate on `ANTHROPIC_API_KEY` and will always skip after Fix 1.
+- Net upper bound: Task 1.4 passed + 5 = 4718. Net lower bound: Task 1.4 passed = 4713 (when both effects fully offset, the modal pass count holds steady).
+
+**Targeted pass/skip count for env-var-entangled files** (these are the files Task 3.1's targeted regression check will re-run):
+
+Command:
+```
+uv run pytest tests/test_hyde.py tests/test_rag_fusion.py tests/test_description_generator.py tests/integration/test_wizard_e2e.py tests/test_e2e_wizard_optional_features.py tests/test_install_wizard_features.py --no-cov -n0 2>&1 | tail -1
+```
+
+Output: `============================= 152 passed in 0.93s ==============================`
+
+**Baseline: 152 passed, 0 skipped, 0 failed across the 6 env-var-entangled files** (`test_hyde.py`, `test_rag_fusion.py`, `test_description_generator.py`, `test_wizard_e2e.py`, `test_e2e_wizard_optional_features.py`, `test_install_wizard_features.py`). Task 3.1's targeted regression check must observe the same `152 passed` line — pytest omits the "0 skipped" / "0 failed" tokens from the trailing summary when those counts are zero, so the literal pass→skip-shift regression signal is any trailing summary that does NOT match `152 passed in *s` (e.g. `151 passed, 1 skipped`, `150 passed, 2 failed`, etc.).
+
+**Per-module coverage of `description_generator.py`** (baseline for Task 3.1's coverage criterion):
+
+Command:
+```
+test -n "$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY must be set; aborting"; exit 1; }
+ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY uv run pytest 2>&1 | grep description_generator
+```
+
+Output: `archon_search/description_generator.py          57      3    95%   124, 128-129`
+
+Trailing summary of the same run (for context): `=========== 4713 passed, 9 skipped, 57 warnings in 176.03s (0:02:56) ===========`, `TOTAL                                        11860    784    93%`, `Required test coverage of 85% reached. Total coverage: 93.39%`.
+
+This Task 1.4 coverage run is a 6th full-suite invocation, structurally distinct from the 5 measured Task 1.3 runs (which used `--no-cov` per the Measurement Protocol and are the only inputs to the wall-clock p50). It is NOT counted in the Task 1.3 wall-clock distribution. Its 176.03 s wall-clock landed inside the Task 1.3 baseline range (148.57–206.35 s), informally consistent with the baseline distribution and ruling out the concern that the machine changed speed between Task 1.3 and Task 1.4.
+
+**Baseline: `description_generator.py` per-module coverage = 95% (57 statements, 3 missed lines: 124, 128-129).** The missing lines are inside the SDK exception handlers, exercised only by the `ClaudeSDKClient`-mocked tests in `test_description_generator.py`. Task 3.1's coverage gate: post-fix coverage must not drop by more than 5 percentage points from this baseline (i.e. post-fix must be ≥ 90%). If it does, Task 3.1 requires adding a dedicated `monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")` + `ClaudeSDKClient` mock test that asserts the SDK-call path executes.
+
+**Summary table** (Task 1.4 baselines for Task 3.1's exact-equality / bounded-delta gates):
+
+| Metric | Pre-fix baseline | Task 3.1 gate |
+|---|---|---|
+| Total collected tests | 4722 | exact equality with `4722 + 5 = 4727` |
+| Full-suite `passed` count | 4713 | within `[4713, 4718]` |
+| Targeted env-var-entangled files | 152 passed, 0 skipped | exact equality (`152 passed`) |
+| `description_generator.py` coverage | 95% (57 stmts, 3 missed) | drop ≤ 5 pp (≥ 90%) |
+| Global coverage gate | 93.39% (≥ 85% required) | still passes |
+
+**Ephemeral working files** (kept under `/tmp/c18-task1.4/` for the duration of this plan session — not committed; the brief above is the durable artifact):
+- `collect-only.log` — full `--collect-only -q` stdout
+- `targeted.log` — full `tests/test_hyde.py … --no-cov -n0` stdout
+- `full-with-coverage.log` — full `uv run pytest 2>&1` stdout including the per-module coverage report
