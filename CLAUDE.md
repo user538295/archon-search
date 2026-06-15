@@ -148,3 +148,29 @@ Topic-specific entry points:
 | End-user / operator guides | `Documentation/UserManual/` |
 
 When generating, refactoring, or reviewing code: open the relevant Architecture doc first for context, then verify against source. When making a behavior change that the docs describe (auth, telemetry, routing, schemas, API surface), update the docs in the same PR. ADRs are append-only — supersede with a new ADR rather than editing accepted ones.
+
+## Memory and Learning
+
+**Before starting any task:**
+You MUST Read `learnings.md` in full. Apply all entries under "What Has Worked"
+and "Patterns and Preferences." Avoid all patterns listed under
+"What Has Failed."
+
+**After completing any task:**
+You MUST Update `learnings.md` with new observations using this format:
+
+**[Date] — [Task type]**
+- Observation: [what you noticed]
+- Action: [what to do or avoid going forward]
+- Confidence: [high / medium / low]
+
+Be specific. "Avoid relative imports in /utils — the build step
+resolves them incorrectly" is useful. "Be careful with imports" is not.
+
+Do not add:
+- Observations already captured in the file
+- General best practices (only project-specific ones)
+- Redundant restatements of existing entries
+
+You MUST update `learnings.md` before ending the session. This is required even if nothing new was discovered. If existing patterns held, add a brief note confirming that.
+
