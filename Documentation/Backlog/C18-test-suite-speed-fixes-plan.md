@@ -276,7 +276,7 @@ No new modules, classes, functions, config keys, env vars, or API surface change
     - Checkpoint: `git diff tests/conftest.py` MUST include the new `monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)` block AND MUST NOT modify the existing 5-tuple loop, the fixture signature, the fixture scope, or the `archon_unset_data_dir` branch. Permitted in scope: updating the existing fixture docstring to reflect the new behavior.
 
 #### Task 2.2 — Add guard-existence regression tests AND autouse-firing proof tests
-- [ ] **File**: `tests/test_anthropic_key_guards.py` (new file). Note: the file name does NOT follow the `test_no_*` convention used by other static-invariant tests because this file contains both static (guard-existence) and runtime (composition) tests — the `test_no_*` naming would mislead about scope. Standalone `test_anthropic_key_guards.py` accurately describes the file's purpose.
+- [x] **File**: `tests/test_anthropic_key_guards.py` (new file). Note: the file name does NOT follow the `test_no_*` convention used by other static-invariant tests because this file contains both static (guard-existence) and runtime (composition) tests — the `test_no_*` naming would mislead about scope. Standalone `test_anthropic_key_guards.py` accurately describes the file's purpose.
 - **Depends on**: Task 2.1
 - **Description**:
   - Create a small dedicated test file with two test purposes:
