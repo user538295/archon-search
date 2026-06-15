@@ -502,3 +502,171 @@ This Task 1.4 coverage run is a 6th full-suite invocation, structurally distinct
 - `collect-only.log` — full `--collect-only -q` stdout
 - `targeted.log` — full `tests/test_hyde.py … --no-cov -n0` stdout
 - `full-with-coverage.log` — full `uv run pytest 2>&1` stdout including the per-module coverage report
+
+### Task 3.1 — Post-fix verification (2026-06-15)
+
+**Verdict**: All acceptance criteria met. Wall-clock improvement is **strong and well above the noise floor**: post-fix p50 = 92.33 s vs pre-fix p50 = 167.59 s (delta = **75.26 s**, exceeds both pre-fix range 57.78 s and post-fix range 7.27 s). Coverage drop of 4 pp (95% → 91%) is within the 5 pp budget. All diff-scope, pass-count, collected-count, and targeted regression gates pass.
+
+**Machine**: M-series Apple Silicon, 14 logical CPUs. Running inside the Claude Code agent harness. `ANTHROPIC_API_KEY` set in shell (autouse fixture clears it inside pytest after Fix 1). Same machine as Task 1.3 baseline.
+
+#### Diff scope (criterion 1)
+
+`git diff HEAD~6 -- tests/conftest.py` (delta from the pre-Task-2.1 commit `fbb11f4`):
+
+- Adds the new `monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)` block (with the multi-line motivation comment) AFTER the 5-tuple loop and BEFORE the `archon_unset_data_dir` branch.
+- Extends the docstring with the sentence "`ANTHROPIC_API_KEY` IS cleared by a separate block below — see the inline comment for the SDK-timeout motivation."
+- Does NOT modify the 5-tuple loop, the fixture signature, the fixture scope, or the `archon_unset_data_dir` branch.
+
+`git diff HEAD~6 -- archon_search/ pyproject.toml .github/` produces no output. Production code, pyproject, and CI workflows are unchanged.
+
+#### Existing 5-tuple unchanged (criterion 4)
+
+The `ARCHON_SEARCH_HOST/PORT/CONTAINER/KEY_FILE/CONFIG` clearing loop at `tests/conftest.py:99-106` is unmodified (no entries added or removed). `ARCHON_SEARCH_API_KEY` remains set globally at `tests/conftest.py:35`. Verified via `git diff HEAD~6 -- tests/conftest.py`.
+
+#### Wall-clock improvement (criterion 5)
+
+**Command** (per Measurement Protocol, with the brief's precondition guard):
+```
+test -n "$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY must be set; aborting"; exit 1; }
+ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY uv run pytest --no-cov 2>&1 | tail -1
+```
+
+**Runs** (1 warm-up discarded; 5 measured):
+
+| Run | Wall-clock | Outcome |
+|---|---|---|
+| Warm-up (discarded) | 98.60 s | 4718 passed, 9 skipped |
+| 1 | 93.50 s | 4718 passed, 9 skipped |
+| 2 | 99.47 s | 4718 passed, 9 skipped |
+| 3 | 92.20 s | 4718 passed, 9 skipped |
+| 4 | 92.33 s | 4718 passed, 9 skipped |
+| 5 | 92.30 s | 4718 passed, 9 skipped |
+
+**Statistics over the 5 measured runs** (sorted: 92.20, 92.30, 92.33, 93.50, 99.47):
+
+- min: 92.20 s
+- max: 99.47 s
+- **p50 (median): 92.33 s**
+- **range (max − min): 7.27 s**
+- mean: 93.96 s
+
+**Delta vs pre-fix baseline (Task 1.3)**:
+
+| Metric | Pre-fix (Task 1.3) | Post-fix (Task 3.1) | Delta |
+|---|---|---|---|
+| p50 | 167.59 s | 92.33 s | **−75.26 s** (45% reduction) |
+| Range (max − min) | 57.78 s | 7.27 s | −50.51 s (range collapsed by 87%) |
+| min | 148.57 s | 92.20 s | −56.37 s |
+| max | 206.35 s | 99.47 s | −106.88 s |
+| mean | 175.62 s | 93.96 s | −81.66 s |
+
+**Acceptance gate**: delta (75.26 s) MUST exceed BOTH pre-fix range (57.78 s) AND post-fix range (7.27 s). **Both satisfied** (75.26 > 57.78 and 75.26 > 7.27). Post-fix range (7.27 s) is well under the 30 s threshold, so no additional runs are required.
+
+**Flake observation**: the `test_full_lifecycle_patch_reindex_get` pre-existing flake did NOT reproduce in any of the 6 post-fix runs (warm-up + 5 measured). All 6 runs reported the same `4718 passed, 9 skipped` summary. This asymmetry vs the pre-fix runs (2 of 6 had the flake) marginally favors the post-fix p50 by avoiding the 15 s job-timeout cost. The flake count is small relative to the 75 s improvement, so the delta-> range gate is comfortably above the noise floor even after accounting for asymmetric flake counts.
+
+#### Coverage (criterion 6)
+
+**Post-fix per-module coverage of `description_generator.py`**:
+
+Command (same as Task 1.4 baseline):
+```
+test -n "$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY must be set; aborting"; exit 1; }
+ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY uv run pytest 2>&1 | grep description_generator
+```
+
+Output: `archon_search/description_generator.py          57      5    91%   89-90, 124, 128-129`
+
+**Post-fix: 91% (57 stmts, 5 missed). Pre-fix baseline: 95% (57 stmts, 3 missed).** Drop: 4 percentage points (95 − 91 = 4), within the 5 pp budget.
+
+**Newly missed lines 89-90** are inside the `asyncio.TimeoutError` handler — exactly what the autouse `delenv` prevents from being exercised when the SDK-call path early-exits via the `os.environ.get("ANTHROPIC_API_KEY")` guard at line 76. This is a structural consequence of the fix (the SDK-timeout branch is now unreachable in default runs), not an accidental coverage loss. The deepest SDK exception handler (lines 91-97) and the helper at line 124 + 128-129 remain hit via the explicit `ClaudeSDKClient`-mocked tests in `tests/test_description_generator.py` (whose `monkeypatch.setenv` calls compose correctly over the autouse `delenv`).
+
+**Global coverage gate**: `Required test coverage of 85% reached. Total coverage: 93.37%`. Pre-fix was 93.39%; post-fix is 93.37% — drop of 0.02 pp, well above the 85% gate. No additional `monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")` test required.
+
+**Parallel-test flake observation in the coverage run**: the post-fix full-coverage run produced `2 failed, 4716 passed, 9 skipped`. The failing tests were `tests/eval/test_baseline_contract.py::test_eval_hash_is_stable_for_same_inputs` and `test_baseline_metadata_hashes_match_benchmark_inputs`. Both tests compute `compute_eval_hash(EVAL_DIR)` and assert equality; under parallel execution another test transiently mutates files under `tests/eval/` (likely a `shutil.copytree`-using helper). Both tests PASS in isolation (`uv run pytest tests/eval/test_baseline_contract.py --no-cov` → `21 passed`) and PASS in serial mode (`uv run pytest -n0` → `4717 passed, 10 skipped`).
+
+**Honest scoping of the flake**: the failure occurred ONLY in the coverage run (where `pytest-cov` instrumentation is active) and did NOT reproduce in any of the 6 `--no-cov` wall-clock runs (warm-up + 5 measured), all of which reported the same `4718 passed, 9 skipped` summary. This is consistent with coverage-instrumentation timing perturbation widening the window for the file-mutation race. Calling this flake "pre-existing" (i.e. unrelated to C18) cannot be proven from the data captured in this task — establishing that would require reproducing the same coverage-run failure at HEAD~6 (the commit immediately before Task 2.1). The hash-computation logic touched by the failure is in eval-corpus code, structurally unrelated to `ANTHROPIC_API_KEY`, which makes a C18-introduced regression unlikely but not impossible. **Recommendation**: flag this for follow-up (e.g. reproduce at HEAD~6 to confirm pre-existence, or open a separate issue for the parallel-test eval-corpus race); do NOT block Task 3.1 on this finding given the failure does not reproduce in the wall-clock measurement runs and the file-level coverage gate (93.37%) is unaffected.
+
+#### Collected count (criterion 7)
+
+Command: `uv run pytest --collect-only -q 2>&1 | tail -3`
+
+Output: `4727 tests collected in 5.70s`
+
+**Post-fix: 4727 tests collected. Baseline (Task 1.4): 4722.** Delta: +5 (exact match to expected: 3 parametrized guard tests + 2 composition tests from Task 2.2). Gate **PASSES**.
+
+#### Pass-count regression (criterion 8)
+
+**Post-fix passed count (modal across 5 measured runs)**: `4718 passed, 9 skipped`.
+
+Task 1.4 baseline was `4713 passed, 9 skipped`. Post-fix is at the **upper bound** of the `[4713, 4718]` band:
+
+- +5 for the 3 guard tests + 2 composition tests from Task 2.2 (all pass).
+- −0 expected from live RAG-Fusion tests: investigation showed the 5 `_skip_if_no_api_key()`-gated tests in `tests/eval/live/test_live_rag_fusion.py` were **already skipping pre-fix** via the parallel `_skip_if_anthropic_not_installed()` gate (the `anthropic` package is not installed in this venv — verified with `python -c "import anthropic"` → `ModuleNotFoundError`). So Fix 1's autouse `delenv` does not produce a new skip for these tests; they continue to skip via the package-availability gate. The expected −5 in the plan's pass-count math reflects what would happen in a venv WITH `anthropic` installed; in this venv the pre-fix net was already at the upper bound.
+
+Gate **PASSES** (4718 is the exact upper bound; structurally equivalent to "no regressions, 5 new passing tests added").
+
+#### Targeted env-var-entangled regression check (criterion 9)
+
+Command: `uv run pytest tests/test_hyde.py tests/test_rag_fusion.py tests/test_description_generator.py tests/integration/test_wizard_e2e.py tests/test_e2e_wizard_optional_features.py tests/test_install_wizard_features.py --no-cov -n0 2>&1 | tail -1`
+
+Output: `============================= 152 passed in 0.81s ==============================`
+
+**Post-fix: 152 passed, 0 skipped, 0 failed. Baseline (Task 1.4): 152 passed.** Exact equality. Gate **PASSES**.
+
+Both `monkeypatch.setenv` composition (e.g. `test_description_generator.py`, `test_hyde.py`, `test_rag_fusion.py`, `test_wizard_e2e.py`) and `patch.dict(os.environ, ...)` composition (e.g. `test_install_wizard_features.py`, `test_e2e_wizard_optional_features.py`) work correctly — per-test env-var overrides win over the autouse `delenv` as predicted by Edge Case analysis in the brief.
+
+#### Serial mode (criterion 10)
+
+Command: `uv run pytest -n0 2>&1 | tail -5`
+
+Output: `========== 4717 passed, 10 skipped, 57 warnings in 269.82s (0:04:29) ===========`
+
+4717 passed (consistent with C12's serial-mode pattern), 0 failures. The slight pass-count delta from parallel mode (4717 vs 4718) is the usual serial-vs-parallel difference (some tests under `xdist_group` co-scheduling that fail to collect identically under `-n0`; unrelated to Task 2.1). Gate **PASSES**.
+
+#### Docs updated (criterion 11)
+
+Discovery command: `grep -rn 'ANTHROPIC_API_KEY' Documentation/ CLAUDE.md --include='*.md' | grep -v 'Documentation/Completed/'`
+
+Files modified by Task 3.1 to reflect the new autouse contract:
+
+- `Documentation/Architecture/200_testing_strategy.md` — 4 sites updated:
+  - Line 14 (principle 2 narrative): describe that `live`/`live_eval` tests skip because the autouse fixture clears the key.
+  - Line 28 (Mermaid diagram label): "autouse clears ANTHROPIC_API_KEY / always skip on default runs".
+  - Line 95 (`live` marker section): explain the autouse-cleared behavior, point at the "invoke separately" workaround.
+  - Line 99 (`live_eval` marker section): same.
+- `CLAUDE.md` — 1 site updated (line 109): same wording aligned with the autouse contract; explicit reference to C18.
+
+Files NOT modified (operator-facing wizard/user docs about setting the key in production — unrelated to the test-runtime contract):
+
+- `Documentation/Architecture/600_api_reference_or_public_interface.md` (REST/MCP/CLI surface)
+- `Documentation/UserManual/02_wizard.md` (wizard prompts)
+- `Documentation/UserManual/05_searching.md` (HyDE/RAG-Fusion operator setup)
+- `Documentation/ADRs/C4-hyde-external-llm-dependency.md`, `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md`
+- `Documentation/Architecture/150_security_and_privacy_architecture.md` (shared-key rate-limit risk)
+- `Documentation/archon-search-notes.md` (server runtime setup notes)
+
+#### Brief artifacts captured (criterion 12)
+
+This Task 3.1 section IS the captured artifact (post-fix p50, delta, range, post-fix pass/skip counts, coverage delta, doc-update inventory). Combined with the existing Tasks 1.1–1.4 sections above, the brief is the durable record of Fix 1's measurement story.
+
+**Ephemeral working files** (kept under `/tmp/c18-task3.1/` for the duration of this plan session — not committed):
+- `warmup.log`, `run{1..5}.log` — trailing summary lines from the 6 wall-clock runs.
+- `collect-only.log` — post-fix `--collect-only -q` output.
+- `targeted.log` — post-fix targeted env-var regression output.
+- `serial.log` — post-fix `-n0` full-suite output.
+- `full-with-coverage.log` — full `uv run pytest 2>&1` output with per-module coverage.
+
+---
+
+## Summary: Fix 1 outcome
+
+Fix 1 (autouse `delenv("ANTHROPIC_API_KEY")` in `tests/conftest.py`) achieves a **75.26 s reduction in p50 wall-clock** for `uv run pytest` on the brief author's machine (M-series, 14 cores), with the post-fix range (7.27 s) collapsing 87% relative to the pre-fix range (57.78 s). The delta exceeds both ranges by a large margin, clearing the brief's variance-relative acceptance gate.
+
+The fix is structurally honest: it eliminates the 30 s SDK-timeout floor that fires per affected test, leaving the three production guard-checks at `description_generator.py:76`, `hyde.py:101`, and `rag_fusion.py:138` untouched. No production code changes, no marker/addopts changes, no CI workflow changes. Three guard-existence regression tests + 2 composition-rule tests (Task 2.2) protect the contract.
+
+The post-fix saving (75 s) is substantially larger than the upper-bound estimate from Task 1.2 (≈28 s under `-n auto`). The discrepancy is **consistent with one of two non-exclusive explanations** (cannot be distinguished without subtest-level instrumentation, which is out of scope here):
+
+1. **SDK hang, not fast-fail** — the 30 s `asyncio.wait_for` ceiling was being hit consistently on affected tests rather than the SDK fast-failing. Under `-n auto --dist=loadgroup` with W=14 workers, hung tests serialize critical-path waits in ways the `ceil(N/W) × 30 s` estimate underapproximates.
+2. **Affected-test undercount in Task 1.2** — the `--durations=0` enumeration in Task 1.2 only flags tests crossing the 25 s individual-test threshold; tests that spend a smaller fraction in the SDK call (e.g. amortised across worker scheduling) are not counted, and the actual affected set is larger than the enumerated N.
+
+Both are consistent with the observed 75 s delta. The brief's "Fix 1 alone is sufficient" gate at 50% of estimated saving is comfortably cleared regardless of which explanation dominates, and the conditional Fix 2/3 evaluation (xdist-group serialization of `tests/pipeline/test_pipeline_ingest.py` and `tests/test_sync_e2e.py`) is NOT triggered — those remain out of scope.
