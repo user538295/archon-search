@@ -86,6 +86,13 @@ class _DebounceHandler(FileSystemEventHandler):
                 "Event loop closed, skipping watch-triggered sync for %r",
                 self._collection_name,
             )
+        except BaseException:
+            # Close the coroutine to prevent "coroutine never awaited" RuntimeWarning
+            # when run_coroutine_threadsafe raises any non-RuntimeError exception.
+            # _async_callback is always an async def (type contract), so coro is
+            # always a coroutine object here.
+            coro.close()
+            raise
         finally:
             with self._lock:
                 # Only clear if on_any_event hasn't scheduled a new timer during submission

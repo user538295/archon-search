@@ -40,6 +40,7 @@ def _make_async_callback():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.filterwarnings("error::RuntimeWarning")
 class TestDebounceHandler:
     def test_debounce_handler_schedules_callback(self):
         """on_any_event with a file event starts a timer; firing it submits the coroutine."""
@@ -66,6 +67,8 @@ class TestDebounceHandler:
             mock_future.add_done_callback.assert_called_once()
             # Timer must be cleared after _fire()
             assert handler._timer is None
+            # Close the coroutine that was passed to the mock (never awaited by the mock)
+            mock_rct.call_args[0][0].close()
 
         loop.close()
 
@@ -194,6 +197,37 @@ class TestDebounceHandler:
         assert handler._timer is None
         loop.close()
 
+    def test_fire_closes_coroutine_on_non_runtime_exception(self):
+        """except BaseException must call coro.close() to prevent coroutine leak (RuntimeWarning)."""
+        loop = asyncio.new_event_loop()
+
+        async def base_cb(col: str) -> None:
+            pass  # pragma: no cover
+
+        # Intercept the coroutine created inside _fire() by monkey-patching _async_callback.
+        handler = _DebounceHandler(base_cb, loop, "mycol", debounce_seconds=0.0)
+
+        created_coros: list = []
+        original_async_callback = handler._async_callback
+
+        def capturing_async_callback(col_name: str):
+            coro = original_async_callback(col_name)
+            created_coros.append(coro)
+            return coro
+
+        handler._async_callback = capturing_async_callback
+
+        with patch("asyncio.run_coroutine_threadsafe", side_effect=ValueError("boom")):
+            with pytest.raises(ValueError, match="boom"):
+                handler._fire()
+
+        assert len(created_coros) == 1
+        coro = created_coros[0]
+        # A closed coroutine has no frame (cr_frame is None)
+        assert coro.cr_frame is None, "coroutine was not closed — RuntimeWarning would fire"
+
+        loop.close()
+
     def test_fire_does_not_clobber_timer_set_by_concurrent_event(self):
         """If on_any_event sets a NEW timer during _fire(), the finally block must not clear it."""
         loop = asyncio.new_event_loop()
@@ -215,6 +249,7 @@ class TestDebounceHandler:
 
         # The new timer must survive — finally must NOT clobber it
         assert handler._timer is new_timer
+        loop.close()
 
 
 # ---------------------------------------------------------------------------

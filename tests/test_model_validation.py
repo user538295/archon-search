@@ -35,15 +35,16 @@ async def test_validate_unknown_model_falls_back_to_instantiation():
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("error::RuntimeWarning")
 async def test_validate_timeout_raises_model_validation_error():
     """If the embed probe times out, raise ModelValidationError."""
     mock_embedder = MagicMock()
+    # AsyncMock raises TimeoutError when awaited — the real wait_for propagates it.
+    # Do NOT mock asyncio.wait_for directly: it would leak the inner coroutine (RuntimeWarning).
     mock_embedder.embed = AsyncMock(side_effect=asyncio.TimeoutError)
 
     with patch("archon_search.model_validation.TextEmbedding") as mock_te, \
-         patch("archon_search.model_validation.make_embedder", return_value=mock_embedder), \
-         patch("archon_search.model_validation.asyncio.wait_for",
-               side_effect=asyncio.TimeoutError):
+         patch("archon_search.model_validation.make_embedder", return_value=mock_embedder):
         mock_te.list_supported_models.return_value = []
         with pytest.raises(ModelValidationError) as exc_info:
             await validate_embedding_model("slow-model")
@@ -52,6 +53,7 @@ async def test_validate_timeout_raises_model_validation_error():
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("error::RuntimeWarning")
 async def test_validate_list_supported_models_unavailable_falls_back():
     """If list_supported_models raises AttributeError, fall back to instantiation."""
     mock_embedder = MagicMock()
