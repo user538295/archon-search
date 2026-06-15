@@ -109,17 +109,29 @@ def _archon_isolated_data_dir(
     # When developers have it exported in their shell, every test that calls
     # `ingest_directory` on a new collection triggers `generate_description`,
     # which then sits in a 30 s asyncio.wait_for around the Claude SDK.
-    # Clearing it here lets `description_generator.generate_description`,
-    # `hyde.HyDEGenerator.generate`, and `rag_fusion.RAGFusionGenerator.generate_variants`
-    # short-circuit on their early-exit guards (each module has an
-    # `os.environ.get("ANTHROPIC_API_KEY")` check that returns early when the key
-    # is unset). Tests that need the key set use `monkeypatch.setenv` themselves —
-    # setenv runs after this delenv, so the per-test override wins.
-    # Uses raising=False so this is a no-op when the key is absent (CI, fresh
-    # shells, tests that already cleared it themselves). Downside: if the SDK
-    # ever renames ANTHROPIC_API_KEY upstream, this line becomes dead and the
-    # 30 s floor returns — the guard-existence test in
-    # tests/test_anthropic_key_guards.py mitigates that risk.
+    # Clearing it here lets the SDK-calling modules that have early-exit guards
+    # (`description_generator.generate_description`, `hyde.HyDEGenerator.generate`,
+    # `rag_fusion.RAGFusionGenerator.generate_variants`) short-circuit on their
+    # `os.environ.get("ANTHROPIC_API_KEY")` check. Other production paths that
+    # read this key (e.g., `install.py` wizard prompts, `cli/install_cmd.py`) are
+    # safely tested either in branches that are only entered when the key IS set
+    # (so clearing it harmlessly skips those branches) or via explicit
+    # `patch.dict("os.environ", {"ANTHROPIC_API_KEY": ...})` overrides, which
+    # operate independently of monkeypatch and override the cleared state.
+    # Tests that need the key set use `monkeypatch.setenv` themselves —
+    # setenv on the same monkeypatch instance overwrites the cleared state, so
+    # the per-test override wins. Uses raising=False so this is a no-op when the
+    # key is absent (CI, fresh shells, tests that already cleared it themselves).
+    # Side-effect: `live`/`live_eval` tests that gate on ANTHROPIC_API_KEY (e.g.,
+    # `test_live_rag_fusion.py`) will always skip in the default suite because
+    # this fixture clears the key before _skip_if_no_api_key() runs. There is
+    # currently no supported way to run those tests within the standard test tree
+    # while this autouse fixture is active; they must be invoked via a separate
+    # mechanism that sets the key after fixture setup (e.g., a live conftest that
+    # re-injects it via monkeypatch.setenv).
+    # Downside: if the SDK ever renames ANTHROPIC_API_KEY upstream, this line
+    # becomes dead and the 30 s floor returns — the guard-existence regression test
+    # in tests/test_anthropic_key_guards.py mitigates that risk.
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     if "archon_unset_data_dir" in request.keywords:
