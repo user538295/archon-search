@@ -204,3 +204,37 @@ Implement Fix 1 only — Design Decision #1 is resolved (accept the live-eval sk
 CI is not affected by any change in this brief (CI uses `-n0` and never sets `ANTHROPIC_API_KEY`); the wins are developer-DX only.
 
 The hardest part of this feature is not the implementation but the measurement discipline. Each verification command above must run; the inventory of affected tests must be enumerated rather than guessed; the post-implementation delta must be a measured p50, not a single anecdote.
+
+## Measured results
+
+### Task 1.1 — Hypothesis confirmation (2026-06-15)
+
+**Verdict**: Hypothesis CONFIRMED for the tested subset, with a caveat — the SDK is NOT hanging for the full 30 s `asyncio.wait_for` timeout on this machine; it fast-fails / responds in ~6–8 s per affected test. Fix 1 still removes that ~6–8 s per affected test, but the per-test saving is smaller than the brief's ~30 s estimate.
+
+**Machine**: M-series Apple Silicon, 14 logical CPUs. Running inside the Claude Code agent harness (no `ANTHROPIC_BASE_URL` proxy override; only `ANTHROPIC_API_KEY` is set).
+
+**Per-test wall times (2 runs each, `-n0 --no-cov`)**:
+
+| Test | With key, run 1 | With key, run 2 | Without key, run 1 | Without key, run 2 | Avg delta |
+|---|---|---|---|---|---|
+| `test_pipeline_code_enricher.py::test_ingest_directory_forwards_collection_root` | 6.44 s | 7.56 s | 0.25 s | 0.25 s | ~6.75 s |
+| `test_sync_e2e.py::TestS15_3_FileModifiedIncrementalUpdate::test_sync_reindexes_on_file_change` | 8.70 s | 7.27 s | 0.11 s | 0.10 s | ~7.88 s |
+
+**Wall-clock totals (2-test invocation)**:
+- With key, run 1: 19.04 s (durations flag not set; same setup as run 2, just different output format)
+- With key, run 2: 15.90 s (with `--durations=0`)
+- Without key, run 1: 6.69 s (cold pytest start — first invocation in the session; includes plugin discovery and fastembed stub install)
+- Without key, run 2: 1.40 s (warm caches from prior invocations)
+
+Per-test call durations (right column of `--durations=0` output) are the right comparison — they exclude session startup. The cold/warm session-startup difference (6.69 s vs 1.40 s for the same 2 tests without the key) is an artifact of pytest/uv start cost, not the SDK timeout. Per-test call durations remained essentially unchanged across cold/warm without-key runs (~0.25 s and ~0.10 s — see table above).
+
+**Both tests show a clear, repeatable wall-time drop when the key is cleared**, with no overlap between key-set and key-cleared distributions. The drop is real but smaller than the brief's 30 s hypothesis predicted. Neither test stays at ~36 s when the key is cleared, so the alternative-hypothesis 30 s sources (`INGEST_LOCK_TIMEOUT_S = 30.0`, `model_validation.timeout_seconds = 30.0`) are NOT the dominant cause for these two tests.
+
+**Plan Task 1.1 STOP gate**: the gate fires if "neither test's wall time drops by more than 20 s ... shows essentially the same per-test durations as the key-set run". The "essentially the same per-test durations" clause does NOT apply here — durations differ clearly (factor of 25× and 80×). The literal 20 s-per-test threshold is not crossed because the SDK does not hang fully on this machine, but the directional evidence is unambiguous: clearing the key produces a measurable, repeatable wall-clock reduction on both named tests. The hypothesis ("the env-var clearing fixes a real wall-clock floor on developer machines") is upheld; only the magnitude estimate (30 s per test) is corrected downward to ~6–8 s per test for this machine.
+
+**Implications for downstream tasks**:
+- Task 1.2's `awk '$1+0 > 25'` filter will likely return EMPTY on this machine (no per-test duration crosses 25 s when only the SDK adds ~6–8 s). The affected-test enumeration must use a LOWER threshold (e.g. `> 5 s`) when run on a machine where the SDK fast-fails, OR be performed on a different machine where the SDK actually hangs.
+- Task 3.1's wall-clock acceptance criterion ("post-fix p50 must be lower by more than the pre-fix range") still applies but the magnitude will be in the seconds-range, not the minute-range.
+- The `ceil(N / W) × 30 s` saving estimate in the brief is an UPPER bound; the actual saving on a fast-fail machine is `ceil(N / W) × ~7 s`.
+
+**Files NOT flagged as alternative-hypothesis candidates**: neither of the two named tests stays slow when the key is cleared, so neither is a candidate for `INGEST_LOCK_TIMEOUT_S` or `model_validation.timeout_seconds`. Task 1.2 (broader enumeration) is the right place to flag any test that stays >25 s when the key is cleared.

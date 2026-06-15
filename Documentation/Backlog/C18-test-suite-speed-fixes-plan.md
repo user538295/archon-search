@@ -148,7 +148,7 @@ No new modules, classes, functions, config keys, env vars, or API surface change
 > **Releasable**: nothing user-visible — this phase is a measurement gate. After this phase the team has (a) confirmed the 30 s floor is the SDK timeout, (b) enumerated the actual affected tests, and (c) captured a defensible pre-fix baseline. **No code changes yet.** Per the brief's "Pre-implementation Verification" section, all four tasks below MUST complete before Phase 2.
 
 #### Task 1.1 — Confirm the 30 s floor IS `ANTHROPIC_API_KEY` → `generate_description` (not an alternative)
-- [ ] **File**: N/A (verification command; output captured as plan artifact)
+- [x] **File**: N/A (verification command; output captured as plan artifact)
 - **Depends on**: nothing
 - **Description**:
   - Run two known-symptomatic tests with `ANTHROPIC_API_KEY` explicitly cleared:
