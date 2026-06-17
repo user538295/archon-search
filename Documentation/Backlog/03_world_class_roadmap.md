@@ -106,8 +106,8 @@ Goal: ship the features users actually came for. Each item must show a measurabl
 
 Goal: support real operational workflows — backup, migration, key rotation, maintenance.
 
-- [ ] **D1. Job contract completion (item 2)** — formalise the protocol-agnostic contract; add `export`, `import`, `migration` job kinds with cancel/resume; backpressure and failure-isolation policy.
-- [ ] **D2. Export / import / backup / restore (item 20)** — collection export with manifest, import with schema-version check, per-backend backup compatibility statement.
+- [x] **D1. Job contract completion (item 2)** — formalise the protocol-agnostic contract; add `export`, `import`, `migration` job kinds with cancel/resume; backpressure and failure-isolation policy.
+- [x] **D2. Export / import / backup / restore (item 20)** — collection export with manifest, import with schema-version check, per-backend backup compatibility statement.
 - [ ] **D3. Schema migration tooling (item 21)** — migration job kind (depends on D1); documented rollback rules; no forced full re-ingest.
 - [ ] **D4. Streaming / incremental chunking (item 18)** — avoid full-document materialisation above a configurable threshold.
 - [ ] **D5. Maintenance jobs and policies (item 26)** — stale-collection detection, compaction/vacuum where the backend needs it, orphan cleanup, failed-ingest retry, periodic integrity checks.
@@ -266,8 +266,8 @@ If only one ordering is used for planning, use this — each phase is a coherent
 - ✅ C17. Install-lock parallel-test isolation + `Path.home()` ratchet guard.
 
 **Phase D — Operability and portability**
-30. ⬜ D1. Job contract completion (item 2).
-31. ⬜ D2. Export / import / backup / restore (item 20).
+30. ✅ D1. Job contract completion (item 2).
+31. ✅ D2. Export / import / backup / restore (item 20).
 32. ⬜ D3. Schema migration tooling (item 21).
 33. ⬜ D4. Streaming / incremental chunking (item 18).
 34. ⬜ D5. Maintenance jobs and policies (item 26).

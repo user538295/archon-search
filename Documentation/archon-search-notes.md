@@ -2,6 +2,10 @@
 
 ## Feature ideas
 
+### Handle more file type without file size limit.
+
+Currently PDF only supported under 1 MB, which is very poor. We have to support any size of documents. We also have to support as many file type as we can. At least we have to suppert the same file types that the R2R support.
+
 ### The user can search between the visited websites and if he asks questions in a topic, then these websites also could help him to recall and use those information.
 
 A chrome extension could be written to use it to ingest the current website content and link to be able to use later and be indexed. In this case a new type of sources could be added to the archon-search. A challange can be if it is stored in one collections, because many various type of contents would be stored in one collection (from cooking recipes to technical deep dive in documentation and other researches). It could be hard to find the right collection for the app.
@@ -16,8 +20,31 @@ First we should support ChatGPT, Claude and Perplexity. Is there any services to
 
 If we have more collections in the future, then we should think over the handling of the search between collections. Now we have a heuristic, to determine in which collections should be search (not all of them), but later we should handle it even better. Eg.: What if we put another layer to collection search? The collections should have a larger more detailed description about what are in that collection and run a very fast and effective search on these descriptions to determine which collections will fit the best. We should define what does the more detailed collection mean. I expect that the 
 
-### Flaky tests
+### Anthorpic key save and usage
 
-The tests are flaky after we boost and make to run parallel the tests. Investigate the jsonl logs to find evidence for the flake tests and make an extremely deep investigation what cause this and how to solve them. Don't fix it yet.
-"Pre-existing install-lock parallel flake (the task 2.3 subagent already flagged it — ~/.archon-search/.install.lock is hardcoded Path.home() outside this task's scope). Re-running full suite"
+Where to set ANTHROPIC_API_KEY today (depends on how you start the server):
 
+  - archon-search serve (foreground / container) — export ANTHROPIC_API_KEY=... in the shell. The process inherits the env. This is the documented path in Documentation/UserManual/05_searching.md:210-215.
+  - archon-search start (launchd on macOS, systemd on Linux) — the service templates only forward ARCHON_SEARCH_CONFIG (archon_search/platform/macos.py:33-37, archon_search/platform/linux.py:26). Shell env is NOT
+  inherited. To make HyDE / RAG Fusion / description-generation work under the managed service you must:
+    - macOS: edit ~/Library/LaunchAgents/com.archon.search.plist, add the key inside <key>EnvironmentVariables</key>, then launchctl unload && launchctl load.
+    - Linux: edit ~/.config/systemd/user/archon-search.service, add Environment=ANTHROPIC_API_KEY=... (or EnvironmentFile=~/.archon-search/.secrets.env with mode 600), then systemctl --user daemon-reload &&
+  systemctl --user restart archon-search.
+  - Tests — don't set it. C18 (just committed) clears it in the autouse fixture so the 30 s SDK timeout floor doesn't fire.
+
+  There's a real doc gap: the user manual says "set it in the server's environment before starting" but doesn't explain that launchd/systemd templates won't inherit your shell. That's worth fixing as a separate doc
+   PR.
+
+  Should the wizard ask for it? My recommendation: no direct prompt.
+
+  - The key would end up written in plain text into ~/Library/LaunchAgents/com.archon.search.plist or ~/.config/systemd/user/archon-search.service — a security smell that contradicts the "operator-provisioned
+  credentials" stance in Documentation/ADRs/C4-hyde-external-llm-dependency.md:66.
+  - The wizard already does the right thing at discovery time: it asks to enable HyDE + RAG Fusion only when the key is detected in the env (archon_search/install.py:1083), and prints a post-install Tip when it's
+  missing (archon_search/install.py:1855-1861).
+  - The description-generator call site is silent on missing key (debug log only), so no UX nudge needed.
+
+  If you do want a wizard-level improvement, a safer design: mirror the existing ~/.archon-search/.search.env pattern. Add EnvironmentFile=~/.archon-search/.secrets.env (mode 600, gitignored) to both service
+  templates; the wizard creates the empty file with right perms; the operator drops the key into the file. No secret ever lands in a wizard-prompted text and rotation = edit one file + restart. That's a separate,
+  meaningful design ticket — not in scope for C18.
+
+  
