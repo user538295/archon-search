@@ -205,7 +205,15 @@ def create_app(
                         )
                     )
                 elif isinstance(job, MigrationJob):
-                    raise NotImplementedError("MigrationJob dispatch wired in BE-12")
+                    from archon_search.server.routes_collections import _migration_task  # noqa: PLC0415
+                    task = asyncio.create_task(
+                        _migration_task(
+                            job=job,
+                            job_store=app.state.job_store,
+                            search_store=app.state.search_store,
+                            # spec=None: _migration_task fetches the pending REWRITE spec itself
+                        )
+                    )
                 else:
                     raise TypeError(
                         f"_real_dispatch: unsupported job type {type(job).__name__}"

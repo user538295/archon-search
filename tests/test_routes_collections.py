@@ -3265,7 +3265,7 @@ def test_post_migrate_in_place_returns_200_with_migrations_applied(
 def test_post_migrate_applies_only_in_place_specs_when_mixed_pending(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
-    """POST /migrate only applies IN_PLACE specs; REWRITE specs are not applied."""
+    """POST /migrate without backup_confirmed=True returns 422 when rewrite is pending (even with mixed specs)."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.types import MigrationKind, MigrationSpec
 
@@ -3286,19 +3286,57 @@ def test_post_migrate_applies_only_in_place_specs_when_mixed_pending(
         introduced_at=1,
     )
 
-    c, name, mock_store = _make_migrate_app(
+    c, name, mock_store = _make_migrate_app_with_reindex(
         tmp_path, tmp_store,
         meta_override=meta,
         pending_migrations_result=[in_place_spec, rewrite_spec],
     )
 
+    # backup_confirmed=False (default) with REWRITE pending → 422
     response = c.post(f"/collections/{name}/migrate", json={})
+    assert response.status_code == 422
 
-    assert response.status_code == 200
+
+def test_post_migrate_mixed_backup_confirmed_returns_202(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /migrate with backup_confirmed=True and both in_place and rewrite pending returns 202."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import MigrationJob, MigrationKind, MigrationSpec
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=col_name, namespace="default", schema_version=0)
+    in_place_spec = MigrationSpec(
+        name="migrate_namespace",
+        kind=MigrationKind.IN_PLACE,
+        description="add namespace column",
+        introduced_at=0,
+    )
+    rewrite_spec = MigrationSpec(
+        name="rebuild_embeddings",
+        kind=MigrationKind.REWRITE,
+        description="re-embed after model upgrade",
+        introduced_at=1,
+    )
+
+    c, name, mock_store = _make_migrate_app_with_reindex(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[in_place_spec, rewrite_spec],
+    )
+
+    # backup_confirmed=True with mixed specs → 202 (rewrite job created)
+    response = c.post(f"/collections/{name}/migrate", json={"backup_confirmed": True})
+    assert response.status_code == 202
     data = response.json()
-    # Only the IN_PLACE spec is applied and listed
-    assert data["migrations_applied"] == ["migrate_namespace"]
-    # apply_in_place_migrations called with only the in_place_spec (filtered)
+    assert "job_id" in data
+    assert data["status"] == "RUNNING"
+    jobs = tmp_store.list()
+    assert len(jobs) == 1
+    assert isinstance(jobs[0], MigrationJob)
+    # In-place was applied before queuing the rewrite job
     mock_store.apply_in_place_migrations.assert_called_once_with(name, "default", [in_place_spec])
 
 
@@ -3567,3 +3605,344 @@ def test_job_response_migrations_applied_empty_list_not_coerced_to_none() -> Non
 
     assert resp.migrations_applied == []
     assert resp.migrations_applied is not None
+
+
+# ---------------------------------------------------------------------------
+# POST /collections/{name}/migrate  (BE-12) — rewrite async path
+# ---------------------------------------------------------------------------
+
+
+def _make_migrate_app_with_reindex(
+    tmp_path: "Path",
+    tmp_store: "JobStore",
+    *,
+    meta_override: "CollectionMeta | None" = None,
+    pending_migrations_result: list | None = None,
+    reindex_job: "object | None" = None,
+) -> "tuple[TestClient, str, MagicMock]":
+    """Helper: create a TestClient wired for POST /migrate rewrite tests.
+
+    ``reindex_job`` can be injected into ``tmp_store`` to simulate an active
+    ``ReindexJob``; the real ``JobStore`` is passed so the route can look it up.
+    """
+    import os
+    from archon_search.collection_meta import CollectionMeta as _CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    name = path_to_collection_name(str(src))
+    if meta_override is None:
+        meta_override = _CollectionMeta(name=name, namespace="default")
+
+    if reindex_job is not None:
+        tmp_store.create_job(reindex_job)  # type: ignore[arg-type]
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta_override)
+    mock_store.pending_migrations = AsyncMock(return_value=pending_migrations_result or [])
+    mock_store.apply_in_place_migrations = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    return c, name, mock_store
+
+
+def test_post_migrate_rewrite_returns_202_with_job_id(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /migrate with backup_confirmed=true and a rewrite migration pending returns 202 + job_id."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import MigrationJob, MigrationKind, MigrationSpec
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=col_name, namespace="default", schema_version=0)
+    spec = MigrationSpec(
+        name="rebuild_embeddings",
+        kind=MigrationKind.REWRITE,
+        description="re-embed after model upgrade",
+        introduced_at=1,
+    )
+
+    c, name, mock_store = _make_migrate_app_with_reindex(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[spec],
+    )
+
+    response = c.post(f"/collections/{name}/migrate", json={"backup_confirmed": True})
+
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+    assert data["status"] == "RUNNING"
+    # A MigrationJob must have been persisted.
+    jobs = tmp_store.list()
+    assert len(jobs) == 1
+    assert isinstance(jobs[0], MigrationJob)
+    assert jobs[0].backup_confirmed is True
+    assert jobs[0].collection == name
+    assert jobs[0].kind == MigrationKind.REWRITE
+
+
+def test_post_migrate_rewrite_422_without_backup_confirmed(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /migrate without backup_confirmed=true returns 422 when rewrite migration is pending."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=col_name, namespace="default", schema_version=0)
+    spec = MigrationSpec(
+        name="rebuild_embeddings",
+        kind=MigrationKind.REWRITE,
+        description="re-embed after model upgrade",
+        introduced_at=1,
+    )
+
+    c, name, mock_store = _make_migrate_app_with_reindex(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[spec],
+    )
+
+    # Without backup_confirmed (defaults to False)
+    response = c.post(f"/collections/{name}/migrate", json={})
+    assert response.status_code == 422
+    assert "detail" in response.json()
+
+    # Explicitly false
+    response2 = c.post(f"/collections/{name}/migrate", json={"backup_confirmed": False})
+    assert response2.status_code == 422
+
+
+def test_post_migrate_export_rebuild_422_not_implemented(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /migrate with export_rebuild migration pending returns 422 (D3 does not execute it)."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=col_name, namespace="default", schema_version=0)
+    spec = MigrationSpec(
+        name="rebuild_all",
+        kind=MigrationKind.EXPORT_REBUILD,
+        description="full re-ingest required; operators must re-ingest manually",
+        introduced_at=1,
+    )
+
+    c, name, mock_store = _make_migrate_app_with_reindex(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[spec],
+    )
+
+    # Even with backup_confirmed=true, export_rebuild is not executable in D3
+    response = c.post(f"/collections/{name}/migrate", json={"backup_confirmed": True})
+    assert response.status_code == 422
+    data = response.json()
+    assert "detail" in data
+    # Message should reference export_rebuild or manual re-ingest
+    detail_lower = data["detail"].lower()
+    assert "export_rebuild" in detail_lower or "manual" in detail_lower
+
+
+def test_post_migrate_409_if_reindex_job_running(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /migrate returns 409 when a ReindexJob is RUNNING for the same collection."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import JobStatus, MigrationKind, MigrationSpec, ReindexJob
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = path_to_collection_name(str(src))
+    meta = CollectionMeta(
+        name=col_name,
+        namespace="default",
+        schema_version=0,
+        reindex_job_id="rj-001",
+    )
+    spec = MigrationSpec(
+        name="rebuild_embeddings",
+        kind=MigrationKind.REWRITE,
+        description="re-embed after model upgrade",
+        introduced_at=1,
+    )
+
+    now_iso = "2026-01-01T00:00:00+00:00"
+    running_reindex = ReindexJob(
+        job_id="rj-001",
+        status=JobStatus.RUNNING,
+        created_at=now_iso,
+        updated_at=now_iso,
+        namespace="default",
+    )
+
+    c, name, mock_store = _make_migrate_app_with_reindex(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[spec],
+        reindex_job=running_reindex,
+    )
+
+    response = c.post(f"/collections/{name}/migrate", json={"backup_confirmed": True})
+    assert response.status_code == 409
+    data = response.json()
+    assert "detail" in data
+
+
+def test_post_migrate_409_if_reindex_job_queued(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /migrate returns 409 when a ReindexJob is QUEUED for the same collection."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import JobStatus, MigrationKind, MigrationSpec, ReindexJob
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = path_to_collection_name(str(src))
+    meta = CollectionMeta(
+        name=col_name,
+        namespace="default",
+        schema_version=0,
+        reindex_job_id="rj-002",
+    )
+    spec = MigrationSpec(
+        name="rebuild_embeddings",
+        kind=MigrationKind.REWRITE,
+        description="re-embed after model upgrade",
+        introduced_at=1,
+    )
+
+    now_iso = "2026-01-01T00:00:00+00:00"
+    queued_reindex = ReindexJob(
+        job_id="rj-002",
+        status=JobStatus.QUEUED,
+        created_at=now_iso,
+        updated_at=now_iso,
+        namespace="default",
+    )
+
+    c, name, mock_store = _make_migrate_app_with_reindex(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[spec],
+        reindex_job=queued_reindex,
+    )
+
+    response = c.post(f"/collections/{name}/migrate", json={"backup_confirmed": True})
+    assert response.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# _migration_task unit tests (BE-12)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_migration_task_marks_failed_on_apply_rewrite_exception(tmp_path: Path) -> None:
+    """_migration_task marks job FAILED when apply_rewrite_migration raises.
+
+    The caller (route or scheduler) is responsible for transitioning the job to
+    RUNNING before invoking _migration_task; we simulate that here.
+    """
+    from archon_search.jobs.store import JobStore
+    from archon_search.types import MigrationKind, MigrationSpec, JobStatus
+    from archon_search.server.routes_collections import _migration_task
+    from unittest.mock import AsyncMock, MagicMock
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    queued_job = job_store.create_migration(collection="my-col", kind=MigrationKind.REWRITE, backup_confirmed=True)
+    # Simulate the route/scheduler transitioning to RUNNING before dispatch.
+    running_job = job_store.transition(queued_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+    assert running_job is not None
+
+    spec = MigrationSpec(name="rebuild", kind=MigrationKind.REWRITE, description="test", introduced_at=1)
+
+    mock_search_store = MagicMock()
+    mock_search_store.apply_rewrite_migration = AsyncMock(side_effect=RuntimeError("lancedb crashed"))
+
+    await _migration_task(job=running_job, job_store=job_store, search_store=mock_search_store, spec=spec)
+
+    final_job = job_store.get(queued_job.job_id)
+    assert final_job is not None
+    assert final_job.status == JobStatus.FAILED
+    assert "lancedb crashed" in (final_job.error or "")
+
+
+@pytest.mark.asyncio
+async def test_migration_task_spec_none_fetches_pending_and_uses_first_rewrite(tmp_path: Path) -> None:
+    """_migration_task with spec=None fetches pending migrations and uses the first REWRITE spec.
+
+    This exercises the scheduler resume path where the job arrives already RUNNING.
+    """
+    from archon_search.jobs.store import JobStore
+    from archon_search.types import MigrationKind, MigrationSpec, JobStatus
+    from archon_search.server.routes_collections import _migration_task
+    from unittest.mock import AsyncMock, MagicMock
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    queued_job = job_store.create_migration(collection="my-col", kind=MigrationKind.REWRITE, backup_confirmed=True)
+    # Simulate the scheduler's _tick() transitioning QUEUED → RUNNING before dispatch.
+    running_job = job_store.transition(queued_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+    assert running_job is not None
+
+    spec = MigrationSpec(name="rebuild", kind=MigrationKind.REWRITE, description="test", introduced_at=1)
+
+    mock_search_store = MagicMock()
+    mock_search_store.pending_migrations = AsyncMock(return_value=[spec])
+    mock_search_store.apply_rewrite_migration = AsyncMock(return_value=42)
+
+    await _migration_task(job=running_job, job_store=job_store, search_store=mock_search_store, spec=None)
+
+    final_job = job_store.get(queued_job.job_id)
+    assert final_job is not None
+    assert final_job.status == JobStatus.DONE
+    assert final_job.result == {"migrated_chunks": 42}
+    mock_search_store.pending_migrations.assert_called_once_with("my-col", running_job.namespace)
+
+
+@pytest.mark.asyncio
+async def test_migration_task_spec_none_no_rewrite_pending_marks_failed(tmp_path: Path) -> None:
+    """_migration_task with spec=None marks job FAILED when no pending REWRITE migration exists.
+
+    This exercises the scheduler resume path where the REWRITE spec has already been
+    applied (or never existed) by the time the scheduler picks up the job.
+    """
+    from archon_search.jobs.store import JobStore
+    from archon_search.types import MigrationKind, JobStatus
+    from archon_search.server.routes_collections import _migration_task
+    from unittest.mock import AsyncMock, MagicMock
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    queued_job = job_store.create_migration(collection="my-col", kind=MigrationKind.REWRITE, backup_confirmed=True)
+    # Simulate the scheduler's _tick() transitioning QUEUED → RUNNING before dispatch.
+    running_job = job_store.transition(queued_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+    assert running_job is not None
+
+    mock_search_store = MagicMock()
+    mock_search_store.pending_migrations = AsyncMock(return_value=[])
+
+    await _migration_task(job=running_job, job_store=job_store, search_store=mock_search_store, spec=None)
+
+    final_job = job_store.get(queued_job.job_id)
+    assert final_job is not None
+    assert final_job.status == JobStatus.FAILED
+    assert "no pending REWRITE" in (final_job.error or "")

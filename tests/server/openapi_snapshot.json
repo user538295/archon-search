@@ -2915,7 +2915,7 @@
     },
     "/collections/{name}/migrate": {
       "post": {
-        "description": "Apply pending in-place migrations synchronously or report pending list (dry-run).\n\n**dry_run=true (default behaviour of GET pending alias):** returns the same\n``MigrationPendingResponse`` body as ``GET /migrations/pending`` without applying\nanything.\n\n**In-place-only migrations:** applies synchronously, returns 200 with\n``{migrations_applied: [...]}``.  No ``MigrationJob`` is created.\n\nReturns 404 if the collection is not found in the caller's namespace.",
+        "description": "Apply pending migrations or report pending list (dry-run).\n\n**dry_run=true:** returns the same ``MigrationPendingResponse`` body as\n``GET /migrations/pending`` without applying anything.\n\n**In-place-only migrations:** applies synchronously, returns 200 with\n``{migrations_applied: [...]}``.  No ``MigrationJob`` is created.\n\n**Rewrite migrations:** requires ``backup_confirmed: true``; creates a\n``MigrationJob``, transitions it immediately to RUNNING, and returns 202\nwith ``{job_id, status: \"RUNNING\"}``.  The job is transitioned before the\ntask is spawned so the scheduler never sees it in QUEUED state.\n\n**export_rebuild migrations:** always returns 422 \u2014 D3 does not execute\nexport_rebuild; operators must re-ingest manually.\n\nReturns 404 if the collection is not found in the caller's namespace.\nReturns 409 if a ReindexJob is active for the same collection.\nReturns 422 if rewrite/export_rebuild migrations are pending without\n``backup_confirmed: true``, or if export_rebuild migrations are present.",
         "operationId": "migrate_collection_collections__name__migrate_post",
         "parameters": [
           {
@@ -2949,6 +2949,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/MigrationPendingResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/JobResponse"
                     }
                   ],
                   "title": "Response Migrate Collection Collections  Name  Migrate Post"
@@ -2976,6 +2979,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {

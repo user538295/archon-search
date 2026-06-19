@@ -187,7 +187,7 @@ Behavioural only — step-level detail is in each task's `Tests` block.
 | **S4** | **Given** no collection named `x` exists · **When** `GET /collections/x/migrations/pending` · **Then** `404` |
 | **S5** | **Given** only in-place migrations are pending for a collection · **When** `POST /collections/{name}/migrate` (no `backup_confirmed` required) · **Then** `200` with `{migrations_applied: […]}`; no `MigrationJob` created in `JobStore` |
 | **S6** | **Given** server starts and a collection has pending in-place migrations · **When** FastAPI lifespan runs `_run_startup_migrations()` · **Then** all in-place migrations applied silently; no operator action needed; `schema_version` updated |
-| **S7** | **Given** rewrite migrations are pending · **When** `POST /collections/{name}/migrate` with `{backup_confirmed: true}` · **Then** `202` with `{job_id, status: "QUEUED"}` |
+| **S7** | **Given** rewrite migrations are pending · **When** `POST /collections/{name}/migrate` with `{backup_confirmed: true}` · **Then** `202` with `{job_id, status: "RUNNING"}` (route transitions to RUNNING immediately to prevent scheduler double-dispatch) |
 | **S8** | **Given** a `MigrationJob` is dispatched · **When** `apply_rewrite_migration()` processes chunks in batches · **Then** job transitions `QUEUED → RUNNING → DONE`; `progress.processed/total/phase` written every 100 chunks; `result.migrated_chunks` is correct |
 | **S9** | **Given** rewrite or export_rebuild migrations are pending · **When** `POST /collections/{name}/migrate` with `backup_confirmed: false` or omitted · **Then** `422` with clear error |
 | **S10** | **Given** a `MigrationJob` rewrite phase holds the per-collection `asyncio.Lock` · **When** an ingest request arrives for the same collection · **Then** `503` after lock timeout; other-collection ingest is unaffected |
@@ -495,7 +495,7 @@ flowchart LR
         - #unit_test — `test_job_response_migration_fields_default_none` — existing job kinds produce `None` for both new fields; no serialization error
         - #unit_test — `test_job_response_migration_fields_populated` — `MigrationJob` with `migrations_applied=["m1"]` and `backup_confirmed=True` serializes correctly
 
-- [ ] **BE-12** — Add `POST /collections/{name}/migrate` rewrite async path to `routes_collections.py` (202, `backup_confirmed` gate, 409 for active `ReindexJob`, 422 for export_rebuild, `asyncio.create_task(_migration_task(…))`); add `_migration_task` coroutine; wire into scheduler dispatch closure in `app.py` lifespan #backend-role
+- [x] **BE-12** — Add `POST /collections/{name}/migrate` rewrite async path to `routes_collections.py` (202, `backup_confirmed` gate, 409 for active `ReindexJob`, 422 for export_rebuild, `asyncio.create_task(_migration_task(…))`); add `_migration_task` coroutine; wire into scheduler dispatch closure in `app.py` lifespan #backend-role
     - Presentation · 4.0h
     - needs BE-9, BE-10, BE-11 · completes S7, S8, S9, S11, C2
     - Tests

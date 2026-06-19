@@ -24,7 +24,7 @@ from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
 from archon_search.store import StoreBusyError
 from archon_search.sync import path_to_collection_name
-from archon_search.types import JobStatus, MigrationKind
+from archon_search.types import JobStatus, MigrationJob, MigrationKind, MigrationSpec
 
 logger = logging.getLogger(__name__)
 
@@ -583,6 +583,74 @@ async def reindex_collection(name: str, request: Request) -> JobResponse | JSONR
     return JobResponse(**job_to_dict(job))
 
 
+async def _migration_task(
+    job: MigrationJob,
+    job_store: JobStore,
+    search_store: object,
+    spec: MigrationSpec | None = None,
+) -> None:
+    """Coroutine that drives a single REWRITE MigrationJob to completion.
+
+    The caller is responsible for ensuring the job is already in RUNNING state
+    before invoking this coroutine.  Both the route handler and the scheduler
+    dispatch function satisfy this contract:
+
+    - **Route path**: ``migrate_collection`` calls
+      ``job_store.transition({QUEUED}, RUNNING)`` immediately after creating
+      the job, then passes the already-RUNNING job to ``asyncio.create_task``.
+    - **Scheduler path**: ``JobScheduler._tick()`` calls
+      ``store.transition({QUEUED}, RUNNING)`` before calling ``dispatch_fn``,
+      which creates this task.
+
+    Lifecycle (caller sets RUNNING → this task drives to terminal):
+      1. Resolve spec from ``pending_migrations()`` when ``spec`` is ``None``
+         (scheduler resume path).
+      2. call ``apply_rewrite_migration`` with ``progress_cb``
+      3. Transition to DONE with ``result.migrated_chunks`` on success.
+      4. Transition to FAILED with error message on any exception.
+
+    When ``spec`` is ``None`` (scheduler resume path), the pending migrations
+    list is fetched from the store and the first REWRITE spec is used.
+    """
+    job_id = job.job_id
+
+    def _progress_cb(processed: int, total: int, phase: str) -> None:
+        try:
+            job_store.update_progress(job_id, processed, total, phase)
+        except (KeyError, OSError):
+            logger.warning("_migration_task: could not update progress for job %s", job_id)
+
+    try:
+        if spec is None:
+            pending = await search_store.pending_migrations(job.collection, job.namespace)  # type: ignore[attr-defined]
+            rewrite_pending = [s for s in pending if s.kind == MigrationKind.REWRITE]
+            if not rewrite_pending:
+                raise RuntimeError(
+                    f"MigrationJob {job_id}: no pending REWRITE migration found for "
+                    f"collection {job.collection!r}"
+                )
+            spec = rewrite_pending[0]
+
+        migrated = await search_store.apply_rewrite_migration(  # type: ignore[attr-defined]
+            job.collection,
+            job.namespace,
+            spec,
+            progress_cb=_progress_cb,
+        )
+        job_store.update(
+            job_id,
+            status=JobStatus.DONE,
+            result={"migrated_chunks": migrated},
+            migrations_applied=[spec.name],
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("_migration_task: job %s failed", job_id)
+        try:
+            job_store.update(job_id, status=JobStatus.FAILED, error=str(exc))
+        except (KeyError, OSError):
+            logger.error("_migration_task: could not persist FAILED status for job %s", job_id)
+
+
 @router.get("/{name}/migrations/pending", response_model=MigrationPendingResponse, responses=_ERROR_401_404)
 async def get_migrations_pending(name: str, request: Request) -> MigrationPendingResponse:
     """Return the list of pending migrations for a collection.
@@ -618,9 +686,10 @@ async def get_migrations_pending(name: str, request: Request) -> MigrationPendin
     )
 
 
-_ERROR_401_404_422 = {
+_MIGRATE_ERROR_RESPONSES = {
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
+    409: {"model": ErrorDetail},
     422: {"model": ErrorDetail},
     500: {"model": ErrorDetail},
 }
@@ -628,25 +697,36 @@ _ERROR_401_404_422 = {
 
 @router.post(
     "/{name}/migrate",
-    response_model=MigrateInPlaceResponse | MigrationPendingResponse,
-    responses=_ERROR_401_404_422,
+    response_model=MigrateInPlaceResponse | MigrationPendingResponse | JobResponse,
+    responses=_MIGRATE_ERROR_RESPONSES,
 )
 async def migrate_collection(
     name: str, body: MigrateRequest, request: Request
-) -> MigrateInPlaceResponse | MigrationPendingResponse:
-    """Apply pending in-place migrations synchronously or report pending list (dry-run).
+) -> MigrateInPlaceResponse | MigrationPendingResponse | JobResponse | JSONResponse:
+    """Apply pending migrations or report pending list (dry-run).
 
-    **dry_run=true (default behaviour of GET pending alias):** returns the same
-    ``MigrationPendingResponse`` body as ``GET /migrations/pending`` without applying
-    anything.
+    **dry_run=true:** returns the same ``MigrationPendingResponse`` body as
+    ``GET /migrations/pending`` without applying anything.
 
     **In-place-only migrations:** applies synchronously, returns 200 with
     ``{migrations_applied: [...]}``.  No ``MigrationJob`` is created.
 
+    **Rewrite migrations:** requires ``backup_confirmed: true``; creates a
+    ``MigrationJob``, transitions it immediately to RUNNING, and returns 202
+    with ``{job_id, status: "RUNNING"}``.  The job is transitioned before the
+    task is spawned so the scheduler never sees it in QUEUED state.
+
+    **export_rebuild migrations:** always returns 422 — D3 does not execute
+    export_rebuild; operators must re-ingest manually.
+
     Returns 404 if the collection is not found in the caller's namespace.
+    Returns 409 if a ReindexJob is active for the same collection.
+    Returns 422 if rewrite/export_rebuild migrations are pending without
+    ``backup_confirmed: true``, or if export_rebuild migrations are present.
     """
     config: SearchConfig = request.app.state.config
     search_store = request.app.state.search_store
+    job_store: JobStore = request.app.state.job_store
     ns: str = request.state.namespace
 
     # Gate 1: config-path check (matches all sibling /{name} routes).
@@ -677,17 +757,95 @@ async def migrate_collection(
             schema_version=meta.schema_version,
         )
 
-    # Separate in-place from non-in-place pending specs.
-    # Non-in-place specs (REWRITE, EXPORT_REBUILD) are silently skipped here;
-    # BE-12 will add the rewrite async path and backup_confirmed gate for those.
+    # Classify pending specs by kind.
     in_place_specs = [s for s in pending if s.kind == MigrationKind.IN_PLACE]
+    rewrite_specs = [s for s in pending if s.kind == MigrationKind.REWRITE]
+    export_rebuild_specs = [s for s in pending if s.kind == MigrationKind.EXPORT_REBUILD]
 
-    # Apply in-place migrations synchronously.
-    # NOTE(BE-12): When rewrite/export_rebuild migrations are also pending,
-    # BE-12 must add a gate here before this method is called. Calling
-    # apply_in_place_migrations with only in-place specs when rewrite specs
-    # are also pending would incorrectly bump schema_version to STORE_SCHEMA_VERSION,
-    # marking the rewrite as "done" before it runs.
+    # Gate: export_rebuild migrations cannot be executed by D3.
+    if export_rebuild_specs:
+        names = ", ".join(s.name for s in export_rebuild_specs)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"export_rebuild migrations cannot be applied automatically: {names}. "
+                "Operators must re-ingest the collection manually (D5)."
+            ),
+        )
+
+    # Gate: rewrite migrations require backup_confirmed.
+    if rewrite_specs and not body.backup_confirmed:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "backup_confirmed: true is required before applying rewrite migrations. "
+                "Confirm you have a backup of the collection before proceeding."
+            ),
+        )
+
+    # Rewrite path: create a MigrationJob and dispatch asynchronously.
+    if rewrite_specs:
+        # Gate: reject if a ReindexJob is active for this collection.
+        if meta.reindex_job_id is not None:
+            existing_reindex = job_store.get(meta.reindex_job_id)
+            if existing_reindex is not None and existing_reindex.status in {
+                JobStatus.RUNNING, JobStatus.QUEUED, JobStatus.PENDING
+            }:
+                return JSONResponse(
+                    {"detail": "reindex in progress; wait for reindex job to complete before migrating"},
+                    status_code=409,
+                )
+
+        # Apply in-place migrations before queuing the rewrite job.
+        if in_place_specs:
+            try:
+                await search_store.apply_in_place_migrations(name, ns, in_place_specs)
+            except Exception:
+                logger.exception("apply_in_place_migrations failed before rewrite dispatch for collection %r", name)
+                return JSONResponse({"detail": "migration failed: internal error"}, status_code=500)
+
+        # Create the MigrationJob and immediately transition it to RUNNING.
+        # The route dispatches the task directly (not via the scheduler), so the
+        # job must NOT sit in QUEUED state — otherwise the scheduler would pick it
+        # up on its next tick and dispatch a second _migration_task for the same job.
+        try:
+            migration_job = job_store.create_migration(
+                collection=name,
+                kind=MigrationKind.REWRITE,
+                backup_confirmed=body.backup_confirmed,
+                namespace=ns,
+            )
+        except OSError:
+            return JSONResponse({"detail": "internal error"}, status_code=500)
+
+        # Transition to RUNNING before spawning the task so the scheduler never
+        # sees this job in QUEUED state (scheduler only promotes QUEUED → RUNNING).
+        running_job = job_store.transition(migration_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+        if running_job is None:
+            # Should not happen (we just created this job), but guard defensively.
+            logger.error("_migration_task route: failed to transition job %s to RUNNING", migration_job.job_id)
+            return JSONResponse({"detail": "internal error"}, status_code=500)
+
+        # Use the first rewrite spec (D3 scope: one rewrite migration at a time).
+        spec = rewrite_specs[0]
+
+        task = asyncio.create_task(
+            _migration_task(
+                job=running_job,
+                job_store=job_store,
+                search_store=search_store,
+                spec=spec,
+            )
+        )
+        request.app.state._background_tasks.add(task)
+        task.add_done_callback(request.app.state._background_tasks.discard)
+
+        return JSONResponse(
+            job_to_dict(running_job),
+            status_code=202,
+        )
+
+    # In-place-only path: apply synchronously.
     try:
         await search_store.apply_in_place_migrations(name, ns, in_place_specs)
     except Exception:
