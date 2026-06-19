@@ -2928,3 +2928,257 @@ def test_reindex_endpoint_creates_reindex_job_not_ingest_job(
     job_id = response.json()["job_id"]
     job = tmp_store.get(job_id)
     assert isinstance(job, ReindexJob), f"Expected ReindexJob, got {type(job)}"
+
+
+# ---------------------------------------------------------------------------
+# GET /collections/{name}/migrations/pending  (BE-4)
+# ---------------------------------------------------------------------------
+
+
+def _make_migrations_pending_app(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    *,
+    meta_override: "CollectionMeta | None" = None,
+    pending_migrations_result: list | None = None,
+) -> "tuple[TestClient, str, MagicMock]":
+    """Helper: create a TestClient wired for migrations/pending tests."""
+    import os
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    name = path_to_collection_name(str(src))
+    if meta_override is None:
+        meta_override = CollectionMeta(name=name, namespace="default")
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta_override)
+    mock_store.pending_migrations = AsyncMock(return_value=pending_migrations_result or [])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    return c, name, mock_store
+
+
+def test_get_migrations_pending_200(tmp_path: Path, tmp_store: JobStore) -> None:
+    """GET /collections/{name}/migrations/pending returns 200 with pending migrations."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import MigrationKind, MigrationSpec
+    from archon_search.sync import path_to_collection_name as _ptn
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = _ptn(str(src))
+    meta = CollectionMeta(name=col_name, namespace="default", schema_version=0)
+    spec = MigrationSpec(
+        name="migrate_namespace",
+        kind=MigrationKind.IN_PLACE,
+        description="add namespace column",
+        introduced_at=0,
+    )
+
+    c, name, mock_store = _make_migrations_pending_app(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[spec],
+    )
+
+    response = c.get(f"/collections/{name}/migrations/pending")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["collection"] == name
+    assert data["schema_version"] == 0
+    assert len(data["pending"]) == 1
+    assert data["pending"][0]["name"] == "migrate_namespace"
+    assert data["pending"][0]["kind"] == "in_place"
+    assert data["pending"][0]["description"] == "add namespace column"
+    assert data["pending"][0]["introduced_at"] == 0
+    mock_store.pending_migrations.assert_called_once_with(name, "default")
+
+
+def test_get_migrations_pending_empty(tmp_path: Path, tmp_store: JobStore) -> None:
+    """GET /collections/{name}/migrations/pending returns 200 with empty list when schema is current."""
+    c, name, mock_store = _make_migrations_pending_app(tmp_path, tmp_store, pending_migrations_result=[])
+
+    response = c.get(f"/collections/{name}/migrations/pending")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["pending"] == []
+    assert data["collection"] == name
+    assert data["schema_version"] == 0
+
+
+def test_get_migrations_pending_404_unknown_collection(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name}/migrations/pending returns 404 for non-existent collection."""
+    import os
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    # "nonexistent-collection" is not derived from any configured path
+    # → config-path check fires first; get_collection_meta is never reached
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get("/collections/nonexistent-collection/migrations/pending")
+    assert response.status_code == 404
+    mock_store.get_collection_meta.assert_not_called()
+
+
+def test_get_migrations_pending_in_config_no_meta_returns_404(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name}/migrations/pending returns 404 when collection is in config but has no meta (cross-namespace access)."""
+    import os
+    from archon_search.sync import path_to_collection_name as _ptn
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    name = _ptn(str(src))  # Correct name — passes config gate
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=None)  # Fails meta gate
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get(f"/collections/{name}/migrations/pending")
+    assert response.status_code == 404
+    mock_store.get_collection_meta.assert_called_once()
+
+
+def test_get_migrations_pending_unauthenticated_returns_401(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name}/migrations/pending returns 401 for unauthenticated request."""
+    import os
+    from archon_search.sync import path_to_collection_name as _ptn
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    name = _ptn(str(src))
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    # No auth header
+    c = TestClient(app)
+    response = c.get(f"/collections/{name}/migrations/pending")
+    assert response.status_code == 401
+
+
+def test_get_migrations_pending_multiple_specs_order_preserved(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name}/migrations/pending returns all specs in order."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import MigrationKind, MigrationSpec
+    from archon_search.sync import path_to_collection_name as _ptn
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = _ptn(str(src))
+    meta = CollectionMeta(name=col_name, namespace="default", schema_version=0)
+    specs = [
+        MigrationSpec(name="migrate_namespace", kind=MigrationKind.IN_PLACE, description="add ns", introduced_at=0),
+        MigrationSpec(name="migrate_acl", kind=MigrationKind.IN_PLACE, description="add acl", introduced_at=0),
+        MigrationSpec(name="rebuild_embeddings", kind=MigrationKind.REWRITE, description="rewrite vecs", introduced_at=1),
+    ]
+
+    c, name, mock_store = _make_migrations_pending_app(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=specs,
+    )
+
+    response = c.get(f"/collections/{name}/migrations/pending")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["pending"]) == 3
+    assert data["pending"][0]["name"] == "migrate_namespace"
+    assert data["pending"][1]["name"] == "migrate_acl"
+    assert data["pending"][2]["name"] == "rebuild_embeddings"
+    assert data["pending"][2]["kind"] == "rewrite"
+
+
+def test_get_migrations_pending_export_rebuild_kind(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name}/migrations/pending includes export_rebuild migrations with correct kind."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import MigrationKind, MigrationSpec
+    from archon_search.sync import path_to_collection_name as _ptn
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = _ptn(str(src))
+    meta = CollectionMeta(name=col_name, namespace="default", schema_version=0)
+    spec = MigrationSpec(
+        name="rebuild_embeddings",
+        kind=MigrationKind.EXPORT_REBUILD,
+        description="re-embed after model upgrade; operators must re-ingest manually",
+        introduced_at=1,
+    )
+
+    c, name, mock_store = _make_migrations_pending_app(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[spec],
+    )
+
+    response = c.get(f"/collections/{name}/migrations/pending")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["pending"]) == 1
+    pending_item = data["pending"][0]
+    assert pending_item["kind"] == "export_rebuild"
+    assert pending_item["name"] == "rebuild_embeddings"
+    assert pending_item["description"] == "re-embed after model upgrade; operators must re-ingest manually"
+    assert pending_item["introduced_at"] == 1

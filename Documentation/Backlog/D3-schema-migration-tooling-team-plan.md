@@ -418,7 +418,7 @@ flowchart LR
         - #unit_test — `test_pending_migrations_defaults_missing_schema_version_to_zero` — collection row with no `schema_version` column treated as `0`
         - #integration_test — `test_pending_migrations_real_store_empty` — `pending_migrations()` returns `[]` for a freshly created collection (all existing migrations have `introduced_at=0`)
 
-- [ ] **BE-4** — Add `GET /collections/{name}/migrations/pending` route handler to `routes_collections.py`; add `MigrationPendingResponse` Pydantic model to `schemas.py` #backend-role
+- [x] **BE-4** — Add `GET /collections/{name}/migrations/pending` route handler to `routes_collections.py`; add `MigrationPendingResponse` Pydantic model to `schemas.py` #backend-role
     - Presentation · 2.0h
     - needs BE-3 · completes S1, S4, S18, C2
     - Tests

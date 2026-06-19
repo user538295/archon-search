@@ -205,3 +205,20 @@ class PatchCollectionBody(BaseModel):
         if not v:
             raise ValueError("embedding_model field required")
         return v
+
+
+class MigrationSpecSchema(BaseModel):
+    """Serialized representation of a MigrationSpec for REST responses."""
+
+    name: str
+    kind: str
+    description: str
+    introduced_at: int
+
+
+class MigrationPendingResponse(BaseModel):
+    """Response body for GET /collections/{name}/migrations/pending."""
+
+    collection: str
+    pending: list[MigrationSpecSchema]
+    schema_version: int

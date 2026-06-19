@@ -21,7 +21,7 @@ from archon_search.model_validation import ModelValidationError, validate_embedd
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _reindex_task
-from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse, PatchCollectionBody
+from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
 from archon_search.store import StoreBusyError
 from archon_search.sync import path_to_collection_name
 from archon_search.types import JobStatus
@@ -581,3 +581,38 @@ async def reindex_collection(name: str, request: Request) -> JobResponse | JSONR
     task.add_done_callback(request.app.state._background_tasks.discard)
 
     return JobResponse(**job_to_dict(job))
+
+
+@router.get("/{name}/migrations/pending", response_model=MigrationPendingResponse, responses=_ERROR_401_404)
+async def get_migrations_pending(name: str, request: Request) -> MigrationPendingResponse:
+    """Return the list of pending migrations for a collection.
+
+    Returns 404 if the collection is not found in the caller's namespace.
+    Returns an empty ``pending`` list when the collection schema is current.
+    """
+    config: SearchConfig = request.app.state.config
+    search_store = request.app.state.search_store
+    ns: str = request.state.namespace
+
+    path_to_name = _all_collection_paths(config)
+    if name not in path_to_name:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    meta = await search_store.get_collection_meta(name, namespace=ns)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    pending = await search_store.pending_migrations(name, ns)
+    return MigrationPendingResponse(
+        collection=name,
+        pending=[
+            MigrationSpecSchema(
+                name=spec.name,
+                kind=spec.kind.value,
+                description=spec.description,
+                introduced_at=spec.introduced_at,
+            )
+            for spec in pending
+        ],
+        schema_version=meta.schema_version,
+    )
