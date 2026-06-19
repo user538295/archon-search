@@ -448,13 +448,13 @@ flowchart LR
         - #unit_test — `test_apply_in_place_updates_schema_version` — `schema_version` in `_archon_collection_meta` is updated after apply
         - #integration_test — `test_run_startup_migrations_applies_in_place_on_startup` — seed pre-D3 schema in `tmp_path`, drive `make_real_app` lifespan; assert `schema_version` column exists and in-place migrations are applied
 
-- [ ] **BE-7** — Add `POST /collections/{name}/migrate` in-place synchronous path (status `200`) to `routes_collections.py`; add `MigrateRequest` Pydantic model to `schemas.py` #backend-role
+- [x] **BE-7** — Add `POST /collections/{name}/migrate` in-place synchronous path (status `200`) to `routes_collections.py`; add `MigrateRequest` Pydantic model to `schemas.py` #backend-role
     - Presentation · 2.0h
     - needs BE-6 · completes S5, C2
     - Tests
-        - #unit_test — `test_post_migrate_in_place_returns_200_with_migrations_applied` — returns `{migrations_applied: [...]}` synchronously; no job created in job store
-        - #unit_test — `test_post_migrate_dry_run_true_returns_pending_list` — `dry_run: true` returns same response as GET pending; no side effect
-        - #integration_test — `test_post_migrate_in_place_real_store` — real LanceDB; `schema_version` updated after apply; no MigrationJob in job store
+        - [x] #unit_test — `test_post_migrate_in_place_returns_200_with_migrations_applied` — returns `{migrations_applied: [...]}` synchronously; no job created in job store
+        - [x] #unit_test — `test_post_migrate_dry_run_true_returns_pending_list` — `dry_run: true` returns same response as GET pending; no side effect
+        - [x] #integration_test — `test_post_migrate_in_place_real_store` — real LanceDB; `schema_version` updated after apply; no MigrationJob in job store
 
 - [ ] **BE-8** — Extend CLI `migrate` with `--apply` flag (in-place sync path); print `{migrations_applied}` summary on success #backend-role
     - Presentation · 1.0h

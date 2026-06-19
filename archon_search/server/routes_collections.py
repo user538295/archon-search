@@ -21,10 +21,10 @@ from archon_search.model_validation import ModelValidationError, validate_embedd
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _reindex_task
-from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
+from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
 from archon_search.store import StoreBusyError
 from archon_search.sync import path_to_collection_name
-from archon_search.types import JobStatus
+from archon_search.types import JobStatus, MigrationKind
 
 logger = logging.getLogger(__name__)
 
@@ -615,4 +615,85 @@ async def get_migrations_pending(name: str, request: Request) -> MigrationPendin
             for spec in pending
         ],
         schema_version=meta.schema_version,
+    )
+
+
+_ERROR_401_404_422 = {
+    401: {"model": ErrorDetail},
+    404: {"model": ErrorDetail},
+    422: {"model": ErrorDetail},
+    500: {"model": ErrorDetail},
+}
+
+
+@router.post(
+    "/{name}/migrate",
+    response_model=MigrateInPlaceResponse | MigrationPendingResponse,
+    responses=_ERROR_401_404_422,
+)
+async def migrate_collection(
+    name: str, body: MigrateRequest, request: Request
+) -> MigrateInPlaceResponse | MigrationPendingResponse:
+    """Apply pending in-place migrations synchronously or report pending list (dry-run).
+
+    **dry_run=true (default behaviour of GET pending alias):** returns the same
+    ``MigrationPendingResponse`` body as ``GET /migrations/pending`` without applying
+    anything.
+
+    **In-place-only migrations:** applies synchronously, returns 200 with
+    ``{migrations_applied: [...]}``.  No ``MigrationJob`` is created.
+
+    Returns 404 if the collection is not found in the caller's namespace.
+    """
+    config: SearchConfig = request.app.state.config
+    search_store = request.app.state.search_store
+    ns: str = request.state.namespace
+
+    # Gate 1: config-path check (matches all sibling /{name} routes).
+    path_to_name = _all_collection_paths(config)
+    if name not in path_to_name:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    # Gate 2: namespace-scoped meta check.
+    meta = await search_store.get_collection_meta(name, namespace=ns)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    pending = await search_store.pending_migrations(name, ns)
+
+    # dry_run: return pending list, no side effects.
+    if body.dry_run:
+        return MigrationPendingResponse(
+            collection=name,
+            pending=[
+                MigrationSpecSchema(
+                    name=spec.name,
+                    kind=spec.kind.value,
+                    description=spec.description,
+                    introduced_at=spec.introduced_at,
+                )
+                for spec in pending
+            ],
+            schema_version=meta.schema_version,
+        )
+
+    # Separate in-place from non-in-place pending specs.
+    # Non-in-place specs (REWRITE, EXPORT_REBUILD) are silently skipped here;
+    # BE-12 will add the rewrite async path and backup_confirmed gate for those.
+    in_place_specs = [s for s in pending if s.kind == MigrationKind.IN_PLACE]
+
+    # Apply in-place migrations synchronously.
+    # NOTE(BE-12): When rewrite/export_rebuild migrations are also pending,
+    # BE-12 must add a gate here before this method is called. Calling
+    # apply_in_place_migrations with only in-place specs when rewrite specs
+    # are also pending would incorrectly bump schema_version to STORE_SCHEMA_VERSION,
+    # marking the rewrite as "done" before it runs.
+    try:
+        await search_store.apply_in_place_migrations(name, ns, in_place_specs)
+    except Exception:
+        logger.exception("apply_in_place_migrations failed for collection %r", name)
+        return JSONResponse({"detail": "migration failed: internal error"}, status_code=500)
+
+    return MigrateInPlaceResponse(
+        migrations_applied=[s.name for s in in_place_specs],
     )

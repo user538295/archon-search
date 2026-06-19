@@ -3182,3 +3182,285 @@ def test_get_migrations_pending_export_rebuild_kind(
     assert pending_item["name"] == "rebuild_embeddings"
     assert pending_item["description"] == "re-embed after model upgrade; operators must re-ingest manually"
     assert pending_item["introduced_at"] == 1
+
+
+# ---------------------------------------------------------------------------
+# POST /collections/{name}/migrate  (BE-7) — in-place synchronous path
+# ---------------------------------------------------------------------------
+
+
+def _make_migrate_app(
+    tmp_path: "Path",
+    tmp_store: "JobStore",
+    *,
+    meta_override: "CollectionMeta | None" = None,
+    pending_migrations_result: list | None = None,
+) -> "tuple[TestClient, str, MagicMock]":
+    """Helper: create a TestClient wired for POST /migrate tests."""
+    import os
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    name = path_to_collection_name(str(src))
+    if meta_override is None:
+        meta_override = CollectionMeta(name=name, namespace="default")
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta_override)
+    mock_store.pending_migrations = AsyncMock(return_value=pending_migrations_result or [])
+    mock_store.apply_in_place_migrations = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    return c, name, mock_store
+
+
+def test_post_migrate_in_place_returns_200_with_migrations_applied(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/migrate returns 200 with migrations_applied; no job created."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=col_name, namespace="default", schema_version=0)
+    spec = MigrationSpec(
+        name="migrate_namespace",
+        kind=MigrationKind.IN_PLACE,
+        description="add namespace column",
+        introduced_at=0,
+    )
+
+    c, name, mock_store = _make_migrate_app(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[spec],
+    )
+
+    response = c.post(f"/collections/{name}/migrate", json={})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "migrations_applied" in data
+    assert data["migrations_applied"] == ["migrate_namespace"]
+    # No job created — JobStore must not have been used
+    assert tmp_store.list() == []
+    # apply_in_place_migrations must have been called with exact args
+    mock_store.apply_in_place_migrations.assert_called_once_with(name, "default", [spec])
+
+
+def test_post_migrate_applies_only_in_place_specs_when_mixed_pending(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /migrate only applies IN_PLACE specs; REWRITE specs are not applied."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=col_name, namespace="default", schema_version=0)
+    in_place_spec = MigrationSpec(
+        name="migrate_namespace",
+        kind=MigrationKind.IN_PLACE,
+        description="add namespace column",
+        introduced_at=0,
+    )
+    rewrite_spec = MigrationSpec(
+        name="rebuild_embeddings",
+        kind=MigrationKind.REWRITE,
+        description="re-embed after model upgrade",
+        introduced_at=1,
+    )
+
+    c, name, mock_store = _make_migrate_app(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[in_place_spec, rewrite_spec],
+    )
+
+    response = c.post(f"/collections/{name}/migrate", json={})
+
+    assert response.status_code == 200
+    data = response.json()
+    # Only the IN_PLACE spec is applied and listed
+    assert data["migrations_applied"] == ["migrate_namespace"]
+    # apply_in_place_migrations called with only the in_place_spec (filtered)
+    mock_store.apply_in_place_migrations.assert_called_once_with(name, "default", [in_place_spec])
+
+
+def test_post_migrate_dry_run_true_returns_pending_list(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/migrate with dry_run=true returns same body as GET pending; no side effect."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=col_name, namespace="default", schema_version=0)
+    spec = MigrationSpec(
+        name="migrate_namespace",
+        kind=MigrationKind.IN_PLACE,
+        description="add namespace column",
+        introduced_at=0,
+    )
+
+    c, name, mock_store = _make_migrate_app(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[spec],
+    )
+
+    response = c.post(f"/collections/{name}/migrate", json={"dry_run": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    # dry_run returns the pending list (same as GET pending)
+    assert "pending" in data
+    assert len(data["pending"]) == 1
+    assert data["pending"][0]["name"] == "migrate_namespace"
+    assert data["collection"] == name
+    assert data["schema_version"] == 0
+    # No apply called
+    mock_store.apply_in_place_migrations.assert_not_called()
+    # No job created
+    assert tmp_store.list() == []
+    # pending_migrations must have been called (read-path correctness)
+    mock_store.pending_migrations.assert_called_once_with(name, "default")
+
+
+def test_post_migrate_in_place_404_unknown_collection(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/migrate returns 404 for a non-existent collection (config-miss gate)."""
+    import os
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/nonexistent-collection/migrate", json={})
+    assert response.status_code == 404
+    mock_store.get_collection_meta.assert_not_called()
+
+
+def test_post_migrate_in_place_404_meta_miss(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/migrate returns 404 when in config but meta missing (cross-namespace gate)."""
+    import os
+    from archon_search.sync import path_to_collection_name as _ptn
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    name = _ptn(str(src))
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post(f"/collections/{name}/migrate", json={})
+    assert response.status_code == 404
+    mock_store.get_collection_meta.assert_called_once()
+
+
+def test_post_migrate_unauthenticated_returns_401(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/migrate returns 401 for unauthenticated request."""
+    import os
+    from archon_search.sync import path_to_collection_name as _ptn
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    name = _ptn(str(src))
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    # No auth header
+    c = TestClient(app)
+    response = c.post(f"/collections/{name}/migrate", json={})
+    assert response.status_code == 401
+
+
+def test_post_migrate_apply_failure_returns_500(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /migrate returns 500 with structured error when apply_in_place_migrations raises."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    src = tmp_path / "docs"
+    src.mkdir(exist_ok=True)
+    col_name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=col_name, namespace="default", schema_version=0)
+    spec = MigrationSpec(
+        name="migrate_namespace",
+        kind=MigrationKind.IN_PLACE,
+        description="add namespace column",
+        introduced_at=0,
+    )
+
+    c, name, mock_store = _make_migrate_app(
+        tmp_path, tmp_store,
+        meta_override=meta,
+        pending_migrations_result=[spec],
+    )
+    mock_store.apply_in_place_migrations = AsyncMock(side_effect=RuntimeError("db crashed"))
+
+    response = c.post(f"/collections/{name}/migrate", json={})
+
+    assert response.status_code == 500
+    data = response.json()
+    assert "detail" in data
+    assert "migration failed" in data["detail"]

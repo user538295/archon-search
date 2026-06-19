@@ -222,3 +222,16 @@ class MigrationPendingResponse(BaseModel):
     collection: str
     pending: list[MigrationSpecSchema]
     schema_version: int
+
+
+class MigrateRequest(BaseModel):
+    """Request body for POST /collections/{name}/migrate."""
+
+    backup_confirmed: bool = False
+    dry_run: bool = False
+
+
+class MigrateInPlaceResponse(BaseModel):
+    """Response body for POST /collections/{name}/migrate (in-place synchronous path)."""
+
+    migrations_applied: list[str]
