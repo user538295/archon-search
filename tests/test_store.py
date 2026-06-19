@@ -7321,3 +7321,516 @@ async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
         "migrate_per_collection_model",
         "_migrate_schema_version",
     ], f"Unexpected call order: {call_order}"
+
+
+# ---------------------------------------------------------------------------
+# BE-9 · apply_rewrite_migration()
+# ---------------------------------------------------------------------------
+
+
+def _make_rewrite_chunk_row(index: int, text: str = "hello") -> dict:
+    """Return a minimal row dict matching the chunk table schema with a valid chunk_id."""
+    doc_id = hashlib.sha256(f"doc-{index}".encode()).hexdigest()
+    return {
+        "chunk_id": f"{doc_id}-{index:06d}",
+        "doc_id": doc_id,
+        "text": text,
+        "vector": [0.1, 0.2],
+        "source_path": "/tmp/x.md",
+        "indexed_at": "2024-01-01T00:00:00.000000Z",
+        "file_type": "md",
+        "language": "en",
+        "metadata": "{}",
+        "custom_score": None,
+        "ingested_by": "test",
+        "updated_at": "2024-01-01T00:00:00.000000Z",
+        "acl": "",
+    }
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_calls_progress_cb_every_100_chunks() -> None:
+    """progress_cb is called at processed=100, 200, and 250 for a 250-chunk collection."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from archon_search.store import SearchStore, _MIGRATION_PROGRESS_INTERVAL
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    assert _MIGRATION_PROGRESS_INTERVAL == 100
+
+    rows = [_make_rewrite_chunk_row(i) for i in range(250)]
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    # Dummy transform: identity — returns the batch unchanged.
+    async def dummy_transform(collection: str, batch: list[dict]) -> list[dict]:
+        return batch
+
+    store.migrate_rewrite_dummy = dummy_transform  # type: ignore[attr-defined]
+
+    # Mock the DB and table.
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_dummy",
+        kind=MigrationKind.REWRITE,
+        description="dummy",
+        introduced_at=1,
+    )
+
+    progress_calls: list[tuple[int, int, str]] = []
+
+    def progress_cb(processed: int, total: int, phase: str) -> None:
+        progress_calls.append((processed, total, phase))
+
+    result = await store.apply_rewrite_migration("col1", "default", spec, progress_cb)
+
+    assert result == 250
+    assert len(progress_calls) == 3
+    assert progress_calls[0] == (100, 250, "rewrite")
+    assert progress_calls[1] == (200, 250, "rewrite")
+    assert progress_calls[2] == (250, 250, "rewrite")
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_progress_cb_exact_multiple_of_interval() -> None:
+    """progress_cb is called exactly twice for a 200-chunk collection (exact multiple of 100)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import SearchStore, _MIGRATION_PROGRESS_INTERVAL
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    rows = [_make_rewrite_chunk_row(i) for i in range(200)]
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    async def dummy_transform(collection: str, batch: list[dict]) -> list[dict]:
+        return batch
+
+    store.migrate_rewrite_dummy = dummy_transform  # type: ignore[attr-defined]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_dummy",
+        kind=MigrationKind.REWRITE,
+        description="dummy",
+        introduced_at=1,
+    )
+
+    progress_calls: list[tuple[int, int, str]] = []
+
+    def progress_cb(processed: int, total: int, phase: str) -> None:
+        progress_calls.append((processed, total, phase))
+
+    result = await store.apply_rewrite_migration("col1", "default", spec, progress_cb)
+
+    assert result == 200
+    # Exactly 2 calls — at processed=100 and processed=200 — not 3.
+    assert len(progress_calls) == 2, f"Expected 2 calls, got {len(progress_calls)}: {progress_calls}"
+    assert progress_calls[0] == (100, 200, "rewrite")
+    assert progress_calls[1] == (200, 200, "rewrite")
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_rejects_non_rewrite_spec() -> None:
+    """apply_rewrite_migration raises ValueError for a spec with kind != REWRITE; lock not acquired."""
+    from unittest.mock import MagicMock
+
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+
+    spec = MigrationSpec(
+        name="migrate_add_namespace",
+        kind=MigrationKind.IN_PLACE,
+        description="in-place spec passed to rewrite method",
+        introduced_at=0,
+    )
+
+    with pytest.raises(ValueError, match="REWRITE"):
+        await store.apply_rewrite_migration("col1", "default", spec)
+
+    # Lock must never have been acquired (guard fires before lock acquisition).
+    assert not store._lock_for("col1").locked(), "Lock must not be held after kind validation failure"
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_empty_collection_completes_immediately() -> None:
+    """Zero chunks → progress_cb not called; result is 0; no error raised."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    async def dummy_transform(collection: str, batch: list[dict]) -> list[dict]:
+        return batch
+
+    store.migrate_rewrite_dummy = dummy_transform  # type: ignore[attr-defined]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=[])  # type: ignore[attr-defined]
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_dummy",
+        kind=MigrationKind.REWRITE,
+        description="dummy",
+        introduced_at=1,
+    )
+
+    progress_calls: list[tuple] = []
+    result = await store.apply_rewrite_migration(
+        "col1", "default", spec, lambda p, t, ph: progress_calls.append((p, t, ph))
+    )
+
+    assert result == 0
+    assert progress_calls == []
+    mock_table.delete.assert_not_called()
+    mock_table.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_acquires_collection_lock() -> None:
+    """Concurrent ingest attempt times out with StoreBusyError while rewrite holds lock."""
+    import asyncio
+
+    from archon_search.store import SearchStore, StoreBusyError
+    from archon_search.types import MigrationKind, MigrationSpec
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    # Transform that pauses so we can test concurrent access.
+    lock_held = asyncio.Event()
+    release_transform = asyncio.Event()
+
+    async def blocking_transform(collection: str, batch: list[dict]) -> list[dict]:
+        lock_held.set()
+        await release_transform.wait()
+        return batch
+
+    store.migrate_rewrite_blocking = blocking_transform  # type: ignore[attr-defined]
+
+    rows = [_make_rewrite_chunk_row(0)]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_blocking",
+        kind=MigrationKind.REWRITE,
+        description="blocking",
+        introduced_at=1,
+    )
+
+    # Start rewrite in background.
+    rewrite_task = asyncio.create_task(
+        store.apply_rewrite_migration("col1", "default", spec)
+    )
+
+    # Wait until the rewrite holds the lock.
+    await asyncio.wait_for(lock_held.wait(), timeout=2.0)
+
+    # Verify the lock is held: direct acquisition times out.
+    collection_lock = store._lock_for("col1")
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(collection_lock.acquire(), timeout=0.05)
+
+    assert collection_lock.locked(), "Lock must be held by the rewrite task"
+
+    # Verify that ingest_chunks raises StoreBusyError when lock is held.
+    # Use patch to set a short timeout so the test doesn't hang.
+    with patch("archon_search.store.INGEST_LOCK_TIMEOUT_S", 0.05):
+        with pytest.raises(StoreBusyError):
+            valid_chunk = _chunk(_doc_id(), 0)
+            await store.ingest_chunks("col1", [valid_chunk])
+
+    # Let the rewrite finish.
+    release_transform.set()
+    await rewrite_task
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_schema_version_not_updated_on_error() -> None:
+    """If a RuntimeError is raised mid-rewrite, schema_version is NOT updated."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore, STORE_SCHEMA_VERSION
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+    store.update_collection_meta = AsyncMock()
+
+    rows = [_make_rewrite_chunk_row(i) for i in range(5)]
+
+    # Transform that raises mid-way.
+    call_count = 0
+
+    async def failing_transform(collection: str, batch: list[dict]) -> list[dict]:
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("simulated failure mid-rewrite")
+
+    store.migrate_rewrite_fail = failing_transform  # type: ignore[attr-defined]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_fail",
+        kind=MigrationKind.REWRITE,
+        description="fail",
+        introduced_at=1,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        await store.apply_rewrite_migration("col1", "default", spec)
+
+    # schema_version must NOT have been updated.
+    store.update_collection_meta.assert_not_called()
+    # Lock must be released even when an error occurs.
+    assert not store._lock_for("col1").locked(), "Lock must be released after RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_schema_version_not_updated_on_cancel() -> None:
+    """asyncio.CancelledError during rewrite does NOT update schema_version."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+    store.update_collection_meta = AsyncMock()
+
+    async def cancelling_transform(collection: str, batch: list[dict]) -> list[dict]:
+        raise asyncio.CancelledError("simulated task cancel")
+
+    store.migrate_rewrite_cancel = cancelling_transform  # type: ignore[attr-defined]
+
+    rows = [_make_rewrite_chunk_row(i) for i in range(3)]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_cancel",
+        kind=MigrationKind.REWRITE,
+        description="cancel",
+        introduced_at=1,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await store.apply_rewrite_migration("col1", "default", spec)
+
+    store.update_collection_meta.assert_not_called()
+    # Lock must be released even when CancelledError is raised.
+    assert not store._lock_for("col1").locked(), "Lock must be released after CancelledError"
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_schema_version_not_updated_on_midway_cancel() -> None:
+    """CancelledError raised during the second batch does NOT update schema_version."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore, _MIGRATION_PROGRESS_INTERVAL
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+    store.update_collection_meta = AsyncMock()
+
+    call_count = 0
+
+    async def midway_cancel_transform(collection: str, batch: list[dict]) -> list[dict]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise asyncio.CancelledError("simulated cancel on second batch")
+        return batch
+
+    store.migrate_rewrite_midway_cancel = midway_cancel_transform  # type: ignore[attr-defined]
+
+    # 150 chunks → 2 batches (100 + 50); cancel on the second batch.
+    rows = [_make_rewrite_chunk_row(i) for i in range(150)]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_midway_cancel",
+        kind=MigrationKind.REWRITE,
+        description="midway cancel",
+        introduced_at=1,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await store.apply_rewrite_migration("col1", "default", spec)
+
+    store.update_collection_meta.assert_not_called()
+    # Lock must be released.
+    assert not store._lock_for("col1").locked(), "Lock must be released after mid-way CancelledError"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_apply_rewrite_real_store_with_dummy_transform(tmp_path) -> None:
+    """Real LanceDB: dummy transform rewrites all chunks; idempotent double-apply.
+
+    The dummy transform is an identity — it returns rows unchanged.
+    Verifies that all chunks survive the rewrite and schema_version is updated.
+    Double-apply verifies idempotency (no error on second call).
+    """
+    import uuid
+
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    assert STORE_SCHEMA_VERSION == 0, "Test assumes D3 starting value; update when version bumps."
+
+    store = SearchStore(tmp_path / "db_be9_rewrite")
+    await store.connect()
+    try:
+        col = f"test-{uuid.uuid4().hex[:8]}"
+        dim = 4
+        await store.ensure_collection(col, dim)
+
+        # Create a meta row with schema_version deliberately behind STORE_SCHEMA_VERSION.
+        # This makes the post-apply assertion non-tautological.
+        from archon_search.collection_meta import CollectionMeta
+        initial_meta = CollectionMeta(name=col, namespace="default", schema_version=-1)
+        await store.update_collection_meta(initial_meta)
+
+        # Ingest a small number of chunks using valid chunk_id format (sha256-NNNNNN).
+        n_chunks = 5
+        chunks = [
+            _chunk(_doc_id(), i, text=f"chunk text {i}", dim=dim)
+            for i in range(n_chunks)
+        ]
+        await store.ingest_chunks(col, chunks)
+
+        # Add an identity transform method to the store instance.
+        async def _identity_transform(collection: str, batch: list[dict]) -> list[dict]:
+            return batch
+
+        store.migrate_rewrite_identity = _identity_transform  # type: ignore[attr-defined]
+
+        spec = MigrationSpec(
+            name="migrate_rewrite_identity",
+            kind=MigrationKind.REWRITE,
+            description="identity transform for testing",
+            introduced_at=1,
+        )
+
+        # First apply.
+        result = await store.apply_rewrite_migration(col, "default", spec)
+        assert result == n_chunks
+
+        # Verify chunks still exist and have correct content after rewrite.
+        db = store._require_connected()
+        table = await db.open_table(col)
+        rows_after = await table.query().to_list()
+        assert len(rows_after) == n_chunks
+        # Identity transform preserves text content.
+        original_texts = {c.text for c in chunks}
+        actual_texts = {r["text"] for r in rows_after}
+        assert original_texts == actual_texts, "Identity transform must preserve chunk text"
+
+        # schema_version updated from -1 to STORE_SCHEMA_VERSION (non-tautological:
+        # would fail if update_collection_meta was never called).
+        meta = await store.get_collection_meta(col, "default")
+        assert meta is not None
+        assert meta.schema_version == STORE_SCHEMA_VERSION
+
+        # Second apply — idempotent: no error raised.
+        result2 = await store.apply_rewrite_migration(col, "default", spec)
+        assert result2 == n_chunks
+        rows_after2 = await table.query().to_list()
+        assert len(rows_after2) == n_chunks
+
+    finally:
+        await store.disconnect()

@@ -136,6 +136,8 @@ FTS_OPTIMIZE_REMOVES_DELETED: bool = True  # Plan A; change to False if Plan B a
 # _meta_schema() or _schema() (the shared chunk-table schema) require a version bump.
 STORE_SCHEMA_VERSION: int = 0
 
+# Number of chunks processed between progress_cb calls in apply_rewrite_migration.
+_MIGRATION_PROGRESS_INTERVAL: int = 100
 
 # ---------------------------------------------------------------------------
 # SQL fragment helpers — defense-in-depth behind upstream identifier regexes.
@@ -927,6 +929,96 @@ class SearchStore:
             for spec in self._all_migrations()
             if spec.introduced_at > current_version
         ]
+
+    async def apply_rewrite_migration(
+        self,
+        collection: str,
+        namespace: str,
+        spec: "MigrationSpec",
+        progress_cb: "Callable[[int, int, str], None] | None" = None,
+    ) -> int:
+        """Apply a single rewrite migration to *collection* by reading, transforming, and writing back all chunks.
+
+        Acquires the per-collection lock for the full duration of the rewrite (like
+        ``reindex_metadata``, no timeout — the rewrite IS the holder).
+
+        The transform is performed by calling ``getattr(self, spec.name)(collection, batch)``
+        for each batch of ``_MIGRATION_PROGRESS_INTERVAL`` rows, where *batch* is a
+        ``list[dict]`` of raw row data and the return value is the transformed ``list[dict]``.
+        Each batch is written back by deleting the original rows and re-adding the
+        transformed rows.
+
+        ``progress_cb(processed, total, phase)`` is called after processing every
+        ``_MIGRATION_PROGRESS_INTERVAL`` chunks.  For the final batch (which may be
+        smaller), it is called once at the end if any chunks were processed.
+
+        ``schema_version`` in ``_archon_collection_meta`` is updated to
+        ``STORE_SCHEMA_VERSION`` **only** on successful completion.  If an exception is
+        raised (including ``asyncio.CancelledError``), ``schema_version`` is NOT updated.
+
+        .. warning::
+            Each batch is written using delete-then-add, which is not atomic.
+            If the process crashes or an exception occurs between ``table.delete()``
+            and ``table.add()``, the affected rows are lost.  The ``backup_confirmed``
+            flag at the route layer is the intended mitigation — operators must confirm
+            they have a backup before any rewrite migration runs.
+
+        .. note::
+            ``schema_version`` is updated after the per-collection lock is released
+            (via ``update_collection_meta``, which acquires the lock independently).
+            In the narrow window between lock release and schema_version update, a
+            concurrent operation may modify collection metadata.  This is acceptable
+            for D3 (asyncio single-threaded; window is at most one ``await`` point).
+
+        Returns:
+            The total number of chunks processed (``migrated_chunks``).
+        """
+        if spec.kind != MigrationKind.REWRITE:
+            raise ValueError(
+                f"apply_rewrite_migration requires a REWRITE spec; got kind={spec.kind!r}"
+            )
+        self._validate_collection(collection)
+        db = self._require_connected()
+
+        lock = self._lock_for(collection)
+        await lock.acquire()
+        success = False
+        processed = 0
+        try:
+            table = await db.open_table(collection)
+            rows: list[dict] = await table.query().to_list()
+            total = len(rows)
+
+            transform = getattr(self, spec.name)
+
+            batch_start = 0
+            while batch_start < total:
+                batch = rows[batch_start : batch_start + _MIGRATION_PROGRESS_INTERVAL]
+                batch_start += _MIGRATION_PROGRESS_INTERVAL
+
+                transformed: list[dict] = await transform(collection, batch)
+                # Delete originals and re-add transformed rows.
+                chunk_ids = [r["chunk_id"] for r in batch]
+                await table.delete(_where_in("chunk_id", chunk_ids))
+                if transformed:
+                    await table.add(transformed)
+                processed += len(batch)
+
+                if progress_cb is not None and (
+                    processed % _MIGRATION_PROGRESS_INTERVAL == 0 or batch_start >= total
+                ):
+                    progress_cb(processed, total, "rewrite")
+
+            success = True
+        finally:
+            lock.release()
+
+        if success:
+            meta = await self.get_collection_meta(collection, namespace)
+            if meta is not None:
+                await self.update_collection_meta(replace(meta, schema_version=STORE_SCHEMA_VERSION))
+
+        return processed
 
     async def update_collection_meta(self, meta: "CollectionMeta") -> None:
         _validate_namespace(meta.namespace)

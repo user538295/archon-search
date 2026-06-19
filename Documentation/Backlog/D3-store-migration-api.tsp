@@ -21,6 +21,6 @@ interface SearchStoreMigrationInterface {
   op applyInPlaceMigrations(collection: string, ns: string, specs: MigrationSpec[]): string[];
   // progress_cb(processed, total, phase) called every 100 chunks; not a TypeSpec-expressible callable type
   // ns maps to `namespace` in Python signatures; 'namespace' is a reserved keyword in TypeSpec op parameter positions
-  op applyRewriteMigration(collection: string, ns: string, spec: MigrationSpec): void;
+  op applyRewriteMigration(collection: string, ns: string, spec: MigrationSpec): int32;
   op runStartupMigrations(): void;
 }

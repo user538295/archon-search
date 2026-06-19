@@ -467,7 +467,7 @@ flowchart LR
 
 ### Phase 3 · Trigger and resume rewrite migration
 
-- [ ] **BE-9** — Add `SearchStore.apply_rewrite_migration(collection, namespace, spec, progress_cb)`; acquires per-collection `asyncio.Lock` for duration; reads chunks in batches; transforms; writes back via `add_or_update_batch()`; calls `progress_cb(processed, total, phase)` every 100 chunks #backend-role
+- [x] **BE-9** — Add `SearchStore.apply_rewrite_migration(collection, namespace, spec, progress_cb)`; acquires per-collection `asyncio.Lock` for duration; reads chunks in batches; transforms; writes back via `table.delete() + table.add()` per batch; calls `progress_cb(processed, total, phase)` every 100 chunks #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-6 · completes S10, S14, S19
     - Tests
