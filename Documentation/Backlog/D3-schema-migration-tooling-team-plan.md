@@ -561,7 +561,7 @@ All tester tasks are `@pytest.mark.integration` tests using `make_real_app` (rea
         - #e2e_test — `test_migration_crash_inject_and_resume_e2e` — trigger MigrationJob; force `RUNNING → FAILED` via direct `job_store.update()`; POST `/jobs/{id}/resume`; poll to DONE; assert `migrated_chunks` equals total (checkpoint not lost)
         - #e2e_test — `test_migration_cancel_schema_version_not_updated_e2e` — trigger MigrationJob; cancel mid-rewrite; assert `schema_version` unchanged in store; resume; poll to DONE; assert `schema_version` updated only now
 
-- [ ] **T-4** — e2e: pre-D3 collection startup migration through full lifespan #tester-role
+- [x] **T-4** — e2e: pre-D3 collection startup migration through full lifespan #tester-role
     - — · 1.5h
     - needs BE-6 · completes S3, S6
     - Tests
