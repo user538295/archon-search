@@ -13,7 +13,7 @@ from typing import Literal
 from archon_search._durable_io import atomic_write_json
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import IngestJob, JobStatus, get_jobs_file
-from archon_search.types import DeleteJob, ExportJob, ImportJob, ReindexJob
+from archon_search.types import DeleteJob, ExportJob, ImportJob, MigrationJob, MigrationKind, ReindexJob
 
 logger = logging.getLogger(__name__)
 
@@ -158,12 +158,33 @@ class JobStore:
         )
         return self.create_job(job)  # type: ignore[return-value]
 
+    def create_migration(
+        self,
+        collection: str,
+        kind: MigrationKind,
+        backup_confirmed: bool | None,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> MigrationJob:
+        """Create a MigrationJob with QUEUED status and persist it."""
+        now = _now_iso()
+        job = MigrationJob(
+            job_id=str(uuid.uuid4()),
+            status=JobStatus.QUEUED,
+            created_at=now,
+            updated_at=now,
+            namespace=namespace,
+            collection=collection,
+            kind=kind,
+            backup_confirmed=backup_confirmed,
+        )
+        return self.create_job(job)  # type: ignore[return-value]
+
     def update_progress(self, job_id: str, processed: int, total: int, phase: str) -> None:
         """Set the progress dict on a job."""
         self.update(job_id, progress={"processed": processed, "total": total, "phase": phase})
 
-    def list_queued_bulk(self) -> list[ExportJob | ImportJob]:
-        """Return QUEUED ExportJob/ImportJob instances sorted by (source_priority, created_at).
+    def list_queued_bulk(self) -> list[ExportJob | ImportJob | MigrationJob]:
+        """Return QUEUED ExportJob/ImportJob/MigrationJob instances sorted by (source_priority, created_at).
 
         User-sourced jobs (``source="user"``) sort before backup-sourced jobs
         (``source="backup"``). Within each tier, FIFO is preserved by
@@ -172,7 +193,7 @@ class JobStore:
         bulk = [
             job
             for job in self._jobs.values()
-            if isinstance(job, (ExportJob, ImportJob)) and job.status == JobStatus.QUEUED
+            if isinstance(job, (ExportJob, ImportJob, MigrationJob)) and job.status == JobStatus.QUEUED
         ]
         bulk.sort(key=lambda j: (0 if j.source == "user" else 1, j.created_at))
         return bulk  # type: ignore[return-value]
@@ -221,6 +242,10 @@ class JobStore:
                     job = ReindexJob(**item)
                 elif job_type == "delete":
                     job = DeleteJob(**item)
+                elif job_type == "migration":
+                    item.setdefault("source", "user")
+                    item["kind"] = MigrationKind(item["kind"])
+                    job = MigrationJob(**item)
                 else:
                     job = IngestJob(**item)
                 if job.status in _CRASH_STATUSES:
@@ -246,7 +271,9 @@ class JobStore:
         for job in self._jobs.values():
             item = dataclasses.asdict(job)
             item["status"] = item["status"].value if hasattr(item["status"], "value") else item["status"]
-            if isinstance(job, ExportJob):
+            if isinstance(job, MigrationJob):
+                item["job_type"] = "migration"
+            elif isinstance(job, ExportJob):
                 item["job_type"] = "export"
             elif isinstance(job, ImportJob):
                 item["job_type"] = "import"

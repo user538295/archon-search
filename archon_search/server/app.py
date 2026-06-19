@@ -181,9 +181,9 @@ def create_app(
                 _export_task,
                 _import_task,
             )
-            from archon_search.types import ExportJob, ImportJob  # noqa: PLC0415
+            from archon_search.types import ExportJob, ImportJob, MigrationJob  # noqa: PLC0415
 
-            def _real_dispatch(job: ExportJob | ImportJob) -> None:
+            def _real_dispatch(job: ExportJob | ImportJob | MigrationJob) -> None:
                 if isinstance(job, ExportJob):
                     task = asyncio.create_task(
                         _export_task(
@@ -204,6 +204,8 @@ def create_app(
                             config,
                         )
                     )
+                elif isinstance(job, MigrationJob):
+                    raise NotImplementedError("MigrationJob dispatch wired in BE-12")
                 else:
                     raise TypeError(
                         f"_real_dispatch: unsupported job type {type(job).__name__}"
@@ -336,9 +338,9 @@ def run_server(config: SearchConfig) -> None:
     # reassigns ``scheduler.dispatch_fn`` to the real export/import closure as
     # soon as app state is ready. This placeholder should never run in practice
     # — if it does, something dispatched before startup completed.
-    from archon_search.types import ExportJob, ImportJob  # noqa: PLC0415
+    from archon_search.types import ExportJob, ImportJob, MigrationJob  # noqa: PLC0415
 
-    def _placeholder_dispatch(job: ExportJob | ImportJob) -> None:
+    def _placeholder_dispatch(job: ExportJob | ImportJob | MigrationJob) -> None:
         logger.warning(
             "JobScheduler placeholder dispatch invoked before lifespan startup "
             "completed for job %s; this should not happen",

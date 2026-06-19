@@ -405,7 +405,7 @@ def test_list_queued_bulk_excludes_non_queued(store: JobStore) -> None:
 def test_list_queued_bulk_excludes_ingest(store: JobStore) -> None:
     """Regular IngestJob (even in PENDING/QUEUED-like state) is not returned."""
     # IngestJobs use PENDING, not QUEUED; but even if somehow QUEUED (hypothetically),
-    # list_queued_bulk must only return ExportJob and ImportJob instances.
+    # list_queued_bulk must only return ExportJob, ImportJob, and MigrationJob instances.
     # Normal IngestJob is PENDING — it must not appear.
     store.create()  # IngestJob in PENDING status
     export_job = store.create_export(collection="col", output_path="/tmp/out.tar.gz", tmp_path="/tmp/.tmp")

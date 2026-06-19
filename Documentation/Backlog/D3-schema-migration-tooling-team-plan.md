@@ -477,16 +477,16 @@ flowchart LR
         - #unit_test — `test_apply_rewrite_schema_version_not_updated_on_cancel` — simulate cancel mid-way; assert `schema_version` unchanged
         - #integration_test — `test_apply_rewrite_real_store_with_dummy_transform` — real LanceDB; synthetic `MigrationSpec`; all chunks rewritten; idempotent double-apply
 
-- [ ] **BE-10** — Add `MigrationJob` to `JobStore._load()` + `_write_atomic()` discriminators; add `create_migration()` factory; extend `list_queued_bulk()` isinstance guard and return type; extend `job_to_dict()` with `migrations_applied` and `backup_confirmed` via `getattr` #backend-role
+- [x] **BE-10** — Add `MigrationJob` to `JobStore._load()` + `_write_atomic()` discriminators; add `create_migration()` factory; extend `list_queued_bulk()` isinstance guard and return type; extend `job_to_dict()` with `migrations_applied` and `backup_confirmed` via `getattr` #backend-role
     - Interface Adapters · 4.0h
     - needs BE-1 · completes S12
     - Tests
-        - #unit_test — `test_migration_job_serialization_round_trip` — `_write_atomic()` + `_load()` round-trip preserves all fields including `migrations_applied`, `backup_confirmed`, `source`, `kind`
-        - #unit_test — `test_migration_job_crash_recovery_running_to_failed` — `MigrationJob` in `RUNNING` loaded as `FAILED` with `error="process_restart"`; `progress` checkpoint preserved
-        - #unit_test — `test_migration_job_queued_survives_restart` — `QUEUED` MigrationJob is NOT set to FAILED on load
-        - #unit_test — `test_create_migration_returns_queued_job` — factory method returns `MigrationJob` with `status=QUEUED`
-        - #unit_test — `test_list_queued_bulk_includes_migration_job` — `list_queued_bulk()` returns `MigrationJob` alongside `ExportJob`/`ImportJob`
-        - #unit_test — `test_job_to_dict_includes_migration_fields` — `migrations_applied` and `backup_confirmed` appear in dict; existing jobs get `None` for both
+        - [x] #unit_test — `test_migration_job_serialization_round_trip` — `_write_atomic()` + `_load()` round-trip preserves all fields including `migrations_applied`, `backup_confirmed`, `source`, `kind`
+        - [x] #unit_test — `test_migration_job_crash_recovery_running_to_failed` — `MigrationJob` in `RUNNING` loaded as `FAILED` with `error="process_restart"`; `progress` checkpoint preserved
+        - [x] #unit_test — `test_migration_job_queued_survives_restart` — `QUEUED` MigrationJob is NOT set to FAILED on load
+        - [x] #unit_test — `test_create_migration_returns_queued_job` — factory method returns `MigrationJob` with `status=QUEUED`
+        - [x] #unit_test — `test_list_queued_bulk_includes_migration_job` — `list_queued_bulk()` returns `MigrationJob` alongside `ExportJob`/`ImportJob`
+        - [x] #unit_test — `test_job_to_dict_includes_migration_fields` — `migrations_applied` and `backup_confirmed` appear in dict; existing jobs get `None` for both
 
 - [ ] **BE-11** — Add `migrations_applied: list[str] | None = None` and `backup_confirmed: bool | None = None` to `JobResponse` in `schemas.py`; regenerate OpenAPI snapshot with `uv run --python 3.12` #backend-role
     - Presentation · 1.5h

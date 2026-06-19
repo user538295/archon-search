@@ -47,6 +47,9 @@ def job_to_dict(job: IngestJob) -> dict:
         "collection": getattr(job, "collection", None),
         "output_path": getattr(job, "output_path", None),
         "archive_path": getattr(job, "archive_path", None),
+        "migrations_applied": getattr(job, "migrations_applied", None),
+        "backup_confirmed": getattr(job, "backup_confirmed", None),
+        "kind": getattr(job, "kind", None),
     }
 
 
