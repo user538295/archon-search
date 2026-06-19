@@ -13,7 +13,7 @@ from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
-from archon_search.types import ExportJob, ImportJob, JobStatus
+from archon_search.types import ExportJob, ImportJob, JobStatus, MigrationJob, MigrationKind
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +373,7 @@ def test_resume_ingest_job_not_resumable(client: TestClient, tmp_store: JobStore
     assert response.status_code == 409
     data = response.json()
     assert data["error"] == "job_not_resumable"
-    assert "only export and import jobs" in data["reason"]
+    assert "only export, import, and migration jobs" in data["reason"]
 
 
 @pytest.mark.integration
@@ -400,3 +400,109 @@ def test_resume_wrong_namespace(tmp_path: Path, tmp_store: JobStore, auth_header
     assert response.status_code == 404
     data = response.json()
     assert data["error"] == "not_found"
+
+
+# ---------------------------------------------------------------------------
+# POST /jobs/{job_id}/resume — MigrationJob (BE-13)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_resume_migration_job_transitions_failed_to_queued(
+    client: TestClient, tmp_store: JobStore
+) -> None:
+    """A FAILED MigrationJob transitions to QUEUED; returns 202."""
+    job = tmp_store.create_migration(
+        collection="col",
+        kind=MigrationKind.REWRITE,
+        backup_confirmed=True,
+        namespace=DEFAULT_NAMESPACE,
+    )
+    tmp_store.update(job.job_id, status=JobStatus.FAILED)
+
+    response = client.post(f"/jobs/{job.job_id}/resume")
+    assert response.status_code == 202
+    data = response.json()
+    assert data["status"] == "QUEUED"
+    assert data["job_id"] == job.job_id
+
+
+@pytest.mark.integration
+def test_resume_migration_job_not_failed_returns_409(
+    client: TestClient, tmp_store: JobStore
+) -> None:
+    """A RUNNING MigrationJob returns 409 with error=job_not_failed."""
+    job = tmp_store.create_migration(
+        collection="col",
+        kind=MigrationKind.IN_PLACE,
+        backup_confirmed=None,
+        namespace=DEFAULT_NAMESPACE,
+    )
+    tmp_store.update(job.job_id, status=JobStatus.RUNNING)
+
+    response = client.post(f"/jobs/{job.job_id}/resume")
+    assert response.status_code == 409
+    data = response.json()
+    assert data["error"] == "job_not_failed"
+    assert data["current_status"] == "RUNNING"
+
+
+@pytest.mark.integration
+def test_resume_migration_job_queued_returns_409(client: TestClient, tmp_store: JobStore) -> None:
+    """A QUEUED MigrationJob returns 409 with error=job_not_failed."""
+    job = tmp_store.create_migration(
+        collection="col",
+        kind=MigrationKind.IN_PLACE,
+        backup_confirmed=None,
+        namespace=DEFAULT_NAMESPACE,
+    )
+    # Job is QUEUED by default after creation
+
+    response = client.post(f"/jobs/{job.job_id}/resume")
+    assert response.status_code == 409
+    data = response.json()
+    assert data["error"] == "job_not_failed"
+    assert data["current_status"] == "QUEUED"
+
+
+@pytest.mark.integration
+def test_resume_migration_job_done_returns_409(client: TestClient, tmp_store: JobStore) -> None:
+    """A DONE MigrationJob returns 409 with error=job_not_failed."""
+    job = tmp_store.create_migration(
+        collection="col",
+        kind=MigrationKind.REWRITE,
+        backup_confirmed=True,
+        namespace=DEFAULT_NAMESPACE,
+    )
+    tmp_store.update(job.job_id, status=JobStatus.DONE)
+
+    response = client.post(f"/jobs/{job.job_id}/resume")
+    assert response.status_code == 409
+    data = response.json()
+    assert data["error"] == "job_not_failed"
+    assert data["current_status"] == "DONE"
+
+
+@pytest.mark.integration
+def test_resume_migration_job_no_file_check_required(
+    client: TestClient, tmp_store: JobStore
+) -> None:
+    """A FAILED MigrationJob resumes without file-existence validation.
+
+    MigrationJob operates on LanceDB in-store data, not on external file archives.
+    Unlike ExportJob (tmp_path check) and ImportJob (archive_path check), no
+    filesystem artifact needs to exist for MigrationJob to be resumable.
+    """
+    job = tmp_store.create_migration(
+        collection="col-with-no-file",
+        kind=MigrationKind.REWRITE,
+        backup_confirmed=True,
+        namespace=DEFAULT_NAMESPACE,
+    )
+    tmp_store.update(job.job_id, status=JobStatus.FAILED)
+
+    # Resume succeeds — no file path to check for MigrationJob
+    response = client.post(f"/jobs/{job.job_id}/resume")
+    assert response.status_code == 202
+    data = response.json()
+    assert data["status"] == "QUEUED"

@@ -274,3 +274,97 @@ def test_migration_job_dispatched_via_scheduler_reaches_done(
     )
     assert isinstance(final_job.result, dict), f"expected dict result, got: {final_job.result!r}"
     assert final_job.result.get("migrated_chunks") == 7
+
+
+def test_migration_job_resume_from_failed_state_reaches_done(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAILED MigrationJob resumes via POST /jobs/{id}/resume and reaches DONE.
+
+    Note: _migration_task always restarts from scratch by calling apply_rewrite_migration
+    from zero — it does NOT resume from the checkpoint offset. The checkpoint stored in
+    job.progress is preserved for observability only; the rewrite is idempotent so
+    restarting from scratch is safe.
+
+    Flow:
+    1. Create a QUEUED MigrationJob directly in job_store (bypassing route).
+    2. Force it to FAILED with a progress checkpoint (simulating a crash).
+    3. POST /jobs/{id}/resume → 202, job back in QUEUED.
+    4. Scheduler picks up the job and dispatches it; job reaches DONE.
+    """
+    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
+
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    dummy_spec = MigrationSpec(
+        name="resume_checkpoint_rewrite",
+        kind=MigrationKind.REWRITE,
+        description="checkpoint-resume test no-op rewrite",
+        introduced_at=999,
+    )
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        job_store = client.app.state.job_store
+        search_store = client.app.state.search_store
+
+        # Register a collection.
+        col_path = tmp_path / "resume_docs"
+        col_path.mkdir()
+        from archon_search.sync import path_to_collection_name
+        col_name = path_to_collection_name(str(col_path))
+
+        resp = client.post(
+            "/collections/",
+            json={"path": str(col_path)},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert resp.status_code == 202, f"add_collection failed: {resp.text}"
+
+        async def _fake_pending_migrations(collection, namespace):
+            return [dummy_spec]
+
+        async def _fake_apply_rewrite(collection, namespace, spec, progress_cb=None):
+            return 5  # 5 chunks migrated
+
+        with patch.object(search_store, "pending_migrations", _fake_pending_migrations), \
+             patch.object(search_store, "apply_rewrite_migration", _fake_apply_rewrite):
+
+            # 1. Create QUEUED MigrationJob directly in the store.
+            queued_job = job_store.create_migration(
+                collection=col_name,
+                kind=MigrationKind.REWRITE,
+                backup_confirmed=True,
+                namespace="default",
+            )
+
+            # 2. Force FAILED with a checkpoint (simulating a mid-run crash).
+            # The checkpoint (processed=50) is preserved for observability; resume
+            # will restart from scratch (not from offset 50) because apply_rewrite_migration
+            # is idempotent.
+            job_store.update(
+                queued_job.job_id,
+                status=JobStatus.FAILED,
+                error="process_restart",
+                progress={"processed": 50, "total": 100, "phase": "rewriting"},
+            )
+            crashed = job_store.get(queued_job.job_id)
+            assert crashed is not None
+            assert crashed.status == JobStatus.FAILED
+            assert crashed.progress is not None
+
+            # 3. Resume: POST /jobs/{id}/resume → 202, job transitions FAILED → QUEUED.
+            resp = client.post(
+                f"/jobs/{queued_job.job_id}/resume",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            assert resp.status_code == 202, f"resume expected 202, got {resp.status_code}: {resp.text}"
+            assert resp.json()["status"] == "QUEUED"
+
+            # 4. Scheduler picks up the QUEUED job and runs it to DONE.
+            final_job = _poll_job_store(job_store, queued_job.job_id, timeout_s=15.0)
+
+    assert final_job.status == JobStatus.DONE, (
+        f"resumed migration job ended with {final_job.status}: error={final_job.error!r}"
+    )
+    assert isinstance(final_job.result, dict), f"expected dict result, got: {final_job.result!r}"
+    assert "migrated_chunks" in final_job.result

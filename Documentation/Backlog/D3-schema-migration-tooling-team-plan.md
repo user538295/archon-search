@@ -506,7 +506,7 @@ flowchart LR
         - #integration_test — `test_migration_job_dispatched_and_reaches_done` — `make_real_app` + synthetic dummy transform + scheduler tick = 0.1s; poll `job_store.get()` until DONE; assert `result.migrated_chunks` correct
         - #integration_test — `test_migration_job_progress_written_every_100_chunks` — >100 chunks; assert `progress.processed` checkpoints written during run
 
-- [ ] **BE-13** — Broaden `isinstance` check in `POST /jobs/{id}/resume` handler (`routes_jobs.py`) to include `MigrationJob`; no other logic changes #backend-role
+- [x] **BE-13** — Broaden `isinstance` check in `POST /jobs/{id}/resume` handler (`routes_jobs.py`) to include `MigrationJob`; no other logic changes #backend-role
     - Presentation · 1.5h
     - needs BE-10 · completes S13
     - Tests

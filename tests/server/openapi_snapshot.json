@@ -3561,7 +3561,7 @@
     },
     "/jobs/{job_id}/resume": {
       "post": {
-        "description": "Transition a FAILED export or import job back to QUEUED so the scheduler can retry it.",
+        "description": "Transition a FAILED export, import, or migration job back to QUEUED so the scheduler can retry it.",
         "operationId": "resume_job_jobs__job_id__resume_post",
         "parameters": [
           {

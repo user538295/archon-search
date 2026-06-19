@@ -18,7 +18,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.schemas import ErrorDetail, JobListResponse, JobResponse
-from archon_search.types import DeleteJob, ExportJob, ImportJob, ReindexJob
+from archon_search.types import DeleteJob, ExportJob, ImportJob, MigrationJob, ReindexJob
 
 logger = logging.getLogger(__name__)
 
@@ -483,7 +483,7 @@ async def get_job(job_id: str, request: Request) -> JobResponse:
     },
 )
 async def resume_job(job_id: str, request: Request) -> JobResponse | JSONResponse:
-    """Transition a FAILED export or import job back to QUEUED so the scheduler can retry it."""
+    """Transition a FAILED export, import, or migration job back to QUEUED so the scheduler can retry it."""
     store: JobStore = request.app.state.job_store
     job = store.get(job_id)
 
@@ -491,10 +491,10 @@ async def resume_job(job_id: str, request: Request) -> JobResponse | JSONRespons
     if job is None or job.namespace != request.state.namespace:
         return JSONResponse({"error": "not_found"}, status_code=404)
 
-    # Only bulk jobs (ExportJob, ImportJob) support resume
-    if not isinstance(job, (ExportJob, ImportJob)):
+    # Only bulk jobs (ExportJob, ImportJob, MigrationJob) support resume
+    if not isinstance(job, (ExportJob, ImportJob, MigrationJob)):
         return JSONResponse(
-            {"error": "job_not_resumable", "reason": "only export and import jobs support resume"},
+            {"error": "job_not_resumable", "reason": "only export, import, and migration jobs support resume"},
             status_code=409,
         )
 

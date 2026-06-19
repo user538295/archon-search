@@ -111,6 +111,11 @@
 - Action: For any route that applies side effects before a 409 guard: move the guard first. For scheduler dispatch, always pass the return value of `store.transition()` (the promoted object), not the original queued object. Always grep for cross-file references before renaming module-level constants.
 - Confidence: high
 
+**2026-06-19 — BE-13 resume handler broadening (D3)**
+- Observation: (1) FastAPI uses function docstrings as the `description` field in the OpenAPI spec — changing a docstring in a route handler triggers an OpenAPI snapshot diff. Always regenerate the snapshot with `uv run --python 3.12` when touching route docstrings. (2) `_migration_task` restarts `apply_rewrite_migration` from scratch on every dispatch (including resume) — the progress checkpoint is stored for observability and idempotency documentation, not for offset resumption. Tests that claim "checkpoint resume" but use an unconditional fake must be renamed to avoid misleading future developers. (3) When adding a new job type to an isinstance allowlist in a resume/dispatch handler, always add tests for every non-FAILED terminal state (QUEUED, DONE) to cover the status-gate rejection path.
+- Action: For any route whose isinstance guard is broadened: (a) update the docstring and error message to match; (b) regenerate the OpenAPI snapshot; (c) add tests for all non-FAILED terminal states; (d) add a test explicitly documenting the absence of file-existence checks if the new type has no file dependency.
+- Confidence: high
+
 ## Open Questions
 - (Nothing recorded yet)
 
