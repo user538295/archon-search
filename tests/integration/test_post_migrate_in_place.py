@@ -45,9 +45,14 @@ def test_post_migrate_in_place_real_store(tmp_path, monkeypatch) -> None:
         assert result["migrations_applied"] == []
 
         # Verify no MigrationJob was created.
-        resp = client.get("/jobs?kind=migration", headers=headers)
-        assert resp.status_code == 200
-        assert resp.json()["total"] == 0
+        # GET /jobs?kind=migration is a no-op filter ("migration" is not in _KIND_TYPE_MAP),
+        # so use direct job_store access instead.
+        from archon_search.types import MigrationJob
+        job_store = client.app.state.job_store
+        migration_jobs = [j for j in job_store.list() if isinstance(j, MigrationJob)]
+        assert len(migration_jobs) == 0, (
+            "no MigrationJob should be created for in-place-only migrations"
+        )
 
         # GET /migrations/pending must also be empty.
         resp = client.get(f"/collections/{col_name}/migrations/pending", headers=headers)
