@@ -546,7 +546,7 @@ All tester tasks are `@pytest.mark.integration` tests using `make_real_app` (rea
     - Tests
         - [x] #e2e_test — `test_migrate_dry_run_then_in_place_apply_e2e` — `make_real_app`; GET `/migrations/pending` returns non-empty list; POST `/migrate` (in-place) returns 200; GET `/migrations/pending` returns `{pending: []}`; assert `schema_version` updated in `_archon_collection_meta`
 
-- [ ] **T-2** — e2e: full rewrite migration lifecycle including concurrent ingest 503 #tester-role
+- [x] **T-2** — e2e: full rewrite migration lifecycle including concurrent ingest 503 #tester-role
     - — · 2.0h
     - needs BE-12 · completes S7, S8, S10, S14
     - Tests

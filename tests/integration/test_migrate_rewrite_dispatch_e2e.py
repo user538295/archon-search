@@ -10,15 +10,18 @@ the job dataclass (same pattern as test_dispatch_scheduler_e2e.py).
 """
 from __future__ import annotations
 
+import asyncio
+import threading
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
+import archon_search.constants as _constants
 import archon_search.jobs.scheduler as _scheduler_module
 from archon_search.types import JobStatus, MigrationJob
-from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests.integration.conftest import make_real_app
 
 pytestmark = pytest.mark.integration
 
@@ -368,3 +371,322 @@ def test_migration_job_resume_from_failed_state_reaches_done(
     )
     assert isinstance(final_job.result, dict), f"expected dict result, got: {final_job.result!r}"
     assert "migrated_chunks" in final_job.result
+
+
+# ---------------------------------------------------------------------------
+# T-2 tests: full rewrite lifecycle, concurrent 503, empty collection
+# ---------------------------------------------------------------------------
+
+
+def test_rewrite_migration_full_lifecycle_e2e(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Full rewrite lifecycle: POST /migrate → 202 → poll to DONE → assert result → pending empty.
+
+    Covers S7, S8, S14 (partial — zero chunks is covered by the dedicated empty test).
+
+    Flow:
+    1. Register a collection.
+    2. Patch ``pending_migrations`` with a side_effect list: first call returns
+       ``[dummy_spec]`` (used by the route to classify the rewrite), second call
+       returns ``[]`` (used by GET /migrations/pending after the job is DONE).
+    3. Patch ``apply_rewrite_migration`` to return 5 (simulating 5 chunks migrated).
+    4. POST /migrate → assert 202 + job_id.
+    5. Poll job_store until DONE; assert ``result["migrated_chunks"] == 5``.
+    6. GET /collections/{name}/migrations/pending → assert ``pending == []``.
+    """
+    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
+
+    from archon_search.types import MigrationKind, MigrationSpec
+    from archon_search.sync import path_to_collection_name
+
+    dummy_spec = MigrationSpec(
+        name="lifecycle_rewrite",
+        kind=MigrationKind.REWRITE,
+        description="lifecycle test rewrite spec",
+        introduced_at=999,
+    )
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        job_store = client.app.state.job_store
+        search_store = client.app.state.search_store
+        headers = _auth(api_key)
+
+        col_path = tmp_path / "lifecycle_docs"
+        col_path.mkdir()
+        col_name = path_to_collection_name(str(col_path))
+
+        resp = client.post(
+            "/collections/",
+            json={"path": str(col_path)},
+            headers=headers,
+        )
+        assert resp.status_code == 202, f"add_collection failed: {resp.status_code} {resp.text}"
+
+        # Wait for the ingest job to reach terminal state so DB state is stable.
+        reg_job_id = resp.json()["job_id"]
+        _poll_job_store(job_store, reg_job_id, timeout_s=15.0)
+
+        # Side-effect list: first call from route returns the spec; second call from
+        # GET /migrations/pending returns [] (simulating that the migration was applied).
+        pending_calls: list[list] = [[dummy_spec], []]
+
+        async def _fake_pending_side_effect(collection, namespace):
+            return pending_calls.pop(0) if pending_calls else []
+
+        async def _fake_apply_rewrite(collection, namespace, spec, progress_cb=None):
+            return 5  # 5 chunks migrated
+
+        with patch.object(search_store, "pending_migrations", _fake_pending_side_effect), \
+             patch.object(search_store, "apply_rewrite_migration", _fake_apply_rewrite):
+
+            resp = client.post(
+                f"/collections/{col_name}/migrate",
+                json={"backup_confirmed": True},
+                headers=headers,
+            )
+            assert resp.status_code == 202, (
+                f"POST /migrate expected 202, got {resp.status_code}: {resp.text}"
+            )
+            job_id = resp.json()["job_id"]
+            assert resp.json()["status"] == "RUNNING"
+
+            final_job = _poll_job_store(job_store, job_id, timeout_s=15.0)
+
+            assert final_job.status == JobStatus.DONE, (
+                f"migration job ended with {final_job.status}: error={final_job.error!r}"
+            )
+            assert isinstance(final_job.result, dict), (
+                f"expected dict result, got: {final_job.result!r}"
+            )
+            assert final_job.result["migrated_chunks"] == 5
+            assert final_job.migrations_applied == ["lifecycle_rewrite"], (
+                f"expected migrations_applied=['lifecycle_rewrite'], got: {final_job.migrations_applied!r}"
+            )
+
+            # After the migration task completes, pending_migrations returns [].
+            # GET /migrations/pending should reflect an empty list.
+            pending_resp = client.get(
+                f"/collections/{col_name}/migrations/pending",
+                headers=headers,
+            )
+            assert pending_resp.status_code == 200, (
+                f"GET /migrations/pending expected 200, got {pending_resp.status_code}: {pending_resp.text}"
+            )
+            assert pending_resp.json()["pending"] == [], (
+                f"expected empty pending list after migration, got: {pending_resp.json()['pending']}"
+            )
+
+
+def test_concurrent_ingest_503_during_rewrite_e2e(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """While a MigrationJob holds the per-collection lock, a concurrent ingest returns 503.
+
+    Covers S10.
+
+    The fake ``apply_rewrite_migration`` acquires the same per-collection lock
+    that ``POST /ingest`` tries to acquire via ``acquire_collection_lock_or_503``.
+    A ``threading.Event`` pair coordinates between the main test thread and the
+    asyncio background task running in the TestClient's event loop thread:
+
+    1. POST /migrate → 202; the background task is scheduled.
+    2. Main thread waits for ``lock_held_event`` (set when task acquires the lock).
+    3. Main thread lowers ``INGEST_LOCK_TIMEOUT_S`` to a tiny value and issues
+       POST /ingest → expects 503.
+    4. Main thread sets ``allow_release_event``; the background task releases the
+       lock and returns.
+    5. Poll migration job to DONE.
+    """
+    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
+    # Lower the lock-acquisition timeout so the ingest 503s quickly.
+    monkeypatch.setattr(_constants, "INGEST_LOCK_TIMEOUT_S", 0.05)
+
+    from archon_search.types import MigrationKind, MigrationSpec
+    from archon_search.sync import path_to_collection_name
+
+    dummy_spec = MigrationSpec(
+        name="concurrent_rewrite",
+        kind=MigrationKind.REWRITE,
+        description="concurrent 503 test rewrite spec",
+        introduced_at=999,
+    )
+
+    lock_held_event = threading.Event()
+    allow_release_event = threading.Event()
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        job_store = client.app.state.job_store
+        search_store = client.app.state.search_store
+        headers = _auth(api_key)
+
+        col_path = tmp_path / "concurrent_docs"
+        col_path.mkdir()
+        col_name = path_to_collection_name(str(col_path))
+
+        resp = client.post(
+            "/collections/",
+            json={"path": str(col_path)},
+            headers=headers,
+        )
+        assert resp.status_code == 202, f"add_collection failed: {resp.status_code} {resp.text}"
+
+        # Wait for registration ingest to finish before patching pending_migrations.
+        reg_job_id = resp.json()["job_id"]
+        _poll_job_store(job_store, reg_job_id, timeout_s=15.0)
+
+        async def _holding_rewrite(collection, namespace, spec, progress_cb=None):
+            """Acquire the lock, signal the test thread, block until released."""
+            lock = search_store._lock_for(collection)
+            await lock.acquire()
+            lock_held_event.set()  # signal: lock is now held
+            # Wait in a thread pool so the event loop can process other requests.
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, allow_release_event.wait)
+            lock.release()
+            return 0
+
+        async def _fake_pending_migrations(collection, namespace):
+            return [dummy_spec]
+
+        with patch.object(search_store, "pending_migrations", _fake_pending_migrations), \
+             patch.object(search_store, "apply_rewrite_migration", _holding_rewrite):
+
+            # Trigger the rewrite migration; background task is scheduled.
+            resp = client.post(
+                f"/collections/{col_name}/migrate",
+                json={"backup_confirmed": True},
+                headers=headers,
+            )
+            assert resp.status_code == 202, (
+                f"POST /migrate expected 202, got {resp.status_code}: {resp.text}"
+            )
+            job_id = resp.json()["job_id"]
+
+            # Wait until the background task acquires the lock.
+            acquired = lock_held_event.wait(timeout=10.0)
+            assert acquired, "background task did not acquire the lock within 10s"
+
+            # While the migration holds the lock, ingest must get 503.
+            try:
+                ingest_resp = client.post(
+                    "/ingest",
+                    json={"collection": col_name, "path": str(col_path)},
+                    headers=headers,
+                )
+                assert ingest_resp.status_code == 503, (
+                    f"expected 503 while rewrite holds lock, got {ingest_resp.status_code}: {ingest_resp.text}"
+                )
+                assert ingest_resp.json().get("error") == "store_busy", (
+                    f"expected error='store_busy' in 503 response, got: {ingest_resp.json()!r}"
+                )
+                assert "Retry-After" in ingest_resp.headers, (
+                    "expected Retry-After header in 503 response"
+                )
+
+                # Verify that a DIFFERENT collection is NOT blocked (per-collection lock isolation).
+                other_col_path = tmp_path / "other_docs"
+                other_col_path.mkdir()
+                other_col_name = path_to_collection_name(str(other_col_path))
+                other_resp = client.post(
+                    "/collections/",
+                    json={"path": str(other_col_path)},
+                    headers=headers,
+                )
+                assert other_resp.status_code == 202, (
+                    f"expected 202 for other collection while rewrite holds lock, got {other_resp.status_code}: {other_resp.text}"
+                )
+            finally:
+                # Release the lock; let the migration complete.
+                allow_release_event.set()
+
+            final_job = _poll_job_store(job_store, job_id, timeout_s=15.0)
+
+    assert final_job.status == JobStatus.DONE, (
+        f"migration job ended with {final_job.status}: error={final_job.error!r}"
+    )
+    assert final_job.result["migrated_chunks"] == 0
+    assert final_job.migrations_applied == ["concurrent_rewrite"], (
+        f"expected migrations_applied=['concurrent_rewrite'], got: {final_job.migrations_applied!r}"
+    )
+
+
+def test_empty_collection_rewrite_completes_immediately_e2e(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zero-chunk collection: POST /migrate reaches DONE with migrated_chunks == 0.
+
+    Covers S14.
+
+    Registers a collection with no ingested documents, then triggers a rewrite
+    migration.  ``apply_rewrite_migration`` is patched to return 0 because a
+    freshly-registered collection has no LanceDB table yet (the table is only
+    created on first ingest).  The test verifies that the route → job dispatch
+    path handles zero chunks correctly end-to-end.
+    """
+    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
+
+    from archon_search.types import MigrationKind, MigrationSpec
+    from archon_search.sync import path_to_collection_name
+
+    dummy_spec = MigrationSpec(
+        name="empty_rewrite",
+        kind=MigrationKind.REWRITE,
+        description="zero-chunk rewrite spec",
+        introduced_at=999,
+    )
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        job_store = client.app.state.job_store
+        search_store = client.app.state.search_store
+        headers = _auth(api_key)
+
+        col_path = tmp_path / "empty_docs"
+        col_path.mkdir()
+        col_name = path_to_collection_name(str(col_path))
+
+        resp = client.post(
+            "/collections/",
+            json={"path": str(col_path)},
+            headers=headers,
+        )
+        assert resp.status_code == 202, f"add_collection failed: {resp.status_code} {resp.text}"
+
+        # Wait for registration ingest to finish (no documents in col_path, so fast).
+        reg_job_id = resp.json()["job_id"]
+        _poll_job_store(job_store, reg_job_id, timeout_s=15.0)
+
+        async def _fake_pending_migrations(collection, namespace):
+            return [dummy_spec]
+
+        async def _fake_apply_rewrite_zero(collection, namespace, spec, progress_cb=None):
+            return 0  # zero chunks — matches an empty collection's behaviour
+
+        with patch.object(search_store, "pending_migrations", _fake_pending_migrations), \
+             patch.object(search_store, "apply_rewrite_migration", _fake_apply_rewrite_zero):
+
+            resp = client.post(
+                f"/collections/{col_name}/migrate",
+                json={"backup_confirmed": True},
+                headers=headers,
+            )
+            assert resp.status_code == 202, (
+                f"POST /migrate expected 202, got {resp.status_code}: {resp.text}"
+            )
+            job_id = resp.json()["job_id"]
+            assert resp.json()["status"] == "RUNNING"
+
+            final_job = _poll_job_store(job_store, job_id, timeout_s=15.0)
+
+    assert final_job.status == JobStatus.DONE, (
+        f"empty-collection migration ended with {final_job.status}: error={final_job.error!r}"
+    )
+    assert isinstance(final_job.result, dict), (
+        f"expected dict result, got: {final_job.result!r}"
+    )
+    assert final_job.result["migrated_chunks"] == 0, (
+        f"expected 0 migrated_chunks for empty collection, got: {final_job.result}"
+    )
+    assert final_job.migrations_applied == ["empty_rewrite"], (
+        f"expected migrations_applied=['empty_rewrite'], got: {final_job.migrations_applied!r}"
+    )

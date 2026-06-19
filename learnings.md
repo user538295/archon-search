@@ -131,6 +131,16 @@
 - Action: For any new route field derived from a constant, patch the constant in tests. For status endpoint additions, prefer in-memory computation over per-collection async calls when the data is already fetched. When adding new `search_store` method calls to a route, grep for all mock factory functions in the test files and add the missing mock to each.
 - Confidence: high
 
+**2026-06-19 — T-1 e2e test for D3 migration flow**
+- Observation: (1) `GET /jobs?kind=migration` is a vacuous assertion — `"migration"` is not in `_KIND_TYPE_MAP`, so `total == 0` always passes. Use `job_store.list()` + `isinstance(j, MigrationJob)` instead. (2) When seeding an impossible DB value (`schema_version=-1`) to force pending migrations, the ingest background job from `POST /collections/` can race and overwrite the seeded value via `update_collection_meta`. Always poll the ingest job to `DONE` before seeding. (3) `asyncio.run()` inside a `make_real_app` TestClient context is safe — TestClient's event loop runs in a background thread; the main thread has no running loop. (4) `expected_migration_names` must filter to `IN_PLACE` kind to mirror the route's `in_place_specs` filter; using unfiltered `_all_migrations()` breaks when a REWRITE spec is added later.
+- Action: For any e2e test that seeds DB state after HTTP registration: poll the registration job to DONE first. For `kind=migration` job count assertions: use `job_store.list()` + `isinstance`. For migration name lists: filter by kind to match route filtering.
+- Confidence: high
+
+**2026-06-19 — T-2 concurrent 503 e2e test (D3)**
+- Observation: (1) To test "503 while rewrite holds lock" in a TestClient context, patch `apply_rewrite_migration` to acquire the per-collection lock via `search_store._lock_for(collection)`, signal a `threading.Event`, then `await loop.run_in_executor(None, allow_release_event.wait)` before releasing. This works because TestClient's event loop runs in a background thread — `lock_held_event.wait()` from the main thread blocks only the main thread, letting the background event loop run the task and acquire the lock. (2) Lower `INGEST_LOCK_TIMEOUT_S` via `monkeypatch.setattr(_constants, "INGEST_LOCK_TIMEOUT_S", 0.05)` so the 503 triggers quickly (default is 30s). (3) Freshly-registered collections with no ingested documents have no LanceDB table yet — `apply_rewrite_migration`'s `db.open_table(collection)` raises `ValueError: Table not found`. For zero-chunk tests, patch `apply_rewrite_migration` to return 0 instead of using the real implementation.
+- Action: For any e2e test requiring lock contention: use `threading.Event` pair + `run_in_executor` to coordinate main and event-loop threads. Always lower timeout constants via `monkeypatch.setattr` (not `monkeypatch.setenv`) for module-level constants. For empty-collection rewrite tests, patch the implementation rather than wrestling with table-not-found.
+- Confidence: high
+
 ## Open Questions
 - (Nothing recorded yet)
 
