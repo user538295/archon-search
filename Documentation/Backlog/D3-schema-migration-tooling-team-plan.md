@@ -577,7 +577,7 @@ All tester tasks are `@pytest.mark.integration` tests using `make_real_app` (rea
 
 ### Phase 5 · Close-out
 
-- [ ] **T-6** — Project close-out and acceptance fact-check #tester-role
+- [x] **T-6** — Project close-out and acceptance fact-check #tester-role
     - — · 4.0h
     - needs BE-14, T-1, T-2, T-3, T-4, T-5
     - Tests

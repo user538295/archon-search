@@ -184,8 +184,8 @@ def test_migrate_dry_run_then_in_place_apply_e2e(
         )
 
         # Step 4: No MigrationJob must have been created (in-place path, not rewrite).
-        # GET /jobs?kind=migration is a no-op filter ("migration" is not in _KIND_TYPE_MAP),
-        # so use direct job_store access instead.
+        # Use direct job_store access to verify no MigrationJob was created for in-place-only
+        # migrations (POST /migrate for in-place returns 200 and applies synchronously, no job).
         job_store = client.app.state.job_store
         migration_jobs = [j for j in job_store.list() if isinstance(j, MigrationJob)]
         assert len(migration_jobs) == 0, (

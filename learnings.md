@@ -151,6 +151,11 @@
 - Action: For any e2e test involving pre-D3 DB seeding: (a) always seed at least one data row; (b) read that row back via direct LanceDB read BEFORE any HTTP call to prove the migration's default (not the dataclass default) was applied; (c) use cfg.collections.append() when POST /collections/ would 409 due to a pre-existing meta row.
 - Confidence: high
 
+**2026-06-20 — T-6 close-out (D3)**
+- Observation: (1) The `[jobs].max_concurrent_bulk` comment in `archon-search.toml.example` said "export/import" but `MigrationJob` (D3 BE-10) joins the same `list_queued_bulk()` path — the example comment was stale after BE-10. (2) The architecture doc `130_data_architecture_and_persistence.md` listed only three startup migrations (`migrate_namespace`, `migrate_acl`, `migrate_per_collection_model`) — but the store has five (`migrate_description_embedding` and `migrate_centroid_sum` were missing). Close-out fact-checking catches doc drift that code review misses. (3) `STORE_SCHEMA_VERSION = 0` means no acceptance criterion test can exercise the "pending migrations > 0" code path in production — the tests must either use an impossible value (`schema_version=-1`) or bypass the constant. This is an inherent constraint of infrastructure-only releases and is documented in `learnings.md` under BE-3. (4) `JobResponse.result` was typed `str | None` but `IngestJob.result` at the domain layer is `dict | None`. The mismatch was latent in all prior job types (which left `result=None`) but surfaced immediately with `MigrationJob` which sets `result={"migrated_chunks": N}`. The fix is `str | dict | None` to match the domain model.
+- Action: During close-out, always re-read `.toml.example` comments against the actual `list_queued_bulk()` type guard to catch stale wording. When documenting startup migrations in architecture docs, grep `store.py` for `_all_migrations()` rather than listing from memory. When adding a new job type that sets a non-None `result`, verify that `JobResponse.result` accepts the actual runtime type — never assume `str | None` is correct just because it compiled.
+- Confidence: high
+
 ## Open Questions
 - (Nothing recorded yet)
 

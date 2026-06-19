@@ -112,6 +112,7 @@ Opt-in and **disabled by default**. `writer.py` appends one JSONL line per call 
 - Breaking REST/MCP changes go in `BREAKING.md`.
 - Telemetry's no-raw-query guarantee is structural: do not add a `query` parameter to telemetry entry constructors.
 - `store.py` SQL predicates must be built via `_where_eq`/`_where_in` (which quote through `_sql_quote_str` in `store_filters.py`), never f-strings; the `tests/test_no_fstring_sql.py` CI guard fails the build if an f-string-wrapped `.where(`/`.delete(`/`.count_rows(` reappears in `store.py`.
+- **`STORE_SCHEMA_VERSION` bump policy (D3):** increment `STORE_SCHEMA_VERSION` in `store.py` whenever a structural change to `_meta_schema()` (collection-metadata columns) or `_schema()` (the shared chunk-table schema) requires existing rows to be migrated. **Exception:** per-collection chunk-table-only changes (e.g. `migrate_acl`) do NOT bump the version — only changes to the shared `_schema()` or `_meta_schema()` require it. Every bump must also add a corresponding `MigrationSpec` entry to `SearchStore._all_migrations()`. `STORE_SCHEMA_VERSION = 0` covers all five startup migrations formalised in D3 (all have `introduced_at = 0`). The first feature that adds a real new column after D3 must set `introduced_at = 1` and bump the constant to `1`.
 
 ## Documentation map
 

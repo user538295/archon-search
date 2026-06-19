@@ -152,7 +152,7 @@ class JobResponse(BaseModel):
     status: str
     created_at: str
     updated_at: str
-    result: str | None = None
+    result: str | dict | None = None
     error: str | None = None
     namespace: str
     progress: dict | None = None

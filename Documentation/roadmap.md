@@ -85,7 +85,7 @@ The original Phase B / C retrieval slate is shipped. Items 1–8 below are all m
   - **C3b — Page number extraction** (`_page_start`, `_page_end`): ✓ **shipped**. See Status Snapshot above. Plans/briefs archived under `Completed/C3b-page-number-extraction-brief.md` and `Completed/C3b-page-number-extraction-plan.md`.
   - **C3c — Code symbol context** (`_symbol_type`, `_symbol_subtype`, `_containing_function`, `_containing_class`, `_module_path`): ✓ **shipped**. `CodeEnricher` (tree-sitter, optional `[code]` dep) enriches source-code chunks (`.py`, `.ts`, `.js`, `.go`, `.rs`, `.java`, `.sh`) with five symbol-level metadata fields. Python and TypeScript are mandatory first-class languages; other languages degrade gracefully. See `archon_search/code_enricher.py` and `Completed/C3c-code-symbol-context-plan.md`.
 - Export / import / backup / restore APIs.
-- Schema migration strategy that does not require full re-ingest.
+- ~~Schema migration strategy that does not require full re-ingest.~~ **✓ D3 shipped**: `MigrationJob` tracks rewrite-kind migrations to DONE with progress and crash recovery; five startup migrations are formalised as `MigrationSpec` entries; `GET /collections/{name}/migrations/pending` surfaces pending migrations per collection; `POST /collections/{name}/migrate` applies in-place migrations synchronously or creates a `MigrationJob` for rewrite kind; `GET /status` gains `store_schema_version` and `collections_schema_behind`; CLI `migrate` subcommand added. See `Documentation/Backlog/D3-schema-migration-tooling-team-plan.md`.
 
 ## Priority 3 — Standalone Operability
 

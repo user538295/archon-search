@@ -400,6 +400,7 @@ _KIND_TYPE_MAP: dict[str, type] = {
     "delete": DeleteJob,
     "export": ExportJob,
     "import": ImportJob,
+    "migration": MigrationJob,
 }
 
 

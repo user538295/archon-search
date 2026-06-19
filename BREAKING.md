@@ -412,9 +412,29 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 **Migration**: Configure `[search] top_k_return` in `archon-search.toml` to set the desired result count.
 **Announced in**: this release (the behavior was supported but never documented as stable).
 
+### [next release] — D3 migration tooling: new REST endpoints and `STORE_SCHEMA_VERSION` policy
+
+**Surface**: two new REST endpoints on `routes_collections.py`; `GET /status` response (`StatusResponse`).
+
+**New endpoints**:
+- `GET /collections/{name}/migrations/pending` — returns `{collection, pending: [MigrationSpec], schema_version}`. Each `MigrationSpec` has `name`, `kind` (`"in_place"`, `"rewrite"`, or `"export_rebuild"`), `description`, and `introduced_at`. Returns `404` for unknown or cross-namespace collections.
+- `POST /collections/{name}/migrate` — accepts `{backup_confirmed: bool, dry_run: bool}`. In-place-only migrations return `200` with `{migrations_applied: [name…]}` synchronously; no `MigrationJob` is created. Rewrite migrations require `backup_confirmed: true` (returns `422` without it) and return `202` with a `MigrationJob` job ID. `export_rebuild` migrations always return `422` (execution deferred to D5). `409` when a `ReindexJob` is active for the collection.
+
+**`StatusResponse` additions**:
+- `store_schema_version: int` — current `STORE_SCHEMA_VERSION` constant.
+- `collections_schema_behind: int` — count of collections whose `schema_version < STORE_SCHEMA_VERSION`.
+
+All changes are additive. Strict-schema clients will see new fields; tolerant clients are unaffected.
+
+**`STORE_SCHEMA_VERSION` bump policy**: increment this constant whenever a structural change to `_schema()` (the shared chunk-table schema) or `_meta_schema()` (the collection-metadata schema) requires existing rows to be migrated. **Exception:** per-collection chunk-table-only changes (e.g. `migrate_acl`) do NOT require a version bump — only changes to the shared `_schema()` or `_meta_schema()` require it. Every bump must also add a corresponding `MigrationSpec` entry to `SearchStore._all_migrations()`. `STORE_SCHEMA_VERSION = 0` for D3 (all five formalised startup migrations have `introduced_at = 0`).
+
+**Migration**: no action required for existing callers. Add the new endpoint paths to client schemas if strict validation is in use. Add `store_schema_version` and `collections_schema_behind` to `StatusResponse` type stubs.
+
+---
+
 ### [next release] — D3 migration tooling: new nullable fields on `JobResponse` (BE-11)
 
-**Surface**: REST (all endpoints that return `JobResponse`: `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/ingest`, `POST /jobs/export`, `POST /jobs/import`, `POST /jobs/cancel`, `POST /jobs/{id}/resume`)
+**Surface**: REST (all endpoints that return `JobResponse`: `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/ingest`, `POST /jobs/export`, `POST /jobs/import`, `DELETE /jobs/{job_id}`, `POST /jobs/{id}/resume`)
 
 **Change**: `JobResponse` gains three new nullable fields (default `null`):
 - `kind: string | null` — migration sub-kind (`"in_place"`, `"rewrite"`, `"export_rebuild"`); `null` for all non-migration jobs

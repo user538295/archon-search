@@ -611,6 +611,91 @@ def test_concurrent_ingest_503_during_rewrite_e2e(
     )
 
 
+def test_list_jobs_kind_migration_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /jobs?kind=migration is accepted by the HTTP layer and returns a valid response.
+
+    Verifies:
+      - The filter is not rejected (no 422/400).
+      - After a successful rewrite migration, total >= 1 and all returned items are
+        MigrationJobs (kind field present on the JobResponse).
+    """
+    monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
+
+    from archon_search.types import MigrationKind, MigrationSpec
+    from archon_search.sync import path_to_collection_name
+
+    dummy_spec = MigrationSpec(
+        name="filter_test_rewrite",
+        kind=MigrationKind.REWRITE,
+        description="kind-filter HTTP test rewrite spec",
+        introduced_at=999,
+    )
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        search_store = client.app.state.search_store
+        headers = _auth(api_key)
+
+        col_path = tmp_path / "filter_docs"
+        col_path.mkdir()
+        col_name = path_to_collection_name(str(col_path))
+
+        resp = client.post(
+            "/collections/",
+            json={"path": str(col_path)},
+            headers=headers,
+        )
+        assert resp.status_code == 202, f"add_collection failed: {resp.status_code} {resp.text}"
+
+        # Before any migration, the filter must still return 200 with total >= 0.
+        pre_resp = client.get("/jobs?kind=migration", headers=headers)
+        assert pre_resp.status_code == 200, (
+            f"GET /jobs?kind=migration expected 200, got {pre_resp.status_code}: {pre_resp.text}"
+        )
+        pre_body = pre_resp.json()
+        assert "total" in pre_body, f"missing 'total' in response: {pre_body!r}"
+        assert pre_body["total"] >= 0
+
+        async def _fake_pending_migrations(collection, namespace):
+            return [dummy_spec]
+
+        async def _fake_apply_rewrite(collection, namespace, spec, progress_cb=None):
+            return 0
+
+        with patch.object(search_store, "pending_migrations", _fake_pending_migrations), \
+             patch.object(search_store, "apply_rewrite_migration", _fake_apply_rewrite):
+
+            resp = client.post(
+                f"/collections/{col_name}/migrate",
+                json={"backup_confirmed": True},
+                headers=headers,
+            )
+            assert resp.status_code == 202, (
+                f"POST /migrate expected 202, got {resp.status_code}: {resp.text}"
+            )
+            job_id = resp.json()["job_id"]
+
+            # Wait for the migration job to reach terminal state.
+            job_store = client.app.state.job_store
+            _poll_job_store(job_store, job_id, timeout_s=15.0)
+
+        # After migration completes, GET /jobs?kind=migration must return total >= 1.
+        post_resp = client.get("/jobs?kind=migration", headers=headers)
+        assert post_resp.status_code == 200, (
+            f"GET /jobs?kind=migration expected 200, got {post_resp.status_code}: {post_resp.text}"
+        )
+        post_body = post_resp.json()
+        assert post_body["total"] >= 1, (
+            f"expected total >= 1 after rewrite migration, got: {post_body['total']}"
+        )
+        # All returned items must have the migration-specific fields (kind is not null).
+        for item in post_body["items"]:
+            assert item.get("kind") is not None, (
+                f"expected non-null 'kind' on migration job item: {item!r}"
+            )
+
+
 def test_empty_collection_rewrite_completes_immediately_e2e(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

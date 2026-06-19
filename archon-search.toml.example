@@ -105,8 +105,10 @@ collections = []
 watch = false
 
 [jobs]
-# Maximum number of export/import jobs that may run concurrently.
+# Maximum number of export, import, and migration jobs that may run concurrently.
 # Existing ingest/reindex/delete jobs are unaffected — they dispatch immediately.
+# MigrationJob (D3) respects this same limit: rewrite-kind migrations queue behind
+# any in-flight export/import jobs at the configured concurrency ceiling.
 max_concurrent_bulk = 1
 # Number of documents written between progress checkpoints.
 # Lower values produce more granular progress updates and finer resume granularity;

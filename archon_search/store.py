@@ -130,7 +130,7 @@ FTS_OPTIMIZE_REMOVES_DELETED: bool = True  # Plan A; change to False if Plan B a
 # Schema version for _archon_collection_meta. Starts at 0 for D3 (infrastructure-only
 # release; no new data migrations ship). Increment by 1 whenever a structural change is
 # made to _meta_schema() or _schema(), and add a corresponding MigrationSpec entry to
-# SearchStore.pending_migrations() (to be added in BE-3/D3).
+# SearchStore._all_migrations().
 # NOTE: chunk-table-only structural changes (e.g. migrate_acl which adds an acl column
 # to per-collection chunk tables) do NOT bump STORE_SCHEMA_VERSION. Only changes to
 # _meta_schema() or _schema() (the shared chunk-table schema) require a version bump.
@@ -903,7 +903,7 @@ class SearchStore:
             MigrationSpec(
                 name="migrate_per_collection_model",
                 kind=MigrationKind.IN_PLACE,
-                description="Add embedding_model column to _archon_collection_meta (pre-D3 structural migration).",
+                description="Add active_embedding_model, pending_embedding_model, needs_reindex, reindex_job_id columns to _archon_collection_meta; backfill from legacy embedding_model column and drop it (C1 structural migration).",
                 introduced_at=0,
             ),
         ]
