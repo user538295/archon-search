@@ -567,7 +567,7 @@ All tester tasks are `@pytest.mark.integration` tests using `make_real_app` (rea
     - Tests
         - #e2e_test — `test_pre_d3_startup_applies_in_place_migrations_e2e` — write a LanceDB in `tmp_path` without `schema_version` column; drive `make_real_app` lifespan; assert `schema_version` column present in `_archon_collection_meta`; assert GET `/migrations/pending` returns `{pending: []}`; assert no error logged
 
-- [ ] **T-5** — e2e: schema health status reflects live migration state #tester-role
+- [x] **T-5** — e2e: schema health status reflects live migration state #tester-role
     - — · 1.0h
     - needs BE-15 · completes S17
     - Tests

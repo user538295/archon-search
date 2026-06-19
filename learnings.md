@@ -141,6 +141,16 @@
 - Action: For any e2e test requiring lock contention: use `threading.Event` pair + `run_in_executor` to coordinate main and event-loop threads. Always lower timeout constants via `monkeypatch.setattr` (not `monkeypatch.setenv`) for module-level constants. For empty-collection rewrite tests, patch the implementation rather than wrestling with table-not-found.
 - Confidence: high
 
+**2026-06-20 — T-3 e2e crash recovery and resume tests (D3)**
+- Observation: (1) The plan spec says "force RUNNING → FAILED via direct job_store.update()" — the initial implementation skipped RUNNING and went QUEUED→FAILED directly. The fix is to add `job_store.transition(job_id, {QUEUED}, RUNNING)` before the crash injection to match the real crash scenario. (2) CancelledError inherits from BaseException (not Exception), so `except Exception` in `_migration_task` does NOT catch it — real task cancellation would leave the job in RUNNING forever. Using RuntimeError→FAILED is the correct approach to test "exception during rewrite → schema_version not updated". (3) When `STORE_SCHEMA_VERSION=0` and schema_version defaults to 0, seeding `-1` makes the FAILED (unchanged) vs DONE (updated to 0) paths distinguishable — same pattern as T-1 used. (4) `asyncio.run()` from the main thread alongside make_real_app TestClient is an established codebase pattern (15+ existing tests); architecturally debatable but accepted.
+- Action: When crash-injection tests force a RUNNING→FAILED transition via `job_store.update()`, always add the explicit QUEUED→RUNNING transition first via `job_store.transition()`. For schema_version tests where STORE_SCHEMA_VERSION==0, seed -1 to make the before/after states distinguishable.
+- Confidence: high
+
+**2026-06-20 — T-4 e2e test for pre-D3 startup migration (D3)**
+- Observation: (1) Seeding an EMPTY pre-D3 meta table (no rows, no schema_version column) does NOT prove S3 — `add_columns({"schema_version": "cast(0 as bigint)"})` applies to rows, not an empty table. The schema_version=0 seen after POST /collections/ comes from the CollectionMeta dataclass default, not from the migration. Must seed at least one row. (2) When a seeded meta row creates a 409 on POST /collections/ (name already registered), use `cfg.collections.append(str(col_path))` to pass the config-path gate directly without going through the route. (3) `caplog.at_level` wraps both the TestClient context AND the assertion block — records from the ASGI background thread are captured because Python logging handlers are global to the process. (4) The "Concurrent migration" exclusion should be an explicit zero-count assertion, not a silent filter — it is the signal that a migration ran twice unexpectedly.
+- Action: For any e2e test involving pre-D3 DB seeding: (a) always seed at least one data row; (b) read that row back via direct LanceDB read BEFORE any HTTP call to prove the migration's default (not the dataclass default) was applied; (c) use cfg.collections.append() when POST /collections/ would 409 due to a pre-existing meta row.
+- Confidence: high
+
 ## Open Questions
 - (Nothing recorded yet)
 
