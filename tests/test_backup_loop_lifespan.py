@@ -40,11 +40,7 @@ def test_backup_loop_stored_on_app_state(tmp_path: Path) -> None:
     )
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)
@@ -62,11 +58,7 @@ def test_backup_loop_is_running_as_background_task(tmp_path: Path) -> None:
     )
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)
@@ -87,11 +79,7 @@ def test_backup_loop_cancelled_on_shutdown(tmp_path: Path) -> None:
     )
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)
@@ -110,11 +98,7 @@ def test_backup_loop_disabled_when_interval_zero(tmp_path: Path) -> None:
     )
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)

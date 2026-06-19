@@ -235,8 +235,12 @@ async def test_ingest_chunks_serializes_deny_all_acl(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_app_lifespan_calls_migrate_acl(tmp_path):
-    """lifespan startup calls migrate_acl() after migrate_namespace()."""
+async def test_app_lifespan_calls_startup_migrations(tmp_path):
+    """lifespan startup calls _run_startup_migrations() which internally applies all migrations.
+
+    BE-6 consolidated the five direct migrate_*() calls into _run_startup_migrations().
+    This test verifies the lifespan wires up _run_startup_migrations correctly.
+    """
     from pathlib import Path
     from archon_search.config import SearchConfig
     from archon_search.jobs.store import JobStore
@@ -251,8 +255,6 @@ async def test_app_lifespan_calls_migrate_acl(tmp_path):
 
     # Replace the real store with a mock.
     mock_store = AsyncMock()
-    mock_store.migrate_namespace = AsyncMock()
-    mock_store.migrate_acl = AsyncMock()
     mock_store.disconnect = AsyncMock()
     app.state.search_store = mock_store
 
@@ -265,14 +267,13 @@ async def test_app_lifespan_calls_migrate_acl(tmp_path):
     async with lifespan_ctx:
         pass
 
-    # Verify call order
+    # Verify _run_startup_migrations() is called during startup (after connect)
     call_names = [c[0] for c in mock_store.method_calls]
-    assert "migrate_namespace" in call_names, "migrate_namespace() must be called during startup"
-    assert "migrate_acl" in call_names, "migrate_acl() must be called during startup"
-
-    ns_idx = call_names.index("migrate_namespace")
-    acl_idx = call_names.index("migrate_acl")
-    assert acl_idx > ns_idx, "migrate_acl() must be called after migrate_namespace()"
+    assert "_run_startup_migrations" in call_names, "_run_startup_migrations() must be called during startup"
+    assert "connect" in call_names, "connect() must be called during startup"
+    connect_idx = call_names.index("connect")
+    migration_idx = call_names.index("_run_startup_migrations")
+    assert migration_idx > connect_idx, "_run_startup_migrations() must be called after connect()"
 
 
 # ---------------------------------------------------------------------------

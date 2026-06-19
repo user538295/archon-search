@@ -7092,3 +7092,232 @@ def test_all_migrations_catalog_integrity() -> None:
         assert callable(method), (
             f"Migration '{spec.name}' in catalog but SearchStore.{spec.name} is not a callable method"
         )
+
+
+# ---------------------------------------------------------------------------
+# BE-6 · apply_in_place_migrations() + _run_startup_migrations() (extended)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_in_place_calls_add_columns_for_each_spec() -> None:
+    """Each spec in the list triggers a call to the corresponding migration method."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._locks = {}
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+    store.update_collection_meta = AsyncMock()
+
+    migrate_a = AsyncMock()
+    migrate_b = AsyncMock()
+    store.migrate_a = migrate_a  # type: ignore[attr-defined]
+    store.migrate_b = migrate_b  # type: ignore[attr-defined]
+
+    specs = [
+        MigrationSpec(name="migrate_a", kind=MigrationKind.IN_PLACE, description="A", introduced_at=0),
+        MigrationSpec(name="migrate_b", kind=MigrationKind.IN_PLACE, description="B", introduced_at=0),
+    ]
+
+    await store.apply_in_place_migrations("col1", "default", specs)
+
+    migrate_a.assert_called_once()
+    migrate_b.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_apply_in_place_is_idempotent() -> None:
+    """Calling apply_in_place_migrations twice with the same specs raises no error.
+
+    The underlying migrate_* methods are idempotent; the second call must
+    not raise even if schema_version is already up-to-date.
+    """
+    from unittest.mock import AsyncMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._locks = {}
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+    store.update_collection_meta = AsyncMock()
+
+    noop_migrate = AsyncMock()
+    store.migrate_noop = noop_migrate  # type: ignore[attr-defined]
+
+    specs = [
+        MigrationSpec(name="migrate_noop", kind=MigrationKind.IN_PLACE, description="noop", introduced_at=0),
+    ]
+
+    # First call — no error
+    await store.apply_in_place_migrations("col1", "default", specs)
+    # Second call — idempotent, no error
+    await store.apply_in_place_migrations("col1", "default", specs)
+
+    assert noop_migrate.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_apply_in_place_empty_specs_is_noop() -> None:
+    """apply_in_place_migrations with empty specs returns immediately without touching the store."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore
+
+    store = SearchStore.__new__(SearchStore)
+    store._locks = {}
+    store.get_collection_meta = AsyncMock(return_value=MagicMock(spec=CollectionMeta))
+    store.update_collection_meta = AsyncMock()
+
+    await store.apply_in_place_migrations("col1", "default", [])
+
+    store.get_collection_meta.assert_not_called()
+    store.update_collection_meta.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_in_place_unknown_collection_no_version_update() -> None:
+    """apply_in_place_migrations returns silently when the collection has no meta row."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._locks = {}
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    migrate_fn = AsyncMock()
+    store.migrate_fn = migrate_fn  # type: ignore[attr-defined]
+
+    specs = [
+        MigrationSpec(name="migrate_fn", kind=MigrationKind.IN_PLACE, description="fn", introduced_at=0),
+    ]
+
+    # Must not raise, must not call update_collection_meta
+    await store.apply_in_place_migrations("no-such-col", "default", specs)
+
+    migrate_fn.assert_called_once()  # migration still runs
+    store.update_collection_meta.assert_not_called()  # but version is not updated
+
+
+@pytest.mark.asyncio
+async def test_apply_in_place_updates_schema_version() -> None:
+    """apply_in_place_migrations updates schema_version in _archon_collection_meta after apply."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._locks = {}
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+
+    captured_metas: list[CollectionMeta] = []
+
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+
+    async def _capture_update(m: CollectionMeta) -> None:
+        captured_metas.append(m)
+
+    store.update_collection_meta = _capture_update
+
+    migrate_ok = AsyncMock()
+    store.migrate_ok = migrate_ok  # type: ignore[attr-defined]
+
+    specs = [
+        MigrationSpec(name="migrate_ok", kind=MigrationKind.IN_PLACE, description="ok", introduced_at=0),
+    ]
+
+    await store.apply_in_place_migrations("col1", "default", specs)
+
+    assert len(captured_metas) == 1
+    assert captured_metas[0].schema_version == STORE_SCHEMA_VERSION
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_startup_migrations_applies_in_place_on_startup(tmp_path: Path) -> None:
+    """_run_startup_migrations() on a pre-D3 meta table applies all in-place migrations.
+
+    Seeds a real LanceDB without the schema_version column (pre-D3 state),
+    drives _run_startup_migrations(), and asserts the schema_version column is
+    present and that the store reports pending migrations as empty.
+    """
+    import pyarrow as pa
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+
+    assert STORE_SCHEMA_VERSION == 0, "This test assumes D3 starting value"
+
+    store = SearchStore(tmp_path / "db_be6_startup")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        # Seed a pre-D3 meta table without schema_version
+        old_schema = pa.schema(
+            [f for f in SearchStore._meta_schema() if f.name != "schema_version"]
+        )
+        await db.create_table("_archon_collection_meta", schema=old_schema)
+
+        # Run startup migrations
+        await store._run_startup_migrations()
+
+        # schema_version column must now be present
+        tbl = await db.open_table("_archon_collection_meta")
+        assert "schema_version" in (await tbl.schema()).names
+
+        # No pending migrations should remain after startup (no collections seeded,
+        # so pending_migrations returns [] by definition — collection meta is absent).
+        pending = await store.pending_migrations("nonexistent-col", "default")
+        assert pending == []
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
+    """_run_startup_migrations() calls all 6 methods in the correct order."""
+    from archon_search.store import SearchStore
+
+    call_order: list[str] = []
+
+    def make_recorder(name: str):
+        async def _method():
+            call_order.append(name)
+        return _method
+
+    store = SearchStore.__new__(SearchStore)
+    store.migrate_namespace = make_recorder("migrate_namespace")
+    store.migrate_description_embedding = make_recorder("migrate_description_embedding")
+    store.migrate_acl = make_recorder("migrate_acl")
+    store.migrate_centroid_sum = make_recorder("migrate_centroid_sum")
+    store.migrate_per_collection_model = make_recorder("migrate_per_collection_model")
+    store._migrate_schema_version = make_recorder("_migrate_schema_version")
+
+    await store._run_startup_migrations()
+
+    assert call_order == [
+        "migrate_namespace",
+        "migrate_description_embedding",
+        "migrate_acl",
+        "migrate_centroid_sum",
+        "migrate_per_collection_model",
+        "_migrate_schema_version",
+    ], f"Unexpected call order: {call_order}"

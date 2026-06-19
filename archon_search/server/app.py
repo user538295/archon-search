@@ -148,11 +148,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Startup: connect search store
         await app.state.search_store.connect()
-        await app.state.search_store.migrate_namespace()
-        await app.state.search_store.migrate_description_embedding()
-        await app.state.search_store.migrate_acl()
-        await app.state.search_store.migrate_centroid_sum()
-        await app.state.search_store.migrate_per_collection_model()
+        await app.state.search_store._run_startup_migrations()
 
         # Startup: create embedder cache and optionally preload models
         embedder_cache = EmbedderCache(config.embedder_cache_size)
@@ -162,7 +158,7 @@ def create_app(
             distinct_models = {m.active_embedding_model for m in metas if m.active_embedding_model}
             await embedder_cache.preload(list(distinct_models))
 
-        # All `migrate_*` calls complete before the lifespan context yields control to the request loop
+        # All startup migrations complete before the lifespan context yields control to the request loop
 
         # Startup: warn if the multi-collection fan-out validation cap is out of
         # sync with the configured max_fanout.

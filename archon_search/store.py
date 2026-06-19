@@ -23,7 +23,7 @@ from archon_search.store_filters import build_where, _compute_fetch, _sql_quote_
 from archon_search.types import MigrationKind, MigrationSpec
 
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 # Fixed-width UTC timestamp regex: YYYY-MM-DDTHH:MM:SS.ffffffZ
@@ -817,16 +817,49 @@ class SearchStore:
                 # should prevent startup rather than silently continue with missing data.
                 raise
 
+    async def apply_in_place_migrations(
+        self, collection: str, namespace: str, specs: "list[MigrationSpec]"
+    ) -> None:
+        """Apply a list of in-place migration specs to *collection* and update its schema_version.
+
+        Each spec's ``name`` must correspond to a callable async method on ``SearchStore``.
+        The methods are called in order; each is idempotent so double-application is safe.
+        After all specs are applied, ``schema_version`` in ``_archon_collection_meta`` is
+        set to ``STORE_SCHEMA_VERSION`` via ``update_collection_meta``.
+
+        If ``specs`` is empty, returns immediately without touching the store.
+        """
+        if not specs:
+            return
+
+        for spec in specs:
+            method = getattr(self, spec.name)
+            await method()
+
+        # Update schema_version to reflect all applied migrations.
+        meta = await self.get_collection_meta(collection, namespace)
+        if meta is None:
+            return
+        await self.update_collection_meta(replace(meta, schema_version=STORE_SCHEMA_VERSION))
+
     async def _run_startup_migrations(self) -> None:
         """Run all idempotent startup migrations in order.
 
-        BE-2: adds schema_version column to _archon_collection_meta.
-        BE-6 will extend this to replace the five direct migrate_*() calls in app.py lifespan.
+        Replaces the five direct ``migrate_*()`` calls previously in ``app.py`` lifespan:
+        - ``migrate_namespace`` (BE-2: adds namespace column)
+        - ``migrate_description_embedding`` (adds description_embedding_json column)
+        - ``migrate_acl`` (adds acl column to chunk tables)
+        - ``migrate_centroid_sum`` (adds centroid_sum_json and related columns)
+        - ``migrate_per_collection_model`` (renames embedding_model → active_embedding_model)
+
+        Also adds the ``schema_version`` column to ``_archon_collection_meta`` (BE-2).
+        All operations are idempotent; calling this method multiple times is safe.
         """
-        # WARNING: This method does NOT yet replace the five migrate_*() calls in app.py
-        # lifespan (migrate_acl, migrate_namespace, etc.).  Do NOT wire this into app.py
-        # until BE-6 — that task is responsible for consolidating all startup migrations
-        # here and removing the direct call sites in the lifespan handler.
+        await self.migrate_namespace()
+        await self.migrate_description_embedding()
+        await self.migrate_acl()
+        await self.migrate_centroid_sum()
+        await self.migrate_per_collection_model()
         await self._migrate_schema_version()
 
     # Catalog of all known migrations.  Each entry is a MigrationSpec that describes
@@ -854,6 +887,12 @@ class SearchStore:
                 introduced_at=0,
             ),
             MigrationSpec(
+                name="migrate_acl",
+                kind=MigrationKind.IN_PLACE,
+                description="Add acl column to per-collection chunk tables (pre-D3 structural migration).",
+                introduced_at=0,
+            ),
+            MigrationSpec(
                 name="migrate_centroid_sum",
                 kind=MigrationKind.IN_PLACE,
                 description="Add centroid_sum_json, mutations_since_recompute, needs_recompute columns to _archon_collection_meta (pre-D3 structural migration).",
@@ -863,12 +902,6 @@ class SearchStore:
                 name="migrate_per_collection_model",
                 kind=MigrationKind.IN_PLACE,
                 description="Add embedding_model column to _archon_collection_meta (pre-D3 structural migration).",
-                introduced_at=0,
-            ),
-            MigrationSpec(
-                name="migrate_acl",
-                kind=MigrationKind.IN_PLACE,
-                description="Add acl column to per-collection chunk tables (pre-D3 structural migration).",
                 introduced_at=0,
             ),
         ]

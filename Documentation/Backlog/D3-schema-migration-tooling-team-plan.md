@@ -439,7 +439,7 @@ flowchart LR
 
 ### Phase 2 · Apply in-place migrations
 
-- [ ] **BE-6** — Add `SearchStore.apply_in_place_migrations(collection, namespace, specs)` and `SearchStore._run_startup_migrations()`; replace the five direct `migrate_*()` calls in `app.py` lifespan with `await store._run_startup_migrations()` #backend-role
+- [x] **BE-6** — Add `SearchStore.apply_in_place_migrations(collection, namespace, specs)` and `SearchStore._run_startup_migrations()`; replace the five direct `migrate_*()` calls in `app.py` lifespan with `await store._run_startup_migrations()` #backend-role
     - Frameworks & Drivers · 2.0h
     - needs BE-3 · completes S6
     - Tests

@@ -33,11 +33,7 @@ def _make_job_store(tmp_path: Path) -> JobStore:
 def _store_patches():
     return (
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     )
 
@@ -60,11 +56,7 @@ def test_scheduler_starts_with_app(tmp_path: Path) -> None:
 
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)
@@ -92,11 +84,7 @@ def test_scheduler_cancelled_on_shutdown(tmp_path: Path) -> None:
 
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)
@@ -117,11 +105,7 @@ def test_create_app_without_scheduler_sets_none(tmp_path: Path) -> None:
 
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store)
