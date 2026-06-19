@@ -6925,3 +6925,170 @@ async def test_schema_version_preserved_through_update_description(tmp_path: Pat
         assert retrieved.schema_version == 5
     finally:
         await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# BE-3 · pending_migrations()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pending_migrations_empty_when_current() -> None:
+    """pending_migrations returns [] when collection schema_version == STORE_SCHEMA_VERSION."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+
+    store = SearchStore.__new__(SearchStore)
+
+    mock_meta = MagicMock()
+    mock_meta.schema_version = STORE_SCHEMA_VERSION
+
+    store.get_collection_meta = AsyncMock(return_value=mock_meta)  # type: ignore[method-assign]
+
+    result = await store.pending_migrations("col1", "default")
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_pending_migrations_returns_specs_when_behind() -> None:
+    """pending_migrations returns all MigrationSpec entries with introduced_at > schema_version."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+    from archon_search.types import MigrationKind
+
+    assert STORE_SCHEMA_VERSION == 0, (
+        "Update schema_version=-1 to 0 when the first introduced_at=1 migration is added"
+    )
+
+    store = SearchStore.__new__(SearchStore)
+
+    mock_meta = MagicMock()
+    # NOTE: schema_version=-1 is an impossible production value (minimum is 0).
+    # We use -1 here because all five existing migrations have introduced_at=0,
+    # so no realistic value of schema_version triggers them as pending right now
+    # (0 > 0 is False). This test proves the filter logic is directionally correct.
+    # When the first introduced_at=1 migration is added, update this test to use
+    # schema_version=0 instead.
+    mock_meta.schema_version = -1  # deliberately behind
+
+    store.get_collection_meta = AsyncMock(return_value=mock_meta)  # type: ignore[method-assign]
+
+    result = await store.pending_migrations("col1", "default")
+    # All five existing in_place migrations have introduced_at=0, which is > -1
+    assert len(result) == 5
+    assert all(s.kind == MigrationKind.IN_PLACE for s in result)
+    assert all(s.introduced_at == 0 for s in result)
+    names = {s.name for s in result}
+    assert "migrate_namespace" in names
+    assert "migrate_description_embedding" in names
+    assert "migrate_centroid_sum" in names
+    assert "migrate_per_collection_model" in names
+    assert "migrate_acl" in names
+
+
+@pytest.mark.asyncio
+async def test_pending_migrations_defaults_missing_schema_version_to_zero() -> None:
+    """pending_migrations returns [] when get_collection_meta returns schema_version=0.
+
+    schema_version=0 is the value _row_to_meta() produces for a pre-D3 row that has
+    no schema_version column (tested directly in test_row_to_meta_defaults_schema_version_to_zero).
+    This test verifies that the defaulting path flows correctly through pending_migrations:
+    since all five existing migrations have introduced_at=0 and 0 > 0 is False, the
+    result is an empty list.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import SearchStore
+
+    store = SearchStore.__new__(SearchStore)
+
+    mock_meta = MagicMock()
+    # schema_version=0 is what _row_to_meta() produces for a pre-D3 row that has
+    # no schema_version column — the same as STORE_SCHEMA_VERSION (0).
+    mock_meta.schema_version = 0
+
+    store.get_collection_meta = AsyncMock(return_value=mock_meta)  # type: ignore[method-assign]
+
+    result = await store.pending_migrations("pre-d3-col", "default")
+    # All five existing migrations have introduced_at=0; 0 > 0 is False → empty list.
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_pending_migrations_unknown_collection_returns_empty() -> None:
+    """pending_migrations returns [] for an unknown collection (get_collection_meta returns None)."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.store import SearchStore
+
+    store = SearchStore.__new__(SearchStore)
+    store.get_collection_meta = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    result = await store.pending_migrations("nonexistent", "default")
+    assert result == []
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pending_migrations_real_store_empty(tmp_path: Path) -> None:
+    """pending_migrations() returns [] for a freshly created collection.
+
+    All five existing migrations have introduced_at=0 and STORE_SCHEMA_VERSION=0,
+    so introduced_at > schema_version is always False → empty list.
+    """
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+
+    assert STORE_SCHEMA_VERSION == 0, "This test assumes D3 starting value"
+
+    store = SearchStore(tmp_path / "db_pending")
+    await store.connect()
+    try:
+        meta = CollectionMeta(name="fresh-col", schema_version=0)
+        await store.update_collection_meta(meta)
+
+        result = await store.pending_migrations("fresh-col", "default")
+        assert result == []
+    finally:
+        await store.disconnect()
+
+
+def test_all_migrations_catalog_integrity() -> None:
+    """_all_migrations() catalog must satisfy ordering and naming invariants.
+
+    These invariants are preconditions for correct apply behavior in BE-6.
+    """
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+
+    specs = SearchStore._all_migrations()
+
+    assert len(specs) > 0, "Catalog must not be empty"
+
+    # All introduced_at values must be non-negative and within the current schema version.
+    for spec in specs:
+        assert spec.introduced_at >= 0, f"{spec.name}: introduced_at must be >= 0"
+        assert spec.introduced_at <= STORE_SCHEMA_VERSION, (
+            f"{spec.name}: introduced_at={spec.introduced_at} exceeds "
+            f"STORE_SCHEMA_VERSION={STORE_SCHEMA_VERSION}; "
+            "bump STORE_SCHEMA_VERSION when adding new migrations"
+        )
+
+    # Names must be unique.
+    names = [spec.name for spec in specs]
+    assert len(names) == len(set(names)), "Duplicate migration names in catalog"
+
+    # introduced_at values must be monotonically non-decreasing (catalog ordered by version).
+    for i in range(1, len(specs)):
+        assert specs[i].introduced_at >= specs[i - 1].introduced_at, (
+            f"Catalog not ordered: {specs[i - 1].name}(introduced_at={specs[i-1].introduced_at}) "
+            f"followed by {specs[i].name}(introduced_at={specs[i].introduced_at})"
+        )
+
+    # Each name must correspond to an actual callable method on SearchStore.
+    for spec in specs:
+        method = getattr(SearchStore, spec.name, None)
+        assert callable(method), (
+            f"Migration '{spec.name}' in catalog but SearchStore.{spec.name} is not a callable method"
+        )

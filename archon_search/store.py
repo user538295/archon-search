@@ -20,6 +20,7 @@ from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, Sear
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, PING_TIMEOUT_SECONDS, PING_TTL_SECONDS, _validate_namespace
 from archon_search.observability import record_stage, _stage_recorder
 from archon_search.store_filters import build_where, _compute_fetch, _sql_quote_str
+from archon_search.types import MigrationKind, MigrationSpec
 
 
 from dataclasses import dataclass, field
@@ -800,8 +801,9 @@ class SearchStore:
             return
         try:
             # Use 0 as the default for pre-existing rows: pre-D3 collections are at
-            # schema version 0 by definition. Defaulting to STORE_SCHEMA_VERSION would
-            # be wrong — these rows have NOT had all migrations applied yet.
+            # schema version 0 by definition. This is correct — all five legacy
+            # migrations have introduced_at=0, so a collection at schema_version=0
+            # is considered fully migrated (0 > 0 is False → no pending migrations).
             await table.add_columns({"schema_version": "cast(0 as bigint)"})
             logger.info("schema_version migration: added schema_version column to %s", _META_TABLE)
         except RuntimeError as exc:
@@ -826,6 +828,72 @@ class SearchStore:
         # until BE-6 — that task is responsible for consolidating all startup migrations
         # here and removing the direct call sites in the lifespan handler.
         await self._migrate_schema_version()
+
+    # Catalog of all known migrations.  Each entry is a MigrationSpec that describes
+    # one idempotent structural change.  The five existing migrate_*() methods are
+    # formalised here with introduced_at=0 (already applied on all pre-D3 stores).
+    # Future migrations must increment STORE_SCHEMA_VERSION and add a new entry here.
+    @staticmethod
+    def _all_migrations() -> "list[MigrationSpec]":
+        """Return the full ordered catalog of MigrationSpec objects."""
+        # NOTE: The five pre-D3 migration methods catalogued here have global signatures:
+        # migrate_*(self) → None — they operate on ALL collections at once.
+        # BE-6 (apply_in_place_migrations) must reconcile this with its per-collection
+        # call pattern. These methods are idempotent, so calling them multiple times is safe.
+        return [
+            MigrationSpec(
+                name="migrate_namespace",
+                kind=MigrationKind.IN_PLACE,
+                description="Add namespace column to _archon_collection_meta (pre-D3 structural migration).",
+                introduced_at=0,
+            ),
+            MigrationSpec(
+                name="migrate_description_embedding",
+                kind=MigrationKind.IN_PLACE,
+                description="Add description_embedding_json column to _archon_collection_meta (pre-D3 structural migration).",
+                introduced_at=0,
+            ),
+            MigrationSpec(
+                name="migrate_centroid_sum",
+                kind=MigrationKind.IN_PLACE,
+                description="Add centroid_sum_json, mutations_since_recompute, needs_recompute columns to _archon_collection_meta (pre-D3 structural migration).",
+                introduced_at=0,
+            ),
+            MigrationSpec(
+                name="migrate_per_collection_model",
+                kind=MigrationKind.IN_PLACE,
+                description="Add embedding_model column to _archon_collection_meta (pre-D3 structural migration).",
+                introduced_at=0,
+            ),
+            MigrationSpec(
+                name="migrate_acl",
+                kind=MigrationKind.IN_PLACE,
+                description="Add acl column to per-collection chunk tables (pre-D3 structural migration).",
+                introduced_at=0,
+            ),
+        ]
+
+    async def pending_migrations(self, collection: str, namespace: str = DEFAULT_NAMESPACE) -> "list[MigrationSpec]":
+        """Return the list of MigrationSpec entries not yet applied to *collection*.
+
+        A migration is pending when its ``introduced_at`` version is strictly
+        greater than the collection's current ``schema_version``.
+
+        Returns an empty list when the collection is fully up-to-date
+        (``schema_version == STORE_SCHEMA_VERSION``).
+
+        ``get_collection_meta`` already defaults ``schema_version`` to ``0``
+        for pre-D3 rows that lack the column, so no special-casing is needed here.
+        """
+        meta = await self.get_collection_meta(collection, namespace)
+        if meta is None:
+            return []
+        current_version: int = meta.schema_version
+        return [
+            spec
+            for spec in self._all_migrations()
+            if spec.introduced_at > current_version
+        ]
 
     async def update_collection_meta(self, meta: "CollectionMeta") -> None:
         _validate_namespace(meta.namespace)

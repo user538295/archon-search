@@ -409,7 +409,7 @@ flowchart LR
         - #unit_test — `test_collection_meta_schema_version_default` — `CollectionMeta()` has `schema_version == 0`
         - #integration_test — `test_schema_version_column_added_idempotently` — calling `_run_startup_migrations()` twice on a real LanceDB does not raise; `schema_version` column present after first call
 
-- [ ] **BE-3** — Add `SearchStore.pending_migrations(collection, namespace)` returning `list[MigrationSpec]`; classify the five existing `migrate_*` methods as `in_place` with `introduced_at=0` #backend-role
+- [x] **BE-3** — Add `SearchStore.pending_migrations(collection, namespace)` returning `list[MigrationSpec]`; classify the five existing `migrate_*` methods as `in_place` with `introduced_at=0` #backend-role
     - Frameworks & Drivers · 3.0h
     - needs BE-2 · completes S2, S3
     - Tests
