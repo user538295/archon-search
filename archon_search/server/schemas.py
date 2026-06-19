@@ -160,6 +160,10 @@ class JobResponse(BaseModel):
     collection: str | None = None
     output_path: str | None = None
     archive_path: str | None = None
+    # D3 MigrationJob fields. Nullable and additive: non-migration jobs get None.
+    kind: str | None = None
+    migrations_applied: list[str] | None = None
+    backup_confirmed: bool | None = None
 
 
 class JobListResponse(BaseModel):

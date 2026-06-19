@@ -411,3 +411,18 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 **Change**: The `top_k` field in `SearchRequest` is now ignored at the route level; the pipeline uses `config.top_k_return` instead. Previously, each request could specify its own `top_k`.
 **Migration**: Configure `[search] top_k_return` in `archon-search.toml` to set the desired result count.
 **Announced in**: this release (the behavior was supported but never documented as stable).
+
+### [next release] — D3 migration tooling: new nullable fields on `JobResponse` (BE-11)
+
+**Surface**: REST (all endpoints that return `JobResponse`: `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/ingest`, `POST /jobs/export`, `POST /jobs/import`, `POST /jobs/cancel`, `POST /jobs/{id}/resume`)
+
+**Change**: `JobResponse` gains three new nullable fields (default `null`):
+- `kind: string | null` — migration sub-kind (`"in_place"`, `"rewrite"`, `"export_rebuild"`); `null` for all non-migration jobs
+- `migrations_applied: string[] | null` — list of migration names applied by a `MigrationJob`; `null` for all non-migration jobs
+- `backup_confirmed: boolean | null` — whether the operator confirmed a backup before a rewrite migration; `null` for all non-migration jobs
+
+For tolerant JSON consumers: fully additive — no client changes required. For strict-validating REST clients (`extra="forbid"` schemas): the three new keys are a true contract change — relax the client schema or regenerate from the updated OpenAPI snapshot.
+
+**Migration**: regenerate client types from `GET /openapi.json`. No behavior changes to existing job kinds.
+
+**Announced in**: this release.

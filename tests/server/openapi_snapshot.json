@@ -1248,6 +1248,17 @@
             ],
             "title": "Archive Path"
           },
+          "backup_confirmed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backup Confirmed"
+          },
           "collection": {
             "anyOf": [
               {
@@ -1277,6 +1288,31 @@
           "job_id": {
             "title": "Job Id",
             "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "migrations_applied": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Migrations Applied"
           },
           "namespace": {
             "title": "Namespace",

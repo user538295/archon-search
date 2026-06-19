@@ -3464,3 +3464,106 @@ def test_post_migrate_apply_failure_returns_500(
     data = response.json()
     assert "detail" in data
     assert "migration failed" in data["detail"]
+
+
+# ---------------------------------------------------------------------------
+# JobResponse migration fields (BE-11)
+# ---------------------------------------------------------------------------
+
+
+def test_job_response_migration_fields_default_none() -> None:
+    """JobResponse from a base IngestJob serializes migrations_applied=None and backup_confirmed=None."""
+    from archon_search.jobs.model import job_to_dict
+    from archon_search.server.schemas import JobResponse
+    from archon_search.types import IngestJob, JobStatus
+
+    job = IngestJob(
+        job_id="job-001",
+        status=JobStatus.DONE,
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+        namespace="default",
+    )
+
+    d = job_to_dict(job)
+    resp = JobResponse(**d)
+
+    assert resp.kind is None
+    assert resp.migrations_applied is None
+    assert resp.backup_confirmed is None
+
+
+def test_job_response_migration_fields_populated() -> None:
+    """JobResponse from a MigrationJob serializes migrations_applied and backup_confirmed correctly."""
+    from archon_search.jobs.model import job_to_dict
+    from archon_search.server.schemas import JobResponse
+    from archon_search.types import MigrationJob, MigrationKind, JobStatus
+
+    job = MigrationJob(
+        job_id="job-002",
+        status=JobStatus.DONE,
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+        namespace="default",
+        collection="my-collection",
+        kind=MigrationKind.IN_PLACE,
+        migrations_applied=["migrate_namespace", "migrate_acl"],
+        backup_confirmed=True,
+    )
+
+    d = job_to_dict(job)
+    resp = JobResponse(**d)
+
+    assert resp.kind == "in_place"
+    assert resp.migrations_applied == ["migrate_namespace", "migrate_acl"]
+    assert resp.backup_confirmed is True
+
+
+def test_job_response_backup_confirmed_false_not_coerced_to_none() -> None:
+    """backup_confirmed=False is preserved as False, not coerced to None."""
+    from archon_search.jobs.model import job_to_dict
+    from archon_search.server.schemas import JobResponse
+    from archon_search.types import MigrationJob, MigrationKind, JobStatus
+
+    job = MigrationJob(
+        job_id="job-003",
+        status=JobStatus.DONE,
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+        namespace="default",
+        collection="my-collection",
+        kind=MigrationKind.IN_PLACE,
+        migrations_applied=[],
+        backup_confirmed=False,
+    )
+
+    d = job_to_dict(job)
+    resp = JobResponse(**d)
+
+    assert resp.backup_confirmed is False
+    assert resp.backup_confirmed is not None
+
+
+def test_job_response_migrations_applied_empty_list_not_coerced_to_none() -> None:
+    """migrations_applied=[] is preserved as empty list, not coerced to None."""
+    from archon_search.jobs.model import job_to_dict
+    from archon_search.server.schemas import JobResponse
+    from archon_search.types import MigrationJob, MigrationKind, JobStatus
+
+    job = MigrationJob(
+        job_id="job-004",
+        status=JobStatus.DONE,
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+        namespace="default",
+        collection="my-collection",
+        kind=MigrationKind.IN_PLACE,
+        migrations_applied=[],
+        backup_confirmed=True,
+    )
+
+    d = job_to_dict(job)
+    resp = JobResponse(**d)
+
+    assert resp.migrations_applied == []
+    assert resp.migrations_applied is not None

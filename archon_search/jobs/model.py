@@ -28,12 +28,16 @@ def get_jobs_file() -> Path:
 def job_to_dict(job: IngestJob) -> dict:
     """Serialize an IngestJob to a plain dict for JSON responses.
 
-    Subclass-specific fields (`source`, `collection`, `output_path`,
-    `archive_path`) are surfaced via :func:`getattr` so that base ``IngestJob``
-    instances serialize them as ``None`` while ``ExportJob`` / ``ImportJob``
-    instances carry the real values. Added in D2-1.4 to fix a serialization
-    gap where bulk-job-specific fields were dropped from REST responses.
+    Subclass-specific fields are surfaced via :func:`getattr` so that base
+    ``IngestJob`` instances serialize them as ``None`` while the relevant
+    subclass instances carry real values:
+
+    - D2-1.4: ``source``, ``collection``, ``output_path``, ``archive_path``
+      (``ExportJob`` / ``ImportJob``)
+    - D3: ``kind``, ``migrations_applied``, ``backup_confirmed``
+      (``MigrationJob``; ``kind`` is serialized as the enum ``.value`` string)
     """
+    k = getattr(job, "kind", None)
     return {
         "job_id": job.job_id,
         "status": job.status.value,
@@ -47,9 +51,9 @@ def job_to_dict(job: IngestJob) -> dict:
         "collection": getattr(job, "collection", None),
         "output_path": getattr(job, "output_path", None),
         "archive_path": getattr(job, "archive_path", None),
+        "kind": k.value if k is not None else None,
         "migrations_applied": getattr(job, "migrations_applied", None),
         "backup_confirmed": getattr(job, "backup_confirmed", None),
-        "kind": getattr(job, "kind", None),
     }
 
 

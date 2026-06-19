@@ -488,7 +488,7 @@ flowchart LR
         - [x] #unit_test — `test_list_queued_bulk_includes_migration_job` — `list_queued_bulk()` returns `MigrationJob` alongside `ExportJob`/`ImportJob`
         - [x] #unit_test — `test_job_to_dict_includes_migration_fields` — `migrations_applied` and `backup_confirmed` appear in dict; existing jobs get `None` for both
 
-- [ ] **BE-11** — Add `migrations_applied: list[str] | None = None` and `backup_confirmed: bool | None = None` to `JobResponse` in `schemas.py`; regenerate OpenAPI snapshot with `uv run --python 3.12` #backend-role
+- [x] **BE-11** — Add `migrations_applied: list[str] | None = None` and `backup_confirmed: bool | None = None` to `JobResponse` in `schemas.py`; regenerate OpenAPI snapshot with `uv run --python 3.12` #backend-role
     - Presentation · 1.5h
     - needs BE-10 · completes C2
     - Tests
