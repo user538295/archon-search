@@ -3,16 +3,32 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from pathlib import Path
 
 import click
+import httpx
 import tomlkit
 
 from archon_search.config import get_default_config_path, load_config
 from archon_search.embedder import make_embedder
+from archon_search.key_manager import load_or_generate_key
 from archon_search.observability import bind_stage_recorder, new_correlation_id
 from archon_search.pipeline import create_pipeline
+
+_DEFAULT_API_URL = "http://localhost:8765"
+
+
+def _resolve_api_key(api_key: str | None) -> str:
+    """Return the API key from the option, env var, or the key file."""
+    if api_key:
+        return api_key
+    env_key = os.environ.get("ARCHON_SEARCH_API_KEY")
+    if env_key:
+        return env_key
+    key, _ = load_or_generate_key()
+    return key
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +298,56 @@ def reindex_metadata_cmd(
     except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
+
+
+@collection.command("migrate")
+@click.argument("collection_name")
+@click.option("--dry-run", is_flag=True, default=False, help="Print pending migrations without applying (default behaviour)")
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def migrate_cmd(collection_name: str, dry_run: bool, api_url: str, api_key: str | None) -> None:
+    """Show pending schema migrations for a collection.
+
+    Without flags (or with --dry-run) prints the list of pending migrations
+    and exits without modifying anything.
+    """
+    key = _resolve_api_key(api_key)
+    headers = {"Authorization": f"Bearer {key}"}
+    url = f"{api_url.rstrip('/')}/collections/{collection_name}/migrations/pending"
+
+    try:
+        resp = httpx.get(url, headers=headers)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code == 404:
+        click.echo(f"Error: collection '{collection_name}' not found.", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code != 200:
+        click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
+        raise SystemExit(1)
+
+    data = resp.json()
+    pending = data.get("pending", [])
+
+    if not pending:
+        click.echo(f"Collection '{collection_name}' is up to date — no pending migrations.")
+        return
+
+    click.echo(f"Pending migrations for '{collection_name}' (schema_version={data.get('schema_version', 0)}):")
+    for spec in pending:
+        click.echo(f"  - {spec['name']}  kind={spec['kind']}  {spec['description']}")
 
 
 @collection.command("reindex")

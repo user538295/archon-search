@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import httpx
 import pytest
 from click.testing import CliRunner
 
@@ -435,3 +436,99 @@ def test_cli_reindex_empty_active_model_uses_global_embedder() -> None:
     assert result.exit_code == 0, result.output
     mock_make.assert_not_called()
     pipeline.store.update_collection_meta.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# BE-5: collection migrate --dry-run subcommand
+# ---------------------------------------------------------------------------
+
+
+def _pending_response(collection: str, specs: list[dict], schema_version: int = 0) -> dict:
+    """Build a MigrationPendingResponse-shaped dict."""
+    return {
+        "collection": collection,
+        "pending": specs,
+        "schema_version": schema_version,
+    }
+
+
+def _mock_http_response(status_code: int, body: dict) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = body
+    return resp
+
+
+def test_migrate_cli_dry_run_prints_pending() -> None:
+    """--dry-run fetches GET /collections/{name}/migrations/pending and prints migration names."""
+    runner = CliRunner()
+    specs = [
+        {"name": "migrate_namespace", "kind": "in_place", "description": "Add namespace column", "introduced_at": 0},
+        {"name": "migrate_description_embedding", "kind": "in_place", "description": "Add description_embedding", "introduced_at": 0},
+    ]
+    get_resp = _mock_http_response(200, _pending_response("mycol", specs))
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=get_resp) as mock_get:
+        result = runner.invoke(collection, ["migrate", "mycol", "--dry-run", "--api-key", "test-key"])
+
+    assert result.exit_code == 0, result.output
+    assert "migrate_namespace" in result.output
+    assert "migrate_description_embedding" in result.output
+    mock_get.assert_called_once()
+    call_url = mock_get.call_args[0][0]
+    assert "/collections/mycol/migrations/pending" in call_url
+    _, call_kwargs = mock_get.call_args
+    assert call_kwargs.get("headers", {}).get("Authorization") == "Bearer test-key"
+
+
+def test_migrate_cli_no_flags_defaults_to_dry_run() -> None:
+    """Running without flags behaves identically to --dry-run (prints pending, no mutation)."""
+    runner = CliRunner()
+    specs = [
+        {"name": "migrate_acl", "kind": "in_place", "description": "Add ACL columns", "introduced_at": 0},
+    ]
+    get_resp = _mock_http_response(200, _pending_response("mycol", specs))
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=get_resp) as mock_get:
+        with patch("archon_search.cli.collection.httpx.post") as mock_post:
+            result = runner.invoke(collection, ["migrate", "mycol", "--api-key", "test-key"])
+
+    assert result.exit_code == 0, result.output
+    assert "migrate_acl" in result.output
+    mock_get.assert_called_once()
+    mock_post.assert_not_called()
+
+
+def test_migrate_cli_empty_pending_prints_up_to_date() -> None:
+    """When no migrations are pending, CLI prints an 'up to date' message."""
+    runner = CliRunner()
+    get_resp = _mock_http_response(200, _pending_response("mycol", []))
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=get_resp):
+        result = runner.invoke(collection, ["migrate", "mycol", "--dry-run", "--api-key", "test-key"])
+
+    assert result.exit_code == 0, result.output
+    assert "up to date" in result.output.lower() or "no pending" in result.output.lower()
+
+
+def test_migrate_cli_404_prints_not_found() -> None:
+    """404 response prints collection-not-found error and exits with code 1."""
+    runner = CliRunner()
+    get_resp = _mock_http_response(404, {"detail": "Collection 'mycol' not found"})
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=get_resp):
+        result = runner.invoke(collection, ["migrate", "mycol", "--api-key", "test-key"])
+
+    assert result.exit_code == 1
+    assert "not found" in result.output.lower()
+
+
+def test_migrate_cli_connection_error_exits_1() -> None:
+    """Connection failure prints error and exits with code 1."""
+    runner = CliRunner()
+
+    with patch("archon_search.cli.collection.httpx.get", side_effect=httpx.ConnectError("Connection refused")):
+        result = runner.invoke(collection, ["migrate", "mycol", "--api-key", "test-key"])
+
+    assert result.exit_code == 1
+    assert "error contacting server" in result.output.lower()

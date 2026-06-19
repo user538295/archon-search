@@ -427,13 +427,13 @@ flowchart LR
         - #unit_test — `test_get_migrations_pending_404_unknown_collection` — returns 404 for a non-existent collection
         - #unit_test — `test_get_migrations_pending_export_rebuild_kind` — export_rebuild migration appears in list with correct kind
 
-- [ ] **BE-5** — Add `archon-search collection migrate <name> [--dry-run]` subcommand to `cli/collection.py`; default behavior (no flags) prints pending migrations and exits #backend-role
+- [x] **BE-5** — Add `archon-search collection migrate <name> [--dry-run]` subcommand to `cli/collection.py`; default behavior (no flags) prints pending migrations and exits #backend-role
     - Presentation · 2.0h
     - needs BE-4 · completes S1
     - Tests
-        - #unit_test — `test_migrate_cli_dry_run_prints_pending` — `CliRunner` + mocked `httpx.get` returning pending list; output contains migration names
-        - #unit_test — `test_migrate_cli_no_flags_defaults_to_dry_run` — running without flags behaves identically to `--dry-run`
-        - #unit_test — `test_migrate_cli_empty_pending_prints_up_to_date` — clean output when no migrations pending
+        - [x] #unit_test — `test_migrate_cli_dry_run_prints_pending` — `CliRunner` + mocked `httpx.get` returning pending list; output contains migration names
+        - [x] #unit_test — `test_migrate_cli_no_flags_defaults_to_dry_run` — running without flags behaves identically to `--dry-run`
+        - [x] #unit_test — `test_migrate_cli_empty_pending_prints_up_to_date` — clean output when no migrations pending
 
 ---
 
