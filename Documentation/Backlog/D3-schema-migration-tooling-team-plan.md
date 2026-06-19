@@ -400,7 +400,7 @@ flowchart LR
         - #unit_test — `test_migration_spec_dataclass_fields` — MigrationSpec has name, kind, description, introduced_at
         - #unit_test — `test_migration_kind_enum_values` — MigrationKind has in_place, rewrite, export_rebuild members
 
-- [ ] **BE-2** — Add `STORE_SCHEMA_VERSION = 0` to `store.py`; add `schema_version` column to `_meta_schema()` and `_row_to_meta()`; add `schema_version: int = 0` to `CollectionMeta` in `collection_meta.py` #backend-role
+- [x] **BE-2** — Add `STORE_SCHEMA_VERSION = 0` to `store.py`; add `schema_version` column to `_meta_schema()` and `_row_to_meta()`; add `schema_version: int = 0` to `CollectionMeta` in `collection_meta.py` #backend-role
     - Frameworks & Drivers · 3.0h
     - needs BE-1 · completes (foundation for BE-3)
     - Tests

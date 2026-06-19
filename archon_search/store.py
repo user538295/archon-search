@@ -126,6 +126,15 @@ _META_MAX_VAL_LEN = 4096
 # This constant is set manually after the spike (Task 1.1) and committed as part of C6.
 FTS_OPTIMIZE_REMOVES_DELETED: bool = True  # Plan A; change to False if Plan B applies
 
+# Schema version for _archon_collection_meta. Starts at 0 for D3 (infrastructure-only
+# release; no new data migrations ship). Increment by 1 whenever a structural change is
+# made to _meta_schema() or _schema(), and add a corresponding MigrationSpec entry to
+# SearchStore.pending_migrations() (to be added in BE-3/D3).
+# NOTE: chunk-table-only structural changes (e.g. migrate_acl which adds an acl column
+# to per-collection chunk tables) do NOT bump STORE_SCHEMA_VERSION. Only changes to
+# _meta_schema() or _schema() (the shared chunk-table schema) require a version bump.
+STORE_SCHEMA_VERSION: int = 0
+
 
 # ---------------------------------------------------------------------------
 # SQL fragment helpers — defense-in-depth behind upstream identifier regexes.
@@ -392,6 +401,7 @@ class SearchStore:
                 pa.field("centroid_sum_json", pa.utf8(), nullable=True),
                 pa.field("mutations_since_recompute", pa.int64(), nullable=True),
                 pa.field("needs_recompute", pa.bool_(), nullable=True),
+                pa.field("schema_version", pa.int64(), nullable=True),
             ]
         )
 
@@ -529,6 +539,7 @@ class SearchStore:
                 centroid_sum = None
         mutations_since_recompute = int(row.get("mutations_since_recompute") or 0)
         needs_recompute = bool(row.get("needs_recompute") or False)
+        schema_version = int(row.get("schema_version") or 0)
         return CollectionMeta(
             name=row["name"],
             description=row["description"] if row["description"] else None,
@@ -547,6 +558,7 @@ class SearchStore:
             described_at_doc_count=described_at,
             namespace=row.get("namespace") or DEFAULT_NAMESPACE,
             description_embedding=description_embedding,
+            schema_version=schema_version,
         )
 
     async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> "CollectionMeta | None":
@@ -776,6 +788,45 @@ class SearchStore:
                 else:
                     logger.warning("acl migration: skipping %r due to RuntimeError — %s", name, exc)
 
+    async def _migrate_schema_version(self) -> None:
+        """Idempotent: adds schema_version column to _archon_collection_meta if absent."""
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        table = await db.open_table(_META_TABLE)
+        schema_names = (await table.schema()).names
+        if "schema_version" in schema_names:
+            return
+        try:
+            # Use 0 as the default for pre-existing rows: pre-D3 collections are at
+            # schema version 0 by definition. Defaulting to STORE_SCHEMA_VERSION would
+            # be wrong — these rows have NOT had all migrations applied yet.
+            await table.add_columns({"schema_version": "cast(0 as bigint)"})
+            logger.info("schema_version migration: added schema_version column to %s", _META_TABLE)
+        except RuntimeError as exc:
+            if "already exists" in str(exc).lower():
+                logger.warning("Concurrent migration: schema_version column already added — %s", exc)
+            else:
+                # Re-raise unexpected RuntimeError: a failure here means the meta table
+                # itself is corrupt or in an unrecoverable state.  Unlike migrate_acl
+                # (which swallows per-collection errors so one bad collection does not
+                # block others), a broken _archon_collection_meta is a hard failure that
+                # should prevent startup rather than silently continue with missing data.
+                raise
+
+    async def _run_startup_migrations(self) -> None:
+        """Run all idempotent startup migrations in order.
+
+        BE-2: adds schema_version column to _archon_collection_meta.
+        BE-6 will extend this to replace the five direct migrate_*() calls in app.py lifespan.
+        """
+        # WARNING: This method does NOT yet replace the five migrate_*() calls in app.py
+        # lifespan (migrate_acl, migrate_namespace, etc.).  Do NOT wire this into app.py
+        # until BE-6 — that task is responsible for consolidating all startup migrations
+        # here and removing the direct call sites in the lifespan handler.
+        await self._migrate_schema_version()
+
     async def update_collection_meta(self, meta: "CollectionMeta") -> None:
         _validate_namespace(meta.namespace)
         self._validate_collection(meta.name)
@@ -843,6 +894,7 @@ class SearchStore:
                         "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
                         "mutations_since_recompute": meta.mutations_since_recompute,
                         "needs_recompute": meta.needs_recompute,
+                        "schema_version": meta.schema_version,
                     }
                 ]
             )
@@ -896,6 +948,7 @@ class SearchStore:
                 namespace=existing.namespace,
                 mutations_since_recompute=existing.mutations_since_recompute,
                 needs_recompute=existing.needs_recompute,
+                schema_version=existing.schema_version,
             )
             await self._do_write_meta_unlocked(db, collection, updated)
         finally:
@@ -974,6 +1027,7 @@ class SearchStore:
                     "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
                     "mutations_since_recompute": meta.mutations_since_recompute,
                     "needs_recompute": meta.needs_recompute,
+                    "schema_version": meta.schema_version,
                 }
             ]
         )
@@ -1034,6 +1088,7 @@ class SearchStore:
                     namespace=existing.namespace,
                     mutations_since_recompute=existing.mutations_since_recompute,
                     needs_recompute=True,
+                    schema_version=existing.schema_version,
                 )
                 await self._do_write_meta_unlocked(db, collection, patched)
                 return True
@@ -1062,6 +1117,7 @@ class SearchStore:
                     namespace=existing.namespace,
                     mutations_since_recompute=existing.mutations_since_recompute,
                     needs_recompute=True,
+                    schema_version=existing.schema_version,
                 )
                 await self._do_write_meta_unlocked(db, collection, patched)
                 return True
@@ -1089,6 +1145,7 @@ class SearchStore:
                 namespace=existing.namespace,
                 mutations_since_recompute=new_mutations,
                 needs_recompute=existing.needs_recompute,
+                schema_version=existing.schema_version,
             )
             await self._do_write_meta_unlocked(db, collection, new_meta)
             return new_meta.mutations_since_recompute >= self._config.centroid_recompute_threshold or new_meta.needs_recompute
@@ -1099,6 +1156,7 @@ class SearchStore:
                 new_meta = CollectionMeta(
                     name=collection, active_embedding_model=embedding_model,
                     namespace=namespace, needs_recompute=True,
+                    schema_version=STORE_SCHEMA_VERSION,
                 )
                 await self._do_write_meta_unlocked(db, collection, new_meta)
                 return True
@@ -1113,6 +1171,7 @@ class SearchStore:
                 active_embedding_model=embedding_model,
                 namespace=namespace,
                 mutations_since_recompute=n,
+                schema_version=STORE_SCHEMA_VERSION,
             )
             await self._do_write_meta_unlocked(db, collection, new_meta)
             return False
@@ -1164,6 +1223,7 @@ class SearchStore:
                 namespace=existing.namespace,
                 mutations_since_recompute=new_mutations,
                 needs_recompute=True,
+                schema_version=existing.schema_version,
             )
             await self._do_write_meta_unlocked(db, collection, patched)
             return
@@ -1198,6 +1258,7 @@ class SearchStore:
             namespace=existing.namespace,
             mutations_since_recompute=new_mutations,
             needs_recompute=existing.needs_recompute,
+            schema_version=existing.schema_version,
         )
         await self._do_write_meta_unlocked(db, collection, new_meta)
 

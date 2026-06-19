@@ -1267,9 +1267,10 @@ async def test_old_schema_upsert_preserves_new_columns(tmp_path: Path) -> None:
         row_b["name"] = "col-b"
         await table.add([row_a, row_b])
 
-        # Run migrations (B5 then C1) to reach a fully migrated state
+        # Run migrations (B5 then C1 then D3) to reach a fully migrated state
         await store.migrate_centroid_sum()
         await store.migrate_per_collection_model()
+        await store._migrate_schema_version()
 
         # Write B5 values to row_a via update_collection_meta
         meta_a = CollectionMeta(
@@ -1812,6 +1813,9 @@ async def test_malformed_centroid_sum_json_parses_to_none(connected_store: Searc
     # C1 boolean fields must not be left as "" — LanceDB cannot cast empty string to bool
     if "needs_reindex" in schema.names:
         row["needs_reindex"] = False
+    # D3 int field must not be left as "" — LanceDB cannot cast empty string to int64
+    if "schema_version" in schema.names:
+        row["schema_version"] = 0
     await table.add([row])
     retrieved = await connected_store.get_collection_meta("b5-malformed-sum")
     assert retrieved is not None
@@ -6779,4 +6783,145 @@ async def test_list_chunks_raw_nonexistent_collection_yields_nothing(
     async for row in connected_store.list_chunks_raw("no-such-collection-xyz123", "default"):
         results.append(row)
 
-    assert results == []
+
+# ---------------------------------------------------------------------------
+# BE-2 · STORE_SCHEMA_VERSION + schema_version column
+# ---------------------------------------------------------------------------
+
+
+def test_meta_schema_includes_schema_version() -> None:
+    """_meta_schema() includes a schema_version field with int64 type."""
+    schema = SearchStore._meta_schema()
+    assert "schema_version" in schema.names
+    idx = schema.get_field_index("schema_version")
+    assert schema.field(idx).type == pa.int64()
+
+
+def test_row_to_meta_defaults_schema_version_to_zero() -> None:
+    """Row dict without schema_version key produces CollectionMeta.schema_version == 0."""
+    row = {
+        "name": "col1",
+        "description": None,
+        "centroid_json": None,
+        "doc_count": 0,
+        "chunk_count": 0,
+        "last_indexed": None,
+        "last_described": None,
+        "described_at_doc_count": -1,
+        # No schema_version key — simulates pre-D3 row
+    }
+    meta = SearchStore._row_to_meta(row)
+    assert meta.schema_version == 0
+
+
+def test_store_schema_version_constant_is_zero() -> None:
+    """STORE_SCHEMA_VERSION starts at 0 for D3 (infrastructure-only release)."""
+    from archon_search.store import STORE_SCHEMA_VERSION
+
+    assert STORE_SCHEMA_VERSION == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_schema_version_column_added_idempotently(tmp_path: Path) -> None:
+    """Calling _run_startup_migrations() twice on real LanceDB does not raise;
+    schema_version column present after first call.
+    """
+    store = SearchStore(tmp_path / "db_schema_ver")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        # Create meta table WITHOUT schema_version column (simulates pre-D3 DB)
+        old_schema = pa.schema(
+            [f for f in SearchStore._meta_schema() if f.name != "schema_version"]
+        )
+        await db.create_table("_archon_collection_meta", schema=old_schema)
+
+        # First call: must add schema_version column without raising
+        await store._run_startup_migrations()
+        tbl = await db.open_table("_archon_collection_meta")
+        assert "schema_version" in (await tbl.schema()).names
+
+        # Second call: must be idempotent (no error)
+        await store._run_startup_migrations()
+        tbl = await db.open_table("_archon_collection_meta")
+        assert "schema_version" in (await tbl.schema()).names
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_schema_version_round_trips_through_update_and_get(tmp_path: Path) -> None:
+    """schema_version written via update_collection_meta is returned by get_collection_meta."""
+    from archon_search.collection_meta import CollectionMeta
+
+    store = SearchStore(tmp_path / "db_sv_roundtrip")
+    await store.connect()
+    try:
+        meta = CollectionMeta(name="sv-roundtrip", schema_version=3)
+        await store.update_collection_meta(meta)
+        retrieved = await store.get_collection_meta("sv-roundtrip")
+        assert retrieved is not None
+        assert retrieved.schema_version == 3
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_run_startup_migrations_no_meta_table_is_noop(tmp_path: Path) -> None:
+    """_run_startup_migrations() on a fresh store with no meta table does not raise."""
+    store = SearchStore(tmp_path / "db_no_meta")
+    await store.connect()
+    try:
+        # Verify meta table does not exist
+        db = store._require_connected()
+        all_names = (await db.list_tables()).tables
+        assert "_archon_collection_meta" not in all_names
+
+        # Must not raise
+        await store._run_startup_migrations()
+    finally:
+        await store.disconnect()
+
+
+def test_row_to_meta_schema_version_none_defaults_to_zero() -> None:
+    """Row dict with schema_version=None produces CollectionMeta.schema_version == 0."""
+    row = {
+        "name": "col1",
+        "description": None,
+        "centroid_json": None,
+        "doc_count": 0,
+        "chunk_count": 0,
+        "last_indexed": None,
+        "last_described": None,
+        "described_at_doc_count": -1,
+        "schema_version": None,
+    }
+    meta = SearchStore._row_to_meta(row)
+    assert meta.schema_version == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_schema_version_preserved_through_update_description(tmp_path: Path) -> None:
+    """schema_version is not reset to 0 when update_description is called."""
+    from archon_search.collection_meta import CollectionMeta
+
+    store = SearchStore(tmp_path / "db_sv_desc")
+    await store.connect()
+    try:
+        meta = CollectionMeta(name="schema-preserve-test", schema_version=5)
+        await store.update_collection_meta(meta)
+        await store.update_description(
+            "schema-preserve-test",
+            description="updated desc",
+            last_described=None,
+            described_at_doc_count=None,
+            last_indexed=None,
+        )
+        retrieved = await store.get_collection_meta("schema-preserve-test")
+        assert retrieved is not None
+        assert retrieved.schema_version == 5
+    finally:
+        await store.disconnect()

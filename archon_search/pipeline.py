@@ -596,6 +596,7 @@ class SearchPipeline:
                     described_at_doc_count=described_at,
                     namespace=namespace,
                     description_embedding=description_embedding,
+                    schema_version=existing_meta.schema_version if existing_meta is not None else 0,
                 )
                 await self.store.update_collection_meta(meta)
 
@@ -1505,6 +1506,7 @@ class SearchPipeline:
                     description_embedding=None,
                     mutations_since_recompute=0,
                     needs_recompute=False,
+                    schema_version=existing_meta.schema_version if existing_meta else 0,
                 )
                 await self.store.update_collection_meta(meta)
             return
@@ -1537,6 +1539,7 @@ class SearchPipeline:
             description_embedding=description_embedding,
             mutations_since_recompute=0,
             needs_recompute=False,
+            schema_version=existing_meta.schema_version if existing_meta else 0,
         )
         await self.store.update_collection_meta(meta)
 
