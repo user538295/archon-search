@@ -116,6 +116,16 @@
 - Action: For any route whose isinstance guard is broadened: (a) update the docstring and error message to match; (b) regenerate the OpenAPI snapshot; (c) add tests for all non-FAILED terminal states; (d) add a test explicitly documenting the absence of file-existence checks if the new type has no file dependency.
 - Confidence: high
 
+**2026-06-19 — BE-14 CLI flag validation ordering (D3)**
+- Observation: When multiple flags are mutually exclusive or have dependency relationships (e.g., `--dry-run` + `--apply` mutex, `--backup-first` requires `--apply`, `--wait` requires `--apply`), the validation order matters for error message quality. `--dry-run --backup-first` hits the "backup-first requires --apply" check before the "dry-run + apply" mutex check, producing a misleading message that suggests adding `--apply` (which dry-run forbids). An explicit `--dry-run + --backup-first` check with a clearer message must come before the generic `--backup-first` requires `--apply` check.
+- Action: For any new CLI flag with multiple dependency relationships, enumerate all problematic flag combinations explicitly and add a dedicated check with a clear, actionable error message for each. Do not rely on catch-all `X requires Y` checks to cover compound invalid combinations.
+- Confidence: high
+
+**2026-06-19 — Module-level constants in CLI files (D3 BE-14)**
+- Observation: When adding module-level constants (like `_POLL_INTERVAL_SECONDS`, `_TERMINAL_STATUSES`) to a file that already has a `_DEFAULT_API_URL` constant, the new constants should go immediately after the imports alongside `_DEFAULT_API_URL` — not between import groups. The fix agent placed them mid-import block (between stdlib and third-party imports), which is a PEP 8 violation caught by iterative review.
+- Action: Always place module-level constants after ALL imports, never between import groups.
+- Confidence: high
+
 ## Open Questions
 - (Nothing recorded yet)
 

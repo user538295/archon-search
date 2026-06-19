@@ -514,7 +514,7 @@ flowchart LR
         - #unit_test — `test_resume_migration_job_not_failed_returns_409` — `RUNNING` MigrationJob → 409 `job_not_failed`
         - #integration_test — `test_migration_job_resume_from_checkpoint_reaches_done` — FAILED + progress checkpoint; resume; scheduler re-dispatches; job reaches DONE; `migrated_chunks` reflects resumed work
 
-- [ ] **BE-14** — Extend CLI `migrate` with `--apply --backup-first --wait` flags; `--wait` polls `GET /jobs/{job_id}` every 2s and prints `phase: processed/total`; exits `0` on `DONE`, `1` on `FAILED`/`CANCELLED` #backend-role
+- [x] **BE-14** — Extend CLI `migrate` with `--apply --backup-first --wait` flags; `--wait` polls `GET /jobs/{job_id}` every 2s and prints `phase: processed/total`; exits `0` on `DONE`, `1` on `FAILED`/`CANCELLED` #backend-role
     - Presentation · 2.0h
     - needs BE-12 · completes S15, S16
     - Tests
