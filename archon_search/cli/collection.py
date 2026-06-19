@@ -303,6 +303,7 @@ def reindex_metadata_cmd(
 @collection.command("migrate")
 @click.argument("collection_name")
 @click.option("--dry-run", is_flag=True, default=False, help="Print pending migrations without applying (default behaviour)")
+@click.option("--apply", "apply_flag", is_flag=True, default=False, help="Apply in-place migrations synchronously and print summary")
 @click.option(
     "--api-url",
     default=_DEFAULT_API_URL,
@@ -314,15 +315,48 @@ def reindex_metadata_cmd(
     default=None,
     help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
 )
-def migrate_cmd(collection_name: str, dry_run: bool, api_url: str, api_key: str | None) -> None:
+def migrate_cmd(collection_name: str, dry_run: bool, apply_flag: bool, api_url: str, api_key: str | None) -> None:
     """Show pending schema migrations for a collection.
 
     Without flags (or with --dry-run) prints the list of pending migrations
-    and exits without modifying anything.
+    and exits without modifying anything. Use --apply to apply in-place
+    migrations synchronously.
     """
+    if dry_run and apply_flag:
+        click.echo("Error: --dry-run and --apply are mutually exclusive.", err=True)
+        raise SystemExit(1)
+
     key = _resolve_api_key(api_key)
     headers = {"Authorization": f"Bearer {key}"}
-    url = f"{api_url.rstrip('/')}/collections/{collection_name}/migrations/pending"
+    base_url = api_url.rstrip("/")
+
+    if apply_flag:
+        post_url = f"{base_url}/collections/{collection_name}/migrate"
+        try:
+            resp = httpx.post(post_url, json={"dry_run": False}, headers=headers)
+        except httpx.HTTPError as exc:
+            click.echo(f"Error contacting server: {exc}", err=True)
+            raise SystemExit(1)
+
+        if resp.status_code == 404:
+            click.echo(f"Error: collection '{collection_name}' not found.", err=True)
+            raise SystemExit(1)
+
+        if resp.status_code != 200:
+            click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
+            raise SystemExit(1)
+
+        data = resp.json()
+        applied = data.get("migrations_applied", [])
+        if not applied:
+            click.echo(f"Collection '{collection_name}' is up to date — no migrations applied.")
+        else:
+            click.echo(f"Applied {len(applied)} migration(s) to '{collection_name}':")
+            for name in applied:
+                click.echo(f"  - {name}")
+        return
+
+    url = f"{base_url}/collections/{collection_name}/migrations/pending"
 
     try:
         resp = httpx.get(url, headers=headers)

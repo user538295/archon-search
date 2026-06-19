@@ -532,3 +532,72 @@ def test_migrate_cli_connection_error_exits_1() -> None:
 
     assert result.exit_code == 1
     assert "error contacting server" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# BE-8: collection migrate --apply flag (in-place sync path)
+# ---------------------------------------------------------------------------
+
+
+def test_migrate_cli_apply_in_place_prints_summary() -> None:
+    """--apply calls POST /collections/{name}/migrate and prints applied migration names."""
+    runner = CliRunner()
+    post_resp = _mock_http_response(200, {"migrations_applied": ["migrate_namespace", "migrate_acl"]})
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp) as mock_post:
+        result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--api-key", "test-key"])
+
+    assert result.exit_code == 0, result.output
+    assert "migrate_namespace" in result.output
+    assert "migrate_acl" in result.output
+    mock_post.assert_called_once()
+    call_url = mock_post.call_args[0][0]
+    assert "/collections/mycol/migrate" in call_url
+    _, call_kwargs = mock_post.call_args
+    assert call_kwargs.get("headers", {}).get("Authorization") == "Bearer test-key"
+    assert call_kwargs.get("json") == {"dry_run": False}
+
+
+def test_migrate_cli_apply_and_dry_run_mutually_exclusive() -> None:
+    """Passing both --apply and --dry-run raises a usage error and exits non-zero."""
+    runner = CliRunner()
+
+    result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--dry-run", "--api-key", "test-key"])
+
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.output.lower()
+
+
+def test_migrate_cli_apply_empty_migrations_prints_up_to_date() -> None:
+    """--apply with no pending migrations prints an 'up to date' message."""
+    runner = CliRunner()
+    post_resp = _mock_http_response(200, {"migrations_applied": []})
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp):
+        result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--api-key", "test-key"])
+
+    assert result.exit_code == 0, result.output
+    assert "up to date" in result.output.lower() or "no migrations" in result.output.lower()
+
+
+def test_migrate_cli_apply_404_prints_not_found() -> None:
+    """--apply with 404 response prints collection-not-found error and exits 1."""
+    runner = CliRunner()
+    post_resp = _mock_http_response(404, {"detail": "Not found"})
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp):
+        result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--api-key", "test-key"])
+
+    assert result.exit_code == 1
+    assert "not found" in result.output.lower()
+
+
+def test_migrate_cli_apply_connection_error_exits_1() -> None:
+    """--apply with connection failure prints error and exits 1."""
+    runner = CliRunner()
+
+    with patch("archon_search.cli.collection.httpx.post", side_effect=httpx.ConnectError("Connection refused")):
+        result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--api-key", "test-key"])
+
+    assert result.exit_code == 1
+    assert "error contacting server" in result.output.lower()

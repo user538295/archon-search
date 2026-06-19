@@ -456,12 +456,12 @@ flowchart LR
         - [x] #unit_test — `test_post_migrate_dry_run_true_returns_pending_list` — `dry_run: true` returns same response as GET pending; no side effect
         - [x] #integration_test — `test_post_migrate_in_place_real_store` — real LanceDB; `schema_version` updated after apply; no MigrationJob in job store
 
-- [ ] **BE-8** — Extend CLI `migrate` with `--apply` flag (in-place sync path); print `{migrations_applied}` summary on success #backend-role
+- [x] **BE-8** — Extend CLI `migrate` with `--apply` flag (in-place sync path); print `{migrations_applied}` summary on success #backend-role
     - Presentation · 1.0h
     - needs BE-7 · completes S5
     - Tests
-        - #unit_test — `test_migrate_cli_apply_in_place_prints_summary` — `CliRunner` + mocked `httpx.post` returning 200 + `migrations_applied`; output contains applied names
-        - #unit_test — `test_migrate_cli_apply_and_dry_run_mutually_exclusive` — passing both `--apply` and `--dry-run` raises a usage error
+        - [x] #unit_test — `test_migrate_cli_apply_in_place_prints_summary` — `CliRunner` + mocked `httpx.post` returning 200 + `migrations_applied`; output contains applied names
+        - [x] #unit_test — `test_migrate_cli_apply_and_dry_run_mutually_exclusive` — passing both `--apply` and `--dry-run` raises a usage error
 
 ---
 
