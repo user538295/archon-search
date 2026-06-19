@@ -554,7 +554,7 @@ All tester tasks are `@pytest.mark.integration` tests using `make_real_app` (rea
         - #e2e_test — `test_concurrent_ingest_503_during_rewrite_e2e` — trigger MigrationJob rewrite on a real collection; while rewrite holds lock, issue ingest POST to same collection; assert 503; migration finishes cleanly
         - #e2e_test — `test_empty_collection_rewrite_completes_immediately_e2e` — zero-chunk collection; POST `/migrate`; poll to DONE; assert `migrated_chunks == 0`
 
-- [ ] **T-3** — e2e: crash recovery and resume complete flow #tester-role
+- [x] **T-3** — e2e: crash recovery and resume complete flow #tester-role
     - — · 2.0h
     - needs BE-13 · completes S12, S13, S19
     - Tests
