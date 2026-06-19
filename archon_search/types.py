@@ -58,6 +58,31 @@ class ImportJob(IngestJob):
     source: Literal["user", "backup"] = "user"
 
 
+# UPPER_CASE names follow the convention of JobStatus and IndexingStatus.
+# Wire values are snake_case to match the TypeSpec C1 contract and REST API.
+class MigrationKind(str, Enum):
+    IN_PLACE = "in_place"
+    REWRITE = "rewrite"
+    EXPORT_REBUILD = "export_rebuild"
+
+
+@dataclass
+class MigrationSpec:
+    name: str
+    kind: MigrationKind
+    description: str
+    introduced_at: int
+
+
+@dataclass
+class MigrationJob(IngestJob):
+    collection: str = ""
+    kind: MigrationKind = MigrationKind.IN_PLACE
+    migrations_applied: list[str] = field(default_factory=list)
+    backup_confirmed: bool | None = None
+    source: Literal["user", "backup"] = "user"
+
+
 @dataclass
 class Query:
     text: str
