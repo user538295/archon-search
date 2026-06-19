@@ -526,7 +526,7 @@ flowchart LR
 
 ### Phase 4 · View schema status in server health
 	
-- [ ] **BE-15** — Add `store_schema_version: int` and `collections_schema_behind: int` to `StatusResponse` in `schemas.py`; update `routes_status.py` handler to populate them from `STORE_SCHEMA_VERSION` and `pending_migrations()` aggregate #backend-role
+- [x] **BE-15** — Add `store_schema_version: int` and `collections_schema_behind: int` to `StatusResponse` in `schemas.py`; update `routes_status.py` handler to populate them from `STORE_SCHEMA_VERSION` and `pending_migrations()` aggregate #backend-role
     - Presentation · 2.0h
     - needs BE-3 · completes S17, C2
     - Tests

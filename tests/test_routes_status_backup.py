@@ -29,6 +29,7 @@ def _make_mock_search_store(collections: list[CollectionInfo] | None = None) -> 
     mock.get_collection_meta = AsyncMock(return_value=None)
     mock.list_collections = AsyncMock(return_value=cols)
     mock.count_untagged_language_chunks = AsyncMock(return_value=0)
+    mock.pending_migrations = AsyncMock(return_value=[])
     return mock
 
 

@@ -103,6 +103,9 @@ class StatusResponse(BaseModel):
     collections: list[StatusCollectionEntry]
     readiness: ReadinessDetail | None = None
     backup: BackupStatusDetail | None = None
+    # D3 BE-15 — schema migration health fields
+    store_schema_version: int = 0
+    collections_schema_behind: int = Field(default=0, ge=0)
 
 
 class IndexingStateCollectionEntry(BaseModel):

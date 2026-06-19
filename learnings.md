@@ -126,6 +126,11 @@
 - Action: Always place module-level constants after ALL imports, never between import groups.
 - Confidence: high
 
+**2026-06-19 — BE-15 Presentation layer implementation (D3 StatusResponse extensions)**
+- Observation: (1) When a new route field is computed from a constant that currently equals the Pydantic model's default (e.g., `STORE_SCHEMA_VERSION=0` and `store_schema_version: int = 0`), tests that assert `response_value == constant` are tautological — they pass even if the route never sets the field. Always patch the constant to a non-default value in tests for such fields. (2) When adding a new status computation that iterates already-fetched data (e.g., `ns_meta` from `get_all_collections_meta()`), never call a method that re-fetches the same data per item — use the in-memory objects directly. The plan may say "populate from `method()`" but the intent is the aggregate count, not the method call itself. (3) Existing mock stores that don't implement newly-called `search_store` methods break all tests using those mocks; always grep for all mock factories in the test file and add the new AsyncMock to each one before running the suite.
+- Action: For any new route field derived from a constant, patch the constant in tests. For status endpoint additions, prefer in-memory computation over per-collection async calls when the data is already fetched. When adding new `search_store` method calls to a route, grep for all mock factory functions in the test files and add the missing mock to each.
+- Confidence: high
+
 ## Open Questions
 - (Nothing recorded yet)
 

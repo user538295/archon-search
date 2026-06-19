@@ -43,6 +43,7 @@ def _make_client_with_state(tmp_db: Path, state: IndexingState) -> TestClient:
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -159,6 +160,7 @@ def test_status_no_state_file(tmp_db: Path) -> None:
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -205,6 +207,7 @@ def test_status_config_paths_converted_to_names(tmp_db: Path) -> None:
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -250,6 +253,7 @@ def _make_client_with_namespace(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
 
     return TestClient(app, headers={"Authorization": f"Bearer {tenant_key}"})
@@ -326,6 +330,7 @@ def _make_client_with_readiness(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.ping = AsyncMock(return_value=ping_result)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
     app.state.watcher_manager = watcher_manager
 
@@ -380,6 +385,7 @@ def test_status_readiness_jobs_counts_correct(tmp_db: Path) -> None:
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -404,6 +410,7 @@ def test_status_returns_500_when_job_store_raises(tmp_db: Path) -> None:
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
 
     # Break count_by_status
@@ -518,6 +525,7 @@ def _make_client_with_meta(tmp_db: Path, meta_rows: list[CollectionMeta]) -> Tes
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -608,6 +616,7 @@ def _make_client_multilingual(
         return untagged_counts.get(collection, 0)
 
     mock_store.count_untagged_language_chunks = _count_untagged
+    mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -644,3 +653,132 @@ def test_status_no_warning_when_all_tagged(tmp_db: Path) -> None:
     c = _make_client_multilingual(tmp_db, meta_rows, untagged_counts={"col-a": 0})
     data = c.get("/status").json()
     assert "warning" not in data["collections"][0] or data["collections"][0]["warning"] is None
+
+
+# ---------------------------------------------------------------------------
+# BE-15 — store_schema_version and collections_schema_behind in GET /status
+# ---------------------------------------------------------------------------
+
+
+def _make_client_with_pending_migrations(
+    tmp_db: Path,
+    meta_rows: list[CollectionMeta],
+    pending_by_collection: dict[str, list],
+) -> TestClient:
+    """Build a TestClient with mocked pending_migrations() returning per-collection lists."""
+    config = SearchConfig()
+    config.db_path = str(tmp_db)
+    job_store = JobStore(path=tmp_db / "jobs.json")
+    app = create_app(config, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=meta_rows)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
+
+    async def _pending_migrations(collection: str, namespace: str = "default") -> list:
+        return pending_by_collection.get(collection, [])
+
+    mock_store.count_untagged_language_chunks = AsyncMock(return_value=0)
+    mock_store.pending_migrations = _pending_migrations
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+
+def test_get_status_includes_store_schema_version(tmp_db: Path) -> None:
+    """GET /status response reflects the STORE_SCHEMA_VERSION constant (not just the Pydantic default)."""
+    from unittest.mock import patch
+
+    c = _make_client_with_pending_migrations(tmp_db, meta_rows=[], pending_by_collection={})
+    # Patch to a non-zero, non-default value to prove the route passes the constant through.
+    with patch("archon_search.server.routes_status.STORE_SCHEMA_VERSION", 42):
+        data = c.get("/status").json()
+    assert "store_schema_version" in data
+    assert data["store_schema_version"] == 42
+
+
+def test_get_status_collections_schema_behind_count(tmp_db: Path) -> None:
+    """Mock 3 collections, 1 behind; assert collections_schema_behind == 1."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+    from unittest.mock import patch
+
+    # col-a has schema_version=0 (behind); col-b and col-c are at schema_version=1 (current)
+    meta_rows = [
+        CollectionMeta(name="col-a", namespace=DEFAULT_NAMESPACE, schema_version=0),
+        CollectionMeta(name="col-b", namespace=DEFAULT_NAMESPACE, schema_version=1),
+        CollectionMeta(name="col-c", namespace=DEFAULT_NAMESPACE, schema_version=1),
+    ]
+    c = _make_client_with_pending_migrations(
+        tmp_db,
+        meta_rows=meta_rows,
+        pending_by_collection={},
+    )
+    with patch("archon_search.server.routes_status.STORE_SCHEMA_VERSION", 1):
+        data = c.get("/status").json()
+    assert data["collections_schema_behind"] == 1
+
+
+def test_get_status_collections_schema_behind_zero(tmp_db: Path) -> None:
+    """All collections current (schema_version == STORE_SCHEMA_VERSION); assert count == 0."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+    from unittest.mock import patch
+
+    # Set all collections at schema_version=1, patch STORE_SCHEMA_VERSION to 1.
+    # This proves the counting logic ran and found zero laggards (not that defaults align).
+    meta_rows = [
+        CollectionMeta(name="col-a", namespace=DEFAULT_NAMESPACE, schema_version=1),
+        CollectionMeta(name="col-b", namespace=DEFAULT_NAMESPACE, schema_version=1),
+    ]
+    c = _make_client_with_pending_migrations(
+        tmp_db,
+        meta_rows=meta_rows,
+        pending_by_collection={},
+    )
+    with patch("archon_search.server.routes_status.STORE_SCHEMA_VERSION", 1):
+        data = c.get("/status").json()
+    assert data["collections_schema_behind"] == 0
+
+
+def test_get_status_collections_schema_behind_all_behind(tmp_db: Path) -> None:
+    """All N collections have schema_version behind; assert collections_schema_behind == N."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+    from unittest.mock import patch
+
+    meta_rows = [
+        CollectionMeta(name="col-a", namespace=DEFAULT_NAMESPACE, schema_version=0),
+        CollectionMeta(name="col-b", namespace=DEFAULT_NAMESPACE, schema_version=0),
+    ]
+    c = _make_client_with_pending_migrations(
+        tmp_db,
+        meta_rows=meta_rows,
+        pending_by_collection={},
+    )
+    with patch("archon_search.server.routes_status.STORE_SCHEMA_VERSION", 1):
+        data = c.get("/status").json()
+    assert data["collections_schema_behind"] == 2
+
+
+def test_get_status_collections_schema_behind_namespace_scoped(tmp_db: Path) -> None:
+    """collections_schema_behind counts only the caller's namespace collections."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+    from unittest.mock import patch
+
+    # col-a is the caller's (DEFAULT_NAMESPACE), col-b is in another namespace.
+    # Only col-a is behind; col-b should not contribute to the count.
+    meta_rows = [
+        CollectionMeta(name="col-a", namespace=DEFAULT_NAMESPACE, schema_version=0),
+        CollectionMeta(name="col-b", namespace="other", schema_version=0),  # different NS
+    ]
+    c = _make_client_with_pending_migrations(
+        tmp_db,
+        meta_rows=meta_rows,
+        pending_by_collection={},
+    )
+    with patch("archon_search.server.routes_status.STORE_SCHEMA_VERSION", 1):
+        data = c.get("/status").json()
+    # col-b is in "other" namespace, filtered out by ns_meta. Only col-a counts.
+    assert data["collections_schema_behind"] == 1

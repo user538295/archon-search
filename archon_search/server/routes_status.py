@@ -19,6 +19,7 @@ from archon_search.server.schemas import (
     StatusCollectionEntry,
     StatusResponse,
 )
+from archon_search.store import STORE_SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -97,6 +98,12 @@ async def status(request: Request) -> StatusResponse:
             )
         )
 
+    # D3 BE-15 — count collections whose schema_version is behind STORE_SCHEMA_VERSION.
+    # Uses already-fetched ns_meta to avoid N additional DB round-trips.
+    collections_schema_behind = sum(
+        1 for m in ns_meta if m.schema_version < STORE_SCHEMA_VERSION
+    )
+
     readiness = await collect_readiness(request.app.state, state)
     backup_detail = _build_backup_status(request, config, ns, sorted(ns_names))
     return StatusResponse(
@@ -106,6 +113,8 @@ async def status(request: Request) -> StatusResponse:
         collections=collection_entries,
         readiness=readiness,
         backup=backup_detail,
+        store_schema_version=STORE_SCHEMA_VERSION,
+        collections_schema_behind=collections_schema_behind,
     )
 
 
