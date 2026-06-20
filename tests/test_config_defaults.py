@@ -114,7 +114,6 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "routing_description_weight": DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
         # [database] — B5 incremental centroid
         "centroid_recompute_threshold": 10_000,
-        "centroid_incremental_enabled": True,
         # [database] — C0 tiered install profiles
         "profile": "",
         "multilingual": False,

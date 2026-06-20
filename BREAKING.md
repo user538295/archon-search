@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — D4: `centroid_incremental_enabled` config field removed
+
+**Surface**: `archon-search.toml` `[database]` section.
+
+- The `centroid_incremental_enabled` field has been removed from `SearchConfig`. The B5 incremental centroid path is now unconditional.
+- If present in an existing TOML config, the field is silently ignored and a WARNING is logged at startup.
+- The legacy full-recompute path (previously activated by `centroid_incremental_enabled = false`) has been deleted.
+
+**Migration**: remove `centroid_incremental_enabled` from your `archon-search.toml`. No functional change — the incremental path was already the default since B5.
+
+---
+
 ### [next release] — D2 job contract: `JobResponse` gains bulk-job subclass fields
 
 **Surface**: `GET /jobs/{job_id}` and `GET /jobs` REST responses (`JobResponse`).

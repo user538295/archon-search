@@ -3756,7 +3756,6 @@ class TestTask46:
         meta = CollectionMeta(name="myproject", needs_recompute=True)
         pipeline.store.get_collection_meta = AsyncMock(return_value=meta)
         cfg = SearchConfig()
-        cfg.centroid_incremental_enabled = True
         pipeline.store._config = cfg
 
         state_store = _make_done_state(tmp_path, "myproject", {})
@@ -4916,7 +4915,7 @@ class TestSyncCollectionMethod:
 # ===========================================================================
 
 
-def _make_pipeline_for_sync_centroid(tmp_path, meta=None, incremental_enabled=True, threshold=10_000):
+def _make_pipeline_for_sync_centroid(tmp_path, meta=None, threshold=10_000):
     """Build a mock pipeline for Task 6.2 centroid tests.
 
     Sets up store._config with centroid flags and get_collection_meta.
@@ -4926,7 +4925,6 @@ def _make_pipeline_for_sync_centroid(tmp_path, meta=None, incremental_enabled=Tr
     pipeline = _make_mock_pipeline_with_ingest_file(tmp_path, existing_collections=["myproject"])
 
     cfg = SearchConfig()
-    cfg.centroid_incremental_enabled = incremental_enabled
     cfg.centroid_recompute_threshold = threshold
     pipeline.store._config = cfg
 

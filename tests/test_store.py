@@ -5233,7 +5233,7 @@ def _make_store_with_config(tmp_path, **config_overrides):
 async def test_do_update_meta_on_add_accumulates_from_zero(tmp_path) -> None:
     """Brand-new collection (no meta row) — accumulates from zero seed."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5258,7 +5258,7 @@ async def test_do_update_meta_on_add_accumulates_onto_existing(tmp_path) -> None
     """Existing meta with centroid_sum=[1.0] and chunk_count=1 → add [3.0]."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5285,7 +5285,7 @@ async def test_do_update_meta_on_add_signals_recompute_on_invalid_sum(tmp_path) 
     """Stored meta has NaN centroid_sum → returns True and writes centroid=None, centroid_sum=None."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5313,7 +5313,7 @@ async def test_do_update_meta_on_add_invalid_sum_does_not_bump_mutations(tmp_pat
     """NaN stored sum → mutations_since_recompute stays at 7, counts unchanged."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5342,7 +5342,7 @@ async def test_do_update_meta_on_add_signals_recompute_at_threshold(tmp_path) ->
     """mutations_since_recompute hits threshold → signal is True."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True, centroid_recompute_threshold=3)
+    cfg = SearchConfig(centroid_recompute_threshold=3)
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5368,7 +5368,7 @@ async def test_do_update_meta_on_add_nan_batch_vector_triggers_recompute(tmp_pat
     """NaN in input batch → returns True."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5393,7 +5393,7 @@ async def test_do_update_meta_on_add_none_model_skips_maintenance(tmp_path) -> N
     """embedding_model=None → meta unchanged, returns False."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5421,7 +5421,7 @@ async def test_do_update_meta_on_add_preserves_description_embedding(tmp_path) -
     """description_embedding must survive an incremental add (not be silently wiped)."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5449,7 +5449,7 @@ async def test_do_update_meta_on_add_preserves_description_embedding(tmp_path) -
 async def test_do_update_meta_on_add_new_collection_no_recompute_at_threshold(tmp_path) -> None:
     """Brand-new collection (no prior meta) never signals recompute even above threshold."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True, centroid_recompute_threshold=1)
+    cfg = SearchConfig(centroid_recompute_threshold=1)
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5473,7 +5473,7 @@ def _make_incremental_store(tmp_path, threshold: int = 10_000):
     """Return a connected SearchStore with incremental centroid enabled."""
     import asyncio
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True, centroid_recompute_threshold=threshold)
+    cfg = SearchConfig(centroid_recompute_threshold=threshold)
     store = SearchStore(tmp_path / "db", config=cfg)
     asyncio.run(store.connect())
     return store
@@ -5484,7 +5484,7 @@ async def test_ingest_chunks_accumulates_centroid_sum_on_second_batch(tmp_path) 
     """B1 then B2 → centroid_sum == elementwise sum of all vectors."""
     import asyncio
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5512,7 +5512,7 @@ async def test_ingest_chunks_accumulates_centroid_sum_on_second_batch(tmp_path) 
 async def test_ingest_chunks_bootstrap_creates_meta_row(tmp_path) -> None:
     """ingest into collection with no prior meta → meta row created with correct chunk_count."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5533,7 +5533,7 @@ async def test_ingest_chunks_bootstrap_creates_meta_row(tmp_path) -> None:
 async def test_ingest_chunks_doc_count_multi_doc_batch(tmp_path) -> None:
     """Single ingest_chunks call with 3 distinct doc_ids → doc_count == 3."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5558,7 +5558,7 @@ async def test_ingest_chunks_no_full_scan_spy(tmp_path) -> None:
     """get_all_vectors and count_documents are never called during ingest_chunks."""
     from unittest.mock import AsyncMock, patch
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5582,7 +5582,7 @@ async def test_ingest_chunks_lock_serializes_concurrent_adds(tmp_path) -> None:
     """Two concurrent ingest_chunks for the same collection serialize correctly."""
     import asyncio
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5616,7 +5616,7 @@ def test_lock_for_keys_by_collection_not_namespace(tmp_path) -> None:
 async def test_ingest_chunks_locked_by_caller_accumulates_meta(tmp_path) -> None:
     """_locked_by_caller=True: meta still updated; lock not released by ingest_chunks."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5685,7 +5685,7 @@ async def test_ingest_chunks_needs_recompute_false_below_threshold(tmp_path) -> 
     """Fresh collection, 3 chunks, default threshold 10 000 → needs_recompute == False."""
     from archon_search.store import ChunkIngestResult
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5920,9 +5920,9 @@ async def test_do_subtract_meta_bumps_mutations(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_delete_document_subtracts_vectors(tmp_path) -> None:
-    """delete_document with centroid_incremental_enabled subtracts deleted doc's vectors from centroid_sum."""
+    """delete_document subtracts deleted doc's vectors from centroid_sum."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5966,7 +5966,7 @@ async def test_delete_document_subtracts_vectors(tmp_path) -> None:
 async def test_delete_document_last_document_resets_centroid(tmp_path) -> None:
     """Deleting the only document resets centroid_sum to None and chunk_count to 0."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5994,7 +5994,7 @@ async def test_delete_document_last_document_resets_centroid(tmp_path) -> None:
 async def test_delete_document_bumps_last_indexed(tmp_path) -> None:
     """delete_document updates last_indexed in the collection meta."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -6027,7 +6027,7 @@ async def test_delete_document_bumps_last_indexed(tmp_path) -> None:
 async def test_delete_document_returns_zero_for_missing_doc(tmp_path) -> None:
     """Deleting a non-existent doc_id returns 0 and leaves meta unchanged."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -6082,7 +6082,7 @@ async def test_delete_document_no_full_scan_spy(tmp_path) -> None:
     """delete_document does not call get_all_vectors or count_documents (no full scan)."""
     from unittest.mock import AsyncMock, patch
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db_del_spy", config=cfg)
     await store.connect()
     try:
@@ -6161,7 +6161,7 @@ async def test_update_description_does_not_touch_centroid_sum(tmp_path) -> None:
     """update_description does not alter centroid_sum, chunk_count, or doc_count."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -6234,7 +6234,7 @@ async def test_update_description_concurrent_with_ingest(tmp_path) -> None:
     """Concurrent ingest_chunks and update_description — centroid_sum correct, description set."""
     import asyncio
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -6256,6 +6256,33 @@ async def test_update_description_concurrent_with_ingest(tmp_path) -> None:
     finally:
         await store.disconnect()
 
+@pytest.mark.asyncio
+async def test_store_ingest_chunks_always_calls_incremental_update(tmp_path) -> None:
+    """ingest_chunks always calls _do_update_meta_on_add regardless of any config flag."""
+    from unittest.mock import AsyncMock, MagicMock
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig()
+    store = SearchStore(tmp_path / "db_always_inc", config=cfg)
+    await store.connect()
+
+    update_calls: list = []
+
+    async def fake_update(db, collection, batch_vectors, distinct_doc_count, *, embedding_model, embedding_dim):
+        update_calls.append((batch_vectors, distinct_doc_count))
+        return False
+
+    store._do_update_meta_on_add = fake_update  # type: ignore[assignment]
+
+    try:
+        col = "always_inc"
+        await store.ensure_collection(col, _DIM)
+        doc = _doc_id()
+        chunks = [_chunk(doc, 0)]
+        await store.ingest_chunks(col, chunks, embedding_model="m")
+    finally:
+        await store.disconnect()
+
+    assert len(update_calls) == 1, "_do_update_meta_on_add must be called unconditionally"
 
 # ---------------------------------------------------------------------------
 # C1 per-collection embedding model field round-trip tests (Task 1.2)

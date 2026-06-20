@@ -60,9 +60,6 @@ multilingual = false
 # Set automatically by the wizard as max(15, 3 × top_k_return) when --top-k is passed.
 # top_k_retrieve = 15
 
-# B5: incremental centroid maintenance (default: true).
-# Set to false to revert to the pre-B5 batch-overwrite behavior as a rollback escape hatch.
-centroid_incremental_enabled = true
 # Trigger a full centroid recompute after this many mutations (adds + deletes) since last recompute.
 centroid_recompute_threshold = 10000
 

@@ -62,7 +62,6 @@ def _make_store_with_mock_db(
 
     store._db = mock_db
     store._config = MagicMock()
-    store._config.centroid_incremental_enabled = False
 
     return store, mock_db, mock_table
 

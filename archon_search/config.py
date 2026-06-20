@@ -95,7 +95,6 @@ class SearchConfig:
     routing_description_weight: float = DEFAULT_ROUTING_DESCRIPTION_WEIGHT
     # [database] — B5 incremental centroid
     centroid_recompute_threshold: int = 10_000
-    centroid_incremental_enabled: bool = True
     # [database] — C0 tiered install profiles
     profile: str = ""
     multilingual: bool = False
@@ -282,8 +281,9 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             raise ConfigError("centroid_recompute_threshold must be >= 1")
         config.centroid_recompute_threshold = threshold
     if "centroid_incremental_enabled" in database:
-        config.centroid_incremental_enabled = _coerce_bool(
-            database["centroid_incremental_enabled"], "centroid_incremental_enabled"
+        _logger.warning(
+            "centroid_incremental_enabled is deprecated and ignored; "
+            "the B5 incremental centroid path is always used"
         )
     if "profile" in database:
         config.profile = str(database["profile"])

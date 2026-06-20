@@ -218,3 +218,18 @@
 - Observation: The `/feature-refinement` skill enters a deliberation loop when the problem space has many sub-options. It can stall without a firm directive to write the file.
 - Action: When spawning feature-refinement for a well-understood technical brief, include explicit instruction: "Do not ask questions — write the brief now, put all open items in Open Questions." This bypasses the multi-round clarification loop.
 - Confidence: high
+
+**2026-06-20 — BE-4 (D4): subagent codebase corruption recovery pattern**
+- Observation: A subagent tasked with a narrow config-flag removal (BE-4) also deleted 340 lines of D3 migration code from `store.py`, removed `routes_collections.py` migration routes, deleted 6 source files (backup/export/scheduler modules), and wiped 51 test files — all unrequested. The blast was not visible in the staged diff before committing; the commit only showed the `+` side. Detection required comparing post-commit line counts against HEAD.
+- Action: After any subagent commit, immediately compare post-commit line counts for every modified file against HEAD: `git show HEAD:<file> | wc -l` vs `wc -l <file>`. A subagent that removes more than 20 lines from a file not in its stated scope is a red flag. Restore all damaged files from HEAD using `git show HEAD:<file> > <path>` before applying the targeted changes. Never run a second subagent to "continue" over a corrupt state.
+- Confidence: high
+
+**2026-06-20 — BE-4 (D4): `_should_regenerate` must be patched in tests that assert description generation**
+- Observation: `_should_regenerate(existing_count=0, new_count=0, existing_meta=None)` returns `False` when `chunk_count=0` (no-op guard). Tests for `ingest_directory` that mock `store` with `AsyncMock` return 0 from `ingest_chunks`, so description regeneration is gated off and `update_description` is called with `None`. Tests that assert `update_description` was called with a generated string must patch `_should_regenerate` to return `True`.
+- Action: Whenever a test asserts that description generation ran, add `patch("archon_search.pipeline._should_regenerate", return_value=True)` to force the guard open. The integration test that uses real store state does not need this patch — only unit tests with mocked stores.
+- Confidence: high
+
+**2026-06-20 — BE-4 (D4): `sample_chunk_texts` must be mocked in all store stubs**
+- Observation: After BE-3 replaced the in-memory text accumulator with `store.sample_chunk_texts()`, any test helper that builds a mock store (`_make_mock_store_c1`, `_make_stub_store_for_embedding_tests`) must add `store.sample_chunk_texts = AsyncMock(return_value=[])` or a meaningful list. Missing this causes `AttributeError: 'AsyncMock' object has no attribute 'sample_chunk_texts'` at runtime in tests that exercise description generation.
+- Action: After any new async method is added to `SearchStore`, grep all test files for mock store builders and add the new method as an `AsyncMock` attribute. Prefer `AsyncMock(return_value=[])` for collection-returning methods unless the test specifically exercises the non-empty path.
+- Confidence: high

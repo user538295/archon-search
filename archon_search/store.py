@@ -1513,15 +1513,14 @@ class SearchStore:
             chunks_ingested = await self._do_ingest(db, collection, chunks)
             needs_recompute = False
 
-            if self._config.centroid_incremental_enabled:
-                batch_vectors = [list(c.vector) for c in chunks]
-                if batch_vectors:
-                    distinct_doc_count = 0 if _is_continuation else len({c.doc_id for c in chunks})
-                    needs_recompute = await self._do_update_meta_on_add(
-                        db, collection, batch_vectors, distinct_doc_count,
-                        embedding_model=embedding_model,
-                        embedding_dim=len(batch_vectors[0]),
-                    )
+            batch_vectors = [list(c.vector) for c in chunks]
+            if batch_vectors:
+                distinct_doc_count = 0 if _is_continuation else len({c.doc_id for c in chunks})
+                needs_recompute = await self._do_update_meta_on_add(
+                    db, collection, batch_vectors, distinct_doc_count,
+                    embedding_model=embedding_model,
+                    embedding_dim=len(batch_vectors[0]),
+                )
 
             return ChunkIngestResult(chunks_ingested=chunks_ingested, needs_recompute=needs_recompute)
         finally:
@@ -1971,8 +1970,7 @@ class SearchStore:
                 return 0
             # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
             await table.delete(_where_eq("doc_id", doc_id))
-            if self._config.centroid_incremental_enabled:
-                await self._do_subtract_meta_on_delete(db, collection, del_vectors, namespace=namespace)
+            await self._do_subtract_meta_on_delete(db, collection, del_vectors, namespace=namespace)
         finally:
             lock.release()
         # FTS maintenance is performed AFTER lock release to avoid holding the lock
