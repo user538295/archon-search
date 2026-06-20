@@ -29,7 +29,7 @@ from archon_search.store import STORE_SCHEMA_VERSION
 from archon_search.types import JobStatus, MigrationKind, MigrationSpec
 from tests.integration.conftest import make_real_app
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("benchmark")]
 
 _TERMINAL = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
 

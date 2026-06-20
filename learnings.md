@@ -17,6 +17,16 @@
 - Action: Follow this two-step verification before any move; never move based on plan checkbox state alone.
 - Confidence: high
 
+**2026-06-20 — Patching a static method on a class with monkeypatch**
+- Observation: `SearchStore._all_migrations.__func__` raises `AttributeError` because a `staticmethod` is already unwrapped by the time it's accessed as a class attribute — `__func__` only exists on bound methods. To capture the original static method, call it directly (`SearchStore._all_migrations()`) before patching, then use `monkeypatch.setattr(SearchStore, "_all_migrations", staticmethod(wrapper))`.
+- Action: Never access `.__func__` on a static method accessed via the class. Call it first to capture its return value, then replace with `staticmethod(new_fn)`.
+- Confidence: high
+
+**2026-06-20 — apply_in_place_migrations is a route-level, not startup-level, operation**
+- Observation: `SearchStore._run_startup_migrations()` only runs structural migrations (`migrate_*` methods + `_migrate_schema_version`). Per-collection `apply_in_place_migrations` is NOT called during lifespan startup — it is exclusively triggered by `POST /collections/{name}/migrate`. The "startup migration path" test must exercise the HTTP route, not the lifespan hook, to exercise `apply_in_place_migrations`.
+- Action: When writing tests for "startup migration path", use `make_real_app` to start the server, then call the HTTP endpoint. Do not expect `apply_in_place_migrations` to be triggered by lifespan alone.
+- Confidence: high
+
 ## What Has Failed
 
 **2026-06-15 — Mocking `asyncio.wait_for` to simulate timeout**
@@ -154,6 +164,11 @@
 **2026-06-20 — T-6 close-out (D3)**
 - Observation: (1) The `[jobs].max_concurrent_bulk` comment in `archon-search.toml.example` said "export/import" but `MigrationJob` (D3 BE-10) joins the same `list_queued_bulk()` path — the example comment was stale after BE-10. (2) The architecture doc `130_data_architecture_and_persistence.md` listed only three startup migrations (`migrate_namespace`, `migrate_acl`, `migrate_per_collection_model`) — but the store has five (`migrate_description_embedding` and `migrate_centroid_sum` were missing). Close-out fact-checking catches doc drift that code review misses. (3) `STORE_SCHEMA_VERSION = 0` means no acceptance criterion test can exercise the "pending migrations > 0" code path in production — the tests must either use an impossible value (`schema_version=-1`) or bypass the constant. This is an inherent constraint of infrastructure-only releases and is documented in `learnings.md` under BE-3. (4) `JobResponse.result` was typed `str | None` but `IngestJob.result` at the domain layer is `dict | None`. The mismatch was latent in all prior job types (which left `result=None`) but surfaced immediately with `MigrationJob` which sets `result={"migrated_chunks": N}`. The fix is `str | dict | None` to match the domain model.
 - Action: During close-out, always re-read `.toml.example` comments against the actual `list_queued_bulk()` type guard to catch stale wording. When documenting startup migrations in architecture docs, grep `store.py` for `_all_migrations()` rather than listing from memory. When adding a new job type that sets a non-None `result`, verify that `JobResponse.result` accepts the actual runtime type — never assume `str | None` is correct just because it compiled.
+- Confidence: high
+
+**2026-06-20 — Fixing flaky tests under parallel xdist load**
+- Observation: (1) A session-scoped autouse fixture writing to a shared repo file (tests/eval/corpus/pdf-fixtures/three_page.pdf) creates a race condition under xdist: multiple workers all call reportlab Canvas.save() on the same path simultaneously, truncating the file mid-write while another worker's compute_eval_hash reads it. The fix is an early-exit guard (if file exists: return) since the PDF is byte-deterministic and committed to git — plus an atomic write pattern (temp file + rename) for the case where the file is absent. (2) Integration tests relying on a scheduler asyncio event loop ticking at 0.1s with timeout_s=15.0 can fail under CPU starvation when 14 xdist workers are all running simultaneously. Adding xdist_group("benchmark") to such tests serializes them on a single worker, preventing concurrent CPU competition. (3) The established convention for scheduler-timing-sensitive tests is timeout_s=30.0 (see test_dispatch_scheduler_e2e.py) — new tests should match this, not use 15.0.
+- Action: For any fixture that writes to a shared source-tree file, add an early-exit if the file exists, then write atomically (temp + rename). For any integration test that relies on an asyncio event loop tick (scheduler, backup loop) within a timeout, add xdist_group("benchmark") to serialize it and avoid CPU starvation failures.
 - Confidence: high
 
 ## Open Questions

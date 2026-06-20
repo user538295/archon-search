@@ -23,7 +23,7 @@ import archon_search.jobs.scheduler as _scheduler_module
 from archon_search.types import JobStatus, MigrationJob
 from tests.integration.conftest import make_real_app
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("benchmark")]
 
 _TERMINAL = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
 

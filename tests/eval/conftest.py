@@ -48,10 +48,33 @@ def _generate_eval_corpus_pdf() -> None:
     the eval runner ingests the corpus.  Reuses the shared generator from
     tests/_pdf_fixture.py so the textual content is identical across fixture
     copies.
+
+    Under xdist, multiple workers run this session fixture concurrently. To
+    avoid a race where one worker truncates the file while another reads it for
+    compute_eval_hash, we write to a temp file and rename atomically.  If the
+    file already exists (committed to git or previously generated), we skip
+    regeneration entirely — the PDF is byte-deterministic so the committed copy
+    is identical to what generate_three_page_pdf would produce.
     """
+    if _EVAL_PDF_PATH.exists():
+        return  # already present; skip to avoid concurrent-write race with xdist workers
+
     from _pdf_fixture import generate_three_page_pdf  # noqa: PLC0415
 
-    generate_three_page_pdf(_EVAL_PDF_PATH)
+    import tempfile  # noqa: PLC0415
+
+    _EVAL_PDF_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        dir=_EVAL_PDF_PATH.parent, suffix=".pdf.tmp", delete=False
+    ) as tmp:
+        tmp_path_obj = Path(tmp.name)
+    try:
+        generate_three_page_pdf(tmp_path_obj)
+        # Atomic rename: only one writer wins; others see a complete file.
+        tmp_path_obj.replace(_EVAL_PDF_PATH)
+    except Exception:
+        tmp_path_obj.unlink(missing_ok=True)
+        raise
 
 
 # ---------------------------------------------------------------------------
