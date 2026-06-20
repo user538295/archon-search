@@ -224,3 +224,151 @@ def test_pre_d3_startup_applies_in_place_migrations_e2e(
         "schema_version=0, verify it's returned as pending by GET /migrations/pending, "
         "then apply via POST /migrate, and re-verify pending=[]."
     )
+
+
+def test_apply_in_place_migrations_bumped_schema_version_e2e(
+    tmp_path, monkeypatch
+) -> None:
+    """S6 full: patched STORE_SCHEMA_VERSION=1 → apply_in_place_migrations is exercised.
+
+    The existing T-4 test covers S6 partially: with STORE_SCHEMA_VERSION=0 no
+    per-collection apply_in_place_migrations call is triggered because
+    introduced_at=0 > schema_version=0 is False.
+
+    This test patches STORE_SCHEMA_VERSION to 1 and injects a synthetic
+    MigrationSpec at introduced_at=1 backed by the real idempotent
+    migrate_namespace() method.  The sequence:
+
+      1. Seed _archon_collection_meta with a row whose schema_version=0.
+      2. Patch STORE_SCHEMA_VERSION → 1 and _all_migrations() → original + synthetic spec.
+      3. Boot the app (lifespan runs _run_startup_migrations(); per-collection apply
+         is NOT in startup — it is gated behind the POST /migrate route).
+      4. GET /collections/{name}/migrations/pending confirms pending=[synthetic spec].
+      5. POST /collections/{name}/migrate applies it.
+      6. Read schema_version from LanceDB directly and assert it equals 1 (the patched
+         STORE_SCHEMA_VERSION), proving apply_in_place_migrations wrote the new version.
+    """
+    import asyncio
+
+    import lancedb
+    import pyarrow as pa
+
+    from archon_search.store import SearchStore
+    from archon_search.sync import path_to_collection_name
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    db_path = str(tmp_path / "db")
+
+    # Step 1: seed _archon_collection_meta with a row at schema_version=0.
+    # Use the FULL current schema (schema_version column already exists in D3).
+    # The value 0 simulates a collection that has not yet been migrated to version 1.
+    full_schema = SearchStore._meta_schema()
+
+    col_path = tmp_path / "s6_docs"
+    col_path.mkdir()
+    col_name = path_to_collection_name(str(col_path))
+
+    async def _seed_row() -> None:
+        db = await lancedb.connect_async(db_path)
+        seeded_row = {
+            "name": col_name,
+            "description": "",
+            "centroid_json": "",
+            "description_embedding_json": "",
+            "doc_count": 0,
+            "chunk_count": 0,
+            "active_embedding_model": "",
+            "pending_embedding_model": None,
+            "needs_reindex": False,
+            "reindex_job_id": None,
+            "last_indexed": "",
+            "last_described": "",
+            "described_at_doc_count": 0,
+            "namespace": "default",
+            "centroid_sum_json": None,
+            "mutations_since_recompute": 0,
+            "needs_recompute": False,
+            "schema_version": 0,
+        }
+        await db.create_table(
+            "_archon_collection_meta",
+            data=[seeded_row],
+            schema=full_schema,
+        )
+
+    asyncio.run(_seed_row())
+
+    # Step 2: patch STORE_SCHEMA_VERSION → 1 so that pending_migrations() considers
+    # schema_version=0 collections as needing migration.  Also patch _all_migrations()
+    # to append a synthetic IN_PLACE spec at introduced_at=1 backed by the real
+    # idempotent migrate_namespace() method (already safe to call on an up-to-date DB).
+    _original_specs: list[MigrationSpec] = SearchStore._all_migrations()
+
+    SYNTHETIC_SPEC = MigrationSpec(
+        name="migrate_namespace",
+        kind=MigrationKind.IN_PLACE,
+        description="Synthetic spec for S6 coverage (introduced_at=1).",
+        introduced_at=1,
+    )
+
+    def _patched_all_migrations() -> list[MigrationSpec]:
+        return _original_specs + [SYNTHETIC_SPEC]
+
+    monkeypatch.setattr("archon_search.store.STORE_SCHEMA_VERSION", 1)
+    monkeypatch.setattr(SearchStore, "_all_migrations", staticmethod(_patched_all_migrations))
+
+    # Step 3: boot the app — lifespan runs _run_startup_migrations() which adds
+    # schema_version column (no-op here; column already present) and the five
+    # structural migrations (all idempotent).  Per-collection apply_in_place_migrations
+    # is NOT part of startup; it is triggered via POST /migrate.
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        # Register the collection path so the two-gate 404 check passes without
+        # POST /collections/ (which would 409 because the meta row already exists).
+        cfg.collections.append(str(col_path))
+
+        # Step 4: GET pending — should show the synthetic spec at introduced_at=1.
+        resp = client.get(f"/collections/{col_name}/migrations/pending", headers=headers)
+        assert resp.status_code == 200, (
+            f"GET /migrations/pending failed: {resp.status_code} {resp.text}"
+        )
+        pending_body = resp.json()
+        assert pending_body["schema_version"] == 0, (
+            f"expected schema_version=0 before apply; got {pending_body['schema_version']}"
+        )
+        pending_names = [s["name"] for s in pending_body["pending"]]
+        assert "migrate_namespace" in pending_names, (
+            f"synthetic spec 'migrate_namespace' at introduced_at=1 must appear in pending; "
+            f"got: {pending_names}"
+        )
+
+        # Step 5: POST /migrate applies the pending IN_PLACE migration synchronously.
+        resp = client.post(
+            f"/collections/{col_name}/migrate",
+            json={"dry_run": False},
+            headers=headers,
+        )
+        assert resp.status_code == 200, (
+            f"POST /migrate failed: {resp.status_code} {resp.text}"
+        )
+        migrate_body = resp.json()
+        assert "migrate_namespace" in migrate_body["migrations_applied"], (
+            f"expected 'migrate_namespace' in migrations_applied; got: {migrate_body}"
+        )
+
+    # Step 6: verify schema_version=1 written to LanceDB directly — proves
+    # apply_in_place_migrations updated the row (not just returned a response).
+    async def _read_schema_version() -> int:
+        db = await lancedb.connect_async(db_path)
+        tbl = await db.open_table("_archon_collection_meta")
+        rows = await tbl.query().to_list()
+        row = next((r for r in rows if r.get("name") == col_name), None)
+        assert row is not None, f"seeded row for {col_name!r} missing after migration"
+        return int(row["schema_version"])
+
+    final_version = asyncio.run(_read_schema_version())
+    assert final_version == 1, (
+        f"apply_in_place_migrations must set schema_version to patched STORE_SCHEMA_VERSION=1; "
+        f"got schema_version={final_version}"
+    )
