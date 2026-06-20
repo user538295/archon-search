@@ -359,7 +359,7 @@ flowchart LR
         - #unit_test — `test_config_no_longer_accepts_centroid_flag` — loading TOML with `centroid_incremental_enabled = false` logs WARNING, field is ignored
         - #integration_test — `test_sync_centroid_update_unconditional` — use `make_real_pipeline`; trigger sync; assert centroid updates regardless of any legacy config
 
-- [ ] **T-2** — Memory bounds: tracemalloc assertion for directory ingest #tester-role
+- [x] **T-2** — Memory bounds: tracemalloc assertion for directory ingest #tester-role
     - — · 3.0h
     - needs BE-3, BE-4 · completes S8, S11
     - Tests
