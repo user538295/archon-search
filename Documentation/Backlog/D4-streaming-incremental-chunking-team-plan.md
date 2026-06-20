@@ -312,7 +312,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_ingest_chunk_batch_size_constant` — constant exists, equals 512, is `Final[int]`
 
-- [ ] **BE-2** — Refactor `ingest_file()` to batch-emit chunks in `pipeline.py`; add `_is_continuation` param + `sample_chunk_texts()` to `store.py` #backend-role
+- [x] **BE-2** — Refactor `ingest_file()` to batch-emit chunks in `pipeline.py`; add `_is_continuation` param + `sample_chunk_texts()` to `store.py` #backend-role
     - Use Cases + Frameworks & Drivers · 5.0h
     - needs BE-1 · completes S1, S2, S3, S4, S5, S6, S7, C1
     - Tests

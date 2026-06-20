@@ -17,7 +17,7 @@ from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, Excl
 from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.observability import record_stage
 from archon_search.filters import SearchFilters
-from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.constants import DEFAULT_NAMESPACE, _INGEST_CHUNK_BATCH_SIZE
 from archon_search.collection_meta import CollectionMeta
 from archon_search.description_generator import _should_regenerate, generate_description
 from archon_search.chunker import DocumentChunker
@@ -393,16 +393,15 @@ class SearchPipeline:
             record.chunk_id = f"{doc_id}-{idx:06d}"
             record.acl = resolved_acl
 
-        # Collect chunk texts if requested
+        # Collect chunk texts if requested (before batching)
         if _chunk_collector is not None:
             _chunk_collector.extend(r.text for r in records)
 
-        # Embed
-        vectors = await embedder.embed([r.text for r in records])
-        for record, vector in zip(records, vectors):
+        # Embed first batch to initialise embedding_dim before ensure_collection
+        first_batch = records[:_INGEST_CHUNK_BATCH_SIZE]
+        first_vectors = await embedder.embed([r.text for r in first_batch])
+        for record, vector in zip(first_batch, first_vectors):
             record.vector = vector
-        if _vector_collector is not None:
-            _vector_collector.extend(vectors)
 
         # Persist
         with record_stage("persist"):
@@ -411,13 +410,34 @@ class SearchPipeline:
                 await self.store.delete_document(collection, doc_id, namespace=namespace, skip_fts_optimize=True)
             except StoreBusyError:
                 return IngestResult(doc_id=doc_id, chunks_created=0, status="error")
-            ingest_result = await self.store.ingest_chunks(
-                collection, records,
-                embedding_model=embedder.model_name,
-                namespace=namespace,
-            )
 
-            if rebuild_fts and self._centroid_incremental_enabled and ingest_result.needs_recompute:
+            chunks_created = 0
+            needs_recompute = False
+            try:
+                for i in range(0, len(records), _INGEST_CHUNK_BATCH_SIZE):
+                    batch = records[i : i + _INGEST_CHUNK_BATCH_SIZE]
+                    if i == 0:
+                        # First batch already embedded above; vectors are set on records
+                        vectors = first_vectors
+                    else:
+                        vectors = await embedder.embed([r.text for r in batch])
+                        for record, vector in zip(batch, vectors):
+                            record.vector = vector
+                    if _vector_collector is not None:
+                        _vector_collector.extend(vectors)
+                    ingest_result = await self.store.ingest_chunks(
+                        collection,
+                        batch,
+                        embedding_model=embedder.model_name,
+                        namespace=namespace,
+                        _is_continuation=(i > 0),
+                    )
+                    chunks_created += ingest_result.chunks_ingested
+                    needs_recompute = needs_recompute or ingest_result.needs_recompute
+            except StoreBusyError:
+                return IngestResult(doc_id=doc_id, chunks_created=0, status="error")
+
+            if rebuild_fts and self._centroid_incremental_enabled and needs_recompute:
                 await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
 
             if rebuild_fts:
@@ -438,9 +458,9 @@ class SearchPipeline:
 
         return IngestResult(
             doc_id=doc_id,
-            chunks_created=ingest_result.chunks_ingested,
+            chunks_created=chunks_created,
             status="ok",
-            needs_recompute=ingest_result.needs_recompute,
+            needs_recompute=needs_recompute,
         )
 
     async def ingest_directory(

@@ -1465,9 +1465,34 @@ class SearchStore:
         chunks: list[ChunkRecord],
         *,
         _locked_by_caller: bool = False,
+        _is_continuation: bool = False,
         embedding_model: str | None = None,
         namespace: str = DEFAULT_NAMESPACE,
     ) -> ChunkIngestResult:
+        """Ingest a batch of chunks into the named collection.
+
+        Parameters
+        ----------
+        collection:
+            Target collection name.
+        chunks:
+            Chunk records to ingest.
+        _locked_by_caller:
+            When True, assumes the collection lock is already held by the caller
+            and skips acquiring it internally.
+        _is_continuation:
+            When True, signals that this batch is a continuation of a multi-batch
+            ingest for the same doc_id. The doc_count increment in
+            _do_update_meta_on_add is suppressed (distinct_doc_count=0) so that
+            ingesting a file in N batches increments doc_count by 1, not N. Must
+            be True for all batches after the first when ingesting the same doc_id
+            in a sequence.
+        embedding_model:
+            Name of the embedding model used to produce the vectors; stored in
+            collection metadata when centroid incremental updates are enabled.
+        namespace:
+            Collection namespace (default ``DEFAULT_NAMESPACE``).
+        """
         self._validate_collection(collection)
         db = self._require_connected()
         for chunk in chunks:
@@ -1491,7 +1516,7 @@ class SearchStore:
             if self._config.centroid_incremental_enabled:
                 batch_vectors = [list(c.vector) for c in chunks]
                 if batch_vectors:
-                    distinct_doc_count = len({c.doc_id for c in chunks})
+                    distinct_doc_count = 0 if _is_continuation else len({c.doc_id for c in chunks})
                     needs_recompute = await self._do_update_meta_on_add(
                         db, collection, batch_vectors, distinct_doc_count,
                         embedding_model=embedding_model,
@@ -1582,6 +1607,27 @@ class SearchStore:
                 "call rebuild_fts_index() first to create the initial index"
             )
         await table.optimize()
+
+    async def sample_chunk_texts(
+        self,
+        collection: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        n: int = 100,
+    ) -> list[str]:
+        """Return up to *n* chunk text strings from *collection*.
+
+        Returns ``[]`` if the collection table does not exist or any error
+        occurs.  Namespace is accepted for API symmetry but not filtered on —
+        the underlying table is per-collection.
+        """
+        try:
+            db = self._require_connected()
+            table = await db.open_table(collection)
+            rows = await table.query().select(["text"]).limit(n).to_list()
+            return [row["text"] for row in rows]
+        except Exception as e:
+            logger.debug("sample_chunk_texts failed for %r: %s", collection, e, exc_info=True)
+            return []
 
     # ------------------------------------------------------------------
     # Reindex (metadata backfill for pre-A1 collections)

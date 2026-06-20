@@ -27,6 +27,16 @@
 - Action: When writing tests for "startup migration path", use `make_real_app` to start the server, then call the HTTP endpoint. Do not expect `apply_in_place_migrations` to be triggered by lifespan alone.
 - Confidence: high
 
+**2026-06-20 — Batching refactor: embed first batch before ensure_collection**
+- Observation: Moving `ensure_collection` before the batch loop broke `embedder.embedding_dim` access (it's lazy-initialized on first `embed()` call). The fix is to embed the first batch before calling `ensure_collection`, then reuse those vectors in the loop.
+- Action: When moving `ensure_collection` before embed in a batch loop, pre-embed the first batch so `embedding_dim` is initialized. Skip re-embedding batch 0 inside the loop by reusing the pre-embedded vectors.
+- Confidence: high
+
+**2026-06-20 — Integration test wrappers for ingest_chunks must accept new keyword args**
+- Observation: When adding a new keyword parameter (`_is_continuation`) to `ingest_chunks`, any test that monkey-patches `store.ingest_chunks` with a custom function must be updated to accept the new kwarg. The pipeline now always passes `_is_continuation=True/False`, so wrappers missing it get `TypeError`.
+- Action: After adding keyword parameters to a method that is monkey-patched in tests, grep for all test overrides of that method and update their signatures.
+- Confidence: high
+
 ## What Has Failed
 
 **2026-06-15 — Mocking `asyncio.wait_for` to simulate timeout**
@@ -49,6 +59,16 @@
 **2026-06-17 — Team plan generation (D3) — TypeSpec + role mapping**
 - Observation: (1) `namespace` is a reserved keyword in TypeSpec — using it as a model field name fails to compile; rename to e.g. `jobNamespace`. Core-construct `.tsp` files (model/enum/interface, no `@typespec/http` import) compile standalone with `tsp compile <file> --no-emit`. (2) This repo has no GUI: the `/plan-maker-for-team` Frontend role is always N/A — Presentation (FastAPI routes, Pydantic schemas, Click CLI) is server-side Python owned by Backend.
 - Action: For archon-search team plans, mark Frontend N/A and fold Presentation into Backend; when authoring TypeSpec contracts, avoid reserved keywords (`namespace`, `interface`, `model`, etc.) as field names and validate each file before referencing it.
+- Confidence: high
+
+**2026-06-20 — D4 plan review: `_do_update_meta_on_add` is NOT stateless across batches**
+- Observation: A plan claimed `store.ingest_chunks()` is "confirmed stateless per call." It is stateless for the chunk-table write (`_do_ingest`) but NOT for the metadata update (`_do_update_meta_on_add` reads and writes `doc_count`, `chunk_count`, `centroid_sum` on every call). Batching a single file into N batches inflated `doc_count` by N instead of 1. Fix: add `_is_continuation: bool = False` to `ingest_chunks()`; continuation batches skip the doc_count increment.
+- Action: Before declaring any store method "stateless per call" in a plan, grep for what fields `_do_update_meta_on_add` or equivalent touches. Metadata side-effects break batching invariants silently.
+- Confidence: high
+
+**2026-06-20 — `list_chunks_raw()` is NOT a streaming / O(1) alternative to in-memory accumulators**
+- Observation: `store.list_chunks_raw()` appears to be a generator but internally calls `table.query().to_list()` (store.py:2167) which materialises the entire collection into a Python list before yielding. Replacing `all_chunks` with `list_chunks_raw()` would have reintroduced the same O(corpus) memory problem D4 exists to fix. The fix: `store.sample_chunk_texts(n=100)` using `SELECT text LIMIT 100`.
+- Action: Never assume a method is streaming based on its signature (async generator). Always check the implementation for `.to_list()` calls.
 - Confidence: high
 
 **2026-06-17 — Iterative review of a team PLAN (not code) — verify every claim against source**
@@ -139,6 +159,11 @@
 **2026-06-19 — BE-15 Presentation layer implementation (D3 StatusResponse extensions)**
 - Observation: (1) When a new route field is computed from a constant that currently equals the Pydantic model's default (e.g., `STORE_SCHEMA_VERSION=0` and `store_schema_version: int = 0`), tests that assert `response_value == constant` are tautological — they pass even if the route never sets the field. Always patch the constant to a non-default value in tests for such fields. (2) When adding a new status computation that iterates already-fetched data (e.g., `ns_meta` from `get_all_collections_meta()`), never call a method that re-fetches the same data per item — use the in-memory objects directly. The plan may say "populate from `method()`" but the intent is the aggregate count, not the method call itself. (3) Existing mock stores that don't implement newly-called `search_store` methods break all tests using those mocks; always grep for all mock factories in the test file and add the new AsyncMock to each one before running the suite.
 - Action: For any new route field derived from a constant, patch the constant in tests. For status endpoint additions, prefer in-memory computation over per-collection async calls when the data is already fetched. When adding new `search_store` method calls to a route, grep for all mock factory functions in the test files and add the missing mock to each.
+- Confidence: high
+
+**2026-06-20 — Team plan generation for D4 (pure backend refactor, no public API changes)**
+- Observation: (1) For D4 (a pure Use Cases / Frameworks & Drivers refactor), all six investigation subagents returned high-quality findings. The contracts agent correctly identified that `list_chunks_raw()` (store.py:2147) exists and can replace the `all_chunks` accumulator as the text source for `generate_description()` — this was the only genuine open question. (2) When a feature has no cross-role API boundaries (all-backend, Frontend=N/A), TypeSpec contracts apply only to internal behavioral guarantees (batch aggregation shape). Core TypeSpec constructs (model/interface, no HTTP imports) still compile clean standalone. (3) The `centroid_incremental_enabled` flag has 30+ test references — test cleanup is a significant work item that deserves its own task (BE-4) separate from the algorithmic refactor (BE-3). (4) The pre-B5 branch in `ingest_directory()` is not dead code in the sense that it has live test coverage (tests set `centroid_incremental_enabled=False`), but it IS dead in production since the default flipped to True at B5.
+- Action: For all-backend refactors: (a) always check if a store read method exists before concluding an in-memory accumulator is the only text source; (b) count test references to removed flags before estimating task size; (c) TypeSpec contracts for internal-only features should use minimal models without HTTP decorators and validate clean with `tsp compile --no-emit`.
 - Confidence: high
 
 **2026-06-19 — T-1 e2e test for D3 migration flow**

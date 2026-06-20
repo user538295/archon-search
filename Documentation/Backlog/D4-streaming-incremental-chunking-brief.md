@@ -70,13 +70,13 @@ Operators and developers running archon-search on memory-constrained hosts — D
 - **Description regeneration timing**: `_should_regenerate(batch_doc_count, batch_chunk_count, described_at)` is called with the running doc/chunk count after each file completes. This matches today's per-directory semantics; no change to when descriptions regenerate.
 - **Watcher / sync path**: `watcher.py` and `sync.py` call `pipeline.ingest_file()` and `pipeline.ingest_directory()` with the same signatures. No changes needed there; they benefit automatically.
 
-## Open Questions
+## Resolved Decisions (formerly Open Questions)
 
-- **Should `_INGEST_CHUNK_BATCH_SIZE` be exposed in `archon-search.toml` under `[database]` for power users?** The recommendation is no — operators don't have enough information to tune this meaningfully, and a wrong value (e.g., 10000) silently reintroduces the problem. If a future benchmark shows the constant is wrong, change it in code.
-- **Is 512 chunks the right constant?** Needs a memory profile on a real large PDF. If a typical 500-page docling output produces ~2000 chunks at ~4 KB average, four `table.add()` calls of 512 rows each is fine. If pages are much larger in practice (e.g., tables inflate chunk sizes), 256 may be safer. Recommend profiling one real-world large PDF before fixing the constant.
-- **Does LanceDB's `table.add()` benefit from larger batches?** If LanceDB has an internal write buffer, many small `table.add()` calls may cause more index fragmentation than one large call. Needs a quick benchmark. If fragmentation is significant, the mitigation is to call `table.optimize()` (compaction) post-ingest — but this is a separate concern from D4.
-- **`centroid_incremental_enabled=False` path**: Is the pre-B5 centroid path still supported post-D4, or should the flag be removed? Removing it simplifies the code significantly. Recommend a follow-up decision, not a D4 blocker.
-- **Integration test `_vector_collector` / `_chunk_collector` usage**: Verify whether any test outside `ingest_directory()` passes these parameters to `ingest_file()` directly. If so, their semantics after batching (populated incrementally across batches rather than all at once) may break test assertions that assume a single call populates them.
+- **`_INGEST_CHUNK_BATCH_SIZE` stays an internal constant** — not exposed in `archon-search.toml`. A wrong operator value (e.g. 10000) silently reintroduces OOM. If benchmarks prove 512 is wrong, change it in code with a profiling note. Add `# ponytail: profile on large PDFs before changing` comment in `constants.py`.
+- **Ship 512 as the constant** — 512 × ~4 KB ≈ 2 MB per batch is safe on any host. If real-world profiling shows chunks average significantly more (tables, code blocks), bump to 256. Not a D4 blocker.
+- **LanceDB fragmentation is out of scope for D4** — `table.optimize()` already exists for compaction. If post-D4 benchmarks show fragmentation, add a single `optimize()` call after the final batch. Add `# ponytail: monitor for LanceDB fragmentation on large corpora` comment near the batch loop.
+- **Remove `centroid_incremental_enabled` flag in D4** — the pre-B5 path has defaulted to `True` since B5 and is effectively dead. Remove it, simplify `ingest_directory()`, and add a `BREAKING.md` entry.
+- **`_vector_collector` / `_chunk_collector`: no test changes needed** — verified that no test outside `ingest_directory()` passes these parameters to `ingest_file()` directly (only `pipeline.py:499-500` uses them). Parameters stay on the `ingest_file()` signature for backward compatibility; no assertion updates required.
 
 ## Future Iterations
 

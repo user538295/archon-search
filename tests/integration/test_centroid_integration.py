@@ -282,13 +282,14 @@ async def test_concurrent_ingest_and_delete_serializes_correctly(
         # This serializes the two ops without LanceDB write conflicts.
         original_ingest_chunks = store.ingest_chunks
 
-        async def _blocking_ingest_chunks(collection, records, *, embedding_model, namespace):
+        async def _blocking_ingest_chunks(collection, records, *, embedding_model, namespace, _is_continuation=False):
             # Block in a thread-pool worker — doesn't block the event loop.
             await asyncio.to_thread(hold_event.wait)
             return await original_ingest_chunks(
                 collection, records,
                 embedding_model=embedding_model,
                 namespace=namespace,
+                _is_continuation=_is_continuation,
             )
 
         monkeypatch.setattr(store, "ingest_chunks", _blocking_ingest_chunks)
