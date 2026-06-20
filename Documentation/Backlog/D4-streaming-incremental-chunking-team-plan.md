@@ -306,7 +306,7 @@ flowchart LR
 
 ### Slice 1 · Single file ingested in bounded per-file memory *(walking skeleton — thinnest end-to-end batch path; carries the constant that all subsequent work depends on)*
 
-- [ ] **BE-1** — Add `_INGEST_CHUNK_BATCH_SIZE = 512` to `constants.py` with ponytail comments #backend-role
+- [x] **BE-1** — Add `_INGEST_CHUNK_BATCH_SIZE = 512` to `constants.py` with ponytail comments #backend-role
     - Entities · 0.5h
     - needs K1
     - Tests

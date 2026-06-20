@@ -37,6 +37,13 @@ DEFAULT_NAMESPACE: str = "default"
 # Shared by router.py, config.py, and eval/runner.py to avoid hardcoding 0.3.
 DEFAULT_ROUTING_DESCRIPTION_WEIGHT: Final[float] = 0.3
 
+# Maximum number of chunks passed to a single store.ingest_chunks() call during
+# ingest_file() batch-emit (D4). At ~4 KB per chunk, 512 chunks ≈ 2 MB per
+# batch — safe on any memory-constrained host.
+# ponytail: profile on large PDFs before changing
+# ponytail: monitor for LanceDB fragmentation on large corpora
+_INGEST_CHUNK_BATCH_SIZE: Final[int] = 512
+
 _NAMESPACE_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}")
 
 

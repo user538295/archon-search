@@ -1,12 +1,25 @@
 """Tests for _validate_namespace() in archon_search.constants."""
 
+from typing import Final, get_type_hints
+
 import pytest
 
 from archon_search.constants import (
     PING_TIMEOUT_SECONDS,
     PING_TTL_SECONDS,
+    _INGEST_CHUNK_BATCH_SIZE,
     _validate_namespace,
 )
+
+
+def test_ingest_chunk_batch_size_constant() -> None:
+    """_INGEST_CHUNK_BATCH_SIZE exists, equals 512, and is Final[int]."""
+    assert _INGEST_CHUNK_BATCH_SIZE == 512
+    assert isinstance(_INGEST_CHUNK_BATCH_SIZE, int)
+    # Verify it is declared as Final[int] in the module-level annotations
+    import archon_search.constants as _mod
+    hints = get_type_hints(_mod)
+    assert hints.get("_INGEST_CHUNK_BATCH_SIZE") == Final[int]
 
 
 def test_ping_timeout_seconds_is_float() -> None:
