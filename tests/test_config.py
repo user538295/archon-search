@@ -684,6 +684,16 @@ def test_deprecated_flag_emits_warning(tmp_path: Path, caplog: pytest.LogCapture
     assert any("centroid_incremental_enabled" in r.message for r in caplog.records)
 
 
+def test_deprecated_flag_emits_warning_for_true_value(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """centroid_incremental_enabled = true also emits a deprecation WARNING — the handler is value-agnostic."""
+    import logging
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\ncentroid_incremental_enabled = true\n", encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        load_config(path=toml_file)
+    assert any("centroid_incremental_enabled" in r.message for r in caplog.records)
+
+
 def test_deprecated_flag_is_ignored(tmp_path: Path) -> None:
     """centroid_incremental_enabled in TOML is silently ignored — SearchConfig has no such field."""
     toml_file = tmp_path / "cfg.toml"

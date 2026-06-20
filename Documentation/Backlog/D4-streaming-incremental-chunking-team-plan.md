@@ -350,7 +350,7 @@ flowchart LR
         - #unit_test — `test_centroid_incremental_path_always_used` — `ingest_directory` with 3 files; assert `_do_update_meta_on_add` called per batch, not a post-loop full-scan
         - #integration_test — `test_directory_centroid_correct_after_refactor` — use `make_real_pipeline`; ingest 5-file synthetic corpus; assert centroid equals mean of all chunk stub vectors (regression guard for accumulator removal)
 
-- [ ] **BE-4** — Remove `centroid_incremental_enabled` from config/store/sync; fix all tests; add BREAKING.md #backend-role
+- [x] **BE-4** — Remove `centroid_incremental_enabled` from config/store/sync; fix all tests; add BREAKING.md #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-3 · completes S10, C2
     - Tests

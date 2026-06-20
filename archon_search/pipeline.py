@@ -266,13 +266,6 @@ class SearchPipeline:
     def embedder_is_warm(self) -> bool:
         return self._global_embedder.is_warm
 
-    @property
-    def _centroid_incremental_enabled(self) -> bool:
-        """Deprecated: the B5 incremental centroid path is always used. Returns True.
-
-        This shim exists for sync.py compatibility until BE-4 removes the last reference.
-        """
-        return True
 
     # ------------------------------------------------------------------
     # Ingest

@@ -13,10 +13,10 @@
 **Surface**: `archon-search.toml` `[database]` section.
 
 - The `centroid_incremental_enabled` field has been removed from `SearchConfig`. The B5 incremental centroid path is now unconditional.
-- If present in an existing TOML config, the field is silently ignored and a WARNING is logged at startup.
-- The legacy full-recompute path (previously activated by `centroid_incremental_enabled = false`) has been deleted.
+- If present in an existing TOML config, the value is discarded and a WARNING is logged at startup.
+- The per-operation full-recompute gate (previously activated by `centroid_incremental_enabled = false`) has been removed. The full-recompute path itself (`recompute_collection_meta`) still exists and fires on `needs_recompute = True` or periodic drift-reset checkpoints.
 
-**Migration**: remove `centroid_incremental_enabled` from your `archon-search.toml`. No functional change — the incremental path was already the default since B5.
+**Migration**: remove `centroid_incremental_enabled` from your `archon-search.toml`. For operators who never set this flag (or had it set to `true`), there is no functional change — the incremental path was already the default since B5. If you had explicitly set it to `false`, your deployment will now use the B5 incremental centroid path; run `archon-search collection reindex <name>` if you observe centroid drift.
 
 ---
 
