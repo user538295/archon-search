@@ -404,6 +404,8 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
 
     rebuild_called = False
 
+    update_description_called = False
+
     class TrackingStore:
         async def ensure_collection(self, *a: Any, **kw: Any) -> None:
             pass
@@ -420,6 +422,16 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
 
         async def get_dominant_language(self, *a: Any, **kw: Any) -> str:
             return ""
+
+        async def get_collection_meta(self, *a: Any, **kw: Any):
+            return None
+
+        async def update_description(self, *a: Any, **kw: Any) -> None:
+            nonlocal update_description_called
+            update_description_called = True
+
+        async def sample_chunk_texts(self, *a: Any, **kw: Any) -> list:
+            return []
 
     pipeline = SearchPipeline(
         store=TrackingStore(),  # type: ignore[arg-type]
@@ -444,6 +456,7 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
 
     assert all(r.status == "error" for r in results)
     assert not rebuild_called
+    assert not update_description_called, "update_description must not be called when all files fail"
 
 
 @pytest.mark.asyncio
@@ -1354,17 +1367,14 @@ async def test_p14_24_delete_document_sql_injection_rejected_by_doc_id_re(connec
 
 @pytest.mark.asyncio
 async def test_ingest_directory_namespace_param(tmp_path) -> None:
-    """ingest_directory forwards namespace to store.get_collection_meta and CollectionMeta."""
+    """ingest_directory forwards namespace to store.get_collection_meta and update_description."""
     from datetime import UTC, datetime
     from unittest.mock import AsyncMock, MagicMock, call
 
     from archon_search.chunker import DocumentChunker
-    from archon_search.collection_meta import CollectionMeta
     from archon_search.constants import DEFAULT_NAMESPACE
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-
-    from archon_search.config import SearchConfig
 
     store = MagicMock()
     store.ensure_collection = AsyncMock()
@@ -1373,8 +1383,9 @@ async def test_ingest_directory_namespace_param(tmp_path) -> None:
     store.rebuild_fts_index = AsyncMock()
     store.get_dominant_language = AsyncMock(return_value="")
     store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_description = AsyncMock()
     store.update_collection_meta = AsyncMock()
-    store._config = SearchConfig(centroid_incremental_enabled=False)
+    store.sample_chunk_texts = AsyncMock(return_value=[])
 
     pipeline = SearchPipeline(
         store=store,
@@ -1391,12 +1402,15 @@ async def test_ingest_directory_namespace_param(tmp_path) -> None:
     await pipeline.ingest_directory(tmp_path, "my-col", namespace="tenantA", embedder=pipeline._global_embedder, rebuild_fts=False)
 
     # store.get_collection_meta must be called with namespace="tenantA"
-    store.get_collection_meta.assert_awaited_once_with("my-col", namespace="tenantA")
+    store.get_collection_meta.assert_awaited_with("my-col", namespace="tenantA")
 
-    # CollectionMeta passed to update_collection_meta must carry namespace="tenantA"
-    store.update_collection_meta.assert_awaited_once()
-    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
-    assert saved_meta.namespace == "tenantA"
+    # update_description must be called with namespace="tenantA"
+    store.update_description.assert_awaited_once()
+    call_kwargs = store.update_description.call_args
+    assert call_kwargs.kwargs.get("namespace") == "tenantA"
+
+    # The pre-B5 path (update_collection_meta) must NOT be called from ingest_directory
+    store.update_collection_meta.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1405,12 +1419,9 @@ async def test_ingest_directory_default_namespace(tmp_path) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.chunker import DocumentChunker
-    from archon_search.collection_meta import CollectionMeta
     from archon_search.constants import DEFAULT_NAMESPACE
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-
-    from archon_search.config import SearchConfig
 
     store = MagicMock()
     store.ensure_collection = AsyncMock()
@@ -1419,8 +1430,9 @@ async def test_ingest_directory_default_namespace(tmp_path) -> None:
     store.rebuild_fts_index = AsyncMock()
     store.get_dominant_language = AsyncMock(return_value="")
     store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_description = AsyncMock()
     store.update_collection_meta = AsyncMock()
-    store._config = SearchConfig(centroid_incremental_enabled=False)
+    store.sample_chunk_texts = AsyncMock(return_value=[])
 
     pipeline = SearchPipeline(
         store=store,
@@ -1436,9 +1448,12 @@ async def test_ingest_directory_default_namespace(tmp_path) -> None:
 
     await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
 
-    store.get_collection_meta.assert_awaited_once_with("my-col", namespace=DEFAULT_NAMESPACE)
-    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
-    assert saved_meta.namespace == DEFAULT_NAMESPACE
+    store.get_collection_meta.assert_awaited_with("my-col", namespace=DEFAULT_NAMESPACE)
+
+    # update_description must be called with DEFAULT_NAMESPACE
+    store.update_description.assert_awaited_once()
+    call_kwargs = store.update_description.call_args
+    assert call_kwargs.kwargs.get("namespace") == DEFAULT_NAMESPACE
 
 
 @pytest.mark.asyncio
@@ -1480,7 +1495,6 @@ async def test_recompute_collection_meta_namespace_param(tmp_path) -> None:
 def _make_stub_store_for_embedding_tests(existing_meta=None):  # type: ignore[no-untyped-def]
     """Return a store mock suitable for description-embedding tests."""
     from unittest.mock import AsyncMock, MagicMock
-    from archon_search.config import SearchConfig
 
     store = MagicMock()
     store.ensure_collection = AsyncMock()
@@ -1490,7 +1504,8 @@ def _make_stub_store_for_embedding_tests(existing_meta=None):  # type: ignore[no
     store.get_dominant_language = AsyncMock(return_value="")
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.update_collection_meta = AsyncMock()
-    store._config = SearchConfig(centroid_incremental_enabled=False)
+    store.update_description = AsyncMock()
+    store.sample_chunk_texts = AsyncMock(return_value=[])
     return store
 
 
@@ -1512,34 +1527,35 @@ def _make_pipeline_for_embedding_tests(store):  # type: ignore[no-untyped-def]
 
 @pytest.mark.asyncio
 async def test_ingest_populates_description_embedding(tmp_path) -> None:
-    """ingest_directory persists a CollectionMeta with description_embedding when description is set."""
+    """ingest_directory calls update_description (B5 path) with the generated description.
+    After BE-3, description embedding is managed inside store.update_description — ingest_directory
+    does NOT call update_collection_meta directly."""
     from unittest.mock import AsyncMock, patch
-
-    from archon_search.collection_meta import CollectionMeta
 
     store = _make_stub_store_for_embedding_tests(existing_meta=None)
     pipeline = _make_pipeline_for_embedding_tests(store)
 
-    embed_vec = [0.1] * 32
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for embedding test.\n" * 5)
 
-    with (
-        patch("archon_search.pipeline.generate_description", return_value="test desc"),
-        patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock(return_value=embed_vec)),
-    ):
+    with patch("archon_search.pipeline.generate_description", return_value="test desc"), \
+         patch("archon_search.pipeline._should_regenerate", return_value=True):
         await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
 
-    store.update_collection_meta.assert_awaited_once()
-    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
-    assert saved_meta.description_embedding == embed_vec
+    # B5 path: update_description is called with the generated description
+    store.update_description.assert_awaited_once()
+    call_args = store.update_description.call_args
+    # Second positional arg is the description
+    assert call_args.args[1] == "test desc"
+
+    # Pre-B5 path: update_collection_meta is NOT called from ingest_directory
+    store.update_collection_meta.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_ingest_description_none_sets_embedding_none(tmp_path) -> None:
-    """When generate_description returns None, description_embedding is None on persisted meta."""
+    """When generate_description returns None, update_description is still called (B5 path)
+    with None description."""
     from unittest.mock import AsyncMock, patch
-
-    from archon_search.collection_meta import CollectionMeta
 
     store = _make_stub_store_for_embedding_tests(existing_meta=None)
     pipeline = _make_pipeline_for_embedding_tests(store)
@@ -1547,48 +1563,44 @@ async def test_ingest_description_none_sets_embedding_none(tmp_path) -> None:
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for null embedding test.\n" * 5)
 
     with patch("archon_search.pipeline.generate_description", return_value=None):
-        with patch.object(pipeline._global_embedder, "embed_one", new_callable=AsyncMock) as mock_embed:
-            await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
+        await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
 
-    mock_embed.assert_not_awaited()
-    store.update_collection_meta.assert_awaited_once()
-    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
-    assert saved_meta.description_embedding is None
+    # B5 path: update_description is still called; description arg is None
+    store.update_description.assert_awaited_once()
+    call_args = store.update_description.call_args
+    assert call_args.args[1] is None
+
+    # Pre-B5 path: update_collection_meta is NOT called
+    store.update_collection_meta.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_ingest_re_embeds_description_on_every_ingest(tmp_path) -> None:
-    """Re-ingest always re-embeds the description, overwriting stale description_embedding."""
+    """Re-ingest preserves the existing description from meta when _should_regenerate returns False,
+    and passes it to update_description (B5 path)."""
     from unittest.mock import AsyncMock, patch
 
     from archon_search.collection_meta import CollectionMeta
 
-    prior_embedding = [0.5] * 32
     existing_meta = CollectionMeta(
         name="my-col",
         description="old desc",
-        description_embedding=prior_embedding,
         described_at_doc_count=1,  # batch has 1 doc → 0% change → no regeneration
     )
     store = _make_stub_store_for_embedding_tests(existing_meta=existing_meta)
     pipeline = _make_pipeline_for_embedding_tests(store)
 
-    new_embed_vec = [0.9] * 32
-    embed_one_mock = AsyncMock(return_value=new_embed_vec)
-
     (tmp_path / "doc.md").write_text("# Hello\n\nContent for re-embed test.\n" * 5)
 
-    with patch.object(pipeline._global_embedder, "embed_one", new=embed_one_mock):
-        await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
+    await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
 
-    # embed_one must have been called with the preserved description
-    embed_one_mock.assert_awaited_once_with("old desc")
+    # B5 path: update_description is called with the preserved description
+    store.update_description.assert_awaited_once()
+    call_args = store.update_description.call_args
+    assert call_args.args[1] == "old desc"
 
-    # Persisted meta must carry the fresh embedding, not the prior [0.5]*32
-    store.update_collection_meta.assert_awaited_once()
-    saved_meta: CollectionMeta = store.update_collection_meta.call_args[0][0]
-    assert saved_meta.description_embedding == new_embed_vec
-    assert saved_meta.description_embedding != prior_embedding
+    # Pre-B5 path: update_collection_meta is NOT called
+    store.update_collection_meta.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1746,11 +1758,9 @@ def _make_mock_store_for_b5() -> MagicMock:
     store.get_collection_meta = AsyncMock(return_value=None)
     store.update_collection_meta = AsyncMock()
     store.update_description = AsyncMock()
+    store.sample_chunk_texts = AsyncMock(return_value=[])
     store.count_documents = AsyncMock(return_value=1)
     store.get_all_vectors = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
-    # Store needs a _config with centroid_incremental_enabled; set in each test as needed
-    from archon_search.config import SearchConfig
-    store._config = SearchConfig(centroid_incremental_enabled=False)
     return store
 
 
@@ -1874,6 +1884,189 @@ async def test_ingest_file_forwards_namespace_to_store(tmp_path) -> None:
     # ingest_chunks should receive namespace="ns1"
     ic_kwargs = store.ingest_chunks.call_args
     assert ic_kwargs.kwargs.get("namespace") == "ns1"
+
+
+# ---------------------------------------------------------------------------
+# BE-3: accumulator removal and unconditional B5 path tests
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_directory_no_all_vectors_accumulator() -> None:
+    """all_vectors and all_chunks must NOT appear as live variables in ingest_directory source.
+
+    This is a deletion-regression guard: if the accumulators creep back in,
+    this test fails immediately.
+    """
+    import inspect
+
+    from archon_search.pipeline import SearchPipeline
+
+    src = inspect.getsource(SearchPipeline.ingest_directory)
+    # Strip comment lines to avoid false positives from docs/comments
+    code_lines = [line for line in src.splitlines() if not line.lstrip().startswith("#")]
+    code = "\n".join(code_lines)
+    assert "all_vectors" not in code, "all_vectors accumulator must be removed from ingest_directory"
+    assert "all_chunks" not in code, "all_chunks accumulator must be removed from ingest_directory"
+
+
+@pytest.mark.asyncio
+async def test_description_reads_from_store_not_accumulator(tmp_path) -> None:
+    """When _should_regenerate returns True, description uses store.sample_chunk_texts(n=100),
+    not any chunk accumulator. store.list_chunks_raw must NOT be called."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.delete_document = AsyncMock(return_value=0)
+    store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=3, needs_recompute=False))
+    store.rebuild_fts_index = AsyncMock()
+    store.get_dominant_language = AsyncMock(return_value="")
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_description = AsyncMock()
+    store.update_collection_meta = AsyncMock()
+    store.list_chunks_raw = AsyncMock()
+    sample_texts = ["chunk text A", "chunk text B", "chunk text C"]
+    store.sample_chunk_texts = AsyncMock(return_value=sample_texts)
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=64),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    (tmp_path / "doc.md").write_text("# Hello\n\nContent for BE-3 test.\n" * 5)
+
+    with patch("archon_search.pipeline.generate_description", return_value="generated desc") as mock_gen, \
+         patch("archon_search.pipeline._should_regenerate", return_value=True):
+        await pipeline.ingest_directory(
+            tmp_path, "test-col", embedder=pipeline._global_embedder, rebuild_fts=False
+        )
+
+    # sample_chunk_texts must be called with n=100
+    store.sample_chunk_texts.assert_awaited_once()
+    call_kwargs = store.sample_chunk_texts.call_args
+    assert call_kwargs.kwargs.get("n") == 100 or (len(call_kwargs.args) >= 3 and call_kwargs.args[2] == 100)
+
+    # generate_description receives the sample texts
+    mock_gen.assert_awaited_once()
+    desc_arg = mock_gen.call_args[0][0]
+    assert desc_arg == sample_texts
+
+    # list_chunks_raw must NOT be called — the old accumulator path is gone
+    store.list_chunks_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_centroid_incremental_path_always_used(tmp_path) -> None:
+    """ingest_directory always calls update_description (B5 path unconditionally).
+    update_collection_meta (pre-B5 path) must NOT be called."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    store = MagicMock()
+    store.ensure_collection = AsyncMock()
+    store.delete_document = AsyncMock(return_value=0)
+    store.ingest_chunks = AsyncMock(return_value=ChunkIngestResult(chunks_ingested=2, needs_recompute=False))
+    store.rebuild_fts_index = AsyncMock()
+    store.get_dominant_language = AsyncMock(return_value="")
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_description = AsyncMock()
+    store.update_collection_meta = AsyncMock()
+    store.sample_chunk_texts = AsyncMock(return_value=[])
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=64),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    for i in range(3):
+        (tmp_path / f"doc{i}.md").write_text(f"# Doc {i}\n\nContent number {i}.\n" * 5)
+
+    await pipeline.ingest_directory(tmp_path, "test-col", embedder=pipeline._global_embedder, rebuild_fts=False)
+
+    # B5 path: update_description is always called
+    store.update_description.assert_awaited_once()
+    # Pre-B5 path: update_collection_meta is never called from ingest_directory
+    store.update_collection_meta.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_directory_centroid_correct_after_refactor(tmp_path, monkeypatch) -> None:
+    """Regression guard: centroid stored in meta equals mean of all chunk stub vectors
+    after the accumulator removal. Wires up a real SearchStore + SearchPipeline with
+    stub embedder/reranker for end-to-end coverage."""
+    from archon_search.chunker import DocumentChunker
+    from archon_search.embedder import Embedder
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.reranker import Reranker
+    from archon_search.store import SearchStore
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+
+    class _StubEmbedderBackend:
+        model_name: str = "stub-model"
+        is_warm: bool = False
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
+
+    class _StubRerankerBackend:
+        is_warm: bool = False
+
+        def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+            return [0.5] * len(pairs)
+
+    store = SearchStore(str(tmp_path / "db"))
+    await store.connect()
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=Embedder(_StubEmbedderBackend()),
+        reranker=Reranker(_StubRerankerBackend()),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    col = "centroid-test"
+    for i in range(5):
+        (tmp_path / f"file{i}.md").write_text(f"# Doc {i}\n\nReal content for centroid test number {i}.\n" * 5)
+
+    await pipeline.ingest_directory(tmp_path, col, embedder=pipeline._global_embedder, rebuild_fts=False)
+
+    meta = await store.get_collection_meta(col)
+    assert meta is not None, "collection meta must exist after ingest_directory"
+    # The stub embedder returns [0.1, 0.2, 0.3, 0.4] for every chunk.
+    # After B5 incremental ingest, centroid is stored via _do_update_meta_on_add.
+    # Since all vectors are identical, centroid must equal [0.1, 0.2, 0.3, 0.4].
+    expected = [0.1, 0.2, 0.3, 0.4]
+    assert meta.centroid is not None, "centroid must be set in meta"
+    for actual, exp in zip(meta.centroid, expected):
+        assert abs(actual - exp) < 1e-5, f"centroid mismatch: {meta.centroid!r} != {expected!r}"
+
+
+# ---------------------------------------------------------------------------
+# END BE-3 tests
+# ---------------------------------------------------------------------------
 
 
 def test_ingest_result_needs_recompute_not_in_rest_response() -> None:
@@ -2067,10 +2260,10 @@ async def test_recompute_collection_meta_force_bypasses_short_circuit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recompute_no_short_circuit_when_flag_disabled() -> None:
-    """When centroid_incremental_enabled=False, full scan always runs regardless of meta state."""
+async def test_recompute_short_circuits_when_not_needed_and_not_forced() -> None:
+    """When force=False and meta says needs_recompute=False and mutations_since_recompute=0,
+    the full scan is skipped (short-circuit). get_all_vectors is NOT called."""
     from archon_search.collection_meta import CollectionMeta
-    from archon_search.config import SearchConfig
 
     existing = CollectionMeta(name="col", needs_recompute=False, mutations_since_recompute=0)
     store = MagicMock()
@@ -2079,13 +2272,11 @@ async def test_recompute_no_short_circuit_when_flag_disabled() -> None:
     store.count_documents = AsyncMock(return_value=1)
     store.update_collection_meta = AsyncMock()
 
-    cfg = SearchConfig()
-    cfg.centroid_incremental_enabled = False
-    pipeline = _make_pipeline_for_recompute(store, config=cfg)
-    with patch.object(pipeline._global_embedder, "embed_one", new=AsyncMock()):
-        await pipeline.recompute_collection_meta("col", pipeline._global_embedder)
+    pipeline = _make_pipeline_for_recompute(store)
+    await pipeline.recompute_collection_meta("col", pipeline._global_embedder, force=False)
 
-    store.get_all_vectors.assert_awaited_once()
+    # Short-circuit fires — get_all_vectors must NOT be called
+    store.get_all_vectors.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2243,9 +2434,7 @@ def _make_embedder_with_model(model_name: str) -> Embedder:
 
 
 def _make_mock_store_c1(existing_meta=None):  # type: ignore[no-untyped-def]
-    """Minimal mock store for C1 tests (centroid_incremental_enabled=False)."""
-    from archon_search.config import SearchConfig
-
+    """Minimal mock store for C1 tests (B5 incremental path)."""
     store = MagicMock()
     store.ensure_collection = AsyncMock()
     store.delete_document = AsyncMock(return_value=0)
@@ -2255,14 +2444,15 @@ def _make_mock_store_c1(existing_meta=None):  # type: ignore[no-untyped-def]
     store.get_collection_meta = AsyncMock(return_value=existing_meta)
     store.update_collection_meta = AsyncMock()
     store.update_description = AsyncMock()
-    store._config = SearchConfig(centroid_incremental_enabled=False)
+    store.sample_chunk_texts = AsyncMock(return_value=[])
     return store
 
 
 @pytest.mark.asyncio
 async def test_ingest_directory_preserves_active_embedding_model(tmp_path) -> None:
-    """Existing collection with active_embedding_model='model-X'; ingest with embedder_Y;
-    after ingest, active_embedding_model is still 'model-X'."""
+    """After BE-3, ingest_directory uses the B5 path (update_description) and does NOT
+    call update_collection_meta. C1 fields (active_embedding_model, etc.) are preserved
+    inside the store via the incremental update path."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
@@ -2275,7 +2465,7 @@ async def test_ingest_directory_preserves_active_embedding_model(tmp_path) -> No
 
     pipeline = SearchPipeline(
         store=store,
-        embedder=make_embedder(),  # global = "mock-embedder"
+        embedder=make_embedder(),
         reranker=make_reranker(),
         chunker=DocumentChunker(chunk_size=128),
         parser=DocumentParser(),
@@ -2287,29 +2477,27 @@ async def test_ingest_directory_preserves_active_embedding_model(tmp_path) -> No
 
     await pipeline.ingest_directory(tmp_path, "col", embedder=embedder_y, rebuild_fts=False)
 
-    store.update_collection_meta.assert_awaited_once()
-    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
-    assert saved.active_embedding_model == "model-X", (
-        f"expected model-X but got {saved.active_embedding_model!r}"
-    )
+    # B5 path: update_description is called
+    store.update_description.assert_awaited_once()
+    # Pre-B5 path: update_collection_meta is NOT called from ingest_directory
+    store.update_collection_meta.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_ingest_directory_sets_active_embedding_model_for_new_collection(tmp_path) -> None:
-    """New collection (no existing meta); ingest with embedder_X;
-    active_embedding_model is set to embedder_X.model_name."""
-    from archon_search.collection_meta import CollectionMeta
+    """After BE-3, ingest_directory uses the B5 path (update_description) for both
+    new and existing collections. update_collection_meta is not called."""
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
-    store = _make_mock_store_c1(existing_meta=None)  # no existing meta → new collection
+    store = _make_mock_store_c1(existing_meta=None)
 
     embedder_x = _make_embedder_with_model("model-X")
 
     pipeline = SearchPipeline(
         store=store,
-        embedder=make_embedder(),  # global = "mock-embedder"
+        embedder=make_embedder(),
         reranker=make_reranker(),
         chunker=DocumentChunker(chunk_size=128),
         parser=DocumentParser(),
@@ -2321,32 +2509,25 @@ async def test_ingest_directory_sets_active_embedding_model_for_new_collection(t
 
     await pipeline.ingest_directory(tmp_path, "col", embedder=embedder_x, rebuild_fts=False)
 
-    store.update_collection_meta.assert_awaited_once()
-    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
-    assert saved.active_embedding_model == "model-X", (
-        f"expected model-X but got {saved.active_embedding_model!r}"
-    )
+    # B5 path: update_description is called
+    store.update_description.assert_awaited_once()
+    # Pre-B5 path: update_collection_meta is NOT called from ingest_directory
+    store.update_collection_meta.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_ingest_directory_description_uses_global_embedder(tmp_path) -> None:
-    """description_embedding is produced by self._global_embedder.embed_one, not embedder param."""
-    from archon_search.collection_meta import CollectionMeta
+    """After BE-3, description generation uses sample_chunk_texts (not an accumulator)
+    and generate_description is called. update_description receives the generated text."""
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
     store = _make_mock_store_c1(existing_meta=None)
+    store.sample_chunk_texts = AsyncMock(return_value=["sample chunk text"])
 
     global_embedder = _make_embedder_with_model("global-model")
     passed_embedder = _make_embedder_with_model("passed-model")
-
-    # Spy on embed_one for both embedders
-    global_embed_one_mock = AsyncMock(return_value=[0.1] * 4)
-    passed_embed_one_mock = AsyncMock(return_value=[0.2] * 4)
-    global_embedder.embed_one = global_embed_one_mock  # type: ignore[method-assign]
-    passed_embedder.embed_one = passed_embed_one_mock  # type: ignore[method-assign]
-    # Also patch embed so chunks can be embedded
     global_embedder.embed = AsyncMock(return_value=[[0.1] * 4])  # type: ignore[method-assign]
     passed_embedder.embed = AsyncMock(return_value=[[0.2] * 4])  # type: ignore[method-assign]
     global_embedder._embedding_dim = 4
@@ -2365,18 +2546,24 @@ async def test_ingest_directory_description_uses_global_embedder(tmp_path) -> No
     (tmp_path / "doc.md").write_text("# Hello\n\nContent.\n" * 5)
 
     with patch("archon_search.pipeline._should_regenerate", return_value=True), \
-         patch("archon_search.pipeline.generate_description", new=AsyncMock(return_value="A good description")):
+         patch("archon_search.pipeline.generate_description", new=AsyncMock(return_value="A good description")) as mock_gen:
         await pipeline.ingest_directory(tmp_path, "col", embedder=passed_embedder, rebuild_fts=False)
 
-    # global embed_one must have been called (for description embedding)
-    global_embed_one_mock.assert_awaited()
-    # passed embedder's embed_one must NOT have been called for description
-    passed_embed_one_mock.assert_not_awaited()
+    # generate_description must be called with the sample_chunk_texts output
+    mock_gen.assert_awaited_once()
+    desc_arg = mock_gen.call_args[0][0]
+    assert desc_arg == ["sample chunk text"]
+
+    # update_description called with the generated description
+    store.update_description.assert_awaited_once()
+    call_args = store.update_description.call_args
+    assert call_args.args[1] == "A good description"
 
 
 @pytest.mark.asyncio
 async def test_ingest_directory_preserves_all_c1_fields(tmp_path) -> None:
-    """All four C1 fields are preserved from existing_meta after ingest_directory."""
+    """After BE-3, ingest_directory calls update_description (B5 path) and does NOT
+    call update_collection_meta. C1 fields are preserved inside the store."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
@@ -2405,12 +2592,10 @@ async def test_ingest_directory_preserves_all_c1_fields(tmp_path) -> None:
 
     await pipeline.ingest_directory(tmp_path, "col", embedder=pipeline._global_embedder, rebuild_fts=False)
 
-    store.update_collection_meta.assert_awaited_once()
-    saved: CollectionMeta = store.update_collection_meta.call_args[0][0]
-    assert saved.active_embedding_model == "model-A"
-    assert saved.pending_embedding_model == "model-B"
-    assert saved.needs_reindex is True
-    assert saved.reindex_job_id == "job-42"
+    # B5 path: update_description is called
+    store.update_description.assert_awaited_once()
+    # Pre-B5 path: update_collection_meta is NOT called from ingest_directory
+    store.update_collection_meta.assert_not_awaited()
 
 
 @pytest.mark.asyncio

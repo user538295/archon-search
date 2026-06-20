@@ -268,11 +268,11 @@ class SearchPipeline:
 
     @property
     def _centroid_incremental_enabled(self) -> bool:
-        """Return True if the store config has centroid_incremental_enabled set."""
-        cfg = getattr(self.store, "_config", None)
-        if cfg is None:
-            return False
-        return bool(getattr(cfg, "centroid_incremental_enabled", False))
+        """Deprecated: the B5 incremental centroid path is always used. Returns True.
+
+        This shim exists for sync.py compatibility until BE-4 removes the last reference.
+        """
+        return True
 
     # ------------------------------------------------------------------
     # Ingest
@@ -437,7 +437,7 @@ class SearchPipeline:
             except StoreBusyError:
                 return IngestResult(doc_id=doc_id, chunks_created=0, status="error")
 
-            if rebuild_fts and self._centroid_incremental_enabled and needs_recompute:
+            if rebuild_fts and needs_recompute:
                 await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
 
             if rebuild_fts:
@@ -508,16 +508,12 @@ class SearchPipeline:
 
         results: list[IngestResult] = []
         total = len(files)
-        all_vectors: list[list[float]] = []
-        all_chunks: list[str] = []
 
         for done_count, file_path in enumerate(files, start=1):
             result = await self.ingest_file(
                 file_path,
                 collection,
                 rebuild_fts=False,
-                _vector_collector=all_vectors,
-                _chunk_collector=all_chunks,
                 embedder=embedder,
                 namespace=namespace,
                 collection_root=collection_root,
@@ -548,81 +544,36 @@ class SearchPipeline:
                 dominant_lang = await self.store.get_dominant_language(collection)
                 await self.store.rebuild_fts_index(collection, language=dominant_lang)
 
-        # Compute centroid and (conditionally) regenerate description
-        if all_vectors:
-            _all_sum = elementwise_sum(all_vectors)
-            centroid = [x / len(all_vectors) for x in _all_sum]
-            ok_results = [r for r in results if r.status == "ok"]
-            batch_doc_count = len(ok_results)
-            batch_chunk_count = sum(r.chunks_created for r in ok_results)
-
-            # Read existing meta to preserve description state across ingests
+        # Only update metadata when at least one file was successfully ingested
+        if any(r.status == "ok" for r in results):
+            # Regenerate description using fresh store counts from B5 incremental path
             existing_meta = await self.store.get_collection_meta(collection, namespace=namespace)
             description = existing_meta.description if existing_meta else None
             described_at = existing_meta.described_at_doc_count if existing_meta else None
             last_described = existing_meta.last_described if existing_meta else None
+            batch_doc_count = existing_meta.doc_count if existing_meta else 0
+            batch_chunk_count = existing_meta.chunk_count if existing_meta else 0
 
             if force_regenerate_description or _should_regenerate(batch_doc_count, batch_chunk_count, described_at):
-                new_desc = await generate_description(all_chunks, collection)
+                sample_texts = await self.store.sample_chunk_texts(collection, namespace, n=100)
+                new_desc = await generate_description(sample_texts, collection)
                 if new_desc is not None:
                     description = new_desc
                     described_at = batch_doc_count
                     last_described = datetime.now(UTC)
 
-            if self._centroid_incremental_enabled:
-                await self.store.update_description(
-                    collection,
-                    description,
-                    last_described,
-                    described_at_doc_count=described_at,
-                    last_indexed=datetime.now(UTC),
-                    namespace=namespace,
-                )
-            else:
-                # Pre-B5 path: retained until flag default flips in Task 5.3
-                if description is not None:
-                    description_embedding = await self._global_embedder.embed_one(description)
-                else:
-                    logger.debug(
-                        "description_embedding: description is None for collection %r — skipping",
-                        collection,
-                    )
-                    description_embedding = None
+            await self.store.update_description(
+                collection,
+                description,
+                last_described,
+                described_at_doc_count=described_at,
+                last_indexed=datetime.now(UTC),
+                namespace=namespace,
+            )
 
-                # Preserve C1 fields from existing meta; use embedder.model_name only for new collections.
-                if existing_meta is not None:
-                    active_model = existing_meta.active_embedding_model
-                    pending_model = existing_meta.pending_embedding_model
-                    needs_reindex = existing_meta.needs_reindex
-                    reindex_job_id = existing_meta.reindex_job_id
-                else:
-                    active_model = embedder.model_name
-                    pending_model = None
-                    needs_reindex = False
-                    reindex_job_id = None
-
-                meta = CollectionMeta(
-                    name=collection,
-                    centroid=centroid,
-                    description=description,
-                    doc_count=batch_doc_count,
-                    chunk_count=batch_chunk_count,
-                    active_embedding_model=active_model,
-                    pending_embedding_model=pending_model,
-                    needs_reindex=needs_reindex,
-                    reindex_job_id=reindex_job_id,
-                    last_indexed=datetime.now(UTC),
-                    last_described=last_described,
-                    described_at_doc_count=described_at,
-                    namespace=namespace,
-                    description_embedding=description_embedding,
-                    schema_version=existing_meta.schema_version if existing_meta is not None else 0,
-                )
-                await self.store.update_collection_meta(meta)
-
-        # Aggregate needs_recompute signal: if any file triggered it, fire recompute
-        if self._centroid_incremental_enabled and any(r.needs_recompute for r in results):
-            await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
+            # Aggregate needs_recompute signal: if any file triggered it, fire recompute
+            if any(r.needs_recompute for r in results):
+                await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
 
         return results
 
@@ -1471,15 +1422,14 @@ class SearchPipeline:
         resets mutations_since_recompute to 0 and needs_recompute to False, and
         updates the collection metadata. Preserves existing description fields.
 
-        Short-circuit: when centroid_incremental_enabled=True and force=False, skips
-        the full scan if the meta row already has needs_recompute=False and
-        mutations_since_recompute=0.
+        Short-circuit: when force=False, skips the full scan if the meta row already
+        has needs_recompute=False and mutations_since_recompute=0.
 
         force=True bypasses the short-circuit entirely (crash-recovery / reindex path).
         """
         existing_meta = await self.store.get_collection_meta(collection, namespace=namespace)
 
-        if not force and self._centroid_incremental_enabled:
+        if not force:
             if (
                 existing_meta is not None
                 and existing_meta.needs_recompute is False

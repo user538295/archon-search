@@ -61,6 +61,16 @@
 - Action: For archon-search team plans, mark Frontend N/A and fold Presentation into Backend; when authoring TypeSpec contracts, avoid reserved keywords (`namespace`, `interface`, `model`, etc.) as field names and validate each file before referencing it.
 - Confidence: high
 
+**2026-06-20 — BE-3 iterative review: DA agents found `update_description` called unconditionally on all-failures path**
+- Observation: `ingest_directory()` wrote `last_indexed=datetime.now(UTC)` via `update_description` even when all files failed to parse. The FTS rebuild was already guarded with `any(r.status == "ok" for r in results)` but the description block wasn't. DA review in iterative-review caught this.
+- Action: Always guard ALL post-loop metadata writes with the same "at least one success" check used for FTS rebuild. Mirror the FTS guard pattern for every downstream update block.
+- Confidence: high
+
+**2026-06-20 — Deprecated shim returning True doesn't help if the underlying store.py also gates on the config flag**
+- Observation: Adding `_centroid_incremental_enabled` returning `True` always in pipeline.py doesn't un-gate `store.py`'s conditional at `store.py:1516` which reads `self._config.centroid_incremental_enabled`. Users with `centroid_incremental_enabled = false` in TOML still lose centroid maintenance silently until BE-4 removes the flag from config/store.
+- Action: When adding a deprecated shim for a feature flag, check whether the flag also gates logic in lower layers independently. If so, document it as a BE-4-style follow-up or address it in the same PR.
+- Confidence: high
+
 **2026-06-20 — D4 plan review: `_do_update_meta_on_add` is NOT stateless across batches**
 - Observation: A plan claimed `store.ingest_chunks()` is "confirmed stateless per call." It is stateless for the chunk-table write (`_do_ingest`) but NOT for the metadata update (`_do_update_meta_on_add` reads and writes `doc_count`, `chunk_count`, `centroid_sum` on every call). Batching a single file into N batches inflated `doc_count` by N instead of 1. Fix: add `_is_continuation: bool = False` to `ingest_chunks()`; continuation batches skip the doc_count increment.
 - Action: Before declaring any store method "stateless per call" in a plan, grep for what fields `_do_update_meta_on_add` or equivalent touches. Metadata side-effects break batching invariants silently.
@@ -194,6 +204,11 @@
 **2026-06-20 — Fixing flaky tests under parallel xdist load**
 - Observation: (1) A session-scoped autouse fixture writing to a shared repo file (tests/eval/corpus/pdf-fixtures/three_page.pdf) creates a race condition under xdist: multiple workers all call reportlab Canvas.save() on the same path simultaneously, truncating the file mid-write while another worker's compute_eval_hash reads it. The fix is an early-exit guard (if file exists: return) since the PDF is byte-deterministic and committed to git — plus an atomic write pattern (temp file + rename) for the case where the file is absent. (2) Integration tests relying on a scheduler asyncio event loop ticking at 0.1s with timeout_s=15.0 can fail under CPU starvation when 14 xdist workers are all running simultaneously. Adding xdist_group("benchmark") to such tests serializes them on a single worker, preventing concurrent CPU competition. (3) The established convention for scheduler-timing-sensitive tests is timeout_s=30.0 (see test_dispatch_scheduler_e2e.py) — new tests should match this, not use 15.0.
 - Action: For any fixture that writes to a shared source-tree file, add an early-exit if the file exists, then write atomically (temp + rename). For any integration test that relies on an asyncio event loop tick (scheduler, backup loop) within a timeout, add xdist_group("benchmark") to serialize it and avoid CPU starvation failures.
+- Confidence: high
+
+**2026-06-20 — D4 T-1 batched ingest e2e test**
+- Observation: With the GPT-2 tokenizer at chunk_size=512 and paragraphs of ~2380 chars (~595 tokens), each paragraph reliably produces exactly 1 chunk. 620 paragraphs (512 alpha + 108 beta) → 620 chunks, triggering the second ingest batch cleanly. The test ran in 4.06s, well within the 120s timeout. FTS finds the distinct tokens deterministically even though the stub embedder returns zero-vectors for all chunks.
+- Action: For any batched ingest e2e test, use paragraphs of ≥2100 chars so each exceeds the 512-token chunk boundary independently. Use distinct tokens-per-section rather than section offsets so FTS assertions are immune to chunker overlap variations.
 - Confidence: high
 
 ## Open Questions

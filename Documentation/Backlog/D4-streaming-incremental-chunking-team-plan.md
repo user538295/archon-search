@@ -341,7 +341,7 @@ flowchart LR
 
 ### Slice 2 · Directory ingested without corpus-wide accumulation
 
-- [ ] **BE-3** — Refactor `ingest_directory()`: remove accumulators + flag from pipeline.py #backend-role
+- [x] **BE-3** — Refactor `ingest_directory()`: remove accumulators + flag from pipeline.py #backend-role
     - Use Cases · 5.0h
     - needs BE-2 · completes S8, S9, C2 (partial)
     - Tests
