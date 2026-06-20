@@ -331,7 +331,7 @@ flowchart LR
         - #integration_test — `test_partial_batch_failure_leaves_store_partially_written` — use `make_real_pipeline`; mock `ingest_chunks` to raise on batch 2; assert batch 1's chunks exist in the store (`count_chunks > 0`); then re-ingest the same file successfully; assert final state is clean
         - #integration_test — `test_sample_chunk_texts_returns_limit_n` — use `make_real_pipeline`; ingest a 200-chunk file; call `store.sample_chunk_texts(collection, namespace, n=50)` directly; assert `len(result) == 50` and all items are strings; call with `n=200`; assert `len(result) == 200`; call on empty collection; assert `result == []`
 
-- [ ] **T-1** — E2e: ingest a 600-chunk file via HTTP and verify search returns correct results #tester-role
+- [x] **T-1** — E2e: ingest a 600-chunk file via HTTP and verify search returns correct results #tester-role
     - — · 2.0h
     - needs BE-2 · completes S12
     - Tests
