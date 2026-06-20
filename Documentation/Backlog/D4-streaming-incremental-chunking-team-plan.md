@@ -369,7 +369,7 @@ flowchart LR
 
 ### Phase N · Close-out
 
-- [ ] **T-3** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-3** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs T-1, T-2, BE-4
     - Tests

@@ -211,6 +211,16 @@
 - Action: For any batched ingest e2e test, use paragraphs of ≥2100 chars so each exceeds the 512-token chunk boundary independently. Use distinct tokens-per-section rather than section offsets so FTS assertions are immune to chunker overlap variations.
 - Confidence: high
 
+**2026-06-21 — D4 T-2: tracemalloc memory-bounds test design**
+- Observation: (1) `tracemalloc.stop()` must be in its own nested `finally` block independent of store cleanup — if `ingest_directory` raises, the outer `finally` calls `store.disconnect()` but only the inner `finally` guarantees `tracemalloc.stop()`. Without this, leaked tracing state contaminates subsequent xdist worker tests. (2) The discriminating signal for a text-string accumulator regression at `_PARAGRAPHS_PER_FILE=100` and `_FILES_LARGE=10` is ~620 KB (10 files) vs ~62 KB (1 file) of text strings — a 10× ratio that easily exceeds the 3× threshold. Stub embedder vectors (4 floats = 32 bytes each) are too small to be the primary signal; text strings are. (3) Chunk-count preconditions (`sum(r.chunks_created) >= _MIN_CHUNKS_PER_FILE`) are mandatory to guard against vacuous passes when the parser silently produces 0 chunks. (4) `gc.collect()` between measurement runs is important for allocator arena flushing — without it, the second peak may include residual heap from the first run. (5) Two separate `make_real_pipeline` pairs with separate `tmp_path` subdirectories ensure the second measurement doesn't inherit LanceDB metadata state from the first.
+- Action: For any tracemalloc-based regression test: (a) put `tracemalloc.stop()` in an inner `finally` independent of other cleanup; (b) add chunk/data-count preconditions to prove the measurement is meaningful; (c) call `gc.collect()` between runs; (d) quantify the expected signal size and verify it exceeds the threshold assuming the regression is present; (e) use `xdist_group("benchmark")` to prevent CPU starvation from skewing measurements.
+- Confidence: high
+
+**2026-06-21 — D4 T-3 close-out: documentation audit patterns**
+- Observation: (1) The 110 component catalog's `pipeline.py` description did not mention the batch loop or the removal of corpus-wide accumulators — it still said "Computes per-collection centroid on directory ingest" without distinguishing per-batch from per-directory accumulation. The doc update task plan correctly identified this as needing an update. (2) All architecture docs (130, 210) were already updated by BE-4. The toml example already had `centroid_incremental_enabled` removed. BREAKING.md already had the entry. The 110 catalog was the only doc requiring an update. (3) Third-party DeprecationWarning lines from docling (not our code) appear in the test suite — these are pre-existing and not caused by D4.
+- Action: For any close-out that includes a doc update checklist, read the specific sections of each doc (not just grep for removed symbols) — docs may describe *behavior* that changed (e.g., accumulator pattern) without using the exact symbol names. Always update the component catalog's module-purpose cell when the module's primary data-flow behavior changes.
+- Confidence: high
+
 ## Open Questions
 - (Nothing recorded yet)
 

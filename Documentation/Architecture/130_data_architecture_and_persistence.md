@@ -254,10 +254,10 @@ flowchart LR
     D --> E[ACL resolution<br/>acl.py: front-matter _acl > sidecar]
     E --> F[store.py: ingest_chunks<br/>append to LanceDB chunk table]
     F --> G[FTS index<br/>optimize_fts at batch end; rebuild_fts_index for first-time or fallback]
-    F --> H[update_collection_meta<br/>doc_count, chunk_count, centroid, last_indexed]
+    F --> H[_do_update_meta_on_add<br/>doc_count, chunk_count, centroid<br/>per batch inside ingest_chunks]
 ```
 
-Note: step `H` (`update_collection_meta`) runs at the end of `ingest_directory` (`pipeline.py:277–289`); a bare `ingest_file` call does not refresh collection-level centroid/`last_indexed` on its own.
+Note: step `H` (`_do_update_meta_on_add`) runs inside `store.ingest_chunks()` on every batch — centroid, `doc_count`, and `chunk_count` are maintained incrementally (B5 incremental path, unconditional since D4). `ingest_directory` additionally calls `store.update_description()` (description + `last_indexed`) after each file. A drift-correction full recompute (`recompute_collection_meta`) fires if any batch sets `needs_recompute=True`.
 
 ### Reindex semantics
 
