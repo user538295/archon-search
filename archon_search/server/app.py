@@ -18,6 +18,7 @@ from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttex
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.jobs.backup_loop import BackupLoop
+from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.scheduler import JobScheduler
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import load_or_generate_key
@@ -240,6 +241,20 @@ def create_app(
         backup_task = asyncio.create_task(backup_loop.run())
         app.state._background_tasks.add(backup_task)
         backup_task.add_done_callback(app.state._background_tasks.discard)
+
+        # Startup: instantiate MaintenanceLoop and start it as a background task.
+        # Always present on app.state so trigger routes and status endpoints can
+        # reach it unconditionally, even when interval_hours == 0 (disabled schedule).
+        maintenance_loop = MaintenanceLoop(
+            job_store=app.state.job_store,
+            search_store=app.state.search_store,
+            config=config.maintenance,
+            data_dir=get_data_dir(),
+        )
+        app.state.maintenance_loop = maintenance_loop
+        maintenance_task = asyncio.create_task(maintenance_loop.run())
+        app.state._background_tasks.add(maintenance_task)
+        maintenance_task.add_done_callback(app.state._background_tasks.discard)
 
         # Startup: initialise telemetry if enabled
         if config.telemetry.enabled:
