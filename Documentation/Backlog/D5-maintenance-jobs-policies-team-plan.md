@@ -559,11 +559,11 @@ flowchart LR
         - [x] #unit_test — `test_orphan_cleanup_no_chunks_in_collection` — mock `list_chunks_raw` as empty async iterator; assert `Path.exists` never called; assert `delete_by_source_path` never called; assert `orphans_removed_last_run=0`
         - [x] #integration_test — `test_orphan_cleanup_real_store` — `make_real_pipeline`; ingest file; delete file; run `_run_orphan_cleanup`; assert chunks gone from store
 
-- [ ] **T-3** — e2e: ingest doc, delete source file, POST trigger, verify `orphans_removed_last_run > 0` in collection_health #tester-role
+- [x] **T-3** — e2e: ingest doc, delete source file, POST trigger, verify `orphans_removed_last_run > 0` in collection_health #tester-role
     - — · 2.0h
     - needs BE-6 · completes S8
     - Tests
-        - #e2e_test — `test_orphan_cleanup_removes_deleted_source` — `make_real_app`; ingest real file; delete file; POST trigger; poll GET /status until `orphans_removed_last_run > 0`
+        - [x] #e2e_test — `test_orphan_cleanup_removes_deleted_source` — `make_real_app`; ingest real file; delete file; POST trigger; poll GET /status until `orphans_removed_last_run > 0`
 
 ---
 
