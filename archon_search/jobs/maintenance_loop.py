@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -29,6 +30,10 @@ from typing import TYPE_CHECKING, Any
 from archon_search._durable_io import atomic_write_json
 from archon_search.constants import INGEST_LOCK_TIMEOUT_S
 from archon_search.store import FTSIndexNotFoundError
+from archon_search.types import (
+    IngestJob,
+    JobStatus,
+)
 
 if TYPE_CHECKING:
     from archon_search.config import MaintenanceConfig
@@ -297,8 +302,159 @@ class MaintenanceLoop:
         if hasattr(self, "_current_health"):
             self._current_health["orphans_removed_last_run"] = orphan_count
 
-    async def _run_failed_ingest_retry(self) -> None:
-        """Pass-level failed-ingest retry. Implemented by BE-8."""
+    async def _run_failed_ingest_retry(
+        self, health: dict[str, Any], retry_counts: dict[str, int]
+    ) -> None:
+        """Pass-level failed-ingest retry (BE-8).
+
+        Called once per pass, after all per-collection policies complete.
+        Processes ALL namespaces and collections.
+
+        Mutates ``health`` and ``retry_counts`` in-place; the caller
+        (``_run_one_pass``) is responsible for persisting them.
+
+        Algorithm:
+        1. Check for DONE resets: if the latest job for a source_path is DONE,
+           reset its retry count to 0.
+        2. Prune stale keys: remove keys where the source_path no longer appears
+           in JobStore AND count == 0.
+        3. Filter JobStore.list() for FAILED IngestJobs (only base IngestJob, not
+           subclasses like ExportJob/MigrationJob) within age and retry_count limits.
+        4. Skip jobs where source_path == '' (pre-D5 jobs — log DEBUG).
+        5. Re-enqueue eligible jobs via JobStore.create(source="maintenance").
+           On create() failure: log WARNING; retry_count still incremented.
+        6. Increment retry_counts keyed '{namespace}/{collection}/{source_path}'.
+        7. Log WARNING for exhausted jobs (retry_count >= retry_max_attempts).
+        8. Update last_retry_at in collection_health for each collection that had
+           at least one re-enqueued job.
+        9. Deduplicate: only ONE re-enqueue per unique retry_key per pass.
+        """
+        if not self._config.failed_ingest_retry:
+            return
+
+        # Step 1: collect all jobs from JobStore.
+        all_jobs: list[Any] = self._job_store.list()
+
+        # Build a set of all source_paths currently tracked in JobStore
+        # (keyed by '{namespace}/{collection}/{source_path}').
+        job_store_paths: set[str] = set()
+        for job in all_jobs:
+            if job.source_path:
+                job_store_paths.add(f"{job.namespace}/{job.collection}/{job.source_path}")
+
+        # Step 1: reset retry_counts for source paths where the latest job is DONE.
+        # Group all jobs by key to find the most recent one per path.
+        jobs_by_key: dict[str, list[Any]] = defaultdict(list)
+        for job in all_jobs:
+            if job.source_path:
+                key = f"{job.namespace}/{job.collection}/{job.source_path}"
+                jobs_by_key[key].append(job)
+
+        for key, key_jobs in jobs_by_key.items():
+            # Use ISO timestamp comparison for correct chronological ordering.
+            latest = max(key_jobs, key=lambda j: datetime.fromisoformat(j.created_at))
+            if latest.status == JobStatus.DONE and key in retry_counts:
+                retry_counts[key] = 0
+
+        # Step 2: prune stale keys (not in JobStore AND count == 0).
+        keys_to_prune = [
+            k for k, count in retry_counts.items()
+            if k not in job_store_paths and count == 0
+        ]
+        for k in keys_to_prune:
+            del retry_counts[k]
+
+        # Step 3: filter for FAILED IngestJobs within age and attempt limits.
+        # Only exact IngestJob instances — exclude all subclasses.
+        max_age_hours = self._config.retry_max_age_hours
+        max_attempts = self._config.retry_max_attempts
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=max_age_hours) if max_age_hours > 0 else None
+
+        # Track collections that had at least one re-enqueue.
+        retried_collections: set[str] = set()
+        # Deduplicate: only one re-enqueue per unique retry_key per pass.
+        seen_keys: set[str] = set()
+
+        for job in all_jobs:
+            # Only process exact base IngestJob instances (no subclasses).
+            if type(job) is not IngestJob:
+                continue
+            if job.status != JobStatus.FAILED:
+                continue
+
+            # Step 4: skip pre-D5 jobs with no source path.
+            if not job.source_path:
+                logger.debug(
+                    "MaintenanceLoop: skipping pre-D5 FAILED job %s (no source_path)",
+                    job.job_id,
+                )
+                continue
+
+            # Age filter.
+            if cutoff is not None:
+                try:
+                    job_created = datetime.fromisoformat(job.created_at)
+                    if job_created < cutoff:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+
+            retry_key = f"{job.namespace}/{job.collection}/{job.source_path}"
+
+            # Step 9: deduplicate — skip if already processed this key in this pass.
+            if retry_key in seen_keys:
+                continue
+
+            current_count = retry_counts.get(retry_key, 0)
+
+            # Step 7: log WARNING for exhausted jobs.
+            if current_count >= max_attempts:
+                logger.warning(
+                    "MaintenanceLoop: FAILED job for %s in %s/%s has reached "
+                    "max retry attempts (%d); not re-enqueuing",
+                    job.source_path,
+                    job.namespace,
+                    job.collection,
+                    max_attempts,
+                )
+                seen_keys.add(retry_key)
+                continue
+
+            # Step 5: re-enqueue via JobStore.create().
+            try:
+                self._job_store.create(
+                    path=job.source_path,
+                    collection=job.collection,
+                    namespace=job.namespace,
+                    source="maintenance",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "MaintenanceLoop: failed to re-enqueue job for %s in %s/%s: %s",
+                    job.source_path,
+                    job.namespace,
+                    job.collection,
+                    exc,
+                )
+
+            # Step 6: increment retry count regardless of create() success/failure.
+            retry_counts[retry_key] = current_count + 1
+            retried_collections.add(f"{job.namespace}/{job.collection}")
+            seen_keys.add(retry_key)
+
+        # Step 8: update last_retry_at in collection_health for retried collections.
+        now_str = now.isoformat()
+        for col_key in retried_collections:
+            if col_key not in health:
+                health[col_key] = {
+                    "fts_optimized_at": None,
+                    "orphans_removed_last_run": 0,
+                    "last_retry_at": None,
+                    "last_error": None,
+                    "meta_chunk_count": 0,
+                }
+            health[col_key]["last_retry_at"] = now_str
 
     # ------------------------------------------------------------------
     # Main pass
@@ -387,8 +543,10 @@ class MaintenanceLoop:
             health[key] = col_health
 
         # Pass-level retry (once per pass, after all per-collection work).
+        # Passes the pass-level health and retry_counts dicts so the method
+        # mutates them in-place; no internal save is done by the method.
         try:
-            await self._run_failed_ingest_retry()
+            await self._run_failed_ingest_retry(health, retry_counts)
         except Exception as exc:  # noqa: BLE001
             logger.error("MaintenanceLoop: _run_failed_ingest_retry failed: %s", exc)
 

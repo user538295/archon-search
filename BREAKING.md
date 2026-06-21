@@ -460,6 +460,24 @@ All changes are additive. Strict-schema clients will see new fields; tolerant cl
 
 ---
 
+### [next release] — D5 maintenance jobs: `GET /status` gains `maintenance` field (BE-4, BE-8)
+
+**Surface**: `GET /status` REST response (`StatusResponse`).
+
+**Change** (additive):
+- `maintenance: MaintenanceStatusDetail | null` — new nullable field on `StatusResponse`. Present when `app.state.maintenance_loop` is set (always when the server starts normally). `null` only when the maintenance loop is absent (e.g. custom startup without `create_app`).
+- `MaintenanceStatusDetail` contains: `enabled: bool`, `last_run_at: string | null`, `next_run_at: string | null`, `collection_health: CollectionHealthEntry[]`.
+- `CollectionHealthEntry` contains: `collection: string`, `namespace: string`, `fts_optimized_at: string | null`, `orphans_removed_last_run: int`, `last_retry_at: string | null`, `last_error: string | null`, `mutations_since_recompute: int`, `centroid_recompute_threshold: int`, `meta_chunk_count: int`.
+- `collection_health` is namespace-scoped to the caller's API key namespace.
+
+**Additive change**: fully backward-compatible for tolerant consumers. Strict-validating REST clients (`extra="forbid"` schemas) must add `maintenance` to `StatusResponse`.
+
+**Migration**: regenerate client types from `GET /openapi.json`. No behavior changes to existing `GET /status` fields.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — D3 migration tooling: new nullable fields on `JobResponse` (BE-11)
 
 **Surface**: REST (all endpoints that return `JobResponse`: `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/ingest`, `POST /jobs/export`, `POST /jobs/import`, `DELETE /jobs/{job_id}`, `POST /jobs/{id}/resume`)
