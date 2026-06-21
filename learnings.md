@@ -281,8 +281,15 @@
 - Action: For any e2e test verifying orphan cleanup: after polling `orphans_removed_last_run > 0`, also call `search(client, col, ...)` and assert results are empty. Counter + empty search together prove the behavior end-to-end.
 - Confidence: high
 
-## Open Questions
-- (Nothing recorded yet)
+**2026-06-21 — D5 BE-7: Pydantic `JobResponse` nullable fields become stale after base-class promotion**
+- Observation: When `source` and `collection` moved from subclass-only fields (returned as `None` for base `IngestJob`) to `IngestJob` base class fields (returned as non-None strings), `schemas.py` `JobResponse` still declared them `str | None = None`. The OpenAPI spec generated nullable types for fields that can never be null after the change. The `BREAKING.md` noted the null→string change but the schema was not updated.
+- Action: Whenever a field moves from subclass-only (`getattr(job, "field", None)`) to base-class direct access (`job.field`), immediately update the corresponding Pydantic response model from `T | None = None` to `T = default`. Regenerate the OpenAPI snapshot afterward. Never leave a `| None` on a field that `job_to_dict` always returns as a non-None value.
+- Confidence: high
+
+**2026-06-21 — D5 BE-7: `Literal` on dataclass fields requires `__post_init__` for runtime enforcement**
+- Observation: Python `Literal` type annotations are static-only. `IngestJob(source="garbage")` succeeds silently at runtime. A test that only verifies valid values construct cleanly does not satisfy the plan requirement of "invalid source fails." Adding `__post_init__` with a frozenset check is the correct pattern for runtime enforcement of Literal constraints on dataclasses.
+- Action: For any `str, Literal` field on a dataclass where invalid values would cause silent data corruption (e.g., persisted to JSON, drives filtering logic), add a `__post_init__` check backed by a frozenset of valid values. Test that invalid values raise `ValueError`. Do not leave "Literal enforcement" as a comment-only guarantee.
+- Confidence: high
 
 **2026-06-15 — Feature brief writing (D4)**
 - Observation: The `/feature-refinement` skill enters a deliberation loop when the problem space has many sub-options. It can stall without a firm directive to write the file.
