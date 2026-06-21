@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -188,7 +189,113 @@ class MaintenanceLoop:
             self._current_health["fts_optimized_at"] = datetime.now(timezone.utc).isoformat()
 
     async def _run_orphan_cleanup(self, collection: str, namespace: str) -> None:
-        """Orphan chunk cleanup for a single collection. Implemented by BE-6."""
+        """Orphan chunk cleanup for a single collection (BE-6).
+
+        Algorithm:
+        1. Iterate all chunks via ``store.list_chunks_raw(collection, namespace)``.
+        2. Group by unique ``source_path``, skipping URLs (http:// or https://) and
+           empty paths (handles multi-chunk and multi-doc-id files).
+        3. For each unique file path that no longer exists on disk, call
+           ``store.delete_by_source_path(source_path, skip_fts_optimize=True)``.
+           Errors on individual paths are logged as WARNING; the loop continues.
+        4. After all deletions, acquire the per-collection lock and call
+           ``store.optimize_fts(collection)`` once.
+           On lock timeout (``asyncio.TimeoutError``): WARNING + skip FTS optimize.
+           On ``FTSIndexNotFoundError``: WARNING + skip (index not built yet).
+        5. Log WARNING if total elapsed time (scan + delete + FTS) exceeds 60 s.
+        6. Update ``orphans_removed_last_run`` in the current collection health dict.
+
+        The lock is NOT pre-acquired for the scan/delete phase:
+        ``delete_by_source_path`` acquires/releases the lock internally per call.
+        Holding an external lock over the full scan + multiple deletes would create
+        a reentrant-lock deadlock because ``asyncio.Lock`` is not reentrant.
+        The separate post-deletion lock acquisition for ``optimize_fts`` is fine
+        because by that point all deletions (and their internal lock releases) are done.
+        """
+        if not self._config.orphan_cleanup:
+            return
+
+        _ELAPSED_LIMIT_S: float = 60.0
+        start = time.monotonic()
+
+        # Phase 1: collect all unique source_paths with their chunks.
+        source_paths_seen: set[str] = set()
+
+        async for chunk in self._search_store.list_chunks_raw(collection, namespace):
+            source_path: str = chunk.get("source_path", "") or ""
+            if not source_path:
+                continue
+
+            # Skip URLs — these are not on the local filesystem.
+            if source_path.startswith("http://") or source_path.startswith("https://"):
+                logger.debug(
+                    "MaintenanceLoop: skipping URL source_path for %s/%s: %s",
+                    namespace,
+                    collection,
+                    source_path,
+                )
+                continue
+
+            source_paths_seen.add(source_path)
+
+        # Phase 2: identify orphans (paths that no longer exist on disk).
+        # Sorted for deterministic deletion order.
+        orphan_count = 0
+        for sp in sorted(source_paths_seen):
+            if not Path(sp).exists():
+                try:
+                    await self._search_store.delete_by_source_path(
+                        collection, sp, namespace=namespace, skip_fts_optimize=True
+                    )
+                    orphan_count += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "MaintenanceLoop: delete_by_source_path failed for %s in %s/%s: %s",
+                        sp,
+                        namespace,
+                        collection,
+                        exc,
+                    )
+
+        # Phase 3: post-deletion FTS optimize (only when at least one orphan was removed).
+        if orphan_count > 0:
+            lock = self._search_store.lock_for(collection)
+            try:
+                await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "MaintenanceLoop: could not acquire lock for post-orphan FTS optimize "
+                    "for %s/%s; FTS index may be stale",
+                    namespace,
+                    collection,
+                )
+            else:
+                try:
+                    await self._search_store.optimize_fts(collection)
+                except FTSIndexNotFoundError:
+                    logger.warning(
+                        "MaintenanceLoop: FTS optimize skipped after orphan cleanup for %s/%s "
+                        "— no FTS index found; rebuild_fts_index() must be called first",
+                        namespace,
+                        collection,
+                    )
+                finally:
+                    lock.release()
+
+        # Phase 4: elapsed time warning (covers full operation: scan + delete + FTS).
+        elapsed = time.monotonic() - start
+        if elapsed > _ELAPSED_LIMIT_S:
+            logger.warning(
+                "MaintenanceLoop: orphan cleanup for %s/%s took %.1f s (> 60 s); "
+                "consider increasing interval_hours or reducing collection size",
+                namespace,
+                collection,
+                elapsed,
+            )
+
+        # Update per-collection health dict.
+        if hasattr(self, "_current_health"):
+            self._current_health["orphans_removed_last_run"] = orphan_count
 
     async def _run_failed_ingest_retry(self) -> None:
         """Pass-level failed-ingest retry. Implemented by BE-8."""

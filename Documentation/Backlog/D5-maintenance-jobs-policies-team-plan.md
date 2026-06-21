@@ -546,18 +546,18 @@ flowchart LR
 
 ### Slice 3 · Remove orphaned chunks during pass
 
-- [ ] **BE-6** — Implement `_run_orphan_cleanup(collection, namespace)` in `MaintenanceLoop`: call `store.list_chunks_raw`, group by `source_path` (collecting ALL distinct `doc_id`s per source path — the same file may have been ingested multiple times resulting in multiple doc_ids), for each unique path — skip if URL, check `Path.exists()`, call `store.delete_by_source_path(source_path, skip_fts_optimize=True)` per orphaned path (removes all chunks for that path, handling multiple doc_ids automatically), call `store.optimize_fts()` once after all deletions under a separate lock acquisition: `asyncio.wait_for(store.lock_for(collection).acquire(), timeout=INGEST_LOCK_TIMEOUT_S)` + try/finally release — on `asyncio.TimeoutError`, log WARNING ("could not acquire lock for post-orphan FTS optimize; FTS index may be stale") and skip (the next pass will attempt it), log elapsed time with WARNING if > 60 s, update `orphans_removed_last_run` in health state #backend-role
+- [x] **BE-6** — Implement `_run_orphan_cleanup(collection, namespace)` in `MaintenanceLoop`: call `store.list_chunks_raw`, group by `source_path` (collecting ALL distinct `doc_id`s per source path — the same file may have been ingested multiple times resulting in multiple doc_ids), for each unique path — skip if URL, check `Path.exists()`, call `store.delete_by_source_path(source_path, skip_fts_optimize=True)` per orphaned path (removes all chunks for that path, handling multiple doc_ids automatically), call `store.optimize_fts()` once after all deletions under a separate lock acquisition: `asyncio.wait_for(store.lock_for(collection).acquire(), timeout=INGEST_LOCK_TIMEOUT_S)` + try/finally release — on `asyncio.TimeoutError`, log WARNING ("could not acquire lock for post-orphan FTS optimize; FTS index may be stale") and skip (the next pass will attempt it), log elapsed time with WARNING if > 60 s, update `orphans_removed_last_run` in health state #backend-role
     - Use Cases · 3.5h
     - needs BE-4 · completes S8, S9, S10, S11, S12
     - Tests
-        - #unit_test — `test_orphan_cleanup_removes_deleted_file` — async-generator mock for `list_chunks_raw`; source file does not exist; assert `delete_by_source_path` called with correct `source_path`; `orphans_removed_last_run=1` (S8)
-        - #unit_test — `test_orphan_cleanup_no_orphans` — all files exist; `delete_by_source_path` never called; count=0 (S9)
-        - #unit_test — `test_orphan_cleanup_skips_url_source_path` — URL `source_path`; `Path.exists()` never called (S10)
-        - #unit_test — `test_orphan_cleanup_elapsed_warning` — monkeypatch `time.monotonic` to return 65 s elapsed; WARNING logged (S11)
-        - #unit_test — `test_orphan_cleanup_multi_chunk_multi_docid_single_source_path` — three chunks with two distinct `doc_id`s, same `source_path`; `delete_by_source_path` called once; all chunks removed (S12)
-        - #unit_test — `test_orphan_cleanup_disabled_by_config` — `orphan_cleanup=False`; `list_chunks_raw` never called
-        - #unit_test — `test_orphan_cleanup_no_chunks_in_collection` — mock `list_chunks_raw` as empty async iterator; assert `Path.exists` never called; assert `delete_by_source_path` never called; assert `orphans_removed_last_run=0`
-        - #integration_test — `test_orphan_cleanup_real_store` — `make_real_pipeline`; ingest file; delete file; run `_run_orphan_cleanup`; assert chunks gone from store
+        - [x] #unit_test — `test_orphan_cleanup_removes_deleted_file` — async-generator mock for `list_chunks_raw`; source file does not exist; assert `delete_by_source_path` called with correct `source_path`; `orphans_removed_last_run=1` (S8)
+        - [x] #unit_test — `test_orphan_cleanup_no_orphans` — all files exist; `delete_by_source_path` never called; count=0 (S9)
+        - [x] #unit_test — `test_orphan_cleanup_skips_url_source_path` — URL `source_path`; `Path.exists()` never called (S10)
+        - [x] #unit_test — `test_orphan_cleanup_elapsed_warning` — monkeypatch `time.monotonic` to return 65 s elapsed; WARNING logged (S11)
+        - [x] #unit_test — `test_orphan_cleanup_multi_chunk_multi_docid_single_source_path` — three chunks with two distinct `doc_id`s, same `source_path`; `delete_by_source_path` called once; all chunks removed (S12)
+        - [x] #unit_test — `test_orphan_cleanup_disabled_by_config` — `orphan_cleanup=False`; `list_chunks_raw` never called
+        - [x] #unit_test — `test_orphan_cleanup_no_chunks_in_collection` — mock `list_chunks_raw` as empty async iterator; assert `Path.exists` never called; assert `delete_by_source_path` never called; assert `orphans_removed_last_run=0`
+        - [x] #integration_test — `test_orphan_cleanup_real_store` — `make_real_pipeline`; ingest file; delete file; run `_run_orphan_cleanup`; assert chunks gone from store
 
 - [ ] **T-3** — e2e: ingest doc, delete source file, POST trigger, verify `orphans_removed_last_run > 0` in collection_health #tester-role
     - — · 2.0h
