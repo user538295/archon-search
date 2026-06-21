@@ -461,7 +461,7 @@ flowchart LR
 
 ### Phase 0 · Kickoff
 
-- [ ] **K1** — Agree contracts C1, C2, C3 and scenario set with the team #team
+- [x] **K1** — Agree contracts C1, C2, C3 and scenario set with the team #team
     - — · 1.0h
     - completes C1, C2, C3
     - Tests
@@ -488,6 +488,9 @@ flowchart LR
         - #unit_test — `test_load_state_missing_file_returns_empty` — S3
         - #unit_test — `test_load_state_corrupt_file_returns_empty_and_warns` — S4
         - #unit_test — `test_save_state_writes_atomically` — verify tmp-file rename pattern (C3)
+        - #unit_test — `test_save_state_conforms_to_c3_schema` — call `_save_state()` with known health data; read the written JSON; assert top-level keys are exactly `last_run_at`, `next_run_at`, `collection_health`, `retry_counts`; assert `collection_health` value is a dict keyed by `{ns}/{col}`; assert `retry_counts` value is a dict
+        - #unit_test — `test_run_one_pass_no_collections` — mock `store.list_collections()` returning empty list; assert `_run_one_pass` completes without error; assert no policy methods called; state file written with empty `collection_health`
+        - #unit_test — `test_run_one_pass_get_collection_meta_returns_none` — mock `get_collection_meta()` returning `None` for one collection; assert graceful fallback (`meta_chunk_count=0`, `mutations_since_recompute=0`); no exception propagates
         - #unit_test — `test_exclude_exact_ns_col` — S23
         - #unit_test — `test_exclude_bare_col_all_namespaces` — S24
         - #unit_test — `test_run_one_pass_continues_after_per_collection_exception` — first collection raises RuntimeError; second collection processed normally; `last_error` set on first collection; no exception propagates from `_run_one_pass`; assert `health_state[collection_key]['last_error']` contains the RuntimeError message text (not just non-null)
@@ -499,7 +502,7 @@ flowchart LR
     - needs K1 · completes C1, C2
     - Tests
         - #unit_test — `test_status_response_maintenance_field_optional` — `StatusResponse` serialises with `maintenance=None` without error
-        - #unit_test — `test_collection_health_entry_all_fields` — all nine fields round-trip through Pydantic serialisation
+        - #unit_test — `test_collection_health_entry_all_fields` — all eight fields round-trip through Pydantic serialisation
         - #unit_test — `test_maintenance_trigger_response_literal` — `status` must be one of `"triggered"` or `"already_triggered"` (both are valid; neither other values)
 
 - [ ] **BE-4** — Add `routes_maintenance.py` (`POST /maintenance/trigger`; sets `_trigger_event` on `MaintenanceLoop`; returns `{"status":"already_triggered"}` if event already set — `"already_triggered"` is used because `_trigger_event.is_set()` means a trigger is pending or pass is running, not definitively that a pass is running); add `_build_maintenance_status()` and `maintenance` field to `routes_status.py` (namespace scoping: filter `collection_health` to entries whose `{namespace}/{collection}` key starts with `{caller_namespace}/`, following precedent in `routes_status.py` backup scoping); register route in `app.py`; wire `app.state.maintenance_loop` in lifespan (5-line pattern mirroring BackupLoop) #backend-role
@@ -553,6 +556,7 @@ flowchart LR
         - #unit_test — `test_orphan_cleanup_elapsed_warning` — monkeypatch `time.monotonic` to return 65 s elapsed; WARNING logged (S11)
         - #unit_test — `test_orphan_cleanup_multi_chunk_multi_docid_single_source_path` — three chunks with two distinct `doc_id`s, same `source_path`; `delete_by_source_path` called once; all chunks removed (S12)
         - #unit_test — `test_orphan_cleanup_disabled_by_config` — `orphan_cleanup=False`; `list_chunks_raw` never called
+        - #unit_test — `test_orphan_cleanup_no_chunks_in_collection` — mock `list_chunks_raw` as empty async iterator; assert `Path.exists` never called; assert `delete_by_source_path` never called; assert `orphans_removed_last_run=0`
         - #integration_test — `test_orphan_cleanup_real_store` — `make_real_pipeline`; ingest file; delete file; run `_run_orphan_cleanup`; assert chunks gone from store
 
 - [ ] **T-3** — e2e: ingest doc, delete source file, POST trigger, verify `orphans_removed_last_run > 0` in collection_health #tester-role
@@ -592,6 +596,7 @@ flowchart LR
         - #unit_test — `test_retry_count_reset_on_done` — source path in retry_counts (key `{ns}/{col}/{path}`); latest job is DONE; count reset to 0 (S16)
         - #unit_test — `test_retry_no_failed_jobs` — empty filtered list; no new jobs; no WARNING (S46 from investigation)
         - #unit_test — `test_retry_disabled_by_config` — `failed_ingest_retry=False`; `JobStore.list()` not called
+        - #unit_test — `test_retry_skips_jobs_with_empty_source_path` — FAILED IngestJob with `source_path=''` (pre-D5 job); assert job is skipped (no `JobStore.create()` call); assert DEBUG logged; pass continues to next job
         - #unit_test — `test_retry_ingest_file_raises_during_reenqueue` — `JobStore.create()` raises during retry; WARNING logged; `retry_count` still incremented; pass continues to next job
         - #integration_test — `test_retry_reenqueues_into_job_store` — `make_real_pipeline`; insert FAILED IngestJob; run `_run_failed_ingest_retry()`; assert new job in `JobStore.list()` with `source="maintenance"`
         - #unit_test — `test_retry_counts_pruned_when_absent_from_job_store_and_zero` — retry_counts has a key `{ns}/{col}/{path}` with count=0; that path has no job in JobStore.list(); assert key is removed from retry_counts after pruning step
