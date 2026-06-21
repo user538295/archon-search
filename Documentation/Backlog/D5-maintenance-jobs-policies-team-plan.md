@@ -603,11 +603,11 @@ flowchart LR
         - #unit_test — `test_retry_counts_not_pruned_when_present_in_job_store` — retry_counts has a key `{ns}/{col}/{path}` with count=0; a job for that path exists in JobStore.list(); assert key is NOT removed (still eligible for retry)
         - #unit_test — `test_retry_same_file_different_collections_separate_counts` — same source_path ingested into two different collections (ns1/col-a and ns1/col-b); both FAILED; assert retry_counts uses `ns1/col-a/{path}` and `ns1/col-b/{path}` as separate keys; each tracked independently
 
-- [ ] **T-4** — e2e: force FAILED IngestJob, POST trigger, verify new job visible in GET /jobs with source="maintenance" #tester-role
+- [x] **T-4** — e2e: force FAILED IngestJob, POST trigger, verify new job visible in GET /jobs with source="maintenance" #tester-role
     - — · 2.0h
     - needs BE-8 · completes S13
     - Tests
-        - #e2e_test — `test_failed_ingest_retry_creates_new_job` — `make_real_app`; directly insert FAILED IngestJob into job store; POST trigger; poll GET /jobs until a job with `source="maintenance"` appears
+        - [x] #e2e_test — `test_failed_ingest_retry_creates_new_job` — `make_real_app`; directly insert FAILED IngestJob into job store; POST trigger; poll GET /jobs until a job with `source="maintenance"` appears
 
 ---
 

@@ -15,18 +15,17 @@ Flow:
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from archon_search.types import IngestJob, JobStatus
+from archon_search.types import JobStatus
 from tests.integration.conftest import make_real_app
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("benchmark")]
 
-# Poll constants
-_POLL_TIMEOUT_S: float = 15.0
+# Poll constants — 30s matches the project convention for scheduler-timing-sensitive tests.
+_POLL_TIMEOUT_S: float = 30.0
 _POLL_INTERVAL_S: float = 0.1
 
 
@@ -97,6 +96,10 @@ def test_failed_ingest_retry_creates_new_job(
                 )
                 assert new_job.get("namespace") == "default", (
                     f"expected namespace='default'; got: {new_job.get('namespace')}"
+                )
+                _valid_statuses = {s.value for s in JobStatus}
+                assert new_job.get("status") in _valid_statuses, (
+                    f"expected status to be one of {_valid_statuses!r}; got: {new_job.get('status')}"
                 )
                 break
             time.sleep(_POLL_INTERVAL_S)

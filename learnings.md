@@ -306,6 +306,21 @@
 - Action: Whenever a test asserts that description generation ran, add `patch("archon_search.pipeline._should_regenerate", return_value=True)` to force the guard open. The integration test that uses real store state does not need this patch — only unit tests with mocked stores.
 - Confidence: high
 
+**2026-06-21 — D5 BE-8: pass-level policy must mutate caller's state dicts, not own its own save**
+- Observation: `_run_failed_ingest_retry` initially had its own `_load_state()`/`_save_state()`. `_run_one_pass` then overwrote with its stale local vars, silently discarding every retry count increment. The root cause: the method was diverging from the pattern set by `_run_fts_optimize` and `_run_orphan_cleanup`, both of which mutate `self._current_health` (a reference set by the caller). Tests calling the method in isolation all passed because they never exercised the full `_run_one_pass` → method → final save sequence.
+- Action: For any pass-level or per-collection policy added to `MaintenanceLoop`: it must receive mutable state dicts as parameters (or mutate instance-level refs like `self._current_health`) and never call `_save_state()` internally. Only `_run_one_pass` performs the single atomic save after all policies complete.
+- Confidence: high
+
+**2026-06-21 — D5 BE-8: use `type(job) is not SomeClass` for exact-type exclusion, not isinstance deny-list**
+- Observation: The initial implementation used a deny-list `_NON_BASE_INGEST = (ExportJob, ImportJob, ...)` + `isinstance(job, _NON_BASE_INGEST)`. Any future IngestJob subclass not in the tuple silently passes through. Replace with `type(job) is not IngestJob` (exact type check) to make the allowlist behavior explicit and future-proof.
+- Action: When filtering for base-class-only instances (not subclasses), use `type(obj) is BaseClass` not `isinstance(obj, BaseClass) and not isinstance(obj, (Sub1, Sub2, ...))`.
+- Confidence: high
+
+**2026-06-21 — D5 BE-8: deduplication in loops over all FAILED jobs for same path**
+- Observation: `JobStore.list()` can contain multiple FAILED jobs for the same `{ns}/{col}/{path}` (original failure + a prior maintenance retry that also failed). Without a `seen_keys` guard, all are re-enqueued in the same pass, incrementing the count N times instead of 1. `max_attempts` is reached N× faster.
+- Action: For any retry loop that iterates all FAILED jobs from `JobStore.list()`, add a `seen_keys: set[str]` tracker keyed by the retry key. Skip jobs whose key is already in `seen_keys` after processing the first occurrence.
+- Confidence: high
+
 **2026-06-20 — BE-4 (D4): `sample_chunk_texts` must be mocked in all store stubs**
 - Observation: After BE-3 replaced the in-memory text accumulator with `store.sample_chunk_texts()`, any test helper that builds a mock store (`_make_mock_store_c1`, `_make_stub_store_for_embedding_tests`) must add `store.sample_chunk_texts = AsyncMock(return_value=[])` or a meaningful list. Missing this causes `AttributeError: 'AsyncMock' object has no attribute 'sample_chunk_texts'` at runtime in tests that exercise description generation.
 - Action: After any new async method is added to `SearchStore`, grep all test files for mock store builders and add the new method as an `AsyncMock` attribute. Prefer `AsyncMock(return_value=[])` for collection-returning methods unless the test specifically exercises the non-empty path.
