@@ -628,7 +628,7 @@ flowchart LR
         - [x] #unit_test — `test_maintenance_run_connection_error` — `httpx.post` raises `ConnectError`; exit 1
         - [x] #unit_test — `test_main_help_lists_maintenance` — `maintenance` appears in `archon-search --help` output
 
-- [ ] **T-5** — Manual: verify `archon-search maintenance status` reads state file correctly offline; verify `archon-search maintenance run --wait` polls and exits after pass completes against a live server #tester-role
+- [x] **T-5** — Manual: verify `archon-search maintenance status` reads state file correctly offline; verify `archon-search maintenance run --wait` polls and exits after pass completes against a live server #tester-role
     - — · 1.0h
     - needs FE-1 · completes S27
     - Tests
