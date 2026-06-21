@@ -537,7 +537,7 @@ def test_concurrent_ingest_503_during_rewrite_e2e(
 
         async def _holding_rewrite(collection, namespace, spec, progress_cb=None):
             """Acquire the lock, signal the test thread, block until released."""
-            lock = search_store._lock_for(collection)
+            lock = search_store.lock_for(collection)
             await lock.acquire()
             lock_held_event.set()  # signal: lock is now held
             # Wait in a thread pool so the event loop can process other requests.

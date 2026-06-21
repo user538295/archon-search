@@ -28,14 +28,13 @@ def get_jobs_file() -> Path:
 def job_to_dict(job: IngestJob) -> dict:
     """Serialize an IngestJob to a plain dict for JSON responses.
 
-    Subclass-specific fields are surfaced via :func:`getattr` so that base
-    ``IngestJob`` instances serialize them as ``None`` while the relevant
-    subclass instances carry real values:
+    Base ``IngestJob`` fields (``source``, ``source_path``, ``collection``,
+    ``retry_count``) are accessed directly since D5-BE-7 moved them to the
+    base class. Subclass-specific fields that remain on subclasses only are
+    surfaced via :func:`getattr`:
 
-    - D2-1.4: ``source``, ``collection``, ``output_path``, ``archive_path``
-      (``ExportJob`` / ``ImportJob``)
-    - D3: ``kind``, ``migrations_applied``, ``backup_confirmed``
-      (``MigrationJob``; ``kind`` is serialized as the enum ``.value`` string)
+    - D2-1.4: ``output_path``, ``archive_path`` (``ExportJob`` / ``ImportJob``)
+    - D3: ``kind``, ``migrations_applied``, ``backup_confirmed`` (``MigrationJob``)
     """
     k = getattr(job, "kind", None)
     return {
@@ -47,8 +46,10 @@ def job_to_dict(job: IngestJob) -> dict:
         "error": job.error,
         "namespace": job.namespace,
         "progress": job.progress,
-        "source": getattr(job, "source", None),
-        "collection": getattr(job, "collection", None),
+        "source": job.source,
+        "source_path": job.source_path,
+        "collection": job.collection,
+        "retry_count": job.retry_count,
         "output_path": getattr(job, "output_path", None),
         "archive_path": getattr(job, "archive_path", None),
         "kind": k.value if k is not None else None,

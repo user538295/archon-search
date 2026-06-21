@@ -444,6 +444,22 @@ All changes are additive. Strict-schema clients will see new fields; tolerant cl
 
 ---
 
+### [next release] — D5 maintenance jobs: `IngestJob` base class gains `source`, `source_path`, `collection`, `retry_count` fields (BE-7)
+
+**Surface**: `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/ingest`, `DELETE /jobs/{job_id}` REST responses (`JobResponse`); all IngestJob-family subclasses (`ReindexJob`, `DeleteJob`).
+
+**Changes**:
+- `source: str` — moved to `IngestJob` base class with default `"user"`. Previously absent (`null`) for base `IngestJob`, `ReindexJob`, and `DeleteJob` responses. Now serializes as `"user"` for all IngestJob-family types. For `ExportJob`, `ImportJob`, and `MigrationJob`, the Literal type is narrower (`"user" | "backup"`) and is unchanged in practice. **Breaking for strict consumers**: `source` changes from `null` to `"user"` for base ingest, reindex, and delete jobs.
+- `source_path: str` — new field on `IngestJob` base; defaults to `""`. Set by the ingest worker when a file ingest job is created. `JobResponse` gains `source_path: str = ""`.
+- `collection: str` — moved to `IngestJob` base class with default `""`. Previously `null` for base `IngestJob`, `ReindexJob`, and `DeleteJob` responses. Now serializes as `""` for those types. **Breaking for strict consumers**: `collection` changes from `null` to `""` for base ingest, reindex, and delete jobs.
+- `retry_count: int` — new field on `IngestJob` base; defaults to `0`. Incremented by `MaintenanceLoop` on each retry attempt. `JobResponse` gains `retry_count: int = 0`.
+
+**Migration**: update client schemas to accept `source: "user"` (not `null`) for base ingest/reindex/delete job responses, and `collection: ""` (not `null`) for the same. Add `source_path: str` and `retry_count: int` to `JobResponse` type stubs.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — D3 migration tooling: new nullable fields on `JobResponse` (BE-11)
 
 **Surface**: REST (all endpoints that return `JobResponse`: `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/ingest`, `POST /jobs/export`, `POST /jobs/import`, `DELETE /jobs/{job_id}`, `POST /jobs/{id}/resume`)

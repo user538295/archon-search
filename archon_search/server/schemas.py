@@ -188,11 +188,13 @@ class JobResponse(BaseModel):
     error: str | None = None
     namespace: str
     progress: dict | None = None
-    # D2-1.4 bulk-job subclass fields. All nullable and additive: base
-    # IngestJob instances serialize them as None; ExportJob/ImportJob carry
-    # the real values.
-    source: str | None = None
-    collection: str | None = None
+    # D5-BE-7: source, source_path, collection, retry_count are now on the
+    # IngestJob base class. source defaults to "user"; collection and
+    # source_path default to ""; retry_count defaults to 0.
+    source: str = "user"
+    source_path: str = ""
+    collection: str = ""
+    retry_count: int = 0
     output_path: str | None = None
     archive_path: str | None = None
     # D3 MigrationJob fields. Nullable and additive: non-migration jobs get None.

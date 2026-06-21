@@ -109,7 +109,7 @@ def test_add_collection_persists_and_starts_ingest(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
@@ -145,7 +145,7 @@ def test_add_duplicate_collection_returns_409(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
@@ -739,7 +739,7 @@ def test_add_collection_writes_stub_meta(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -776,7 +776,7 @@ def test_add_collection_rollback_on_meta_failure(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     # Provide a real lock so the pre-acquire (moved before state mutation) can succeed.
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -810,7 +810,7 @@ def test_add_collection_cross_namespace_race_returns_409(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     # Provide a real lock so the pre-acquire (moved before state mutation) can succeed.
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -844,7 +844,7 @@ def test_add_collection_job_has_correct_namespace(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
@@ -1246,7 +1246,7 @@ def test_add_collection_rollback_save_failure(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     # Provide a real lock so the pre-acquire (moved before state mutation) can succeed.
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
     # Inject config_path so _maybe_save_config is called during rollback
@@ -1309,7 +1309,7 @@ def test_add_collection_uses_validator_returned_path(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
 
     # Patch the validator in the route module namespace to return a sentinel path.
@@ -1429,7 +1429,7 @@ def test_add_collection_accepts_legitimate_absolute_path(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
@@ -1494,7 +1494,7 @@ def test_collection_add_oserror_returns_500_envelope(
     search_store.migrate_acl = AsyncMock()
     search_store.connect = AsyncMock()
     search_store.disconnect = AsyncMock()
-    search_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    search_store.lock_for = MagicMock(return_value=_asyncio.Lock())
 
     with mock.patch("archon_search.server.app.DocumentChunker"):
         app = create_app(cfg, job_store)
@@ -1567,7 +1567,7 @@ def test_create_collection_returns_503_on_lock_timeout(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
 
@@ -2402,7 +2402,7 @@ def _make_post_app(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
 
     if validate_raises is not None:

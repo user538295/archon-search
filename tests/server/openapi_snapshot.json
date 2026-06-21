@@ -1331,15 +1331,9 @@
             "title": "Backup Confirmed"
           },
           "collection": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Collection"
+            "default": "",
+            "title": "Collection",
+            "type": "string"
           },
           "created_at": {
             "title": "Created At",
@@ -1427,16 +1421,20 @@
             ],
             "title": "Result"
           },
+          "retry_count": {
+            "default": 0,
+            "title": "Retry Count",
+            "type": "integer"
+          },
           "source": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source"
+            "default": "user",
+            "title": "Source",
+            "type": "string"
+          },
+          "source_path": {
+            "default": "",
+            "title": "Source Path",
+            "type": "string"
           },
           "status": {
             "title": "Status",

@@ -569,7 +569,7 @@ flowchart LR
 
 ### Slice 4 · Retry failed ingest jobs during pass
 
-- [ ] **BE-7** — Add the following to `jobs/model.py` and `jobs/store.py` #backend-role
+- [x] **BE-7** — Add the following to `jobs/model.py` and `jobs/store.py` #backend-role
     - (a) `source: Literal["user", "backup", "maintenance"] = "user"` on `IngestJob` base class — use the same `Literal` type as `ExportJob`/`ImportJob`; update subclass `Literal` types to include `"maintenance"`. Note: `ReindexJob` and other subclasses will inherit `source="user"` by default — this is a breaking serialization change (previously `source=None`). **Note**: `ExportJob`, `ImportJob`, and `MigrationJob` keep their own narrower `source: Literal["user", "backup"] = "user"` fields which shadow the base class field for those types. Do NOT widen their Literals — `"maintenance"` is not a valid source for export/import/migration jobs.
     - (b) `source_path: str = ""` on `IngestJob` base class — set by the ingest worker when a file ingest job is created.
     - (c) `collection: str = ""` on `IngestJob` base class — set by the ingest worker when a file ingest job is created.
@@ -579,12 +579,12 @@ flowchart LR
     - Entities · 2.5h
     - needs K1
     - Tests
-        - #unit_test — `test_ingest_job_source_default` — `IngestJob()` has `source="user"` by default
-        - #unit_test — `test_ingest_job_source_maintenance` — `IngestJob(source="maintenance")` round-trips through `job_to_dict`
-        - #unit_test — `test_ingest_job_source_literal` — `source="maintenance"` is valid; `source="unknown"` fails type checking (add a runtime check if Literal is not enforced at runtime)
-        - #unit_test — `test_ingest_job_source_path_and_collection_fields` — verify `source_path`, `collection`, `retry_count` default to empty/0 and round-trip through `job_to_dict`
-        - #unit_test — `test_ingest_job_from_dict_missing_new_fields` — construct a dict missing new fields (only pre-D5 keys); load via `JobStore._load()` deserialization path (`IngestJob(**item)` with default values filling in missing keys); assert `source='user'`, `source_path=''`, `collection=''`, `retry_count=0`
-        - #unit_test — `test_job_store_create_with_source_maintenance` — `JobStore.create(source="maintenance", path="/some/file.txt", collection="my-col", namespace="ns1")`; returned job has correct field values
+        - [x] #unit_test — `test_ingest_job_source_default` — `IngestJob()` has `source="user"` by default
+        - [x] #unit_test — `test_ingest_job_source_maintenance` — `IngestJob(source="maintenance")` round-trips through `job_to_dict`
+        - [x] #unit_test — `test_ingest_job_source_literal` — `source="maintenance"` is valid; `source="unknown"` fails type checking (add a runtime check if Literal is not enforced at runtime)
+        - [x] #unit_test — `test_ingest_job_source_path_and_collection_fields` — verify `source_path`, `collection`, `retry_count` default to empty/0 and round-trip through `job_to_dict`
+        - [x] #unit_test — `test_ingest_job_from_dict_missing_new_fields` — construct a dict missing new fields (only pre-D5 keys); load via `JobStore._load()` deserialization path (`IngestJob(**item)` with default values filling in missing keys); assert `source='user'`, `source_path=''`, `collection=''`, `retry_count=0`
+        - [x] #unit_test — `test_job_store_create_with_source_maintenance` — `JobStore.create(source="maintenance", path="/some/file.txt", collection="my-col", namespace="ns1")`; returned job has correct field values
 
 - [ ] **BE-8** — Implement `_run_failed_ingest_retry()` (no collection/namespace args) in `MaintenanceLoop` as a **pass-level operation** (called once per pass, after all per-collection policies complete, NOT once per collection). It processes ALL namespaces and collections: load retry_counts from state, check DONE resets and prune stale keys (keys keyed by `{namespace}/{collection}/{absolute_source_file_path}`; paths no longer in `JobStore.list()` AND count=0 are removed), filter `JobStore.list()` by FAILED + age + retry_count, skip jobs where `job.source_path == ''` (pre-D5 jobs that lack source path metadata — log DEBUG for each), re-enqueue eligible jobs via `JobStore.create(path=job.source_path, collection=job.collection, namespace=job.namespace, source="maintenance")` — NOT via `pipeline.ingest_file()` (which is a chunking function, not a job creator); the worker picks up the new `IngestJob` on its normal poll cycle; increment retry_counts (keyed `{job.namespace}/{job.collection}/{job.source_path}`), log WARNING for exhausted jobs; update `last_retry_at` in health state per collection; update `BREAKING.md` for `GET /status` additive change. #backend-role
     - Use Cases · 4.0h

@@ -424,11 +424,14 @@ async def list_jobs(
         status_upper = {s.upper() for s in status}
         jobs = [j for j in jobs if j.status.value in status_upper]
 
-    # Filter by source (only meaningful for ExportJob/ImportJob; other job types
-    # have no `source` attribute and are excluded when the filter is active).
+    # Filter by source. Since D5-BE-7, all IngestJob subclasses (including base
+    # IngestJob, ReindexJob, DeleteJob) have source="user" by default, so
+    # ?source=user returns all job types. ExportJob/ImportJob/MigrationJob
+    # carry source="user" or source="backup" (not "maintenance" — only IngestJob
+    # base, ReindexJob, and DeleteJob can carry source="maintenance").
     if source:
         source_set = {s.lower() for s in source}
-        jobs = [j for j in jobs if getattr(j, "source", None) in source_set]
+        jobs = [j for j in jobs if j.source in source_set]
 
     # Filter by kind using exact type matching (not isinstance, since IngestJob is base class)
     if kind:

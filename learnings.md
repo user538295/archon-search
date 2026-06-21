@@ -261,6 +261,26 @@
 - Action: For any D5 e2e test that exercises an FTS-dependent maintenance policy, ingest at least one real document first using `ingest_file_via_path`. The pipeline's post-ingest `rebuild_fts_index()` call is the precondition for `optimize_fts()` to succeed.
 - Confidence: high
 
+**2026-06-21 — D5 BE-6: orphan cleanup policy — per-path exception handling and FTSIndexNotFoundError in post-deletion optimize**
+- Observation: (1) The initial implementation had no per-path try/except in the delete loop — a single `delete_by_source_path` failure would abort the loop leaving remaining orphans untouched and `orphans_removed_last_run` never updated. (2) The post-orphan `optimize_fts` call did not catch `FTSIndexNotFoundError`, inconsistent with `_run_fts_optimize`'s graceful handling. (3) Elapsed time was measured before Phase 4 (FTS optimize), excluding its time from the 60s warning. (4) The URL skip test only checked `delete_by_source_path.assert_not_called()` — vacuously correct but did not assert `Path` was never instantiated. (5) Three FTS tests used `fts_optimize=True` when the implementation's post-orphan optimize runs regardless of that flag — misleading.
+- Action: For any maintenance policy with a per-path delete loop: wrap each delete in `try/except Exception` and log WARNING with path on failure. Add `FTSIndexNotFoundError` handling in any post-policy `optimize_fts` call (consistent with `_run_fts_optimize`). Measure elapsed AFTER all phases including FTS. For URL-skip tests, add `mock_path_cls.assert_not_called()` as the direct assertion. Use `fts_optimize=False` in tests that exercise the post-orphan FTS path to document that the flag is irrelevant to that phase.
+- Confidence: high
+
+**2026-06-21 — D5 BE-6: set iteration order in exception-continuation tests**
+- Observation: `test_orphan_cleanup_delete_exception_continues_loop` used two orphan paths in a `set` with `side_effect=[RuntimeError, None]`. The test assertions (call_count==2, orphans_removed_last_run==1) are order-independent, but the test structure is fragile if future assertions need to know which path failed. The fix: `sorted(source_paths_seen)` in the implementation makes iteration deterministic everywhere.
+- Action: When a `set` is iterated in a loop where per-item side-effects are mocked, sort before iterating so tests can reliably target specific items. This is a low-cost improvement (one `sorted()` call) with high auditability benefit.
+- Confidence: high
+
+**2026-06-21 — D5 T-3: `_SCHEDULER_TICK_SECONDS` monkeypatch is inert for `MaintenanceLoop`**
+- Observation: T-1 and T-2 e2e tests cargo-culted `monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)`. This constant controls `JobScheduler.run()` (the bulk export/import job ticker), NOT `MaintenanceLoop._trigger_loop`, which uses `asyncio.wait_for(_trigger_event.wait(), ...)` — fired immediately when the trigger event is set. The monkeypatch has zero effect on maintenance pass timing.
+- Action: For any e2e test that exercises `MaintenanceLoop` via `POST /maintenance/trigger`, do NOT monkeypatch `_SCHEDULER_TICK_SECONDS`. The event-based trigger fires immediately without any tick dependency.
+- Confidence: high
+
+**2026-06-21 — D5 T-3: e2e orphan test must verify chunks are gone, not just the counter**
+- Observation: `orphans_removed_last_run` is a self-reported counter written by the maintenance loop itself. It could increment even if `delete_by_source_path` silently failed. To satisfy S8's "all chunks for that path removed" requirement, the e2e test must call `search()` (or equivalent) after cleanup and assert empty results — proving the data is actually gone, not just the counter.
+- Action: For any e2e test verifying orphan cleanup: after polling `orphans_removed_last_run > 0`, also call `search(client, col, ...)` and assert results are empty. Counter + empty search together prove the behavior end-to-end.
+- Confidence: high
+
 ## Open Questions
 - (Nothing recorded yet)
 

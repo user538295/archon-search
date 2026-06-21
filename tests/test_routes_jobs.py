@@ -411,7 +411,7 @@ def test_ingest_uses_validator_returned_path(
     )
 
     # Capture the IngestRequest passed to whichever ingest task variant the handler uses.
-    # The handler branches to _default_ingest_task_with_lock when search_store has _lock_for.
+    # The handler branches to _default_ingest_task_with_lock when search_store has lock_for.
     # Must stay await-free: completes in a single event-loop step before the response
     # is returned (no await point => no race with asyncio.create_task).
     captured: list[str] = []

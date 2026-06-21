@@ -44,7 +44,13 @@ class JobStore:
     # Public API
     # ------------------------------------------------------------------
 
-    def create(self, namespace: str = DEFAULT_NAMESPACE) -> IngestJob:
+    def create(
+        self,
+        namespace: str = DEFAULT_NAMESPACE,
+        source: Literal["user", "backup", "maintenance"] = "user",
+        path: str = "",
+        collection: str = "",
+    ) -> IngestJob:
         now = _now_iso()
         job = IngestJob(
             job_id=str(uuid.uuid4()),
@@ -52,6 +58,9 @@ class JobStore:
             created_at=now,
             updated_at=now,
             namespace=namespace,
+            source=source,
+            source_path=path,
+            collection=collection,
         )
         self._jobs[job.job_id] = job
         self._write_atomic()
@@ -229,21 +238,21 @@ class JobStore:
                 item["status"] = JobStatus(item["status"])
                 # Backward compatibility: pre-D1 jobs lack a "progress" key.
                 item.setdefault("progress", None)
+                # Backward compatibility: pre-D5 jobs lack new IngestJob base fields.
+                item.setdefault("source", "user")
+                item.setdefault("source_path", "")
+                item.setdefault("collection", "")
+                item.setdefault("retry_count", 0)
                 job_type = item.pop("job_type", "ingest")
                 if job_type == "export":
-                    # Backward compat: pre-D2 export jobs lack a "source" key.
-                    item.setdefault("source", "user")
                     job: IngestJob = ExportJob(**item)
                 elif job_type == "import":
-                    # Backward compat: pre-D2 import jobs lack a "source" key.
-                    item.setdefault("source", "user")
                     job = ImportJob(**item)
                 elif job_type == "reindex":
                     job = ReindexJob(**item)
                 elif job_type == "delete":
                     job = DeleteJob(**item)
                 elif job_type == "migration":
-                    item.setdefault("source", "user")
                     item["kind"] = MigrationKind(item["kind"])
                     job = MigrationJob(**item)
                 else:

@@ -185,7 +185,7 @@ async def test_reindex_blocks_concurrent_ingest_same_collection(
     await connected_store.ingest_chunks(col, [seed])
 
     # Hold the lock manually to simulate an in-flight reindex.
-    lock = connected_store._lock_for(col)
+    lock = connected_store.lock_for(col)
     await lock.acquire()
     try:
         monkeypatch.setattr("archon_search.store.INGEST_LOCK_TIMEOUT_S", 0.1)

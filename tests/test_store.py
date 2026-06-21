@@ -4405,7 +4405,7 @@ async def test_update_collection_meta_acquires_lock(connected_store: SearchStore
     import archon_search.store as store_mod
 
     col = "ucm-lock-check"
-    real_lock = connected_store._lock_for(col)
+    real_lock = connected_store.lock_for(col)
     acquire_called = False
     real_acquire = real_lock.acquire
 
@@ -4433,7 +4433,7 @@ async def test_update_collection_meta_timeout_raises_store_busy(tmp_path: Path, 
     await store.connect()
     try:
         col = "ucm-busy-col"
-        lock = store._lock_for(col)
+        lock = store.lock_for(col)
         await lock.acquire()
         try:
             with pytest.raises(StoreBusyError):
@@ -5607,8 +5607,8 @@ async def test_ingest_chunks_lock_serializes_concurrent_adds(tmp_path) -> None:
 def test_lock_for_keys_by_collection_not_namespace(tmp_path) -> None:
     """_lock_for returns the same lock for the same collection regardless of any namespace arg."""
     store = SearchStore(tmp_path / "db")
-    lock1 = store._lock_for("mycol")
-    lock2 = store._lock_for("mycol")
+    lock1 = store.lock_for("mycol")
+    lock2 = store.lock_for("mycol")
     assert lock1 is lock2
 
 
@@ -5622,7 +5622,7 @@ async def test_ingest_chunks_locked_by_caller_accumulates_meta(tmp_path) -> None
     try:
         col = "lbc_col"
         await store.ensure_collection(col, 2)
-        lock = store._lock_for(col)
+        lock = store.lock_for(col)
         await lock.acquire()
         try:
             doc = _doc_id()
@@ -6065,7 +6065,7 @@ async def test_delete_document_lock_timeout_raises_store_busy_error(tmp_path, mo
     try:
         col = "del-busy-col"
         await store.ensure_collection(col, _DIM)
-        lock = store._lock_for(col)
+        lock = store.lock_for(col)
         await lock.acquire()
         try:
             doc_id = _doc_id()
@@ -6212,7 +6212,7 @@ async def test_update_description_timeout_skips_write(tmp_path, caplog, monkeypa
         await store.ensure_collection(col, _DIM)
         doc = _doc_id()
         await store.ingest_chunks(col, [_chunk(doc, 0)])
-        lock = store._lock_for(col)
+        lock = store.lock_for(col)
         await lock.acquire()
         try:
             with caplog.at_level(logging.WARNING, logger="archon"):
@@ -7504,7 +7504,7 @@ async def test_apply_rewrite_rejects_non_rewrite_spec() -> None:
         await store.apply_rewrite_migration("col1", "default", spec)
 
     # Lock must never have been acquired (guard fires before lock acquisition).
-    assert not store._lock_for("col1").locked(), "Lock must not be held after kind validation failure"
+    assert not store.lock_for("col1").locked(), "Lock must not be held after kind validation failure"
 
 
 @pytest.mark.asyncio
@@ -7606,7 +7606,7 @@ async def test_apply_rewrite_acquires_collection_lock() -> None:
     await asyncio.wait_for(lock_held.wait(), timeout=2.0)
 
     # Verify the lock is held: direct acquisition times out.
-    collection_lock = store._lock_for("col1")
+    collection_lock = store.lock_for("col1")
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(collection_lock.acquire(), timeout=0.05)
 
@@ -7675,7 +7675,7 @@ async def test_apply_rewrite_schema_version_not_updated_on_error() -> None:
     # schema_version must NOT have been updated.
     store.update_collection_meta.assert_not_called()
     # Lock must be released even when an error occurs.
-    assert not store._lock_for("col1").locked(), "Lock must be released after RuntimeError"
+    assert not store.lock_for("col1").locked(), "Lock must be released after RuntimeError"
 
 
 @pytest.mark.asyncio
@@ -7724,7 +7724,7 @@ async def test_apply_rewrite_schema_version_not_updated_on_cancel() -> None:
 
     store.update_collection_meta.assert_not_called()
     # Lock must be released even when CancelledError is raised.
-    assert not store._lock_for("col1").locked(), "Lock must be released after CancelledError"
+    assert not store.lock_for("col1").locked(), "Lock must be released after CancelledError"
 
 
 @pytest.mark.asyncio
@@ -7780,7 +7780,7 @@ async def test_apply_rewrite_schema_version_not_updated_on_midway_cancel() -> No
 
     store.update_collection_meta.assert_not_called()
     # Lock must be released.
-    assert not store._lock_for("col1").locked(), "Lock must be released after mid-way CancelledError"
+    assert not store.lock_for("col1").locked(), "Lock must be released after mid-way CancelledError"
 
 
 @pytest.mark.integration

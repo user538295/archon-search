@@ -276,7 +276,7 @@ class SearchStore:
         from archon_search.config import SearchConfig as _SearchConfig  # noqa: PLC0415
         self._config: _SearchConfig = config if config is not None else _SearchConfig()
 
-    def _lock_for(self, collection: str) -> asyncio.Lock:
+    def lock_for(self, collection: str) -> asyncio.Lock:
         """Lazily create and return the lock for *collection*."""
         lock = self._collection_locks.get(collection)
         if lock is None:
@@ -980,7 +980,7 @@ class SearchStore:
         self._validate_collection(collection)
         db = self._require_connected()
 
-        lock = self._lock_for(collection)
+        lock = self.lock_for(collection)
         await lock.acquire()
         success = False
         processed = 0
@@ -1023,7 +1023,7 @@ class SearchStore:
     async def update_collection_meta(self, meta: "CollectionMeta") -> None:
         _validate_namespace(meta.namespace)
         self._validate_collection(meta.name)
-        lock = self._lock_for(meta.name)
+        lock = self.lock_for(meta.name)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
         except asyncio.TimeoutError as e:
@@ -1113,7 +1113,7 @@ class SearchStore:
 
         self._validate_collection(collection)
         db = self._require_connected()
-        lock = self._lock_for(collection)
+        lock = self.lock_for(collection)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
         except asyncio.TimeoutError:
@@ -1148,13 +1148,13 @@ class SearchStore:
             lock.release()
 
     # ------------------------------------------------------------------
-    # Private unlocked helpers (caller must hold _lock_for(collection))
+    # Private unlocked helpers (caller must hold lock_for(collection))
     # ------------------------------------------------------------------
 
     async def _do_read_meta_unlocked(
         self, db: "lancedb.db.AsyncConnection", collection: str, namespace: str = DEFAULT_NAMESPACE
     ) -> "CollectionMeta | None":
-        # Caller must hold _lock_for(collection)
+        # Caller must hold lock_for(collection)
         all_names: list[str] = (await db.list_tables()).tables
         if _META_TABLE not in all_names:
             return None
@@ -1172,7 +1172,7 @@ class SearchStore:
     async def _do_write_meta_unlocked(
         self, db: "lancedb.db.AsyncConnection", collection: str, meta: "CollectionMeta"
     ) -> None:
-        # Caller must hold _lock_for(collection)
+        # Caller must hold lock_for(collection)
         if collection != meta.name:
             raise ValueError(f"collection {collection!r} != meta.name {meta.name!r}")
         _validate_namespace(meta.namespace)
@@ -1228,7 +1228,7 @@ class SearchStore:
     async def _do_fetch_doc_vectors_unlocked(
         self, db: "lancedb.db.AsyncConnection", collection: str, doc_id: str
     ) -> list[list[float]]:
-        # Caller must hold _lock_for(collection)
+        # Caller must hold lock_for(collection)
         if not _DOC_ID_RE.match(doc_id):
             raise ValueError(f"Invalid doc_id: {doc_id!r} — must be 64 hex chars")
         self._validate_collection(collection)
@@ -1252,7 +1252,7 @@ class SearchStore:
         embedding_dim: int,
         namespace: str = DEFAULT_NAMESPACE,
     ) -> bool:
-        # Caller must hold _lock_for(collection).
+        # Caller must hold lock_for(collection).
         # Returns True when the caller should invoke recompute_collection_meta.
         from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
         if embedding_model is None:
@@ -1376,7 +1376,7 @@ class SearchStore:
         del_vectors: "list[list[float]]",
         namespace: str = DEFAULT_NAMESPACE,
     ) -> None:
-        # Caller must hold _lock_for(collection).
+        # Caller must hold lock_for(collection).
         from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
         from datetime import timezone  # noqa: PLC0415
 
@@ -1503,7 +1503,7 @@ class SearchStore:
         if not chunks:
             return ChunkIngestResult(chunks_ingested=0, needs_recompute=False)
 
-        lock = None if _locked_by_caller else self._lock_for(collection)
+        lock = None if _locked_by_caller else self.lock_for(collection)
         if lock is not None:
             try:
                 await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
@@ -1660,7 +1660,7 @@ class SearchStore:
         db = self._require_connected()
         result = ReindexResult()
 
-        lock = self._lock_for(collection)
+        lock = self.lock_for(collection)
         await lock.acquire()
         try:
             table = await db.open_table(collection)
@@ -1952,7 +1952,7 @@ class SearchStore:
         db = self._require_connected()
         if not _DOC_ID_RE.match(doc_id):
             raise ValueError(f"Invalid doc_id: {doc_id!r} — must be 64 hex chars")
-        lock = self._lock_for(collection)
+        lock = self.lock_for(collection)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
         except asyncio.TimeoutError as e:

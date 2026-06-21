@@ -43,12 +43,12 @@ def _make_app_and_client(tmp_path: Path):  # type: ignore[no-untyped-def]
     # Real per-collection lock map so we can pre-hold locks in tests.
     _lock_map: dict[str, asyncio.Lock] = {}
 
-    def _lock_for(collection: str) -> asyncio.Lock:
+    def lock_for(collection: str) -> asyncio.Lock:
         if collection not in _lock_map:
             _lock_map[collection] = asyncio.Lock()
         return _lock_map[collection]
 
-    mock_store._lock_for = _lock_for
+    mock_store.lock_for = lock_for
     app.state.search_store = mock_store
 
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_KEY}"})
@@ -102,7 +102,7 @@ def test_post_ingest_releases_lock_after_background_task(tmp_path: Path) -> None
     assert r1.status_code == 202
 
     # Lock must be free now.
-    lock = mock_store._lock_for("shared-col")
+    lock = mock_store.lock_for("shared-col")
     assert not lock.locked(), "Lock must be released after background task completes"
 
     # Second ingest into the same collection must not time out.
@@ -138,7 +138,7 @@ def test_post_ingest_releases_lock_on_task_cancellation(tmp_path: Path) -> None:
     # before returning; no additional settling is needed.
 
     # Lock must be free regardless of task cancellation.
-    lock = mock_store._lock_for("cancel-col")
+    lock = mock_store.lock_for("cancel-col")
     assert not lock.locked(), "Lock must be released after task cancellation"
 
 
@@ -235,7 +235,7 @@ def test_post_ingest_503_on_A_does_not_block_B(
     # We need the lock to be held BEFORE the TestClient request runs; since the
     # TestClient drives its own event loop we acquire it via asyncio.run() — the
     # lock object itself is not loop-bound, only its internal state matters.
-    lock_a = mock_store._lock_for("col-a")
+    lock_a = mock_store.lock_for("col-a")
     asyncio.run(lock_a.acquire())  # lock_a is now held; TestClient's wait_for will time out
 
     # POST /ingest for collection A → 503 (lock held).
