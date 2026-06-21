@@ -517,11 +517,11 @@ flowchart LR
         - [x] #unit_test — `test_status_maintenance_namespace_scoped` — two-namespace mock; only caller's namespace in `collection_health`; implementation must extract namespace from the `{namespace}/{collection}` key in the state file and compare to caller's namespace (S22)
         - [x] #integration_test — `test_trigger_post_timing` — TestClient; assert response received in < 2000 ms (S28); mark with `xdist_group("benchmark")` to avoid flakiness under parallelism
 
-- [ ] **T-1** — e2e: POST /maintenance/trigger → 202; GET /status shows `maintenance.last_run_at` non-null after pass #tester-role
+- [x] **T-1** — e2e: POST /maintenance/trigger → 202; GET /status shows `maintenance.last_run_at` non-null after pass #tester-role
     - — · 2.0h
     - needs BE-4 · completes S17, S20
     - Tests
-        - #e2e_test — `test_maintenance_trigger_and_status_reflect_run` — `make_real_app(maintenance_enabled=True)`; POST trigger; poll GET /status until `maintenance.last_run_at` is non-null; assert `maintenance.enabled=true` and `collection_health` present
+        - [x] #e2e_test — `test_maintenance_trigger_and_status_reflect_run` — `make_real_app(maintenance_enabled=True)`; POST trigger; poll GET /status until `maintenance.last_run_at` is non-null; assert `maintenance.enabled=true` and `collection_health` present
 
 ---
 

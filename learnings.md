@@ -37,6 +37,11 @@
 - Action: After adding keyword parameters to a method that is monkey-patched in tests, grep for all test overrides of that method and update their signatures.
 - Confidence: high
 
+**2026-06-21 — asyncio.Event.set() from test thread is consumed by the running event loop before the route handler checks it**
+- Observation: In `test_trigger_while_busy_returns_202`, calling `maintenance_loop._trigger_event.set()` from the synchronous test thread caused the TestClient's background asyncio event loop to immediately wake up `_trigger_loop`, run `_run_one_pass`, and clear the event — all before the route handler ran. The test got `"triggered"` instead of `"already_triggered"` because by the time the route checked `is_set()`, the loop had already cleared it.
+- Action: When testing an "event already set" branch in a route, replace the actual `asyncio.Event` with a `MagicMock` whose `is_set()` always returns `True`. Do not set the real event from the sync test thread when an async loop is consuming it in the background.
+- Confidence: high
+
 ## What Has Failed
 
 **2026-06-15 — Mocking `asyncio.wait_for` to simulate timeout**
