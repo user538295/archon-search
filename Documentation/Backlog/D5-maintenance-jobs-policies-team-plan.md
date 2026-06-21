@@ -527,7 +527,7 @@ flowchart LR
 
 ### Slice 2 · Optimize FTS indexes during pass
 
-- [ ] **BE-5** — Implement `_run_fts_optimize(collection, namespace)` in `MaintenanceLoop`: acquire lock via `asyncio.wait_for(store.lock_for(collection).acquire(), timeout=INGEST_LOCK_TIMEOUT_S)`, call `store.optimize_fts()`, catch `FTSIndexNotFoundError` → WARNING + skip, catch lock-acquisition timeout (`asyncio.TimeoutError`) → DEBUG + skip, update `fts_optimized_at` in health state. **Prerequisite**: rename `store._lock_for` to `store.lock_for` (remove the underscore, making it public); update all existing callers within `store.py` that reference `_lock_for` to use `lock_for`. This is a purely internal rename with no API impact. #backend-role
+- [x] **BE-5** — Implement `_run_fts_optimize(collection, namespace)` in `MaintenanceLoop`: acquire lock via `asyncio.wait_for(store.lock_for(collection).acquire(), timeout=INGEST_LOCK_TIMEOUT_S)`, call `store.optimize_fts()`, catch `FTSIndexNotFoundError` → WARNING + skip, catch lock-acquisition timeout (`asyncio.TimeoutError`) → DEBUG + skip, update `fts_optimized_at` in health state. **Prerequisite**: rename `store._lock_for` to `store.lock_for` (remove the underscore, making it public); update all existing callers within `store.py` that reference `_lock_for` to use `lock_for`. This is a purely internal rename with no API impact. #backend-role
     - Use Cases · 2.5h
     - needs BE-4 · completes S5, S6, S7
     - Tests

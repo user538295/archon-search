@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from archon_search._durable_io import atomic_write_json
+from archon_search.constants import INGEST_LOCK_TIMEOUT_S
+from archon_search.store import FTSIndexNotFoundError
 
 if TYPE_CHECKING:
     from archon_search.config import MaintenanceConfig
@@ -134,11 +136,56 @@ class MaintenanceLoop:
         atomic_write_json(self._state_file, state)
 
     # ------------------------------------------------------------------
-    # Per-pass policies (stubs — implemented by BE-5, BE-6, BE-8)
+    # Per-pass policies
     # ------------------------------------------------------------------
 
     async def _run_fts_optimize(self, collection: str, namespace: str) -> None:
-        """FTS optimize for a single collection. Implemented by BE-5."""
+        """FTS optimize for a single collection (BE-5).
+
+        Acquires the per-collection lock (timeout = INGEST_LOCK_TIMEOUT_S).
+        On ``FTSIndexNotFoundError``: WARNING + skip (no fts_optimized_at update).
+        On lock timeout (``asyncio.TimeoutError``): DEBUG + skip.
+        On success: updates ``fts_optimized_at`` in the current collection health dict.
+
+        ``self._current_health`` is set by ``_run_one_pass`` to the per-collection
+        health dict before calling this method.
+        """
+        if not self._config.fts_optimize:
+            return
+
+        # Hold the lock through the entire optimize_fts call to prevent concurrent
+        # ingest from writing new chunks between the optimize and the return.
+        # Note: store.optimize_fts() documents that callers are responsible for
+        # concurrency — this is an explicit choice in the maintenance context.
+        # Unlike delete_document (which releases before optimize to reduce contention),
+        # maintenance optimize runs infrequently and brief blocking is acceptable.
+        lock = self._search_store.lock_for(collection)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            logger.debug(
+                "MaintenanceLoop: FTS optimize skipped for %s/%s — collection locked",
+                namespace,
+                collection,
+            )
+            return
+
+        try:
+            await self._search_store.optimize_fts(collection)
+        except FTSIndexNotFoundError:
+            logger.warning(
+                "MaintenanceLoop: FTS optimize skipped for %s/%s — no FTS index found; "
+                "rebuild_fts_index() must be called first",
+                namespace,
+                collection,
+            )
+            return
+        finally:
+            lock.release()
+
+        # Update fts_optimized_at in the current pass health dict.
+        if hasattr(self, "_current_health"):
+            self._current_health["fts_optimized_at"] = datetime.now(timezone.utc).isoformat()
 
     async def _run_orphan_cleanup(self, collection: str, namespace: str) -> None:
         """Orphan chunk cleanup for a single collection. Implemented by BE-6."""
@@ -194,6 +241,7 @@ class MaintenanceLoop:
 
             # Initialise or carry over health entry for this collection.
             col_health: dict[str, Any] = health.get(key, dict(_EMPTY_HEALTH_ENTRY))
+            col_health["last_error"] = None
 
             # Collect O(1) metadata values.
             meta_chunk_count = 0
@@ -207,6 +255,10 @@ class MaintenanceLoop:
                 )
 
             col_health["meta_chunk_count"] = meta_chunk_count
+
+            # Expose current collection's health dict to per-policy methods so they
+            # can update it (e.g. fts_optimized_at, orphans_removed_last_run).
+            self._current_health = col_health
 
             # Per-policy try/except: failures in one policy do not abort others.
             try:

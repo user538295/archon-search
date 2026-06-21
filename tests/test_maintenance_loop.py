@@ -1,6 +1,6 @@
-"""Tests for MaintenanceLoop skeleton (BE-2).
+"""Tests for MaintenanceLoop skeleton (BE-2) and FTS optimize policy (BE-5).
 
-Plan: Documentation/Backlog/D5-maintenance-jobs-policies-team-plan.md Task BE-2.
+Plan: Documentation/Backlog/D5-maintenance-jobs-policies-team-plan.md Tasks BE-2, BE-5.
 
 TDD: tests written first, then MaintenanceLoop implementation in
 archon_search/jobs/maintenance_loop.py.
@@ -21,6 +21,7 @@ import pytest
 from archon_search._types import CollectionInfo
 from archon_search.config import MaintenanceConfig
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
+from archon_search.store import FTSIndexNotFoundError
 
 
 # ---------------------------------------------------------------------------
@@ -519,3 +520,148 @@ async def test_run_is_cancellable(tmp_path: Path) -> None:
     except asyncio.CancelledError:
         pass  # expected
     assert task.done()
+
+
+# ---------------------------------------------------------------------------
+# BE-5: FTS optimize policy tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fts_optimize_happy_path(tmp_path: Path) -> None:
+    """S5: _run_fts_optimize calls optimize_fts and updates fts_optimized_at in health."""
+    ss = AsyncMock()
+    ss.optimize_fts = AsyncMock()
+    lock = asyncio.Lock()
+    ss.lock_for = MagicMock(return_value=lock)
+
+    loop = _make_loop(tmp_path, fts_optimize=True, search_store=ss)
+
+    # Inject a health dict to be mutated by _run_fts_optimize.
+    health: dict[str, Any] = {"fts_optimized_at": None, "orphans_removed_last_run": 0, "last_retry_at": None, "last_error": None, "meta_chunk_count": 0}
+    loop._current_health = health  # type: ignore[attr-defined]
+
+    async def _check_lock_held(*args: Any, **kwargs: Any) -> None:
+        assert lock.locked()
+
+    ss.optimize_fts = AsyncMock(side_effect=_check_lock_held)
+
+    await loop._run_fts_optimize("docs", "default")
+
+    ss.optimize_fts.assert_called_once_with("docs")
+    assert health["fts_optimized_at"] is not None
+    assert not lock.locked()  # lock must be released
+
+
+@pytest.mark.asyncio
+async def test_fts_optimize_index_not_found_warns_and_continues(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """S6: FTSIndexNotFoundError → WARNING logged; fts_optimized_at not updated; no propagation."""
+    ss = AsyncMock()
+    ss.optimize_fts = AsyncMock(side_effect=FTSIndexNotFoundError("no index"))
+    lock = asyncio.Lock()
+    ss.lock_for = MagicMock(return_value=lock)
+
+    loop = _make_loop(tmp_path, fts_optimize=True, search_store=ss)
+    health: dict[str, Any] = {"fts_optimized_at": None, "orphans_removed_last_run": 0, "last_retry_at": None, "last_error": None, "meta_chunk_count": 0}
+    loop._current_health = health  # type: ignore[attr-defined]
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
+        await loop._run_fts_optimize("docs", "default")  # must not raise
+
+    assert health["fts_optimized_at"] is None
+    assert any(r.levelno >= logging.WARNING for r in caplog.records)
+    assert not lock.locked()  # lock must be released even on FTSIndexNotFoundError
+
+
+@pytest.mark.asyncio
+async def test_fts_optimize_locked_collection_skips(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """S7: asyncio.TimeoutError from lock acquisition → DEBUG logged; no exception propagates."""
+    ss = AsyncMock()
+    ss.optimize_fts = AsyncMock()
+    lock = asyncio.Lock()
+    ss.lock_for = MagicMock(return_value=lock)
+
+    loop = _make_loop(tmp_path, fts_optimize=True, search_store=ss)
+    health: dict[str, Any] = {"fts_optimized_at": None, "orphans_removed_last_run": 0, "last_retry_at": None, "last_error": None, "meta_chunk_count": 0}
+    loop._current_health = health  # type: ignore[attr-defined]
+
+    # Simulate lock already held so wait_for times out.
+    import archon_search.jobs.maintenance_loop as ml_mod
+
+    with (
+        caplog.at_level(logging.DEBUG, logger="archon_search.jobs.maintenance_loop"),
+        patch.object(ml_mod, "INGEST_LOCK_TIMEOUT_S", 0.05),
+    ):
+        # Acquire the lock externally so the method times out waiting for it.
+        await lock.acquire()
+        try:
+            await loop._run_fts_optimize("docs", "default")  # must not raise
+        finally:
+            lock.release()
+
+    ss.optimize_fts.assert_not_called()
+    assert health["fts_optimized_at"] is None
+    assert any(r.levelno == logging.DEBUG for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_fts_optimize_disabled_by_config(tmp_path: Path) -> None:
+    """When fts_optimize=False, optimize_fts is never called."""
+    ss = AsyncMock()
+    ss.optimize_fts = AsyncMock()
+    ss.lock_for = MagicMock(return_value=asyncio.Lock())
+
+    loop = _make_loop(tmp_path, fts_optimize=False, search_store=ss)
+    health: dict[str, Any] = {"fts_optimized_at": None, "orphans_removed_last_run": 0, "last_retry_at": None, "last_error": None, "meta_chunk_count": 0}
+    loop._current_health = health  # type: ignore[attr-defined]
+
+    await loop._run_fts_optimize("docs", "default")
+
+    ss.optimize_fts.assert_not_called()
+    assert health["fts_optimized_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_fts_optimize_unexpected_exception_propagates_and_releases_lock(
+    tmp_path: Path,
+) -> None:
+    """Non-FTSIndexNotFoundError from optimize_fts propagates; lock is still released."""
+    ss = AsyncMock()
+    lock = asyncio.Lock()
+    ss.lock_for = MagicMock(return_value=lock)
+    ss.optimize_fts = AsyncMock(side_effect=RuntimeError("LanceDB corrupt"))
+
+    loop = _make_loop(tmp_path, fts_optimize=True, search_store=ss)
+    health: dict[str, Any] = {"fts_optimized_at": None, "orphans_removed_last_run": 0, "last_retry_at": None, "last_error": None, "meta_chunk_count": 0}
+    loop._current_health = health  # type: ignore[attr-defined]
+
+    with pytest.raises(RuntimeError, match="LanceDB corrupt"):
+        await loop._run_fts_optimize("docs", "default")
+
+    # Lock must be released even when optimize_fts raises unexpectedly.
+    assert not lock.locked()
+    # fts_optimized_at must not be updated on failure.
+    assert health["fts_optimized_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_fts_optimize_no_current_health_does_not_crash(tmp_path: Path) -> None:
+    """If _current_health is not set (called outside _run_one_pass), optimize still runs
+    and fts_optimized_at update is silently skipped — no AttributeError raised."""
+    ss = AsyncMock()
+    lock = asyncio.Lock()
+    ss.lock_for = MagicMock(return_value=lock)
+    ss.optimize_fts = AsyncMock()
+
+    loop = _make_loop(tmp_path, fts_optimize=True, search_store=ss)
+    # Deliberately do NOT set loop._current_health
+
+    await loop._run_fts_optimize("docs", "default")  # must not raise
+
+    ss.optimize_fts.assert_called_once_with("docs")
+    # No fts_optimized_at to check — just verify no crash and lock released.
+    assert not lock.locked()
