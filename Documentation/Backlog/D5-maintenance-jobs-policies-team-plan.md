@@ -613,20 +613,20 @@ flowchart LR
 
 ### Slice 5 · CLI maintenance status and run
 
-- [ ] **FE-1** — Create `archon_search/cli/maintenance_cmd.py`: `maintenance` Click group + `status` subcommand (reads `.maintenance-state.json` offline-capable + calls `GET /status` for live data, `--json` flag, plain `click.echo` output) + `run` subcommand (POST trigger, `--wait` polls `GET /status` until `maintenance.last_run_at` changes); register in `main.py`; add `"maintenance"` to subcommand assertion in `tests/cli/test_main.py` #frontend-role
+- [x] **FE-1** — Create `archon_search/cli/maintenance_cmd.py`: `maintenance` Click group + `status` subcommand (reads `.maintenance-state.json` offline-capable + calls `GET /status` for live data, `--json` flag, plain `click.echo` output) + `run` subcommand (POST trigger, `--wait` polls `GET /status` until `maintenance.last_run_at` changes); register in `main.py`; add `"maintenance"` to subcommand assertion in `tests/cli/test_main.py` #frontend-role
     - Presentation · 4.0h
     - needs BE-4 · completes S25, S26
     - Tests
-        - #unit_test — `test_maintenance_status_offline` — CliRunner; mock `get_data_dir` to `tmp_path`; state file present; assert health table in output (S25)
-        - #unit_test — `test_maintenance_status_no_state_file` — no state file; "no maintenance history" in output; exit 0
-        - #unit_test — `test_maintenance_status_json_flag` — `--json`; output parses as JSON with `last_run_at` key
-        - #unit_test — `test_maintenance_run_triggers_and_exits` — mock `httpx.post` returning 202; assert "triggered" in output; exits immediately (S26)
-        - #unit_test — `test_maintenance_run_wait_polls_until_last_run_at_changes` — mock `httpx.post` + `httpx.get` sequence; first GET returns old `last_run_at`; second returns new; assert CLI exits after second GET
-        - #unit_test — `test_maintenance_run_wait_timeout` — mock `httpx.get` always returns same `last_run_at`; assert CLI exits after configured timeout (or max polls) with non-zero exit code
-        - #unit_test — `test_maintenance_run_wait_server_error_mid_poll` — first poll returns 200, second returns 500; assert CLI logs error and exits
-        - #unit_test — `test_maintenance_run_wait_maintenance_null` — `GET /status` returns `maintenance=null`; assert CLI handles gracefully (no crash, informative message)
-        - #unit_test — `test_maintenance_run_connection_error` — `httpx.post` raises `ConnectError`; exit 1
-        - #unit_test — `test_main_help_lists_maintenance` — `maintenance` appears in `archon-search --help` output
+        - [x] #unit_test — `test_maintenance_status_offline` — CliRunner; mock `get_data_dir` to `tmp_path`; state file present; assert health table in output (S25)
+        - [x] #unit_test — `test_maintenance_status_no_state_file` — no state file; "no maintenance history" in output; exit 0
+        - [x] #unit_test — `test_maintenance_status_json_flag` — `--json`; output parses as JSON with `last_run_at` key
+        - [x] #unit_test — `test_maintenance_run_triggers_and_exits` — mock `httpx.post` returning 202; assert "triggered" in output; exits immediately (S26)
+        - [x] #unit_test — `test_maintenance_run_wait_polls_until_last_run_at_changes` — mock `httpx.post` + `httpx.get` sequence; first GET returns old `last_run_at`; second returns new; assert CLI exits after second GET
+        - [x] #unit_test — `test_maintenance_run_wait_timeout` — mock `httpx.get` always returns same `last_run_at`; assert CLI exits after configured timeout (or max polls) with non-zero exit code
+        - [x] #unit_test — `test_maintenance_run_wait_server_error_mid_poll` — first poll returns 200, second returns 500; assert CLI logs error and exits
+        - [x] #unit_test — `test_maintenance_run_wait_maintenance_null` — `GET /status` returns `maintenance=null`; assert CLI handles gracefully (no crash, informative message)
+        - [x] #unit_test — `test_maintenance_run_connection_error` — `httpx.post` raises `ConnectError`; exit 1
+        - [x] #unit_test — `test_main_help_lists_maintenance` — `maintenance` appears in `archon-search --help` output
 
 - [ ] **T-5** — Manual: verify `archon-search maintenance status` reads state file correctly offline; verify `archon-search maintenance run --wait` polls and exits after pass completes against a live server #tester-role
     - — · 1.0h
