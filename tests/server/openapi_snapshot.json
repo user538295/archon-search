@@ -1539,6 +1539,24 @@
         "title": "MaintenanceStatusDetail",
         "type": "object"
       },
+      "MaintenanceTriggerResponse": {
+        "description": "Response body for POST /maintenance/trigger (D5 C2).",
+        "properties": {
+          "status": {
+            "enum": [
+              "triggered",
+              "already_triggered"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "MaintenanceTriggerResponse",
+        "type": "object"
+      },
       "MigrateInPlaceResponse": {
         "description": "Response body for POST /collections/{name}/migrate (in-place synchronous path).",
         "properties": {
@@ -3778,6 +3796,43 @@
           }
         ],
         "summary": "Resume Job"
+      }
+    },
+    "/maintenance/trigger": {
+      "post": {
+        "description": "Set the maintenance trigger event; the loop fires a pass asynchronously.\n\nIf the trigger event is already set (a trigger is pending or a pass is\nrunning), the request is acknowledged but the pass is not duplicated.\n``\"already_triggered\"`` is used (not ``\"already_running\"``) because\n``_trigger_event.is_set()`` means \"pending or running\", not \"definitely\nrunning\".",
+        "operationId": "trigger_maintenance_maintenance_trigger_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceTriggerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Trigger Maintenance",
+        "tags": [
+          "maintenance"
+        ]
       }
     },
     "/ready": {

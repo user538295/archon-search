@@ -39,6 +39,7 @@ except PackageNotFoundError:
     _VERSION = "dev"
 
 from archon_search.server.routes_backup import router as backup_router
+from archon_search.server.routes_maintenance import router as maintenance_router
 from archon_search.server.routes_collections import router as collections_router
 from archon_search.server.routes_explain import router as explain_router
 from archon_search.server.routes_export import router as export_router
@@ -348,6 +349,7 @@ def create_app(
     app.include_router(explain_router)
     app.include_router(telemetry_router)
     app.include_router(backup_router)
+    app.include_router(maintenance_router)
     _configure_openapi(app)
     return app
 

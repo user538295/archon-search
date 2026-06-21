@@ -505,17 +505,17 @@ flowchart LR
         - [x] #unit_test — `test_collection_health_entry_all_fields` — all eight fields round-trip through Pydantic serialisation
         - [x] #unit_test — `test_maintenance_trigger_response_literal` — `status` must be one of `"triggered"` or `"already_triggered"` (both are valid; neither other values)
 
-- [ ] **BE-4** — Add `routes_maintenance.py` (`POST /maintenance/trigger`; sets `_trigger_event` on `MaintenanceLoop`; returns `{"status":"already_triggered"}` if event already set — `"already_triggered"` is used because `_trigger_event.is_set()` means a trigger is pending or pass is running, not definitively that a pass is running); add `_build_maintenance_status()` and `maintenance` field to `routes_status.py` (namespace scoping: filter `collection_health` to entries whose `{namespace}/{collection}` key starts with `{caller_namespace}/`, following precedent in `routes_status.py` backup scoping); register route in `app.py`; wire `app.state.maintenance_loop` in lifespan (5-line pattern mirroring BackupLoop) #backend-role
+- [x] **BE-4** — Add `routes_maintenance.py` (`POST /maintenance/trigger`; sets `_trigger_event` on `MaintenanceLoop`; returns `{"status":"already_triggered"}` if event already set — `"already_triggered"` is used because `_trigger_event.is_set()` means a trigger is pending or pass is running, not definitively that a pass is running); add `_build_maintenance_status()` and `maintenance` field to `routes_status.py` (namespace scoping: filter `collection_health` to entries whose `{namespace}/{collection}` key starts with `{caller_namespace}/`, following precedent in `routes_status.py` backup scoping); register route in `app.py`; wire `app.state.maintenance_loop` in lifespan (5-line pattern mirroring BackupLoop) #backend-role
     - Interface Adapters · 2.0h
     - needs BE-2, BE-3 · completes S17, S18, S19, S20, S21, S22, S28
     - Tests
-        - #unit_test — `test_trigger_returns_202` — Style A TestClient; mock `maintenance_loop`; assert 202 + body `{"status":"triggered"}` (S17, C2)
-        - #unit_test — `test_trigger_requires_auth` — no Bearer → 401 (S19)
-        - #unit_test — `test_trigger_while_busy_returns_202` — pass already running (event set); 202 returned with `{"status":"already_triggered"}`; `_run_one_pass` call count remains 1 (second pass not started) (S17)
-        - #unit_test — `test_status_maintenance_disabled` — `interval_hours=0`; `enabled=false`, `next_run_at=null` (S21)
-        - #unit_test — `test_status_maintenance_absent` — `app.state` has no `maintenance_loop`; `maintenance=null` in response (S20 null branch)
-        - #unit_test — `test_status_maintenance_namespace_scoped` — two-namespace mock; only caller's namespace in `collection_health`; implementation must extract namespace from the `{namespace}/{collection}` key in the state file and compare to caller's namespace (S22)
-        - #integration_test — `test_trigger_post_timing` — TestClient; assert response received in < 2000 ms (S28); mark with `xdist_group("benchmark")` to avoid flakiness under parallelism
+        - [x] #unit_test — `test_trigger_returns_202` — Style A TestClient; mock `maintenance_loop`; assert 202 + body `{"status":"triggered"}` (S17, C2)
+        - [x] #unit_test — `test_trigger_requires_auth` — no Bearer → 401 (S19)
+        - [x] #unit_test — `test_trigger_while_busy_returns_202` — pass already running (event set); 202 returned with `{"status":"already_triggered"}`; `_run_one_pass` call count remains 1 (second pass not started) (S17)
+        - [x] #unit_test — `test_status_maintenance_disabled` — `interval_hours=0`; `enabled=false`, `next_run_at=null` (S21)
+        - [x] #unit_test — `test_status_maintenance_absent` — `app.state` has no `maintenance_loop`; `maintenance=null` in response (S20 null branch)
+        - [x] #unit_test — `test_status_maintenance_namespace_scoped` — two-namespace mock; only caller's namespace in `collection_health`; implementation must extract namespace from the `{namespace}/{collection}` key in the state file and compare to caller's namespace (S22)
+        - [x] #integration_test — `test_trigger_post_timing` — TestClient; assert response received in < 2000 ms (S28); mark with `xdist_group("benchmark")` to avoid flakiness under parallelism
 
 - [ ] **T-1** — e2e: POST /maintenance/trigger → 202; GET /status shows `maintenance.last_run_at` non-null after pass #tester-role
     - — · 2.0h
