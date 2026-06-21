@@ -247,6 +247,77 @@
         "title": "CollectionDetail",
         "type": "object"
       },
+      "CollectionHealthEntry": {
+        "description": "Per-collection health snapshot written after each maintenance pass (D5 C1).",
+        "properties": {
+          "centroid_recompute_threshold": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Centroid Recompute Threshold",
+            "type": "integer"
+          },
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "fts_optimized_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fts Optimized At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_retry_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Retry At"
+          },
+          "meta_chunk_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Meta Chunk Count",
+            "type": "integer"
+          },
+          "mutations_since_recompute": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Mutations Since Recompute",
+            "type": "integer"
+          },
+          "orphans_removed_last_run": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Orphans Removed Last Run",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collection"
+        ],
+        "title": "CollectionHealthEntry",
+        "type": "object"
+      },
       "CollectionStats": {
         "properties": {
           "ok": {
@@ -1418,6 +1489,56 @@
         "title": "LatencyPercentiles",
         "type": "object"
       },
+      "MaintenanceStatusDetail": {
+        "description": "Maintenance loop state for the caller's namespace (D5 C1).",
+        "properties": {
+          "collection_health": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CollectionHealthEntry"
+            },
+            "title": "Collection Health",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "interval_hours": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Interval Hours",
+            "type": "integer"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "MaintenanceStatusDetail",
+        "type": "object"
+      },
       "MigrateInPlaceResponse": {
         "description": "Response body for POST /collections/{name}/migrate (in-place synchronous path).",
         "properties": {
@@ -2267,6 +2388,16 @@
             "minimum": 0.0,
             "title": "Collections Schema Behind",
             "type": "integer"
+          },
+          "maintenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaintenanceStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "pid": {
             "title": "Pid",

@@ -497,13 +497,13 @@ flowchart LR
         - #unit_test — `test_run_one_pass_policy_exception_does_not_abort_other_policies` — mock per-collection policies `_run_fts_optimize` and `_run_orphan_cleanup` as `AsyncMock`; mock pass-level `_run_failed_ingest_retry` as `AsyncMock`; `_run_fts_optimize` raises `RuntimeError`; assert `_run_orphan_cleanup.assert_called_once()` and `_run_failed_ingest_retry.assert_called_once()` after `_run_one_pass` completes (verifies per-policy try/except allows others to proceed, and that pass-level retry still runs)
         - #integration_test — `test_maintenance_loop_lifespan` — `app.state.maintenance_loop` is set; task is cancellable on shutdown; `interval_hours=0` still sets the attribute (S1, S18)
 
-- [ ] **BE-3** — Add `MaintenanceStatusDetail`, `CollectionHealthEntry`, `MaintenanceTriggerResponse` to `schemas.py`; extend `StatusResponse.maintenance: MaintenanceStatusDetail | None = None` #backend-role
+- [x] **BE-3** — Add `MaintenanceStatusDetail`, `CollectionHealthEntry`, `MaintenanceTriggerResponse` to `schemas.py`; extend `StatusResponse.maintenance: MaintenanceStatusDetail | None = None` #backend-role
     - Interface Adapters · 2.0h
     - needs K1 · completes C1, C2
     - Tests
-        - #unit_test — `test_status_response_maintenance_field_optional` — `StatusResponse` serialises with `maintenance=None` without error
-        - #unit_test — `test_collection_health_entry_all_fields` — all eight fields round-trip through Pydantic serialisation
-        - #unit_test — `test_maintenance_trigger_response_literal` — `status` must be one of `"triggered"` or `"already_triggered"` (both are valid; neither other values)
+        - [x] #unit_test — `test_status_response_maintenance_field_optional` — `StatusResponse` serialises with `maintenance=None` without error
+        - [x] #unit_test — `test_collection_health_entry_all_fields` — all eight fields round-trip through Pydantic serialisation
+        - [x] #unit_test — `test_maintenance_trigger_response_literal` — `status` must be one of `"triggered"` or `"already_triggered"` (both are valid; neither other values)
 
 - [ ] **BE-4** — Add `routes_maintenance.py` (`POST /maintenance/trigger`; sets `_trigger_event` on `MaintenanceLoop`; returns `{"status":"already_triggered"}` if event already set — `"already_triggered"` is used because `_trigger_event.is_set()` means a trigger is pending or pass is running, not definitively that a pass is running); add `_build_maintenance_status()` and `maintenance` field to `routes_status.py` (namespace scoping: filter `collection_health` to entries whose `{namespace}/{collection}` key starts with `{caller_namespace}/`, following precedent in `routes_status.py` backup scoping); register route in `app.py`; wire `app.state.maintenance_loop` in lifespan (5-line pattern mirroring BackupLoop) #backend-role
     - Interface Adapters · 2.0h

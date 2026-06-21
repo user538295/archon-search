@@ -221,6 +221,31 @@
 - Action: For any close-out that includes a doc update checklist, read the specific sections of each doc (not just grep for removed symbols) — docs may describe *behavior* that changed (e.g., accumulator pattern) without using the exact symbol names. Always update the component catalog's module-purpose cell when the module's primary data-flow behavior changes.
 - Confidence: high
 
+**2026-06-21 — D5 BE-1: config dataclass with validation — allowlist line-number drift**
+- Observation: Adding a new dataclass block before an existing function shifts all subsequent line numbers. The `path_home_allowlist.txt` stores file:line:hash tuples — inserting `MaintenanceConfig` (11 lines) before `get_default_config_path` moved the `Path.home()` callsite from line 164 to 177, causing `test_path_home_ratchet` to fail. The hash was unchanged (same line content), only the line number differed.
+- Action: After adding a new block to `config.py` (or any file in the allowlist), run `uv run pytest tests/test_no_hardcoded_path_home.py -n0 --no-cov` immediately and update the line number in `path_home_allowlist.txt` before running the full suite.
+- Confidence: high
+
+**2026-06-21 — D5 BE-1: ConfigError validation paths need dedicated tests**
+- Observation: The plan spec listed 3 required tests (defaults, round-trip, warning). The implementation also added 3 ConfigError boundary checks (`interval_hours < 0`, `retry_max_attempts < 1`, `retry_max_age_hours < 0`). The DA review correctly identified these as undertested — TDD mandates tests first for ALL validation logic, including error paths, not just the happy paths the task spec enumerates.
+- Action: For any task that adds both TOML parsing AND validation (ConfigError raises), always add tests for each error path even if the plan spec only lists the happy-path tests. The spec's test list is a minimum, not a ceiling.
+- Confidence: high
+
+**2026-06-21 — D5 BE-2: `_trigger_event.clear()` must come AFTER `_run_one_pass()`**
+- Observation: The initial implementation cleared `_trigger_event` BEFORE calling `_run_one_pass()`. The plan explicitly requires clearing AFTER `_save_state()` completes (i.e., after the pass). Clearing before means a trigger that arrives during a long pass is silently lost. The fix: move `self._trigger_event.clear()` to after `await self._run_one_pass()`, unconditionally — so triggers that arrive during execution are coalesced into "already ran," not dropped.
+- Action: For any event-driven loop where `_trigger_event.wait()` signals work, always clear the event AFTER the work completes, never before. This coalesces concurrent triggers correctly.
+- Confidence: high
+
+**2026-06-21 — D5 BE-2: `dict(module_level_dict)` shallow copy mutates nested dicts**
+- Observation: `dict(_EMPTY_STATE)` creates a shallow copy where nested dicts (`collection_health: {}`, `retry_counts: {}`) are shared references to the same objects in `_EMPTY_STATE`. When `_run_one_pass` later mutates `health[key] = ...`, it permanently pollutes `_EMPTY_STATE` for the process lifetime. The fix: return an inline dict literal with fresh `{}` values instead of `dict(_EMPTY_STATE)`.
+- Action: Never use `dict(module_level_dict)` as a "safe copy" when the module-level dict contains nested mutable objects. Always construct fresh dicts inline or use `copy.deepcopy()`.
+- Confidence: high
+
+**2026-06-21 — D5 BE-2: `test_trigger_loop_fires_on_interval_timeout` must test the real method**
+- Observation: Initial implementation of this test created a local wrapper function that reimplemented the loop logic with a tiny timeout, rather than calling the real `_trigger_loop()`. This means regressions in the real method (wrong `timeout` computation, wrong clear placement) go undetected. The fix: patch `_SECONDS_PER_HOUR` to `0.05` with `patch.object(ml_mod, "_SECONDS_PER_HOUR", 0.05)` so `interval_hours=1` produces a 0.05s timeout and the real `_trigger_loop` runs.
+- Action: When testing an async loop method's interval-timeout path, patch the seconds-per-unit constant to a small value and call the real method, not a wrapper.
+- Confidence: high
+
 ## Open Questions
 - (Nothing recorded yet)
 

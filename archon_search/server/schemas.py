@@ -5,6 +5,7 @@ Pure data models — no business logic.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -96,6 +97,35 @@ class BackupStatusDetail(BaseModel):
     collection_status: list[CollectionBackupStatus] = []
 
 
+class CollectionHealthEntry(BaseModel):
+    """Per-collection health snapshot written after each maintenance pass (D5 C1)."""
+
+    collection: str
+    fts_optimized_at: str | None = None
+    orphans_removed_last_run: int = Field(default=0, ge=0)
+    last_retry_at: str | None = None
+    last_error: str | None = None
+    mutations_since_recompute: int = Field(default=0, ge=0)
+    centroid_recompute_threshold: int = Field(default=0, ge=0)
+    meta_chunk_count: int = Field(default=0, ge=0)
+
+
+class MaintenanceStatusDetail(BaseModel):
+    """Maintenance loop state for the caller's namespace (D5 C1)."""
+
+    enabled: bool
+    interval_hours: int = Field(default=0, ge=0)
+    last_run_at: str | None = None
+    next_run_at: str | None = None
+    collection_health: list[CollectionHealthEntry] = []
+
+
+class MaintenanceTriggerResponse(BaseModel):
+    """Response body for POST /maintenance/trigger (D5 C2)."""
+
+    status: Literal["triggered", "already_triggered"]
+
+
 class StatusResponse(BaseModel):
     running: bool
     pid: int
@@ -106,6 +136,8 @@ class StatusResponse(BaseModel):
     # D3 BE-15 — schema migration health fields
     store_schema_version: int = 0
     collections_schema_behind: int = Field(default=0, ge=0)
+    # D5 BE-3 — maintenance health field (additive, nullable)
+    maintenance: MaintenanceStatusDetail | None = None
 
 
 class IndexingStateCollectionEntry(BaseModel):
