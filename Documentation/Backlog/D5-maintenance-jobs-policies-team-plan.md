@@ -536,7 +536,7 @@ flowchart LR
         - #unit_test — `test_fts_optimize_locked_collection_skips` — mock `asyncio.wait_for` to raise `asyncio.TimeoutError`; DEBUG logged; collection skipped (S7)
         - #unit_test — `test_fts_optimize_disabled_by_config` — `fts_optimize=False`; `optimize_fts` never called
 
-- [ ] **T-2** — e2e: POST /maintenance/trigger → verify `fts_optimized_at` non-null in `GET /status` maintenance.collection_health #tester-role
+- [x] **T-2** — e2e: POST /maintenance/trigger → verify `fts_optimized_at` non-null in `GET /status` maintenance.collection_health #tester-role
     - — · 1.5h
     - needs BE-5 · completes S5
     - Tests

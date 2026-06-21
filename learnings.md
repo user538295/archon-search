@@ -251,6 +251,16 @@
 - Action: When testing an async loop method's interval-timeout path, patch the seconds-per-unit constant to a small value and call the real method, not a wrapper.
 - Confidence: high
 
+**2026-06-21 — D5 BE-5: `_run_fts_optimize` lock-release testing pattern**
+- Observation: (1) The plan-specified tests only covered the four behavioral cases (happy, FTSIndexNotFoundError, lock timeout, config disabled). Iterative review caught two critical gaps: no test verified the lock was released after `FTSIndexNotFoundError`, and no test verified propagation of unexpected exceptions with lock release. (2) To verify the lock is held DURING `optimize_fts`, use a `side_effect=AsyncMock` that asserts `lock.locked()` inside the call. (3) The `last_error` field in per-collection health state was never reset between passes — a transient error persisted indefinitely. Fix: add `col_health["last_error"] = None` at the start of each per-collection block in `_run_one_pass`, after the carry-over from previous state but before any policy execution. (4) Lock held through `optimize_fts` contradicts `store.py`'s documented convention (which releases before optimize in `delete_document`). The maintenance choice is defensible (infrequent, brief blocking acceptable) but must be commented.
+- Action: For any lock-acquiring method: (a) add `assert not lock.locked()` after all test calls; (b) add a side-effect that asserts `lock.locked()` to verify the lock is held during the inner operation; (c) add a test for unexpected exceptions to verify the `finally` block releases the lock; (d) when the locking pattern differs from the established convention in the codebase, add an explicit comment justifying the deviation.
+- Confidence: high
+
+**2026-06-21 — D5 T-2: e2e FTS optimize observable via GET /status**
+- Observation: `ingest_file_via_path` triggers `rebuild_fts_index()` in the pipeline after a successful ingest, creating the FTS index. When the maintenance loop subsequently calls `optimize_fts()`, it succeeds and writes `fts_optimized_at` to the health state. The e2e test just needs to ingest one small doc before triggering maintenance — no special setup for FTS index creation is needed.
+- Action: For any D5 e2e test that exercises an FTS-dependent maintenance policy, ingest at least one real document first using `ingest_file_via_path`. The pipeline's post-ingest `rebuild_fts_index()` call is the precondition for `optimize_fts()` to succeed.
+- Confidence: high
+
 ## Open Questions
 - (Nothing recorded yet)
 
