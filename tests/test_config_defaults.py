@@ -172,6 +172,16 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "exclude": [],
             "output_dir": str(get_data_dir() / "backups"),
         },
+        # [maintenance]
+        "maintenance": {
+            "interval_hours": 0,
+            "fts_optimize": True,
+            "orphan_cleanup": True,
+            "failed_ingest_retry": True,
+            "retry_max_attempts": 3,
+            "retry_max_age_hours": 72,
+            "exclude": [],
+        },
     }
 
     # Keyset guard — fails when a new top-level field is added to SearchConfig

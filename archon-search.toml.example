@@ -230,6 +230,37 @@ num_queries = 2
 # rotation from scanning near-root directories.
 # output_dir = ""
 
+[maintenance]
+# Automated in-process maintenance passes (FTS optimize, orphan cleanup, failed-ingest retry).
+# Disabled by default (interval_hours = 0).
+#
+# When interval_hours > 0, the server runs a maintenance pass every interval_hours hours.
+# When interval_hours = 0, no scheduled pass runs, but POST /maintenance/trigger still works.
+#
+# Set interval_hours = 0 to disable scheduled maintenance entirely.
+# interval_hours = 0
+#
+# Enable FTS index optimization during each pass.
+# fts_optimize = true
+#
+# Enable removal of orphaned chunks (chunks whose source_path no longer exists on disk).
+# URL-sourced chunks are skipped.
+# orphan_cleanup = true
+#
+# Enable automatic re-enqueue of failed IngestJobs within the retry age and attempt limits.
+# failed_ingest_retry = true
+#
+# Maximum number of retry attempts per source file per collection before giving up.
+# retry_max_attempts = 3
+#
+# Only retry failed IngestJobs created within this many hours ago.
+# retry_max_age_hours = 72
+#
+# Collections to exclude from maintenance passes. Accepts bare names (matches across
+# all namespaces) or qualified namespace/collection names.
+# exclude = []
+# exclude = ["scratch", "tenants/staging"]
+
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #

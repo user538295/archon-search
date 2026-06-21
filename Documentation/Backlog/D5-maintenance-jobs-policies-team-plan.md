@@ -470,7 +470,7 @@ flowchart LR
 
 ### Slice 1 · Trigger maintenance, observe health state *(walking skeleton — carries config + state-file + schema foundation)*
 
-- [ ] **BE-1** — Add `MaintenanceConfig` dataclass to `config.py` + `SearchConfig.maintenance` + `_apply_toml` + `archon-search.toml.example` `[maintenance]` section #backend-role
+- [x] **BE-1** — Add `MaintenanceConfig` dataclass to `config.py` + `SearchConfig.maintenance` + `_apply_toml` + `archon-search.toml.example` `[maintenance]` section #backend-role
     - Interface Adapters · 1.5h
     - needs K1 · completes C1
     - Tests
