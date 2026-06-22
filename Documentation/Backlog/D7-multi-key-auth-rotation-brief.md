@@ -38,7 +38,7 @@ Operators running archon-search as a persistent service (daemon, container, or m
   - `GET /keys` — list keys (no token field in response); query params `namespace`, `status`.
   - `DELETE /keys/{id}` — revoke a key.
   - `POST /keys/rotate` — rotate default key; body: `{grace_seconds?}`.
-- **MCP tools**: `create_key`, `list_keys`, `revoke_key` — added to `mcp.py`, sharing the REST auth layer. Token is returned in `create_key` response only.
+- **MCP tools**: `create_key`, `list_keys`, `revoke_key`, `rotate_key` — added to `mcp.py`, sharing the REST auth layer. Token is returned in `create_key` and `rotate_key` responses only.
 - **Backward-compatible TOML `[namespaces]` map**: the existing static map continues to work unchanged. Keys declared in `[namespaces]` are loaded as synthetic `KeyRecord` objects (no `id`, no `expires_at`, `status="active"`) and treated the same way in the middleware loop. Migration is optional — operators can move to the key store gradually or never.
 - **`[auth]` config section**: `rotate_grace_seconds` (int, default `0`). Added to `archon-search.toml.example`.
 - **`app.py` wiring**: `KeyStore` instantiated in `create_app()`; passed to `APIKeyMiddleware` alongside the existing `api_key` and `namespaces`. `app.state.key_store` exposed so route handlers for `/keys` endpoints can call `key_store` methods.
@@ -84,13 +84,20 @@ Operators running archon-search as a persistent service (daemon, container, or m
 - **`keys.json` mode drifts from `0600`**: `KeyStore.load()` tightens permissions on read (same pattern as `key_manager._load_from_file`).
 - **Windows**: `_chmod_600` already has a Windows skip path in `key_manager.py`. `KeyStore` follows the same pattern.
 
-## Open Questions
+## Resolved Decisions
 
-- **Should `/keys` endpoints be restricted to a designated "admin" key or namespace?** The current design gives all keys equal power. If any key can revoke any other key, a compromised namespace key could revoke the default key. Options: (A) equal power (v1, simplest), (B) first key issued is the admin key (implicit privilege), (C) explicit `role: admin | client` field on `KeyRecord`. No decision made — needs operator input.
-- **Should `key list` show revoked keys by default or require `--status all`?** Default behavior affects operational UX. Recommendation: show `active` only by default; `--status all` or `--status revoked` for history.
-- **What duration format is canonical for `--expires`?** Options: (A) human-friendly (`30d`, `12h`) parsed by a simple helper, (B) ISO-8601 duration (`P30D`), (C) absolute ISO-8601 datetime only. Recommendation: (A) for CLI ergonomics; REST API accepts ISO-8601 datetime only (no duration string in JSON).
-- **Should `archon-search.toml` `[namespaces]` entries be auto-migrated to `keys.json` on first start?** Recommendation: no — leave TOML users alone; document that `key create` is the path forward.
-- **Token display format**: should the CLI print the token with a clear "save this now, it will never be shown again" warning banner, or is a plain print sufficient? This is a UX question with security implications.
+- **Key permissions**: Explicit `role: admin | client` field on `KeyRecord`. Only `admin` keys can call `/keys` endpoints (create, revoke, list, rotate). `client` keys can only call search/ingest endpoints. The first key created (the default key) is `admin`. This is deferred to v2 — v1 ships with equal power (Option A) with a clear doc note, and the role field is added in the first follow-up iteration.
+- **`key list` default**: Shows active keys only by default. A hint line at the bottom reports the count of hidden revoked keys (e.g., `3 revoked keys hidden — use --status all to show`). `--status all` or `--status revoked` reveals the full history. `--status active` suppresses the hint line for scripting.
+- **`--expires` format**: CLI accepts both human-friendly shorthand (`30d`, `12h`, `3600s`) and absolute date (`2026-12-31` or `2026-12-31T00:00:00Z`). ISO-8601 duration strings (`P30D`) are not accepted. REST API accepts ISO-8601 datetime only (no duration string in JSON body).
+- **TOML `[namespaces]` migration**: No auto-migration. Config-file keys keep working unchanged after upgrade. Operators issue new managed keys via `key create`; old and new systems coexist indefinitely. The migration path is operator-controlled: issue a new key, update the client, remove the TOML entry when ready.
+- **Token display format**: Warning banner printed to `stderr`; raw token printed to `stdout` only. Scripts that capture output via `$()` or pipe get the clean token. Humans watching the terminal see the full warning. Example stderr output:
+  ```
+  ========================================
+  IMPORTANT: Save this token now.
+  It will NEVER be shown again.
+  ========================================
+  ```
+  Example stdout output: `Token: abc123...`
 
 ## Future Iterations
 
@@ -99,7 +106,6 @@ Operators running archon-search as a persistent service (daemon, container, or m
 - Key expiry auto-rotation: a background task that generates a replacement before a key expires and notifies via a configured webhook.
 - Audit log: append-only JSONL recording `key_id`, `namespace`, endpoint, and timestamp for every authenticated request. No raw tokens or query strings — same no-raw-query invariant as telemetry.
 - `key import-from-toml` migration helper: reads `[namespaces]` from TOML, creates equivalent `keys.json` records, and prints instructions to remove the TOML section.
-- MCP tool `rotate_key` for automated rotation from an LLM agent context.
 
 ## Recommendation
 
