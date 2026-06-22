@@ -193,7 +193,7 @@ Boundaries where roles must agree. Changing one requires team agreement. Contrac
 
 **Done when**
 - [ ] Install wizard warns and falls back to CPU when reranker provider is unavailable, without failing install — S11
-- [ ] `archon-search maintenance status` shows model validation state when server is reachable — S13
+- [x] `archon-search maintenance status` shows model validation state when server is reachable — S13
 
 ---
 
@@ -404,13 +404,13 @@ flowchart LR
     - Tests
         - #unit_test — `test_wizard_warns_on_reranker_provider_failure` — `validate_providers` returns False for reranker; WARNING logged, install does not raise
         - #unit_test — `test_wizard_install_completes_when_reranker_provider_unavailable` — full wizard flow with reranker provider failure; install writes config and returns
-- [ ] **FE-2** — In `cli/maintenance_cmd.py`: update `_print_status_text` and `_gather_status` to extract and display `model_validation` block from `GET /status` when present #frontend-role
+- [x] **FE-2** — In `cli/maintenance_cmd.py`: update `_print_status_text` and `_gather_status` to extract and display `model_validation` block from `GET /status` when present #frontend-role
     - Presentation · 2.0h
     - needs BE-8 · completes S13
     - Tests
-        - #unit_test — `test_maintenance_status_renders_model_validation` — status payload with `model_validation`; output contains `embedder_ok` and `reranker_ok`
-        - #unit_test — `test_maintenance_status_no_model_validation_key` — status payload without `model_validation`; no crash, section omitted
-        - #unit_test — `test_maintenance_status_json_includes_model_validation` — invoke with `--json` flag; assert JSON output includes `model_validation` key with `embedder_ok` and `reranker_ok` fields; assert `validated_at` is JSON-serializable (no raw datetime objects)
+        - [x] #unit_test — `test_maintenance_status_renders_model_validation` — status payload with `model_validation`; output contains `embedder_ok` and `reranker_ok`
+        - [x] #unit_test — `test_maintenance_status_no_model_validation_key` — status payload without `model_validation`; no crash, section omitted
+        - [x] #unit_test — `test_maintenance_status_json_includes_model_validation` — invoke with `--json` flag; assert JSON output includes `model_validation` key with `embedder_ok` and `reranker_ok` fields; assert `validated_at` is JSON-serializable (no raw datetime objects)
 - [ ] **BE-9** — Add `# validation_timeout_seconds = 60` comment+key under `[database]` in `archon-search.toml.example` #backend-role
     - Frameworks & Drivers · 0.5h
     - needs K1 · completes (documentation)

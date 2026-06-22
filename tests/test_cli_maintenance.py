@@ -57,8 +57,9 @@ def _status_server_payload(
     enabled: bool = True,
     last_run_at: str | None = "2026-06-21T10:00:00+00:00",
     next_run_at: str | None = "2026-06-22T10:00:00+00:00",
+    model_validation: dict | None = None,
 ) -> dict:
-    return {
+    payload: dict = {
         "maintenance": {
             "enabled": enabled,
             "interval_hours": 24,
@@ -78,6 +79,9 @@ def _status_server_payload(
             ],
         }
     }
+    if model_validation is not None:
+        payload["model_validation"] = model_validation
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +223,161 @@ def test_maintenance_status_with_errors_in_collection_health(tmp_path: Path) -> 
 
     assert result.exit_code == 0, result.output
     assert "FTS index not found" in result.output
+
+
+# ---------------------------------------------------------------------------
+# status subcommand — model_validation rendering (D6 FE-2)
+# ---------------------------------------------------------------------------
+
+
+def test_maintenance_status_renders_model_validation(tmp_path: Path) -> None:
+    """Status payload with model_validation → output shows embedder/reranker (S13)."""
+    runner = CliRunner()
+    server_payload = _status_server_payload(
+        model_validation={
+            "embedder_ok": True,
+            "reranker_ok": False,
+            "provider_warnings": ["CoreMLExecutionProvider unavailable"],
+            "validated_at": "2026-06-22T10:00:00Z",
+        }
+    )
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch(
+            "archon_search.cli.maintenance_cmd.httpx.get",
+            return_value=_mock_response(200, server_payload),
+        ),
+    ):
+        result = runner.invoke(maintenance_cmd, ["status", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 0, result.output
+    assert "embedder_ok: yes" in result.output
+    assert "reranker_ok: no" in result.output
+    assert "CoreMLExecutionProvider unavailable" in result.output
+
+
+def test_maintenance_status_renders_pending_probes(tmp_path: Path) -> None:
+    """Null probe values (validation still running) → 'pending' rendered (C1-COV-1/2)."""
+    runner = CliRunner()
+    server_payload = _status_server_payload(
+        model_validation={
+            "embedder_ok": None,
+            "reranker_ok": None,
+            "provider_warnings": [],
+            "validated_at": None,
+        }
+    )
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch(
+            "archon_search.cli.maintenance_cmd.httpx.get",
+            return_value=_mock_response(200, server_payload),
+        ),
+    ):
+        result = runner.invoke(maintenance_cmd, ["status", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 0, result.output
+    assert "embedder_ok: pending" in result.output
+    assert "reranker_ok: pending" in result.output
+    assert "validated_at: pending" in result.output
+
+
+def test_maintenance_status_renders_multiple_warnings(tmp_path: Path) -> None:
+    """Multiple provider_warnings each render on their own line (C1-COV-5)."""
+    runner = CliRunner()
+    server_payload = _status_server_payload(
+        model_validation={
+            "embedder_ok": False,
+            "reranker_ok": False,
+            "provider_warnings": ["warning alpha", "warning beta"],
+            "validated_at": "2026-06-22T10:00:00Z",
+        }
+    )
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch(
+            "archon_search.cli.maintenance_cmd.httpx.get",
+            return_value=_mock_response(200, server_payload),
+        ),
+    ):
+        result = runner.invoke(maintenance_cmd, ["status", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 0, result.output
+    assert "warning alpha" in result.output
+    assert "warning beta" in result.output
+
+
+def test_maintenance_status_model_validation_null_no_crash(tmp_path: Path) -> None:
+    """Server sends model_validation=null (real pending shape) → no crash, omitted.
+
+    Unlike the absent-key test, this exercises the ``isinstance(mv, dict)``
+    guards with an explicit ``None`` value — the shape the server actually emits
+    before background validation completes (C1-COV-3 / C1-EDGE-1).
+    """
+    runner = CliRunner()
+    server_payload = _status_server_payload()
+    server_payload["model_validation"] = None  # explicit null, not absent
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch(
+            "archon_search.cli.maintenance_cmd.httpx.get",
+            return_value=_mock_response(200, server_payload),
+        ),
+    ):
+        result = runner.invoke(maintenance_cmd, ["status", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output
+    assert "embedder_ok" not in result.output
+
+
+def test_maintenance_status_no_model_validation_key(tmp_path: Path) -> None:
+    """Status payload without model_validation → no crash, section omitted."""
+    runner = CliRunner()
+    server_payload = _status_server_payload()  # no model_validation key
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch(
+            "archon_search.cli.maintenance_cmd.httpx.get",
+            return_value=_mock_response(200, server_payload),
+        ),
+    ):
+        result = runner.invoke(maintenance_cmd, ["status", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output
+    assert "embedder_ok" not in result.output
+
+
+def test_maintenance_status_json_includes_model_validation(tmp_path: Path) -> None:
+    """--json flag → JSON output includes model_validation with serializable fields."""
+    runner = CliRunner()
+    server_payload = _status_server_payload(
+        model_validation={
+            "embedder_ok": True,
+            "reranker_ok": True,
+            "provider_warnings": [],
+            "validated_at": "2026-06-22T10:00:00Z",
+        }
+    )
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch(
+            "archon_search.cli.maintenance_cmd.httpx.get",
+            return_value=_mock_response(200, server_payload),
+        ),
+    ):
+        result = runner.invoke(
+            maintenance_cmd, ["status", "--json", "--api-key", "deadbeef"]
+        )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)  # must be valid JSON (no raw datetime)
+    assert "model_validation" in payload
+    mv = payload["model_validation"]
+    assert mv["embedder_ok"] is True
+    assert mv["reranker_ok"] is True
+    assert mv["validated_at"] == "2026-06-22T10:00:00Z"
 
 
 # ---------------------------------------------------------------------------

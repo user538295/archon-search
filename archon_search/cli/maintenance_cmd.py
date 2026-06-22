@@ -93,11 +93,17 @@ def _gather_status(api_url: str, api_key: str | None) -> dict[str, Any]:
     last_run_at: str | None = state.get("last_run_at")
     next_run_at: str | None = state.get("next_run_at")
     collection_health: dict[str, Any] = state.get("collection_health", {})
+    # model_validation is server-global (D6) — only available from GET /status,
+    # never persisted to the on-disk maintenance state file.
+    model_validation: dict[str, Any] | None = None
 
     server_reachable = False
     server_payload = _fetch_server_status(api_url, api_key)
     if server_payload is not None:
         server_reachable = True
+        mv = server_payload.get("model_validation")
+        if isinstance(mv, dict):
+            model_validation = mv
         maintenance_obj = server_payload.get("maintenance") or {}
         if "enabled" in maintenance_obj:
             enabled = bool(maintenance_obj["enabled"])
@@ -122,6 +128,8 @@ def _gather_status(api_url: str, api_key: str | None) -> dict[str, Any]:
         "next_run_at": next_run_at,
         "collection_health": collection_health,
     }
+    if model_validation is not None:
+        payload["model_validation"] = model_validation
     return {
         "payload": payload,
         "server_reachable": server_reachable,
@@ -192,6 +200,10 @@ def _print_status_text(data: dict[str, Any]) -> None:
         click.echo("Last run:  [server unavailable]")
         click.echo("Next run:  [server unavailable]")
 
+    model_validation = payload.get("model_validation")
+    if isinstance(model_validation, dict):
+        _print_model_validation(model_validation)
+
     collection_health: dict[str, Any] = payload.get("collection_health", {})
     if not collection_health:
         click.echo("No maintenance history.")
@@ -209,6 +221,27 @@ def _print_status_text(data: dict[str, Any]) -> None:
         )
         if last_error:
             click.echo(f"    last_error: {last_error}")
+
+
+def _print_model_validation(mv: dict[str, Any]) -> None:
+    """Render the server-global model validation block (D6 S13)."""
+    click.echo("\nModel validation:")
+    embedder_ok = mv.get("embedder_ok")
+    reranker_ok = mv.get("reranker_ok")
+    validated_at = mv.get("validated_at") or "pending"
+    click.echo(f"  embedder_ok: {_fmt_ok(embedder_ok)}")
+    click.echo(f"  reranker_ok: {_fmt_ok(reranker_ok)}")
+    click.echo(f"  validated_at: {validated_at}")
+    warnings = mv.get("provider_warnings") or []
+    for warning in warnings:
+        click.echo(f"    warning: {warning}")
+
+
+def _fmt_ok(value: Any) -> str:
+    """Format a nullable bool probe result for human-readable output."""
+    if value is None:
+        return "pending"
+    return "yes" if value else "no"
 
 
 # ---------------------------------------------------------------------------
