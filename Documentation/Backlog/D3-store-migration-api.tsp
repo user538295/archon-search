@@ -1,7 +1,3 @@
-// C1 — Store migration API seam (Use Cases ↔ Interface Adapters / Frameworks)
-// Logical contract only. Realised by SearchStore in archon_search/store.py.
-// Core TypeSpec constructs only; validate with: tsp compile D3-store-migration-api.tsp --no-emit
-
 namespace StoreMigrationContract;
 
 enum MigrationKind {
@@ -10,39 +6,21 @@ enum MigrationKind {
   export_rebuild,
 }
 
-// Phases a rewrite migration passes through; emitted via the progress callback.
-enum MigrationPhase {
-  detecting,
-  rewriting,
-  reindexing,
-  finalizing,
-}
-
-// One pending migration, classified so operators know its cost/risk upfront.
 model MigrationSpec {
   name: string;
   kind: MigrationKind;
   description: string;
+  introduced_at: int32;
 }
 
-// Progress checkpoint reported every 100 chunks during a rewrite.
-model MigrationProgress {
-  processed: int32;
-  total: int32;
-  phase: MigrationPhase;
-}
-
-// Result payload carried on a DONE rewrite migration.
-model MigrationResult {
-  migratedChunks: int32;
-  migrationsApplied: string[];
-  kind: MigrationKind;
-}
-
-// The SearchStore migration surface. pending_migrations compares the live LanceDB
-// schema + the schema_version meta column against the canonical schema target.
-interface StoreMigrationApi {
-  pendingMigrations(collection: string): MigrationSpec[];
-  applyInPlaceMigrations(collection: string, specs: MigrationSpec[]): void;
-  applyRewriteMigration(collection: string, spec: MigrationSpec): MigrationResult;
+interface SearchStoreMigrationInterface {
+  // ns maps to `namespace` in Python signatures; 'namespace' is a reserved keyword in TypeSpec op parameter positions
+  op pendingMigrations(collection: string, ns: string): MigrationSpec[];
+  // Returns names of applied migrations. Postcondition: schema_version in _archon_collection_meta updated to max(spec.introduced_at)
+  // ns maps to `namespace` in Python signatures; 'namespace' is a reserved keyword in TypeSpec op parameter positions
+  op applyInPlaceMigrations(collection: string, ns: string, specs: MigrationSpec[]): string[];
+  // progress_cb(processed, total, phase) called every 100 chunks; not a TypeSpec-expressible callable type
+  // ns maps to `namespace` in Python signatures; 'namespace' is a reserved keyword in TypeSpec op parameter positions
+  op applyRewriteMigration(collection: string, ns: string, spec: MigrationSpec): int32;
+  op runStartupMigrations(): void;
 }

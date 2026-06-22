@@ -20,11 +20,7 @@ def _make_mock_search_store(collections: list[CollectionInfo] | None = None) -> 
     mock = MagicMock()
     mock.connect = AsyncMock()
     mock.disconnect = AsyncMock()
-    mock.migrate_namespace = AsyncMock()
-    mock.migrate_description_embedding = AsyncMock()
-    mock.migrate_acl = AsyncMock()
-    mock.migrate_centroid_sum = AsyncMock()
-    mock.migrate_per_collection_model = AsyncMock()
+    mock._run_startup_migrations = AsyncMock()
     mock.ping = AsyncMock(return_value=True)
     cols = collections or []
     mock.get_all_collections_meta = AsyncMock(
@@ -33,6 +29,7 @@ def _make_mock_search_store(collections: list[CollectionInfo] | None = None) -> 
     mock.get_collection_meta = AsyncMock(return_value=None)
     mock.list_collections = AsyncMock(return_value=cols)
     mock.count_untagged_language_chunks = AsyncMock(return_value=0)
+    mock.pending_migrations = AsyncMock(return_value=[])
     return mock
 
 

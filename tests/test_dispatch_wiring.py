@@ -39,11 +39,7 @@ def _make_config(tmp_path: Path) -> SearchConfig:
 def _store_patches():
     return (
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     )
 
@@ -113,11 +109,7 @@ def test_scheduler_dispatch_fn_is_real_after_lifespan(tmp_path: Path) -> None:
 
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)
@@ -154,11 +146,7 @@ def test_real_dispatch_invokes_export_task_for_export_job(tmp_path: Path) -> Non
         patch("archon_search.server.routes_export._export_task", new=fake_export_task),
         patch("archon_search.server.routes_export._import_task", new=fake_import_task),
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)
@@ -210,11 +198,7 @@ def test_real_dispatch_invokes_import_task_for_import_job(tmp_path: Path) -> Non
         patch("archon_search.server.routes_export._export_task", new=fake_export_task),
         patch("archon_search.server.routes_export._import_task", new=fake_import_task),
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)
@@ -270,11 +254,7 @@ def test_real_dispatch_registers_task_with_scheduler(tmp_path: Path) -> None:
         patch("archon_search.server.routes_export._export_task", new=fake_export_task),
         patch("archon_search.server.routes_export._import_task", new=fake_import_task),
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)
@@ -312,11 +292,7 @@ def test_real_dispatch_raises_typeerror_for_unsupported_job_type(tmp_path: Path)
 
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)
@@ -360,11 +336,7 @@ def test_workers_not_deployed_error_is_gone(tmp_path: Path) -> None:
         patch("archon_search.server.routes_export._export_task", new=fake_export_task),
         patch("archon_search.server.routes_export._import_task", new=fake_import_task),
         patch.object(SearchStore, "connect", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_namespace", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_description_embedding", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_acl", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_centroid_sum", new=AsyncMock()),
-        patch.object(SearchStore, "migrate_per_collection_model", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
     ):
         app = create_app(cfg, job_store, scheduler=scheduler)

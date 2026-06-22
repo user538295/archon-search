@@ -20,9 +20,10 @@ from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, Sear
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S, PING_TIMEOUT_SECONDS, PING_TTL_SECONDS, _validate_namespace
 from archon_search.observability import record_stage, _stage_recorder
 from archon_search.store_filters import build_where, _compute_fetch, _sql_quote_str
+from archon_search.types import MigrationKind, MigrationSpec
 
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 # Fixed-width UTC timestamp regex: YYYY-MM-DDTHH:MM:SS.ffffffZ
@@ -126,6 +127,17 @@ _META_MAX_VAL_LEN = 4096
 # This constant is set manually after the spike (Task 1.1) and committed as part of C6.
 FTS_OPTIMIZE_REMOVES_DELETED: bool = True  # Plan A; change to False if Plan B applies
 
+# Schema version for _archon_collection_meta. Starts at 0 for D3 (infrastructure-only
+# release; no new data migrations ship). Increment by 1 whenever a structural change is
+# made to _meta_schema() or _schema(), and add a corresponding MigrationSpec entry to
+# SearchStore._all_migrations().
+# NOTE: chunk-table-only structural changes (e.g. migrate_acl which adds an acl column
+# to per-collection chunk tables) do NOT bump STORE_SCHEMA_VERSION. Only changes to
+# _meta_schema() or _schema() (the shared chunk-table schema) require a version bump.
+STORE_SCHEMA_VERSION: int = 0
+
+# Number of chunks processed between progress_cb calls in apply_rewrite_migration.
+_MIGRATION_PROGRESS_INTERVAL: int = 100
 
 # ---------------------------------------------------------------------------
 # SQL fragment helpers — defense-in-depth behind upstream identifier regexes.
@@ -264,7 +276,7 @@ class SearchStore:
         from archon_search.config import SearchConfig as _SearchConfig  # noqa: PLC0415
         self._config: _SearchConfig = config if config is not None else _SearchConfig()
 
-    def _lock_for(self, collection: str) -> asyncio.Lock:
+    def lock_for(self, collection: str) -> asyncio.Lock:
         """Lazily create and return the lock for *collection*."""
         lock = self._collection_locks.get(collection)
         if lock is None:
@@ -392,6 +404,7 @@ class SearchStore:
                 pa.field("centroid_sum_json", pa.utf8(), nullable=True),
                 pa.field("mutations_since_recompute", pa.int64(), nullable=True),
                 pa.field("needs_recompute", pa.bool_(), nullable=True),
+                pa.field("schema_version", pa.int64(), nullable=True),
             ]
         )
 
@@ -529,6 +542,7 @@ class SearchStore:
                 centroid_sum = None
         mutations_since_recompute = int(row.get("mutations_since_recompute") or 0)
         needs_recompute = bool(row.get("needs_recompute") or False)
+        schema_version = int(row.get("schema_version") or 0)
         return CollectionMeta(
             name=row["name"],
             description=row["description"] if row["description"] else None,
@@ -547,6 +561,7 @@ class SearchStore:
             described_at_doc_count=described_at,
             namespace=row.get("namespace") or DEFAULT_NAMESPACE,
             description_embedding=description_embedding,
+            schema_version=schema_version,
         )
 
     async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> "CollectionMeta | None":
@@ -776,10 +791,239 @@ class SearchStore:
                 else:
                     logger.warning("acl migration: skipping %r due to RuntimeError — %s", name, exc)
 
+    async def _migrate_schema_version(self) -> None:
+        """Idempotent: adds schema_version column to _archon_collection_meta if absent."""
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        table = await db.open_table(_META_TABLE)
+        schema_names = (await table.schema()).names
+        if "schema_version" in schema_names:
+            return
+        try:
+            # Use 0 as the default for pre-existing rows: pre-D3 collections are at
+            # schema version 0 by definition. This is correct — all five legacy
+            # migrations have introduced_at=0, so a collection at schema_version=0
+            # is considered fully migrated (0 > 0 is False → no pending migrations).
+            await table.add_columns({"schema_version": "cast(0 as bigint)"})
+            logger.info("schema_version migration: added schema_version column to %s", _META_TABLE)
+        except RuntimeError as exc:
+            if "already exists" in str(exc).lower():
+                logger.warning("Concurrent migration: schema_version column already added — %s", exc)
+            else:
+                # Re-raise unexpected RuntimeError: a failure here means the meta table
+                # itself is corrupt or in an unrecoverable state.  Unlike migrate_acl
+                # (which swallows per-collection errors so one bad collection does not
+                # block others), a broken _archon_collection_meta is a hard failure that
+                # should prevent startup rather than silently continue with missing data.
+                raise
+
+    async def apply_in_place_migrations(
+        self, collection: str, namespace: str, specs: "list[MigrationSpec]"
+    ) -> None:
+        """Apply a list of in-place migration specs to *collection* and update its schema_version.
+
+        Each spec's ``name`` must correspond to a callable async method on ``SearchStore``.
+        The methods are called in order; each is idempotent so double-application is safe.
+        After all specs are applied, ``schema_version`` in ``_archon_collection_meta`` is
+        set to ``STORE_SCHEMA_VERSION`` via ``update_collection_meta``.
+
+        If ``specs`` is empty, returns immediately without touching the store.
+        """
+        if not specs:
+            return
+
+        for spec in specs:
+            method = getattr(self, spec.name)
+            await method()
+
+        # Update schema_version to reflect all applied migrations.
+        meta = await self.get_collection_meta(collection, namespace)
+        if meta is None:
+            return
+        await self.update_collection_meta(replace(meta, schema_version=STORE_SCHEMA_VERSION))
+
+    async def _run_startup_migrations(self) -> None:
+        """Run all idempotent startup migrations in order.
+
+        Replaces the five direct ``migrate_*()`` calls previously in ``app.py`` lifespan:
+        - ``migrate_namespace`` (BE-2: adds namespace column)
+        - ``migrate_description_embedding`` (adds description_embedding_json column)
+        - ``migrate_acl`` (adds acl column to chunk tables)
+        - ``migrate_centroid_sum`` (adds centroid_sum_json and related columns)
+        - ``migrate_per_collection_model`` (renames embedding_model → active_embedding_model)
+
+        Also adds the ``schema_version`` column to ``_archon_collection_meta`` (BE-2).
+        All operations are idempotent; calling this method multiple times is safe.
+        """
+        await self.migrate_namespace()
+        await self.migrate_description_embedding()
+        await self.migrate_acl()
+        await self.migrate_centroid_sum()
+        await self.migrate_per_collection_model()
+        await self._migrate_schema_version()
+
+    # Catalog of all known migrations.  Each entry is a MigrationSpec that describes
+    # one idempotent structural change.  The five existing migrate_*() methods are
+    # formalised here with introduced_at=0 (already applied on all pre-D3 stores).
+    # Future migrations must increment STORE_SCHEMA_VERSION and add a new entry here.
+    @staticmethod
+    def _all_migrations() -> "list[MigrationSpec]":
+        """Return the full ordered catalog of MigrationSpec objects."""
+        # NOTE: The five pre-D3 migration methods catalogued here have global signatures:
+        # migrate_*(self) → None — they operate on ALL collections at once.
+        # BE-6 (apply_in_place_migrations) must reconcile this with its per-collection
+        # call pattern. These methods are idempotent, so calling them multiple times is safe.
+        return [
+            MigrationSpec(
+                name="migrate_namespace",
+                kind=MigrationKind.IN_PLACE,
+                description="Add namespace column to _archon_collection_meta (pre-D3 structural migration).",
+                introduced_at=0,
+            ),
+            MigrationSpec(
+                name="migrate_description_embedding",
+                kind=MigrationKind.IN_PLACE,
+                description="Add description_embedding_json column to _archon_collection_meta (pre-D3 structural migration).",
+                introduced_at=0,
+            ),
+            MigrationSpec(
+                name="migrate_acl",
+                kind=MigrationKind.IN_PLACE,
+                description="Add acl column to per-collection chunk tables (pre-D3 structural migration).",
+                introduced_at=0,
+            ),
+            MigrationSpec(
+                name="migrate_centroid_sum",
+                kind=MigrationKind.IN_PLACE,
+                description="Add centroid_sum_json, mutations_since_recompute, needs_recompute columns to _archon_collection_meta (pre-D3 structural migration).",
+                introduced_at=0,
+            ),
+            MigrationSpec(
+                name="migrate_per_collection_model",
+                kind=MigrationKind.IN_PLACE,
+                description="Add active_embedding_model, pending_embedding_model, needs_reindex, reindex_job_id columns to _archon_collection_meta; backfill from legacy embedding_model column and drop it (C1 structural migration).",
+                introduced_at=0,
+            ),
+        ]
+
+    async def pending_migrations(self, collection: str, namespace: str = DEFAULT_NAMESPACE) -> "list[MigrationSpec]":
+        """Return the list of MigrationSpec entries not yet applied to *collection*.
+
+        A migration is pending when its ``introduced_at`` version is strictly
+        greater than the collection's current ``schema_version``.
+
+        Returns an empty list when the collection is fully up-to-date
+        (``schema_version == STORE_SCHEMA_VERSION``).
+
+        ``get_collection_meta`` already defaults ``schema_version`` to ``0``
+        for pre-D3 rows that lack the column, so no special-casing is needed here.
+        """
+        meta = await self.get_collection_meta(collection, namespace)
+        if meta is None:
+            return []
+        current_version: int = meta.schema_version
+        return [
+            spec
+            for spec in self._all_migrations()
+            if spec.introduced_at > current_version
+        ]
+
+    async def apply_rewrite_migration(
+        self,
+        collection: str,
+        namespace: str,
+        spec: "MigrationSpec",
+        progress_cb: "Callable[[int, int, str], None] | None" = None,
+    ) -> int:
+        """Apply a single rewrite migration to *collection* by reading, transforming, and writing back all chunks.
+
+        Acquires the per-collection lock for the full duration of the rewrite (like
+        ``reindex_metadata``, no timeout — the rewrite IS the holder).
+
+        The transform is performed by calling ``getattr(self, spec.name)(collection, batch)``
+        for each batch of ``_MIGRATION_PROGRESS_INTERVAL`` rows, where *batch* is a
+        ``list[dict]`` of raw row data and the return value is the transformed ``list[dict]``.
+        Each batch is written back by deleting the original rows and re-adding the
+        transformed rows.
+
+        ``progress_cb(processed, total, phase)`` is called after processing every
+        ``_MIGRATION_PROGRESS_INTERVAL`` chunks.  For the final batch (which may be
+        smaller), it is called once at the end if any chunks were processed.
+
+        ``schema_version`` in ``_archon_collection_meta`` is updated to
+        ``STORE_SCHEMA_VERSION`` **only** on successful completion.  If an exception is
+        raised (including ``asyncio.CancelledError``), ``schema_version`` is NOT updated.
+
+        .. warning::
+            Each batch is written using delete-then-add, which is not atomic.
+            If the process crashes or an exception occurs between ``table.delete()``
+            and ``table.add()``, the affected rows are lost.  The ``backup_confirmed``
+            flag at the route layer is the intended mitigation — operators must confirm
+            they have a backup before any rewrite migration runs.
+
+        .. note::
+            ``schema_version`` is updated after the per-collection lock is released
+            (via ``update_collection_meta``, which acquires the lock independently).
+            In the narrow window between lock release and schema_version update, a
+            concurrent operation may modify collection metadata.  This is acceptable
+            for D3 (asyncio single-threaded; window is at most one ``await`` point).
+
+        Returns:
+            The total number of chunks processed (``migrated_chunks``).
+        """
+        if spec.kind != MigrationKind.REWRITE:
+            raise ValueError(
+                f"apply_rewrite_migration requires a REWRITE spec; got kind={spec.kind!r}"
+            )
+        self._validate_collection(collection)
+        db = self._require_connected()
+
+        lock = self.lock_for(collection)
+        await lock.acquire()
+        success = False
+        processed = 0
+        try:
+            table = await db.open_table(collection)
+            rows: list[dict] = await table.query().to_list()
+            total = len(rows)
+
+            transform = getattr(self, spec.name)
+
+            batch_start = 0
+            while batch_start < total:
+                batch = rows[batch_start : batch_start + _MIGRATION_PROGRESS_INTERVAL]
+                batch_start += _MIGRATION_PROGRESS_INTERVAL
+
+                transformed: list[dict] = await transform(collection, batch)
+                # Delete originals and re-add transformed rows.
+                chunk_ids = [r["chunk_id"] for r in batch]
+                await table.delete(_where_in("chunk_id", chunk_ids))
+                if transformed:
+                    await table.add(transformed)
+                processed += len(batch)
+
+                if progress_cb is not None and (
+                    processed % _MIGRATION_PROGRESS_INTERVAL == 0 or batch_start >= total
+                ):
+                    progress_cb(processed, total, "rewrite")
+
+            success = True
+        finally:
+            lock.release()
+
+        if success:
+            meta = await self.get_collection_meta(collection, namespace)
+            if meta is not None:
+                await self.update_collection_meta(replace(meta, schema_version=STORE_SCHEMA_VERSION))
+
+        return processed
+
     async def update_collection_meta(self, meta: "CollectionMeta") -> None:
         _validate_namespace(meta.namespace)
         self._validate_collection(meta.name)
-        lock = self._lock_for(meta.name)
+        lock = self.lock_for(meta.name)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
         except asyncio.TimeoutError as e:
@@ -843,6 +1087,7 @@ class SearchStore:
                         "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
                         "mutations_since_recompute": meta.mutations_since_recompute,
                         "needs_recompute": meta.needs_recompute,
+                        "schema_version": meta.schema_version,
                     }
                 ]
             )
@@ -868,7 +1113,7 @@ class SearchStore:
 
         self._validate_collection(collection)
         db = self._require_connected()
-        lock = self._lock_for(collection)
+        lock = self.lock_for(collection)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
         except asyncio.TimeoutError:
@@ -896,19 +1141,20 @@ class SearchStore:
                 namespace=existing.namespace,
                 mutations_since_recompute=existing.mutations_since_recompute,
                 needs_recompute=existing.needs_recompute,
+                schema_version=existing.schema_version,
             )
             await self._do_write_meta_unlocked(db, collection, updated)
         finally:
             lock.release()
 
     # ------------------------------------------------------------------
-    # Private unlocked helpers (caller must hold _lock_for(collection))
+    # Private unlocked helpers (caller must hold lock_for(collection))
     # ------------------------------------------------------------------
 
     async def _do_read_meta_unlocked(
         self, db: "lancedb.db.AsyncConnection", collection: str, namespace: str = DEFAULT_NAMESPACE
     ) -> "CollectionMeta | None":
-        # Caller must hold _lock_for(collection)
+        # Caller must hold lock_for(collection)
         all_names: list[str] = (await db.list_tables()).tables
         if _META_TABLE not in all_names:
             return None
@@ -926,7 +1172,7 @@ class SearchStore:
     async def _do_write_meta_unlocked(
         self, db: "lancedb.db.AsyncConnection", collection: str, meta: "CollectionMeta"
     ) -> None:
-        # Caller must hold _lock_for(collection)
+        # Caller must hold lock_for(collection)
         if collection != meta.name:
             raise ValueError(f"collection {collection!r} != meta.name {meta.name!r}")
         _validate_namespace(meta.namespace)
@@ -974,6 +1220,7 @@ class SearchStore:
                     "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
                     "mutations_since_recompute": meta.mutations_since_recompute,
                     "needs_recompute": meta.needs_recompute,
+                    "schema_version": meta.schema_version,
                 }
             ]
         )
@@ -981,7 +1228,7 @@ class SearchStore:
     async def _do_fetch_doc_vectors_unlocked(
         self, db: "lancedb.db.AsyncConnection", collection: str, doc_id: str
     ) -> list[list[float]]:
-        # Caller must hold _lock_for(collection)
+        # Caller must hold lock_for(collection)
         if not _DOC_ID_RE.match(doc_id):
             raise ValueError(f"Invalid doc_id: {doc_id!r} — must be 64 hex chars")
         self._validate_collection(collection)
@@ -1005,7 +1252,7 @@ class SearchStore:
         embedding_dim: int,
         namespace: str = DEFAULT_NAMESPACE,
     ) -> bool:
-        # Caller must hold _lock_for(collection).
+        # Caller must hold lock_for(collection).
         # Returns True when the caller should invoke recompute_collection_meta.
         from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
         if embedding_model is None:
@@ -1034,6 +1281,7 @@ class SearchStore:
                     namespace=existing.namespace,
                     mutations_since_recompute=existing.mutations_since_recompute,
                     needs_recompute=True,
+                    schema_version=existing.schema_version,
                 )
                 await self._do_write_meta_unlocked(db, collection, patched)
                 return True
@@ -1062,6 +1310,7 @@ class SearchStore:
                     namespace=existing.namespace,
                     mutations_since_recompute=existing.mutations_since_recompute,
                     needs_recompute=True,
+                    schema_version=existing.schema_version,
                 )
                 await self._do_write_meta_unlocked(db, collection, patched)
                 return True
@@ -1089,6 +1338,7 @@ class SearchStore:
                 namespace=existing.namespace,
                 mutations_since_recompute=new_mutations,
                 needs_recompute=existing.needs_recompute,
+                schema_version=existing.schema_version,
             )
             await self._do_write_meta_unlocked(db, collection, new_meta)
             return new_meta.mutations_since_recompute >= self._config.centroid_recompute_threshold or new_meta.needs_recompute
@@ -1099,6 +1349,7 @@ class SearchStore:
                 new_meta = CollectionMeta(
                     name=collection, active_embedding_model=embedding_model,
                     namespace=namespace, needs_recompute=True,
+                    schema_version=STORE_SCHEMA_VERSION,
                 )
                 await self._do_write_meta_unlocked(db, collection, new_meta)
                 return True
@@ -1113,6 +1364,7 @@ class SearchStore:
                 active_embedding_model=embedding_model,
                 namespace=namespace,
                 mutations_since_recompute=n,
+                schema_version=STORE_SCHEMA_VERSION,
             )
             await self._do_write_meta_unlocked(db, collection, new_meta)
             return False
@@ -1124,7 +1376,7 @@ class SearchStore:
         del_vectors: "list[list[float]]",
         namespace: str = DEFAULT_NAMESPACE,
     ) -> None:
-        # Caller must hold _lock_for(collection).
+        # Caller must hold lock_for(collection).
         from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
         from datetime import timezone  # noqa: PLC0415
 
@@ -1164,6 +1416,7 @@ class SearchStore:
                 namespace=existing.namespace,
                 mutations_since_recompute=new_mutations,
                 needs_recompute=True,
+                schema_version=existing.schema_version,
             )
             await self._do_write_meta_unlocked(db, collection, patched)
             return
@@ -1198,6 +1451,7 @@ class SearchStore:
             namespace=existing.namespace,
             mutations_since_recompute=new_mutations,
             needs_recompute=existing.needs_recompute,
+            schema_version=existing.schema_version,
         )
         await self._do_write_meta_unlocked(db, collection, new_meta)
 
@@ -1211,9 +1465,34 @@ class SearchStore:
         chunks: list[ChunkRecord],
         *,
         _locked_by_caller: bool = False,
+        _is_continuation: bool = False,
         embedding_model: str | None = None,
         namespace: str = DEFAULT_NAMESPACE,
     ) -> ChunkIngestResult:
+        """Ingest a batch of chunks into the named collection.
+
+        Parameters
+        ----------
+        collection:
+            Target collection name.
+        chunks:
+            Chunk records to ingest.
+        _locked_by_caller:
+            When True, assumes the collection lock is already held by the caller
+            and skips acquiring it internally.
+        _is_continuation:
+            When True, signals that this batch is a continuation of a multi-batch
+            ingest for the same doc_id. The doc_count increment in
+            _do_update_meta_on_add is suppressed (distinct_doc_count=0) so that
+            ingesting a file in N batches increments doc_count by 1, not N. Must
+            be True for all batches after the first when ingesting the same doc_id
+            in a sequence.
+        embedding_model:
+            Name of the embedding model used to produce the vectors; stored in
+            collection metadata when centroid incremental updates are enabled.
+        namespace:
+            Collection namespace (default ``DEFAULT_NAMESPACE``).
+        """
         self._validate_collection(collection)
         db = self._require_connected()
         for chunk in chunks:
@@ -1224,7 +1503,7 @@ class SearchStore:
         if not chunks:
             return ChunkIngestResult(chunks_ingested=0, needs_recompute=False)
 
-        lock = None if _locked_by_caller else self._lock_for(collection)
+        lock = None if _locked_by_caller else self.lock_for(collection)
         if lock is not None:
             try:
                 await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
@@ -1234,15 +1513,14 @@ class SearchStore:
             chunks_ingested = await self._do_ingest(db, collection, chunks)
             needs_recompute = False
 
-            if self._config.centroid_incremental_enabled:
-                batch_vectors = [list(c.vector) for c in chunks]
-                if batch_vectors:
-                    distinct_doc_count = len({c.doc_id for c in chunks})
-                    needs_recompute = await self._do_update_meta_on_add(
-                        db, collection, batch_vectors, distinct_doc_count,
-                        embedding_model=embedding_model,
-                        embedding_dim=len(batch_vectors[0]),
-                    )
+            batch_vectors = [list(c.vector) for c in chunks]
+            if batch_vectors:
+                distinct_doc_count = 0 if _is_continuation else len({c.doc_id for c in chunks})
+                needs_recompute = await self._do_update_meta_on_add(
+                    db, collection, batch_vectors, distinct_doc_count,
+                    embedding_model=embedding_model,
+                    embedding_dim=len(batch_vectors[0]),
+                )
 
             return ChunkIngestResult(chunks_ingested=chunks_ingested, needs_recompute=needs_recompute)
         finally:
@@ -1329,6 +1607,27 @@ class SearchStore:
             )
         await table.optimize()
 
+    async def sample_chunk_texts(
+        self,
+        collection: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        n: int = 100,
+    ) -> list[str]:
+        """Return up to *n* chunk text strings from *collection*.
+
+        Returns ``[]`` if the collection table does not exist or any error
+        occurs.  Namespace is accepted for API symmetry but not filtered on —
+        the underlying table is per-collection.
+        """
+        try:
+            db = self._require_connected()
+            table = await db.open_table(collection)
+            rows = await table.query().select(["text"]).limit(n).to_list()
+            return [row["text"] for row in rows]
+        except Exception as e:
+            logger.debug("sample_chunk_texts failed for %r: %s", collection, e, exc_info=True)
+            return []
+
     # ------------------------------------------------------------------
     # Reindex (metadata backfill for pre-A1 collections)
     # ------------------------------------------------------------------
@@ -1361,7 +1660,7 @@ class SearchStore:
         db = self._require_connected()
         result = ReindexResult()
 
-        lock = self._lock_for(collection)
+        lock = self.lock_for(collection)
         await lock.acquire()
         try:
             table = await db.open_table(collection)
@@ -1653,7 +1952,7 @@ class SearchStore:
         db = self._require_connected()
         if not _DOC_ID_RE.match(doc_id):
             raise ValueError(f"Invalid doc_id: {doc_id!r} — must be 64 hex chars")
-        lock = self._lock_for(collection)
+        lock = self.lock_for(collection)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=INGEST_LOCK_TIMEOUT_S)
         except asyncio.TimeoutError as e:
@@ -1671,8 +1970,7 @@ class SearchStore:
                 return 0
             # doc_id validated upstream by _DOC_ID_RE; _where_eq is defense-in-depth
             await table.delete(_where_eq("doc_id", doc_id))
-            if self._config.centroid_incremental_enabled:
-                await self._do_subtract_meta_on_delete(db, collection, del_vectors, namespace=namespace)
+            await self._do_subtract_meta_on_delete(db, collection, del_vectors, namespace=namespace)
         finally:
             lock.release()
         # FTS maintenance is performed AFTER lock release to avoid holding the lock

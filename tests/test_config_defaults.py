@@ -114,7 +114,6 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "routing_description_weight": DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
         # [database] — B5 incremental centroid
         "centroid_recompute_threshold": 10_000,
-        "centroid_incremental_enabled": True,
         # [database] — C0 tiered install profiles
         "profile": "",
         "multilingual": False,
@@ -172,6 +171,16 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "keep": 7,
             "exclude": [],
             "output_dir": str(get_data_dir() / "backups"),
+        },
+        # [maintenance]
+        "maintenance": {
+            "interval_hours": 0,
+            "fts_optimize": True,
+            "orphan_cleanup": True,
+            "failed_ingest_retry": True,
+            "retry_max_attempts": 3,
+            "retry_max_age_hours": 72,
+            "exclude": [],
         },
     }
 

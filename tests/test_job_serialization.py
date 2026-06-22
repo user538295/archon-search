@@ -98,7 +98,8 @@ def test_import_job_dict_includes_collection_and_source() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ingest_job_dict_source_is_null() -> None:
+def test_ingest_job_dict_source_is_user() -> None:
+    """D5-BE-7: base IngestJob now has source='user' (not null) and collection=''."""
     job = IngestJob(
         job_id="j-ingest",
         status=JobStatus.RUNNING,
@@ -106,8 +107,8 @@ def test_ingest_job_dict_source_is_null() -> None:
         updated_at=_now(),
     )
     d = job_to_dict(job)
-    assert d["source"] is None
-    assert d["collection"] is None
+    assert d["source"] == "user"
+    assert d["collection"] == ""
     assert d["output_path"] is None
     assert d["archive_path"] is None
 

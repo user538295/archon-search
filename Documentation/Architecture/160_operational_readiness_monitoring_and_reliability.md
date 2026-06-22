@@ -248,6 +248,85 @@ On Linux, use `journalctl --user -u archon-search | grep 'centroid stale'`.
 
 **Note on delete-only workloads**: collections that undergo many deletions without subsequent ingest will accumulate `mutations_since_recompute` until the configured threshold is exceeded. When the threshold fires, the pipeline sets `needs_recompute = True` and queues a recompute automatically. If no ingest follows, the recompute must be triggered manually via `archon-search collection reindex <name>`.
 
+## Maintenance runbook (D5)
+
+`MaintenanceLoop` runs three configurable policies per non-excluded collection each pass: FTS optimize, orphan chunk cleanup, and failed-ingest retry. Disabled by default (`interval_hours = 0`).
+
+### Enabling scheduled maintenance
+
+Add to `~/.archon-search/archon-search.toml`:
+
+```toml
+[maintenance]
+interval_hours = 24        # run once per day
+fts_optimize = true        # optimize FTS indexes
+orphan_cleanup = true      # remove chunks whose source file is gone
+failed_ingest_retry = true # re-enqueue failed ingest jobs
+retry_max_attempts = 3
+retry_max_age_hours = 72
+```
+
+Restart the server for the change to take effect.
+
+### Triggering an immediate pass
+
+```bash
+# Via CLI (posts POST /maintenance/trigger):
+archon-search maintenance run
+
+# Wait for the pass to complete (polls GET /status):
+archon-search maintenance run --wait
+
+# Via HTTP directly:
+curl -s -X POST http://localhost:8765/maintenance/trigger \
+  -H "Authorization: Bearer <your-api-key>"
+```
+
+The trigger returns `202` immediately; the pass runs asynchronously in the background.
+
+### Reading maintenance health state
+
+```bash
+# Offline-capable (reads .maintenance-state.json directly):
+archon-search maintenance status
+
+# JSON output for scripting:
+archon-search maintenance status --json
+
+# Via GET /status (includes maintenance block when loop is running):
+curl -s http://localhost:8765/status \
+  -H "Authorization: Bearer <your-api-key>" | python3 -m json.tool | grep -A 20 '"maintenance"'
+```
+
+The `maintenance.collection_health` block in `GET /status` is namespace-scoped to the caller's API key.
+
+### Interpreting the health state
+
+| Field | Meaning |
+|---|---|
+| `enabled` | `true` when `interval_hours > 0` |
+| `last_run_at` | ISO-8601 timestamp of last completed pass; `null` if no pass has run |
+| `next_run_at` | ISO-8601 timestamp of next scheduled pass; `null` when disabled |
+| `collection_health[n].fts_optimized_at` | Last time FTS was optimized for this collection; `null` if never or index absent |
+| `collection_health[n].orphans_removed_last_run` | Number of orphaned source paths removed in the last pass |
+| `collection_health[n].last_retry_at` | Last time a failed-ingest retry was enqueued for this collection |
+| `collection_health[n].last_error` | Most recent per-collection error string; `null` when last pass was clean |
+| `collection_health[n].meta_chunk_count` | Chunk count from the O(1) metadata row (written at ingest time) |
+| `collection_health[n].mutations_since_recompute` | Mutations since last centroid recompute (from metadata row) |
+| `collection_health[n].centroid_recompute_threshold` | Current configured threshold for triggering a centroid recompute |
+
+### Troubleshooting
+
+**`last_run_at` is always null**: either no pass has been triggered (`interval_hours = 0` and no `POST /maintenance/trigger` called), or `app.state.maintenance_loop` is not set (inspect with `GET /status`).
+
+**`last_error` is non-null for a collection**: a per-collection exception was logged at ERROR level. Check `~/.archon-search/logs/archon-search.log` around the `last_run_at` timestamp for the full traceback.
+
+**Orphan cleanup takes > 60 s**: a WARNING is logged with the elapsed time. Increase `interval_hours` or reduce collection size. The pass still completes — the warning is advisory.
+
+**Failed ingest job not retried**: check that `source_path` is non-empty on the job (`GET /jobs/{job_id}`). Pre-D5 jobs with `source_path=""` are skipped by the retry policy (source path is unknown). Re-trigger manually via `POST /ingest`.
+
+**FTS index not found (`fts_optimized_at` stays null after a pass)**: the collection has no FTS index (never searched with FTS or no documents ingested). A WARNING is logged at the DEBUG level and the policy skips silently. Ingest at least one document and run a search to create the FTS index, then re-trigger.
+
 ## See also
 
 - `Architecture/100_system_architecture_overview.md` — component layout and request flow.

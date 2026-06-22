@@ -1267,9 +1267,10 @@ async def test_old_schema_upsert_preserves_new_columns(tmp_path: Path) -> None:
         row_b["name"] = "col-b"
         await table.add([row_a, row_b])
 
-        # Run migrations (B5 then C1) to reach a fully migrated state
+        # Run migrations (B5 then C1 then D3) to reach a fully migrated state
         await store.migrate_centroid_sum()
         await store.migrate_per_collection_model()
+        await store._migrate_schema_version()
 
         # Write B5 values to row_a via update_collection_meta
         meta_a = CollectionMeta(
@@ -1812,6 +1813,9 @@ async def test_malformed_centroid_sum_json_parses_to_none(connected_store: Searc
     # C1 boolean fields must not be left as "" — LanceDB cannot cast empty string to bool
     if "needs_reindex" in schema.names:
         row["needs_reindex"] = False
+    # D3 int field must not be left as "" — LanceDB cannot cast empty string to int64
+    if "schema_version" in schema.names:
+        row["schema_version"] = 0
     await table.add([row])
     retrieved = await connected_store.get_collection_meta("b5-malformed-sum")
     assert retrieved is not None
@@ -4401,7 +4405,7 @@ async def test_update_collection_meta_acquires_lock(connected_store: SearchStore
     import archon_search.store as store_mod
 
     col = "ucm-lock-check"
-    real_lock = connected_store._lock_for(col)
+    real_lock = connected_store.lock_for(col)
     acquire_called = False
     real_acquire = real_lock.acquire
 
@@ -4429,7 +4433,7 @@ async def test_update_collection_meta_timeout_raises_store_busy(tmp_path: Path, 
     await store.connect()
     try:
         col = "ucm-busy-col"
-        lock = store._lock_for(col)
+        lock = store.lock_for(col)
         await lock.acquire()
         try:
             with pytest.raises(StoreBusyError):
@@ -5229,7 +5233,7 @@ def _make_store_with_config(tmp_path, **config_overrides):
 async def test_do_update_meta_on_add_accumulates_from_zero(tmp_path) -> None:
     """Brand-new collection (no meta row) — accumulates from zero seed."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5254,7 +5258,7 @@ async def test_do_update_meta_on_add_accumulates_onto_existing(tmp_path) -> None
     """Existing meta with centroid_sum=[1.0] and chunk_count=1 → add [3.0]."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5281,7 +5285,7 @@ async def test_do_update_meta_on_add_signals_recompute_on_invalid_sum(tmp_path) 
     """Stored meta has NaN centroid_sum → returns True and writes centroid=None, centroid_sum=None."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5309,7 +5313,7 @@ async def test_do_update_meta_on_add_invalid_sum_does_not_bump_mutations(tmp_pat
     """NaN stored sum → mutations_since_recompute stays at 7, counts unchanged."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5338,7 +5342,7 @@ async def test_do_update_meta_on_add_signals_recompute_at_threshold(tmp_path) ->
     """mutations_since_recompute hits threshold → signal is True."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True, centroid_recompute_threshold=3)
+    cfg = SearchConfig(centroid_recompute_threshold=3)
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5364,7 +5368,7 @@ async def test_do_update_meta_on_add_nan_batch_vector_triggers_recompute(tmp_pat
     """NaN in input batch → returns True."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5389,7 +5393,7 @@ async def test_do_update_meta_on_add_none_model_skips_maintenance(tmp_path) -> N
     """embedding_model=None → meta unchanged, returns False."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5417,7 +5421,7 @@ async def test_do_update_meta_on_add_preserves_description_embedding(tmp_path) -
     """description_embedding must survive an incremental add (not be silently wiped)."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5445,7 +5449,7 @@ async def test_do_update_meta_on_add_preserves_description_embedding(tmp_path) -
 async def test_do_update_meta_on_add_new_collection_no_recompute_at_threshold(tmp_path) -> None:
     """Brand-new collection (no prior meta) never signals recompute even above threshold."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True, centroid_recompute_threshold=1)
+    cfg = SearchConfig(centroid_recompute_threshold=1)
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5469,7 +5473,7 @@ def _make_incremental_store(tmp_path, threshold: int = 10_000):
     """Return a connected SearchStore with incremental centroid enabled."""
     import asyncio
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True, centroid_recompute_threshold=threshold)
+    cfg = SearchConfig(centroid_recompute_threshold=threshold)
     store = SearchStore(tmp_path / "db", config=cfg)
     asyncio.run(store.connect())
     return store
@@ -5480,7 +5484,7 @@ async def test_ingest_chunks_accumulates_centroid_sum_on_second_batch(tmp_path) 
     """B1 then B2 → centroid_sum == elementwise sum of all vectors."""
     import asyncio
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5508,7 +5512,7 @@ async def test_ingest_chunks_accumulates_centroid_sum_on_second_batch(tmp_path) 
 async def test_ingest_chunks_bootstrap_creates_meta_row(tmp_path) -> None:
     """ingest into collection with no prior meta → meta row created with correct chunk_count."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5529,7 +5533,7 @@ async def test_ingest_chunks_bootstrap_creates_meta_row(tmp_path) -> None:
 async def test_ingest_chunks_doc_count_multi_doc_batch(tmp_path) -> None:
     """Single ingest_chunks call with 3 distinct doc_ids → doc_count == 3."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5554,7 +5558,7 @@ async def test_ingest_chunks_no_full_scan_spy(tmp_path) -> None:
     """get_all_vectors and count_documents are never called during ingest_chunks."""
     from unittest.mock import AsyncMock, patch
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5578,7 +5582,7 @@ async def test_ingest_chunks_lock_serializes_concurrent_adds(tmp_path) -> None:
     """Two concurrent ingest_chunks for the same collection serialize correctly."""
     import asyncio
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5603,8 +5607,8 @@ async def test_ingest_chunks_lock_serializes_concurrent_adds(tmp_path) -> None:
 def test_lock_for_keys_by_collection_not_namespace(tmp_path) -> None:
     """_lock_for returns the same lock for the same collection regardless of any namespace arg."""
     store = SearchStore(tmp_path / "db")
-    lock1 = store._lock_for("mycol")
-    lock2 = store._lock_for("mycol")
+    lock1 = store.lock_for("mycol")
+    lock2 = store.lock_for("mycol")
     assert lock1 is lock2
 
 
@@ -5612,13 +5616,13 @@ def test_lock_for_keys_by_collection_not_namespace(tmp_path) -> None:
 async def test_ingest_chunks_locked_by_caller_accumulates_meta(tmp_path) -> None:
     """_locked_by_caller=True: meta still updated; lock not released by ingest_chunks."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
         col = "lbc_col"
         await store.ensure_collection(col, 2)
-        lock = store._lock_for(col)
+        lock = store.lock_for(col)
         await lock.acquire()
         try:
             doc = _doc_id()
@@ -5681,7 +5685,7 @@ async def test_ingest_chunks_needs_recompute_false_below_threshold(tmp_path) -> 
     """Fresh collection, 3 chunks, default threshold 10 000 → needs_recompute == False."""
     from archon_search.store import ChunkIngestResult
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5916,9 +5920,9 @@ async def test_do_subtract_meta_bumps_mutations(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_delete_document_subtracts_vectors(tmp_path) -> None:
-    """delete_document with centroid_incremental_enabled subtracts deleted doc's vectors from centroid_sum."""
+    """delete_document subtracts deleted doc's vectors from centroid_sum."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5962,7 +5966,7 @@ async def test_delete_document_subtracts_vectors(tmp_path) -> None:
 async def test_delete_document_last_document_resets_centroid(tmp_path) -> None:
     """Deleting the only document resets centroid_sum to None and chunk_count to 0."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -5990,7 +5994,7 @@ async def test_delete_document_last_document_resets_centroid(tmp_path) -> None:
 async def test_delete_document_bumps_last_indexed(tmp_path) -> None:
     """delete_document updates last_indexed in the collection meta."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -6023,7 +6027,7 @@ async def test_delete_document_bumps_last_indexed(tmp_path) -> None:
 async def test_delete_document_returns_zero_for_missing_doc(tmp_path) -> None:
     """Deleting a non-existent doc_id returns 0 and leaves meta unchanged."""
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -6061,7 +6065,7 @@ async def test_delete_document_lock_timeout_raises_store_busy_error(tmp_path, mo
     try:
         col = "del-busy-col"
         await store.ensure_collection(col, _DIM)
-        lock = store._lock_for(col)
+        lock = store.lock_for(col)
         await lock.acquire()
         try:
             doc_id = _doc_id()
@@ -6078,7 +6082,7 @@ async def test_delete_document_no_full_scan_spy(tmp_path) -> None:
     """delete_document does not call get_all_vectors or count_documents (no full scan)."""
     from unittest.mock import AsyncMock, patch
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db_del_spy", config=cfg)
     await store.connect()
     try:
@@ -6157,7 +6161,7 @@ async def test_update_description_does_not_touch_centroid_sum(tmp_path) -> None:
     """update_description does not alter centroid_sum, chunk_count, or doc_count."""
     from archon_search.collection_meta import CollectionMeta
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -6208,7 +6212,7 @@ async def test_update_description_timeout_skips_write(tmp_path, caplog, monkeypa
         await store.ensure_collection(col, _DIM)
         doc = _doc_id()
         await store.ingest_chunks(col, [_chunk(doc, 0)])
-        lock = store._lock_for(col)
+        lock = store.lock_for(col)
         await lock.acquire()
         try:
             with caplog.at_level(logging.WARNING, logger="archon"):
@@ -6230,7 +6234,7 @@ async def test_update_description_concurrent_with_ingest(tmp_path) -> None:
     """Concurrent ingest_chunks and update_description — centroid_sum correct, description set."""
     import asyncio
     from archon_search.config import SearchConfig
-    cfg = SearchConfig(centroid_incremental_enabled=True)
+    cfg = SearchConfig()
     store = SearchStore(tmp_path / "db", config=cfg)
     await store.connect()
     try:
@@ -6252,6 +6256,33 @@ async def test_update_description_concurrent_with_ingest(tmp_path) -> None:
     finally:
         await store.disconnect()
 
+@pytest.mark.asyncio
+async def test_store_ingest_chunks_always_calls_incremental_update(tmp_path) -> None:
+    """ingest_chunks always calls _do_update_meta_on_add regardless of any config flag."""
+    from unittest.mock import AsyncMock, MagicMock
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig()
+    store = SearchStore(tmp_path / "db_always_inc", config=cfg)
+    await store.connect()
+
+    update_calls: list = []
+
+    async def fake_update(db, collection, batch_vectors, distinct_doc_count, *, embedding_model, embedding_dim):
+        update_calls.append((batch_vectors, distinct_doc_count))
+        return False
+
+    store._do_update_meta_on_add = fake_update  # type: ignore[assignment]
+
+    try:
+        col = "always_inc"
+        await store.ensure_collection(col, _DIM)
+        doc = _doc_id()
+        chunks = [_chunk(doc, 0)]
+        await store.ingest_chunks(col, chunks, embedding_model="m")
+    finally:
+        await store.disconnect()
+
+    assert len(update_calls) == 1, "_do_update_meta_on_add must be called unconditionally"
 
 # ---------------------------------------------------------------------------
 # C1 per-collection embedding model field round-trip tests (Task 1.2)
@@ -6779,4 +6810,1054 @@ async def test_list_chunks_raw_nonexistent_collection_yields_nothing(
     async for row in connected_store.list_chunks_raw("no-such-collection-xyz123", "default"):
         results.append(row)
 
-    assert results == []
+
+# ---------------------------------------------------------------------------
+# BE-2 · STORE_SCHEMA_VERSION + schema_version column
+# ---------------------------------------------------------------------------
+
+
+def test_meta_schema_includes_schema_version() -> None:
+    """_meta_schema() includes a schema_version field with int64 type."""
+    schema = SearchStore._meta_schema()
+    assert "schema_version" in schema.names
+    idx = schema.get_field_index("schema_version")
+    assert schema.field(idx).type == pa.int64()
+
+
+def test_row_to_meta_defaults_schema_version_to_zero() -> None:
+    """Row dict without schema_version key produces CollectionMeta.schema_version == 0."""
+    row = {
+        "name": "col1",
+        "description": None,
+        "centroid_json": None,
+        "doc_count": 0,
+        "chunk_count": 0,
+        "last_indexed": None,
+        "last_described": None,
+        "described_at_doc_count": -1,
+        # No schema_version key — simulates pre-D3 row
+    }
+    meta = SearchStore._row_to_meta(row)
+    assert meta.schema_version == 0
+
+
+def test_store_schema_version_constant_is_zero() -> None:
+    """STORE_SCHEMA_VERSION starts at 0 for D3 (infrastructure-only release)."""
+    from archon_search.store import STORE_SCHEMA_VERSION
+
+    assert STORE_SCHEMA_VERSION == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_schema_version_column_added_idempotently(tmp_path: Path) -> None:
+    """Calling _run_startup_migrations() twice on real LanceDB does not raise;
+    schema_version column present after first call.
+    """
+    store = SearchStore(tmp_path / "db_schema_ver")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        # Create meta table WITHOUT schema_version column (simulates pre-D3 DB)
+        old_schema = pa.schema(
+            [f for f in SearchStore._meta_schema() if f.name != "schema_version"]
+        )
+        await db.create_table("_archon_collection_meta", schema=old_schema)
+
+        # First call: must add schema_version column without raising
+        await store._run_startup_migrations()
+        tbl = await db.open_table("_archon_collection_meta")
+        assert "schema_version" in (await tbl.schema()).names
+
+        # Second call: must be idempotent (no error)
+        await store._run_startup_migrations()
+        tbl = await db.open_table("_archon_collection_meta")
+        assert "schema_version" in (await tbl.schema()).names
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_schema_version_round_trips_through_update_and_get(tmp_path: Path) -> None:
+    """schema_version written via update_collection_meta is returned by get_collection_meta."""
+    from archon_search.collection_meta import CollectionMeta
+
+    store = SearchStore(tmp_path / "db_sv_roundtrip")
+    await store.connect()
+    try:
+        meta = CollectionMeta(name="sv-roundtrip", schema_version=3)
+        await store.update_collection_meta(meta)
+        retrieved = await store.get_collection_meta("sv-roundtrip")
+        assert retrieved is not None
+        assert retrieved.schema_version == 3
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_run_startup_migrations_no_meta_table_is_noop(tmp_path: Path) -> None:
+    """_run_startup_migrations() on a fresh store with no meta table does not raise."""
+    store = SearchStore(tmp_path / "db_no_meta")
+    await store.connect()
+    try:
+        # Verify meta table does not exist
+        db = store._require_connected()
+        all_names = (await db.list_tables()).tables
+        assert "_archon_collection_meta" not in all_names
+
+        # Must not raise
+        await store._run_startup_migrations()
+    finally:
+        await store.disconnect()
+
+
+def test_row_to_meta_schema_version_none_defaults_to_zero() -> None:
+    """Row dict with schema_version=None produces CollectionMeta.schema_version == 0."""
+    row = {
+        "name": "col1",
+        "description": None,
+        "centroid_json": None,
+        "doc_count": 0,
+        "chunk_count": 0,
+        "last_indexed": None,
+        "last_described": None,
+        "described_at_doc_count": -1,
+        "schema_version": None,
+    }
+    meta = SearchStore._row_to_meta(row)
+    assert meta.schema_version == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_schema_version_preserved_through_update_description(tmp_path: Path) -> None:
+    """schema_version is not reset to 0 when update_description is called."""
+    from archon_search.collection_meta import CollectionMeta
+
+    store = SearchStore(tmp_path / "db_sv_desc")
+    await store.connect()
+    try:
+        meta = CollectionMeta(name="schema-preserve-test", schema_version=5)
+        await store.update_collection_meta(meta)
+        await store.update_description(
+            "schema-preserve-test",
+            description="updated desc",
+            last_described=None,
+            described_at_doc_count=None,
+            last_indexed=None,
+        )
+        retrieved = await store.get_collection_meta("schema-preserve-test")
+        assert retrieved is not None
+        assert retrieved.schema_version == 5
+    finally:
+        await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# BE-3 · pending_migrations()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pending_migrations_empty_when_current() -> None:
+    """pending_migrations returns [] when collection schema_version == STORE_SCHEMA_VERSION."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+
+    store = SearchStore.__new__(SearchStore)
+
+    mock_meta = MagicMock()
+    mock_meta.schema_version = STORE_SCHEMA_VERSION
+
+    store.get_collection_meta = AsyncMock(return_value=mock_meta)  # type: ignore[method-assign]
+
+    result = await store.pending_migrations("col1", "default")
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_pending_migrations_returns_specs_when_behind() -> None:
+    """pending_migrations returns all MigrationSpec entries with introduced_at > schema_version."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+    from archon_search.types import MigrationKind
+
+    assert STORE_SCHEMA_VERSION == 0, (
+        "Update schema_version=-1 to 0 when the first introduced_at=1 migration is added"
+    )
+
+    store = SearchStore.__new__(SearchStore)
+
+    mock_meta = MagicMock()
+    # NOTE: schema_version=-1 is an impossible production value (minimum is 0).
+    # We use -1 here because all five existing migrations have introduced_at=0,
+    # so no realistic value of schema_version triggers them as pending right now
+    # (0 > 0 is False). This test proves the filter logic is directionally correct.
+    # When the first introduced_at=1 migration is added, update this test to use
+    # schema_version=0 instead.
+    mock_meta.schema_version = -1  # deliberately behind
+
+    store.get_collection_meta = AsyncMock(return_value=mock_meta)  # type: ignore[method-assign]
+
+    result = await store.pending_migrations("col1", "default")
+    # All five existing in_place migrations have introduced_at=0, which is > -1
+    assert len(result) == 5
+    assert all(s.kind == MigrationKind.IN_PLACE for s in result)
+    assert all(s.introduced_at == 0 for s in result)
+    names = {s.name for s in result}
+    assert "migrate_namespace" in names
+    assert "migrate_description_embedding" in names
+    assert "migrate_centroid_sum" in names
+    assert "migrate_per_collection_model" in names
+    assert "migrate_acl" in names
+
+
+@pytest.mark.asyncio
+async def test_pending_migrations_defaults_missing_schema_version_to_zero() -> None:
+    """pending_migrations returns [] when get_collection_meta returns schema_version=0.
+
+    schema_version=0 is the value _row_to_meta() produces for a pre-D3 row that has
+    no schema_version column (tested directly in test_row_to_meta_defaults_schema_version_to_zero).
+    This test verifies that the defaulting path flows correctly through pending_migrations:
+    since all five existing migrations have introduced_at=0 and 0 > 0 is False, the
+    result is an empty list.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import SearchStore
+
+    store = SearchStore.__new__(SearchStore)
+
+    mock_meta = MagicMock()
+    # schema_version=0 is what _row_to_meta() produces for a pre-D3 row that has
+    # no schema_version column — the same as STORE_SCHEMA_VERSION (0).
+    mock_meta.schema_version = 0
+
+    store.get_collection_meta = AsyncMock(return_value=mock_meta)  # type: ignore[method-assign]
+
+    result = await store.pending_migrations("pre-d3-col", "default")
+    # All five existing migrations have introduced_at=0; 0 > 0 is False → empty list.
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_pending_migrations_unknown_collection_returns_empty() -> None:
+    """pending_migrations returns [] for an unknown collection (get_collection_meta returns None)."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.store import SearchStore
+
+    store = SearchStore.__new__(SearchStore)
+    store.get_collection_meta = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    result = await store.pending_migrations("nonexistent", "default")
+    assert result == []
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pending_migrations_real_store_empty(tmp_path: Path) -> None:
+    """pending_migrations() returns [] for a freshly created collection.
+
+    All five existing migrations have introduced_at=0 and STORE_SCHEMA_VERSION=0,
+    so introduced_at > schema_version is always False → empty list.
+    """
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+
+    assert STORE_SCHEMA_VERSION == 0, "This test assumes D3 starting value"
+
+    store = SearchStore(tmp_path / "db_pending")
+    await store.connect()
+    try:
+        meta = CollectionMeta(name="fresh-col", schema_version=0)
+        await store.update_collection_meta(meta)
+
+        result = await store.pending_migrations("fresh-col", "default")
+        assert result == []
+    finally:
+        await store.disconnect()
+
+
+def test_all_migrations_catalog_integrity() -> None:
+    """_all_migrations() catalog must satisfy ordering and naming invariants.
+
+    These invariants are preconditions for correct apply behavior in BE-6.
+    """
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+
+    specs = SearchStore._all_migrations()
+
+    assert len(specs) > 0, "Catalog must not be empty"
+
+    # All introduced_at values must be non-negative and within the current schema version.
+    for spec in specs:
+        assert spec.introduced_at >= 0, f"{spec.name}: introduced_at must be >= 0"
+        assert spec.introduced_at <= STORE_SCHEMA_VERSION, (
+            f"{spec.name}: introduced_at={spec.introduced_at} exceeds "
+            f"STORE_SCHEMA_VERSION={STORE_SCHEMA_VERSION}; "
+            "bump STORE_SCHEMA_VERSION when adding new migrations"
+        )
+
+    # Names must be unique.
+    names = [spec.name for spec in specs]
+    assert len(names) == len(set(names)), "Duplicate migration names in catalog"
+
+    # introduced_at values must be monotonically non-decreasing (catalog ordered by version).
+    for i in range(1, len(specs)):
+        assert specs[i].introduced_at >= specs[i - 1].introduced_at, (
+            f"Catalog not ordered: {specs[i - 1].name}(introduced_at={specs[i-1].introduced_at}) "
+            f"followed by {specs[i].name}(introduced_at={specs[i].introduced_at})"
+        )
+
+    # Each name must correspond to an actual callable method on SearchStore.
+    for spec in specs:
+        method = getattr(SearchStore, spec.name, None)
+        assert callable(method), (
+            f"Migration '{spec.name}' in catalog but SearchStore.{spec.name} is not a callable method"
+        )
+
+
+# ---------------------------------------------------------------------------
+# BE-6 · apply_in_place_migrations() + _run_startup_migrations() (extended)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_in_place_calls_add_columns_for_each_spec() -> None:
+    """Each spec in the list triggers a call to the corresponding migration method."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._locks = {}
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+    store.update_collection_meta = AsyncMock()
+
+    migrate_a = AsyncMock()
+    migrate_b = AsyncMock()
+    store.migrate_a = migrate_a  # type: ignore[attr-defined]
+    store.migrate_b = migrate_b  # type: ignore[attr-defined]
+
+    specs = [
+        MigrationSpec(name="migrate_a", kind=MigrationKind.IN_PLACE, description="A", introduced_at=0),
+        MigrationSpec(name="migrate_b", kind=MigrationKind.IN_PLACE, description="B", introduced_at=0),
+    ]
+
+    await store.apply_in_place_migrations("col1", "default", specs)
+
+    migrate_a.assert_called_once()
+    migrate_b.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_apply_in_place_is_idempotent() -> None:
+    """Calling apply_in_place_migrations twice with the same specs raises no error.
+
+    The underlying migrate_* methods are idempotent; the second call must
+    not raise even if schema_version is already up-to-date.
+    """
+    from unittest.mock import AsyncMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._locks = {}
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+    store.update_collection_meta = AsyncMock()
+
+    noop_migrate = AsyncMock()
+    store.migrate_noop = noop_migrate  # type: ignore[attr-defined]
+
+    specs = [
+        MigrationSpec(name="migrate_noop", kind=MigrationKind.IN_PLACE, description="noop", introduced_at=0),
+    ]
+
+    # First call — no error
+    await store.apply_in_place_migrations("col1", "default", specs)
+    # Second call — idempotent, no error
+    await store.apply_in_place_migrations("col1", "default", specs)
+
+    assert noop_migrate.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_apply_in_place_empty_specs_is_noop() -> None:
+    """apply_in_place_migrations with empty specs returns immediately without touching the store."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore
+
+    store = SearchStore.__new__(SearchStore)
+    store._locks = {}
+    store.get_collection_meta = AsyncMock(return_value=MagicMock(spec=CollectionMeta))
+    store.update_collection_meta = AsyncMock()
+
+    await store.apply_in_place_migrations("col1", "default", [])
+
+    store.get_collection_meta.assert_not_called()
+    store.update_collection_meta.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_in_place_unknown_collection_no_version_update() -> None:
+    """apply_in_place_migrations returns silently when the collection has no meta row."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._locks = {}
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    migrate_fn = AsyncMock()
+    store.migrate_fn = migrate_fn  # type: ignore[attr-defined]
+
+    specs = [
+        MigrationSpec(name="migrate_fn", kind=MigrationKind.IN_PLACE, description="fn", introduced_at=0),
+    ]
+
+    # Must not raise, must not call update_collection_meta
+    await store.apply_in_place_migrations("no-such-col", "default", specs)
+
+    migrate_fn.assert_called_once()  # migration still runs
+    store.update_collection_meta.assert_not_called()  # but version is not updated
+
+
+@pytest.mark.asyncio
+async def test_apply_in_place_updates_schema_version() -> None:
+    """apply_in_place_migrations updates schema_version in _archon_collection_meta after apply."""
+    from unittest.mock import AsyncMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._locks = {}
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+
+    captured_metas: list[CollectionMeta] = []
+
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+
+    async def _capture_update(m: CollectionMeta) -> None:
+        captured_metas.append(m)
+
+    store.update_collection_meta = _capture_update
+
+    migrate_ok = AsyncMock()
+    store.migrate_ok = migrate_ok  # type: ignore[attr-defined]
+
+    specs = [
+        MigrationSpec(name="migrate_ok", kind=MigrationKind.IN_PLACE, description="ok", introduced_at=0),
+    ]
+
+    await store.apply_in_place_migrations("col1", "default", specs)
+
+    assert len(captured_metas) == 1
+    assert captured_metas[0].schema_version == STORE_SCHEMA_VERSION
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_run_startup_migrations_applies_in_place_on_startup(tmp_path: Path) -> None:
+    """_run_startup_migrations() on a pre-D3 meta table applies all in-place migrations.
+
+    Seeds a real LanceDB without the schema_version column (pre-D3 state),
+    drives _run_startup_migrations(), and asserts the schema_version column is
+    present and that the store reports pending migrations as empty.
+    """
+    import pyarrow as pa
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+
+    assert STORE_SCHEMA_VERSION == 0, "This test assumes D3 starting value"
+
+    store = SearchStore(tmp_path / "db_be6_startup")
+    await store.connect()
+    try:
+        db = store._require_connected()
+        # Seed a pre-D3 meta table without schema_version
+        old_schema = pa.schema(
+            [f for f in SearchStore._meta_schema() if f.name != "schema_version"]
+        )
+        await db.create_table("_archon_collection_meta", schema=old_schema)
+
+        # Run startup migrations
+        await store._run_startup_migrations()
+
+        # schema_version column must now be present
+        tbl = await db.open_table("_archon_collection_meta")
+        assert "schema_version" in (await tbl.schema()).names
+
+        # No pending migrations should remain after startup (no collections seeded,
+        # so pending_migrations returns [] by definition — collection meta is absent).
+        pending = await store.pending_migrations("nonexistent-col", "default")
+        assert pending == []
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
+    """_run_startup_migrations() calls all 6 methods in the correct order."""
+    from archon_search.store import SearchStore
+
+    call_order: list[str] = []
+
+    def make_recorder(name: str):
+        async def _method():
+            call_order.append(name)
+        return _method
+
+    store = SearchStore.__new__(SearchStore)
+    store.migrate_namespace = make_recorder("migrate_namespace")
+    store.migrate_description_embedding = make_recorder("migrate_description_embedding")
+    store.migrate_acl = make_recorder("migrate_acl")
+    store.migrate_centroid_sum = make_recorder("migrate_centroid_sum")
+    store.migrate_per_collection_model = make_recorder("migrate_per_collection_model")
+    store._migrate_schema_version = make_recorder("_migrate_schema_version")
+
+    await store._run_startup_migrations()
+
+    assert call_order == [
+        "migrate_namespace",
+        "migrate_description_embedding",
+        "migrate_acl",
+        "migrate_centroid_sum",
+        "migrate_per_collection_model",
+        "_migrate_schema_version",
+    ], f"Unexpected call order: {call_order}"
+
+
+# ---------------------------------------------------------------------------
+# BE-9 · apply_rewrite_migration()
+# ---------------------------------------------------------------------------
+
+
+def _make_rewrite_chunk_row(index: int, text: str = "hello") -> dict:
+    """Return a minimal row dict matching the chunk table schema with a valid chunk_id."""
+    doc_id = hashlib.sha256(f"doc-{index}".encode()).hexdigest()
+    return {
+        "chunk_id": f"{doc_id}-{index:06d}",
+        "doc_id": doc_id,
+        "text": text,
+        "vector": [0.1, 0.2],
+        "source_path": "/tmp/x.md",
+        "indexed_at": "2024-01-01T00:00:00.000000Z",
+        "file_type": "md",
+        "language": "en",
+        "metadata": "{}",
+        "custom_score": None,
+        "ingested_by": "test",
+        "updated_at": "2024-01-01T00:00:00.000000Z",
+        "acl": "",
+    }
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_calls_progress_cb_every_100_chunks() -> None:
+    """progress_cb is called at processed=100, 200, and 250 for a 250-chunk collection."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from archon_search.store import SearchStore, _MIGRATION_PROGRESS_INTERVAL
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    assert _MIGRATION_PROGRESS_INTERVAL == 100
+
+    rows = [_make_rewrite_chunk_row(i) for i in range(250)]
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    # Dummy transform: identity — returns the batch unchanged.
+    async def dummy_transform(collection: str, batch: list[dict]) -> list[dict]:
+        return batch
+
+    store.migrate_rewrite_dummy = dummy_transform  # type: ignore[attr-defined]
+
+    # Mock the DB and table.
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_dummy",
+        kind=MigrationKind.REWRITE,
+        description="dummy",
+        introduced_at=1,
+    )
+
+    progress_calls: list[tuple[int, int, str]] = []
+
+    def progress_cb(processed: int, total: int, phase: str) -> None:
+        progress_calls.append((processed, total, phase))
+
+    result = await store.apply_rewrite_migration("col1", "default", spec, progress_cb)
+
+    assert result == 250
+    assert len(progress_calls) == 3
+    assert progress_calls[0] == (100, 250, "rewrite")
+    assert progress_calls[1] == (200, 250, "rewrite")
+    assert progress_calls[2] == (250, 250, "rewrite")
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_progress_cb_exact_multiple_of_interval() -> None:
+    """progress_cb is called exactly twice for a 200-chunk collection (exact multiple of 100)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import SearchStore, _MIGRATION_PROGRESS_INTERVAL
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    rows = [_make_rewrite_chunk_row(i) for i in range(200)]
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    async def dummy_transform(collection: str, batch: list[dict]) -> list[dict]:
+        return batch
+
+    store.migrate_rewrite_dummy = dummy_transform  # type: ignore[attr-defined]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_dummy",
+        kind=MigrationKind.REWRITE,
+        description="dummy",
+        introduced_at=1,
+    )
+
+    progress_calls: list[tuple[int, int, str]] = []
+
+    def progress_cb(processed: int, total: int, phase: str) -> None:
+        progress_calls.append((processed, total, phase))
+
+    result = await store.apply_rewrite_migration("col1", "default", spec, progress_cb)
+
+    assert result == 200
+    # Exactly 2 calls — at processed=100 and processed=200 — not 3.
+    assert len(progress_calls) == 2, f"Expected 2 calls, got {len(progress_calls)}: {progress_calls}"
+    assert progress_calls[0] == (100, 200, "rewrite")
+    assert progress_calls[1] == (200, 200, "rewrite")
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_rejects_non_rewrite_spec() -> None:
+    """apply_rewrite_migration raises ValueError for a spec with kind != REWRITE; lock not acquired."""
+    from unittest.mock import MagicMock
+
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+
+    spec = MigrationSpec(
+        name="migrate_add_namespace",
+        kind=MigrationKind.IN_PLACE,
+        description="in-place spec passed to rewrite method",
+        introduced_at=0,
+    )
+
+    with pytest.raises(ValueError, match="REWRITE"):
+        await store.apply_rewrite_migration("col1", "default", spec)
+
+    # Lock must never have been acquired (guard fires before lock acquisition).
+    assert not store.lock_for("col1").locked(), "Lock must not be held after kind validation failure"
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_empty_collection_completes_immediately() -> None:
+    """Zero chunks → progress_cb not called; result is 0; no error raised."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    async def dummy_transform(collection: str, batch: list[dict]) -> list[dict]:
+        return batch
+
+    store.migrate_rewrite_dummy = dummy_transform  # type: ignore[attr-defined]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=[])  # type: ignore[attr-defined]
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_dummy",
+        kind=MigrationKind.REWRITE,
+        description="dummy",
+        introduced_at=1,
+    )
+
+    progress_calls: list[tuple] = []
+    result = await store.apply_rewrite_migration(
+        "col1", "default", spec, lambda p, t, ph: progress_calls.append((p, t, ph))
+    )
+
+    assert result == 0
+    assert progress_calls == []
+    mock_table.delete.assert_not_called()
+    mock_table.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_acquires_collection_lock() -> None:
+    """Concurrent ingest attempt times out with StoreBusyError while rewrite holds lock."""
+    import asyncio
+
+    from archon_search.store import SearchStore, StoreBusyError
+    from archon_search.types import MigrationKind, MigrationSpec
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    store.update_collection_meta = AsyncMock()
+
+    # Transform that pauses so we can test concurrent access.
+    lock_held = asyncio.Event()
+    release_transform = asyncio.Event()
+
+    async def blocking_transform(collection: str, batch: list[dict]) -> list[dict]:
+        lock_held.set()
+        await release_transform.wait()
+        return batch
+
+    store.migrate_rewrite_blocking = blocking_transform  # type: ignore[attr-defined]
+
+    rows = [_make_rewrite_chunk_row(0)]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_blocking",
+        kind=MigrationKind.REWRITE,
+        description="blocking",
+        introduced_at=1,
+    )
+
+    # Start rewrite in background.
+    rewrite_task = asyncio.create_task(
+        store.apply_rewrite_migration("col1", "default", spec)
+    )
+
+    # Wait until the rewrite holds the lock.
+    await asyncio.wait_for(lock_held.wait(), timeout=2.0)
+
+    # Verify the lock is held: direct acquisition times out.
+    collection_lock = store.lock_for("col1")
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(collection_lock.acquire(), timeout=0.05)
+
+    assert collection_lock.locked(), "Lock must be held by the rewrite task"
+
+    # Verify that ingest_chunks raises StoreBusyError when lock is held.
+    # Use patch to set a short timeout so the test doesn't hang.
+    with patch("archon_search.store.INGEST_LOCK_TIMEOUT_S", 0.05):
+        with pytest.raises(StoreBusyError):
+            valid_chunk = _chunk(_doc_id(), 0)
+            await store.ingest_chunks("col1", [valid_chunk])
+
+    # Let the rewrite finish.
+    release_transform.set()
+    await rewrite_task
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_schema_version_not_updated_on_error() -> None:
+    """If a RuntimeError is raised mid-rewrite, schema_version is NOT updated."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore, STORE_SCHEMA_VERSION
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+    store.update_collection_meta = AsyncMock()
+
+    rows = [_make_rewrite_chunk_row(i) for i in range(5)]
+
+    # Transform that raises mid-way.
+    call_count = 0
+
+    async def failing_transform(collection: str, batch: list[dict]) -> list[dict]:
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("simulated failure mid-rewrite")
+
+    store.migrate_rewrite_fail = failing_transform  # type: ignore[attr-defined]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_fail",
+        kind=MigrationKind.REWRITE,
+        description="fail",
+        introduced_at=1,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        await store.apply_rewrite_migration("col1", "default", spec)
+
+    # schema_version must NOT have been updated.
+    store.update_collection_meta.assert_not_called()
+    # Lock must be released even when an error occurs.
+    assert not store.lock_for("col1").locked(), "Lock must be released after RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_schema_version_not_updated_on_cancel() -> None:
+    """asyncio.CancelledError during rewrite does NOT update schema_version."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+    store.update_collection_meta = AsyncMock()
+
+    async def cancelling_transform(collection: str, batch: list[dict]) -> list[dict]:
+        raise asyncio.CancelledError("simulated task cancel")
+
+    store.migrate_rewrite_cancel = cancelling_transform  # type: ignore[attr-defined]
+
+    rows = [_make_rewrite_chunk_row(i) for i in range(3)]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_cancel",
+        kind=MigrationKind.REWRITE,
+        description="cancel",
+        introduced_at=1,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await store.apply_rewrite_migration("col1", "default", spec)
+
+    store.update_collection_meta.assert_not_called()
+    # Lock must be released even when CancelledError is raised.
+    assert not store.lock_for("col1").locked(), "Lock must be released after CancelledError"
+
+
+@pytest.mark.asyncio
+async def test_apply_rewrite_schema_version_not_updated_on_midway_cancel() -> None:
+    """CancelledError raised during the second batch does NOT update schema_version."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore, _MIGRATION_PROGRESS_INTERVAL
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    store = SearchStore.__new__(SearchStore)
+    store._collection_locks = {}
+    store._validate_collection = MagicMock()
+
+    real_meta = CollectionMeta(name="col1", namespace="default", schema_version=0)
+    store.get_collection_meta = AsyncMock(return_value=real_meta)
+    store.update_collection_meta = AsyncMock()
+
+    call_count = 0
+
+    async def midway_cancel_transform(collection: str, batch: list[dict]) -> list[dict]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise asyncio.CancelledError("simulated cancel on second batch")
+        return batch
+
+    store.migrate_rewrite_midway_cancel = midway_cancel_transform  # type: ignore[attr-defined]
+
+    # 150 chunks → 2 batches (100 + 50); cancel on the second batch.
+    rows = [_make_rewrite_chunk_row(i) for i in range(150)]
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.to_list = AsyncMock(return_value=rows)
+    mock_table.delete = AsyncMock()
+    mock_table.add = AsyncMock()
+
+    mock_db = MagicMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+    store._require_connected = MagicMock(return_value=mock_db)
+
+    spec = MigrationSpec(
+        name="migrate_rewrite_midway_cancel",
+        kind=MigrationKind.REWRITE,
+        description="midway cancel",
+        introduced_at=1,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await store.apply_rewrite_migration("col1", "default", spec)
+
+    store.update_collection_meta.assert_not_called()
+    # Lock must be released.
+    assert not store.lock_for("col1").locked(), "Lock must be released after mid-way CancelledError"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_apply_rewrite_real_store_with_dummy_transform(tmp_path) -> None:
+    """Real LanceDB: dummy transform rewrites all chunks; idempotent double-apply.
+
+    The dummy transform is an identity — it returns rows unchanged.
+    Verifies that all chunks survive the rewrite and schema_version is updated.
+    Double-apply verifies idempotency (no error on second call).
+    """
+    import uuid
+
+    from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    assert STORE_SCHEMA_VERSION == 0, "Test assumes D3 starting value; update when version bumps."
+
+    store = SearchStore(tmp_path / "db_be9_rewrite")
+    await store.connect()
+    try:
+        col = f"test-{uuid.uuid4().hex[:8]}"
+        dim = 4
+        await store.ensure_collection(col, dim)
+
+        # Create a meta row with schema_version deliberately behind STORE_SCHEMA_VERSION.
+        # This makes the post-apply assertion non-tautological.
+        from archon_search.collection_meta import CollectionMeta
+        initial_meta = CollectionMeta(name=col, namespace="default", schema_version=-1)
+        await store.update_collection_meta(initial_meta)
+
+        # Ingest a small number of chunks using valid chunk_id format (sha256-NNNNNN).
+        n_chunks = 5
+        chunks = [
+            _chunk(_doc_id(), i, text=f"chunk text {i}", dim=dim)
+            for i in range(n_chunks)
+        ]
+        await store.ingest_chunks(col, chunks)
+
+        # Add an identity transform method to the store instance.
+        async def _identity_transform(collection: str, batch: list[dict]) -> list[dict]:
+            return batch
+
+        store.migrate_rewrite_identity = _identity_transform  # type: ignore[attr-defined]
+
+        spec = MigrationSpec(
+            name="migrate_rewrite_identity",
+            kind=MigrationKind.REWRITE,
+            description="identity transform for testing",
+            introduced_at=1,
+        )
+
+        # First apply.
+        result = await store.apply_rewrite_migration(col, "default", spec)
+        assert result == n_chunks
+
+        # Verify chunks still exist and have correct content after rewrite.
+        db = store._require_connected()
+        table = await db.open_table(col)
+        rows_after = await table.query().to_list()
+        assert len(rows_after) == n_chunks
+        # Identity transform preserves text content.
+        original_texts = {c.text for c in chunks}
+        actual_texts = {r["text"] for r in rows_after}
+        assert original_texts == actual_texts, "Identity transform must preserve chunk text"
+
+        # schema_version updated from -1 to STORE_SCHEMA_VERSION (non-tautological:
+        # would fail if update_collection_meta was never called).
+        meta = await store.get_collection_meta(col, "default")
+        assert meta is not None
+        assert meta.schema_version == STORE_SCHEMA_VERSION
+
+        # Second apply — idempotent: no error raised.
+        result2 = await store.apply_rewrite_migration(col, "default", spec)
+        assert result2 == n_chunks
+        rows_after2 = await table.query().to_list()
+        assert len(rows_after2) == n_chunks
+
+    finally:
+        await store.disconnect()

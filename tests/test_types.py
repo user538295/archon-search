@@ -14,6 +14,9 @@ from archon_search.types import (
     Collection,
     CollectionDetail,
     Chunk,
+    MigrationJob,
+    MigrationSpec,
+    MigrationKind,
 )
 
 
@@ -247,6 +250,9 @@ def test_all_types_json_serializable():
                          status="ready", embedding_model="m", centroid_present=False),
         Chunk(chunk_id="c", doc_id="d", text="t", source_path="/f", collection="col",
               indexed_at="t", file_type="md", language=""),
+        MigrationJob(job_id="mj", status=JobStatus.QUEUED, created_at="t", updated_at="t",
+                     collection="col", kind=MigrationKind.REWRITE),
+        MigrationSpec(name="m", kind=MigrationKind.IN_PLACE, description="desc", introduced_at=0),
     ]
     for obj in instances:
         d = dataclasses.asdict(obj)
@@ -369,3 +375,182 @@ def test_fixed_width_pattern_matches_normalize_iso_utc_output():
         assert _FIXED_WIDTH_PATTERN.match(result), (
             f"_FIXED_WIDTH_PATTERN does not match normalize_iso_utc output: {result!r}"
         )
+
+
+# --- BE-1: MigrationJob, MigrationSpec, MigrationKind ---
+
+
+def test_migration_kind_enum_values():
+    values = {k.value for k in MigrationKind}
+    assert values == {"in_place", "rewrite", "export_rebuild"}
+
+
+def test_migration_kind_string_round_trip():
+    assert MigrationKind("in_place") == MigrationKind.IN_PLACE
+    assert MigrationKind("rewrite") == MigrationKind.REWRITE
+    assert MigrationKind("export_rebuild") == MigrationKind.EXPORT_REBUILD
+
+
+def test_migration_spec_dataclass_fields():
+    spec = MigrationSpec(
+        name="migrate_namespace",
+        kind=MigrationKind.IN_PLACE,
+        description="Add namespace column to chunks table",
+        introduced_at=0,
+    )
+    assert spec.name == "migrate_namespace"
+    assert spec.kind == MigrationKind.IN_PLACE
+    assert spec.description == "Add namespace column to chunks table"
+    assert spec.introduced_at == 0
+    spec2 = MigrationSpec(
+        name="migrate_reembed",
+        kind=MigrationKind.REWRITE,
+        description="Re-embed after model upgrade",
+        introduced_at=1,
+    )
+    assert spec2.introduced_at == 1
+    assert spec2.kind == MigrationKind.REWRITE
+
+
+def test_migration_job_dataclass_fields():
+    job = MigrationJob(
+        job_id="m1",
+        status=JobStatus.QUEUED,
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+        collection="docs",
+        kind=MigrationKind.REWRITE,
+    )
+    assert job.job_id == "m1"
+    assert job.status == JobStatus.QUEUED
+    assert job.collection == "docs"
+    assert job.kind == MigrationKind.REWRITE
+    assert job.migrations_applied == []
+    assert job.backup_confirmed is None
+    assert job.source == "user"
+    assert isinstance(job, IngestJob)
+    assert job.namespace == "default"
+    assert job.progress is None
+    assert job.result is None
+    assert job.error is None
+
+
+def test_migration_job_migrations_applied_not_shared():
+    a = MigrationJob(
+        job_id="a", status=JobStatus.QUEUED,
+        created_at="t", updated_at="t", collection="col", kind=MigrationKind.IN_PLACE,
+    )
+    b = MigrationJob(
+        job_id="b", status=JobStatus.QUEUED,
+        created_at="t", updated_at="t", collection="col", kind=MigrationKind.IN_PLACE,
+    )
+    a.migrations_applied.append("migrate_namespace")
+    assert b.migrations_applied == []
+
+
+def test_migration_job_serializable():
+    job = MigrationJob(
+        job_id="m2",
+        status=JobStatus.DONE,
+        created_at="t",
+        updated_at="t",
+        collection="docs",
+        kind=MigrationKind.IN_PLACE,
+        migrations_applied=["migrate_namespace"],
+        backup_confirmed=True,
+    )
+    d = dataclasses.asdict(job)
+    assert d["kind"] == "in_place"
+    assert d["migrations_applied"] == ["migrate_namespace"]
+    assert d["backup_confirmed"] is True
+    assert json.dumps(d)  # must be JSON-serializable
+
+
+def test_migration_job_export_rebuild_kind():
+    job = MigrationJob(
+        job_id="m3",
+        status=JobStatus.QUEUED,
+        created_at="t",
+        updated_at="t",
+        collection="col",
+        kind=MigrationKind.EXPORT_REBUILD,
+    )
+    assert job.kind == MigrationKind.EXPORT_REBUILD
+    d = dataclasses.asdict(job)
+    assert d["kind"] == "export_rebuild"
+    assert json.dumps(d)  # must be JSON-serializable
+
+
+def test_migration_job_backup_confirmed_false_distinct_from_none():
+    job = MigrationJob(
+        job_id="m4",
+        status=JobStatus.QUEUED,
+        created_at="t",
+        updated_at="t",
+        collection="col",
+        kind=MigrationKind.REWRITE,
+        backup_confirmed=False,
+    )
+    assert job.backup_confirmed is False
+    d = dataclasses.asdict(job)
+    assert d["backup_confirmed"] is False  # not None
+
+
+def test_migration_spec_serializable():
+    spec = MigrationSpec(
+        name="migrate_namespace",
+        kind=MigrationKind.IN_PLACE,
+        description="Add namespace column",
+        introduced_at=0,
+    )
+    d = dataclasses.asdict(spec)
+    assert d["name"] == "migrate_namespace"
+    assert d["kind"] == "in_place"
+    assert d["description"] == "Add namespace column"
+    assert d["introduced_at"] == 0
+    assert json.dumps(d)  # must be JSON-serializable
+
+
+def test_migration_kind_invalid_value_raises():
+    with pytest.raises(ValueError):
+        MigrationKind("bogus_kind")
+
+
+def test_migration_job_dict_round_trip_requires_kind_coercion():
+    """Verify that dataclasses.asdict() produces 'in_place' string (not MigrationKind.IN_PLACE),
+    and that reconstruction from the dict requires explicit MigrationKind() coercion.
+    This documents the known contract for JobStore._load() (BE-10).
+    """
+    job = MigrationJob(
+        job_id="m5",
+        status=JobStatus.DONE,
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+        collection="docs",
+        kind=MigrationKind.REWRITE,
+        migrations_applied=["migrate_namespace"],
+        backup_confirmed=True,
+        namespace="tenantA",
+        progress={"processed": 50, "total": 200, "phase": "rewrite"},
+        result={"migrated_chunks": 50, "migrations_applied": ["migrate_namespace"], "kind": "rewrite"},
+        error=None,
+    )
+    d = dataclasses.asdict(job)
+    # asdict converts enum to its string value
+    assert d["kind"] == "rewrite"
+    assert d["status"] == "DONE"
+    # Reconstruction from dict requires coercion: kind comes back as str, not MigrationKind
+    raw_kind = d["kind"]
+    assert isinstance(raw_kind, str)
+    # Coercion works correctly — BE-10 _load() must do this
+    assert MigrationKind(raw_kind) == MigrationKind.REWRITE
+    # Full round-trip with manual coercion
+    d_copy = dict(d)
+    d_copy["kind"] = MigrationKind(d_copy["kind"])
+    d_copy["status"] = JobStatus(d_copy["status"])
+    reconstructed = MigrationJob(**d_copy)
+    assert reconstructed.kind == MigrationKind.REWRITE
+    assert reconstructed.migrations_applied == ["migrate_namespace"]
+    assert reconstructed.backup_confirmed is True
+    assert reconstructed.namespace == "tenantA"
+    assert json.dumps(dataclasses.asdict(reconstructed))  # still JSON-serializable

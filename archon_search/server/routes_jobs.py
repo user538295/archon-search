@@ -18,7 +18,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.schemas import ErrorDetail, JobListResponse, JobResponse
-from archon_search.types import DeleteJob, ExportJob, ImportJob, ReindexJob
+from archon_search.types import DeleteJob, ExportJob, ImportJob, MigrationJob, ReindexJob
 
 logger = logging.getLogger(__name__)
 
@@ -400,6 +400,7 @@ _KIND_TYPE_MAP: dict[str, type] = {
     "delete": DeleteJob,
     "export": ExportJob,
     "import": ImportJob,
+    "migration": MigrationJob,
 }
 
 
@@ -423,11 +424,14 @@ async def list_jobs(
         status_upper = {s.upper() for s in status}
         jobs = [j for j in jobs if j.status.value in status_upper]
 
-    # Filter by source (only meaningful for ExportJob/ImportJob; other job types
-    # have no `source` attribute and are excluded when the filter is active).
+    # Filter by source. Since D5-BE-7, all IngestJob subclasses (including base
+    # IngestJob, ReindexJob, DeleteJob) have source="user" by default, so
+    # ?source=user returns all job types. ExportJob/ImportJob/MigrationJob
+    # carry source="user" or source="backup" (not "maintenance" — only IngestJob
+    # base, ReindexJob, and DeleteJob can carry source="maintenance").
     if source:
         source_set = {s.lower() for s in source}
-        jobs = [j for j in jobs if getattr(j, "source", None) in source_set]
+        jobs = [j for j in jobs if j.source in source_set]
 
     # Filter by kind using exact type matching (not isinstance, since IngestJob is base class)
     if kind:
@@ -483,7 +487,7 @@ async def get_job(job_id: str, request: Request) -> JobResponse:
     },
 )
 async def resume_job(job_id: str, request: Request) -> JobResponse | JSONResponse:
-    """Transition a FAILED export or import job back to QUEUED so the scheduler can retry it."""
+    """Transition a FAILED export, import, or migration job back to QUEUED so the scheduler can retry it."""
     store: JobStore = request.app.state.job_store
     job = store.get(job_id)
 
@@ -491,10 +495,10 @@ async def resume_job(job_id: str, request: Request) -> JobResponse | JSONRespons
     if job is None or job.namespace != request.state.namespace:
         return JSONResponse({"error": "not_found"}, status_code=404)
 
-    # Only bulk jobs (ExportJob, ImportJob) support resume
-    if not isinstance(job, (ExportJob, ImportJob)):
+    # Only bulk jobs (ExportJob, ImportJob, MigrationJob) support resume
+    if not isinstance(job, (ExportJob, ImportJob, MigrationJob)):
         return JSONResponse(
-            {"error": "job_not_resumable", "reason": "only export and import jobs support resume"},
+            {"error": "job_not_resumable", "reason": "only export, import, and migration jobs support resume"},
             status_code=409,
         )
 

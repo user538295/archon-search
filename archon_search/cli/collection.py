@@ -3,16 +3,34 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from pathlib import Path
 
 import click
+import httpx
 import tomlkit
 
 from archon_search.config import get_default_config_path, load_config
 from archon_search.embedder import make_embedder
+from archon_search.key_manager import load_or_generate_key
 from archon_search.observability import bind_stage_recorder, new_correlation_id
 from archon_search.pipeline import create_pipeline
+
+_DEFAULT_API_URL = "http://localhost:8765"
+_POLL_INTERVAL_SECONDS = 2
+_TERMINAL_STATUSES = {"DONE", "FAILED", "CANCELLED"}
+
+
+def _resolve_api_key(api_key: str | None) -> str:
+    """Return the API key from the option, env var, or the key file."""
+    if api_key:
+        return api_key
+    env_key = os.environ.get("ARCHON_SEARCH_API_KEY")
+    if env_key:
+        return env_key
+    key, _ = load_or_generate_key()
+    return key
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +299,173 @@ def reindex_metadata_cmd(
         asyncio.run(_run())
     except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
+        raise SystemExit(1)
+
+
+@collection.command("migrate")
+@click.argument("collection_name")
+@click.option("--dry-run", is_flag=True, default=False, help="Print pending migrations without applying (default behaviour)")
+@click.option("--apply", "apply_flag", is_flag=True, default=False, help="Apply migrations (synchronous for in-place; async job for rewrite)")
+@click.option("--backup-first", "backup_first", is_flag=True, default=False, help="Confirm you have a backup (required for rewrite migrations)")
+@click.option("--wait", "wait_flag", is_flag=True, default=False, help="When a rewrite job is created (202), poll until done and print progress")
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def migrate_cmd(
+    collection_name: str,
+    dry_run: bool,
+    apply_flag: bool,
+    backup_first: bool,
+    wait_flag: bool,
+    api_url: str,
+    api_key: str | None,
+) -> None:
+    """Show pending schema migrations for a collection.
+
+    Without flags (or with --dry-run) prints the list of pending migrations
+    and exits without modifying anything. Use --apply to apply in-place
+    migrations synchronously. Use --apply --backup-first for rewrite migrations.
+    Add --wait to poll the rewrite job until completion.
+    """
+    if dry_run and apply_flag:
+        click.echo("Error: --dry-run and --apply are mutually exclusive.", err=True)
+        raise SystemExit(1)
+
+    if dry_run and backup_first:
+        click.echo("Error: --backup-first has no effect with --dry-run (use --apply --backup-first).", err=True)
+        raise SystemExit(1)
+
+    if backup_first and not apply_flag:
+        click.echo("Error: --backup-first requires --apply.", err=True)
+        raise SystemExit(1)
+
+    if wait_flag and not apply_flag:
+        click.echo("Error: --wait requires --apply.", err=True)
+        raise SystemExit(1)
+
+    key = _resolve_api_key(api_key)
+    headers = {"Authorization": f"Bearer {key}"}
+    base_url = api_url.rstrip("/")
+
+    if apply_flag:
+        post_url = f"{base_url}/collections/{collection_name}/migrate"
+        body: dict = {"dry_run": False, "backup_confirmed": backup_first}
+        try:
+            resp = httpx.post(post_url, json=body, headers=headers)
+        except httpx.HTTPError as exc:
+            click.echo(f"Error contacting server: {exc}", err=True)
+            raise SystemExit(1)
+
+        if resp.status_code == 404:
+            click.echo(f"Error: collection '{collection_name}' not found.", err=True)
+            raise SystemExit(1)
+
+        if resp.status_code == 202:
+            # Rewrite job created — optionally poll
+            job_data = resp.json()
+            job_id: str = job_data["job_id"]
+            click.echo(f"Migration job submitted: {job_id}")
+            if wait_flag:
+                _poll_migration_job(job_id, base_url, headers)
+            return
+
+        if resp.status_code != 200:
+            click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
+            raise SystemExit(1)
+
+        data = resp.json()
+        applied = data.get("migrations_applied", [])
+        if not applied:
+            click.echo(f"Collection '{collection_name}' is up to date — no migrations applied.")
+        else:
+            click.echo(f"Applied {len(applied)} migration(s) to '{collection_name}':")
+            for name in applied:
+                click.echo(f"  - {name}")
+        return
+
+    url = f"{base_url}/collections/{collection_name}/migrations/pending"
+
+    try:
+        resp = httpx.get(url, headers=headers)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code == 404:
+        click.echo(f"Error: collection '{collection_name}' not found.", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code != 200:
+        click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
+        raise SystemExit(1)
+
+    data = resp.json()
+    pending = data.get("pending", [])
+
+    if not pending:
+        click.echo(f"Collection '{collection_name}' is up to date — no pending migrations.")
+        return
+
+    click.echo(f"Pending migrations for '{collection_name}' (schema_version={data.get('schema_version', 0)}):")
+    for spec in pending:
+        click.echo(f"  - {spec['name']}  kind={spec['kind']}  {spec['description']}")
+
+
+def _poll_migration_job(job_id: str, base_url: str, headers: dict) -> None:
+    """Poll GET /jobs/{job_id} until terminal, printing progress. Exits 1 on FAILED/CANCELLED."""
+    url = f"{base_url}/jobs/{job_id}"
+    status = "UNKNOWN"
+
+    try:
+        while True:
+            try:
+                resp = httpx.get(url, headers=headers)
+            except httpx.HTTPError as exc:
+                click.echo(f"Error polling job: {exc}", err=True)
+                raise SystemExit(1) from exc
+
+            if resp.status_code != 200:
+                click.echo(
+                    f"Error polling job: server returned {resp.status_code}: {resp.text}",
+                    err=True,
+                )
+                raise SystemExit(1)
+
+            job = resp.json()
+            status = job["status"]
+            progress = job.get("progress")
+
+            if progress:
+                phase = progress.get("phase", "")
+                processed = progress.get("processed", 0)
+                total = progress.get("total", 0)
+                click.echo(f"{phase}: {processed}/{total}")
+
+            if status in _TERMINAL_STATUSES:
+                break
+
+            time.sleep(_POLL_INTERVAL_SECONDS)
+
+    except KeyboardInterrupt:
+        click.echo("Polling stopped — job continues on server")
+        return
+
+    if status == "DONE":
+        click.echo("Migration complete.")
+    elif status == "FAILED":
+        error = job.get("error") or "unknown error"
+        click.echo(f"Migration FAILED: {error}", err=True)
+        raise SystemExit(1)
+    else:
+        click.echo(f"Job ended with status: {status}")
         raise SystemExit(1)
 
 

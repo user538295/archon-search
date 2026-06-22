@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 
 from archon_search.jobs.store import JobStore
-from archon_search.types import ExportJob, ImportJob, JobStatus
+from archon_search.types import ExportJob, ImportJob, JobStatus, MigrationJob
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ class JobScheduler:
         self,
         store: JobStore,
         max_concurrent: int,
-        dispatch_fn: Callable[[ExportJob | ImportJob], None],
+        dispatch_fn: Callable[[ExportJob | ImportJob | MigrationJob], None],
     ) -> None:
         self._store = store
         self._max_concurrent = max_concurrent
@@ -80,7 +80,7 @@ class JobScheduler:
                 # Another tick or concurrent caller beat us — skip this job.
                 continue
             try:
-                self.dispatch_fn(job)
+                self.dispatch_fn(promoted)
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "JobScheduler: dispatch_fn raised for job %s — marking FAILED: %s",

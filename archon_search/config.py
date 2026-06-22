@@ -70,6 +70,17 @@ class BackupConfig:
 
 
 @dataclass
+class MaintenanceConfig:
+    interval_hours: int = 0
+    fts_optimize: bool = True
+    orphan_cleanup: bool = True
+    failed_ingest_retry: bool = True
+    retry_max_attempts: int = 3
+    retry_max_age_hours: int = 72
+    exclude: list[str] = field(default_factory=list)
+
+
+@dataclass
 class SearchConfig:
     # [server]
     host: str = "127.0.0.1"
@@ -95,7 +106,6 @@ class SearchConfig:
     routing_description_weight: float = DEFAULT_ROUTING_DESCRIPTION_WEIGHT
     # [database] — B5 incremental centroid
     centroid_recompute_threshold: int = 10_000
-    centroid_incremental_enabled: bool = True
     # [database] — C0 tiered install profiles
     profile: str = ""
     multilingual: bool = False
@@ -127,6 +137,8 @@ class SearchConfig:
     jobs: JobsConfig = field(default_factory=JobsConfig)
     # [backup]
     backup: BackupConfig = field(default_factory=BackupConfig)
+    # [maintenance]
+    maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -234,6 +246,7 @@ def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfi
 
     _apply_env_overrides(config)
     _post_process_backup(config)
+    _post_process_maintenance(config)
     return config
 
 
@@ -282,8 +295,9 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             raise ConfigError("centroid_recompute_threshold must be >= 1")
         config.centroid_recompute_threshold = threshold
     if "centroid_incremental_enabled" in database:
-        config.centroid_incremental_enabled = _coerce_bool(
-            database["centroid_incremental_enabled"], "centroid_incremental_enabled"
+        _logger.warning(
+            "centroid_incremental_enabled is deprecated and ignored; "
+            "the B5 incremental centroid path is always used"
         )
     if "profile" in database:
         config.profile = str(database["profile"])
@@ -517,6 +531,46 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     if "output_dir" in backup_cfg:
         backup.output_dir = _coerce_str(backup_cfg["output_dir"], "[backup].output_dir")
     config.backup = backup
+
+    maintenance_cfg = doc.get("maintenance", {})
+    maintenance = MaintenanceConfig()
+    if "interval_hours" in maintenance_cfg:
+        maint_interval_hours = _coerce_int(maintenance_cfg["interval_hours"], "[maintenance].interval_hours")
+        if maint_interval_hours < 0:
+            raise ConfigError(f"[maintenance].interval_hours must be >= 0, got {maint_interval_hours}")
+        maintenance.interval_hours = maint_interval_hours
+    if "fts_optimize" in maintenance_cfg:
+        maintenance.fts_optimize = _coerce_bool(maintenance_cfg["fts_optimize"], "[maintenance].fts_optimize")
+    if "orphan_cleanup" in maintenance_cfg:
+        maintenance.orphan_cleanup = _coerce_bool(maintenance_cfg["orphan_cleanup"], "[maintenance].orphan_cleanup")
+    if "failed_ingest_retry" in maintenance_cfg:
+        maintenance.failed_ingest_retry = _coerce_bool(
+            maintenance_cfg["failed_ingest_retry"], "[maintenance].failed_ingest_retry"
+        )
+    if "retry_max_attempts" in maintenance_cfg:
+        retry_max_attempts = _coerce_int(maintenance_cfg["retry_max_attempts"], "[maintenance].retry_max_attempts")
+        if retry_max_attempts < 1:
+            raise ConfigError(f"[maintenance].retry_max_attempts must be >= 1, got {retry_max_attempts}")
+        maintenance.retry_max_attempts = retry_max_attempts
+    if "retry_max_age_hours" in maintenance_cfg:
+        retry_max_age_hours = _coerce_int(
+            maintenance_cfg["retry_max_age_hours"], "[maintenance].retry_max_age_hours"
+        )
+        if retry_max_age_hours < 0:
+            raise ConfigError(f"[maintenance].retry_max_age_hours must be >= 0, got {retry_max_age_hours}")
+        maintenance.retry_max_age_hours = retry_max_age_hours
+    if "exclude" in maintenance_cfg:
+        maintenance.exclude = [str(p) for p in maintenance_cfg["exclude"]]
+    config.maintenance = maintenance
+
+
+def _post_process_maintenance(config: SearchConfig) -> None:
+    """Validate and warn on maintenance config after TOML + env overrides are applied."""
+    if config.maintenance.retry_max_age_hours == 0:
+        _logger.warning(
+            "[maintenance].retry_max_age_hours = 0: all failed ingest jobs will be immediately "
+            "eligible for retry regardless of age; this may cause excessive retry churn"
+        )
 
 
 def _post_process_backup(config: SearchConfig) -> None:

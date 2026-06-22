@@ -18,6 +18,7 @@ from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttex
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.jobs.backup_loop import BackupLoop
+from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.scheduler import JobScheduler
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import load_or_generate_key
@@ -38,6 +39,7 @@ except PackageNotFoundError:
     _VERSION = "dev"
 
 from archon_search.server.routes_backup import router as backup_router
+from archon_search.server.routes_maintenance import router as maintenance_router
 from archon_search.server.routes_collections import router as collections_router
 from archon_search.server.routes_explain import router as explain_router
 from archon_search.server.routes_export import router as export_router
@@ -148,11 +150,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Startup: connect search store
         await app.state.search_store.connect()
-        await app.state.search_store.migrate_namespace()
-        await app.state.search_store.migrate_description_embedding()
-        await app.state.search_store.migrate_acl()
-        await app.state.search_store.migrate_centroid_sum()
-        await app.state.search_store.migrate_per_collection_model()
+        await app.state.search_store._run_startup_migrations()
 
         # Startup: create embedder cache and optionally preload models
         embedder_cache = EmbedderCache(config.embedder_cache_size)
@@ -162,7 +160,7 @@ def create_app(
             distinct_models = {m.active_embedding_model for m in metas if m.active_embedding_model}
             await embedder_cache.preload(list(distinct_models))
 
-        # All `migrate_*` calls complete before the lifespan context yields control to the request loop
+        # All startup migrations complete before the lifespan context yields control to the request loop
 
         # Startup: warn if the multi-collection fan-out validation cap is out of
         # sync with the configured max_fanout.
@@ -185,9 +183,9 @@ def create_app(
                 _export_task,
                 _import_task,
             )
-            from archon_search.types import ExportJob, ImportJob  # noqa: PLC0415
+            from archon_search.types import ExportJob, ImportJob, MigrationJob  # noqa: PLC0415
 
-            def _real_dispatch(job: ExportJob | ImportJob) -> None:
+            def _real_dispatch(job: ExportJob | ImportJob | MigrationJob) -> None:
                 if isinstance(job, ExportJob):
                     task = asyncio.create_task(
                         _export_task(
@@ -206,6 +204,16 @@ def create_app(
                             app.state.pipeline,
                             app.state.embedder_cache,
                             config,
+                        )
+                    )
+                elif isinstance(job, MigrationJob):
+                    from archon_search.server.routes_collections import _migration_task  # noqa: PLC0415
+                    task = asyncio.create_task(
+                        _migration_task(
+                            job=job,
+                            job_store=app.state.job_store,
+                            search_store=app.state.search_store,
+                            # spec=None: _migration_task fetches the pending REWRITE spec itself
                         )
                     )
                 else:
@@ -234,6 +242,20 @@ def create_app(
         backup_task = asyncio.create_task(backup_loop.run())
         app.state._background_tasks.add(backup_task)
         backup_task.add_done_callback(app.state._background_tasks.discard)
+
+        # Startup: instantiate MaintenanceLoop and start it as a background task.
+        # Always present on app.state so trigger routes and status endpoints can
+        # reach it unconditionally, even when interval_hours == 0 (disabled schedule).
+        maintenance_loop = MaintenanceLoop(
+            job_store=app.state.job_store,
+            search_store=app.state.search_store,
+            config=config.maintenance,
+            data_dir=get_data_dir(),
+        )
+        app.state.maintenance_loop = maintenance_loop
+        maintenance_task = asyncio.create_task(maintenance_loop.run())
+        app.state._background_tasks.add(maintenance_task)
+        maintenance_task.add_done_callback(app.state._background_tasks.discard)
 
         # Startup: initialise telemetry if enabled
         if config.telemetry.enabled:
@@ -327,6 +349,7 @@ def create_app(
     app.include_router(explain_router)
     app.include_router(telemetry_router)
     app.include_router(backup_router)
+    app.include_router(maintenance_router)
     _configure_openapi(app)
     return app
 
@@ -340,9 +363,9 @@ def run_server(config: SearchConfig) -> None:
     # reassigns ``scheduler.dispatch_fn`` to the real export/import closure as
     # soon as app state is ready. This placeholder should never run in practice
     # — if it does, something dispatched before startup completed.
-    from archon_search.types import ExportJob, ImportJob  # noqa: PLC0415
+    from archon_search.types import ExportJob, ImportJob, MigrationJob  # noqa: PLC0415
 
-    def _placeholder_dispatch(job: ExportJob | ImportJob) -> None:
+    def _placeholder_dispatch(job: ExportJob | ImportJob | MigrationJob) -> None:
         logger.warning(
             "JobScheduler placeholder dispatch invoked before lifespan startup "
             "completed for job %s; this should not happen",

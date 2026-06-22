@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import httpx
 import pytest
 from click.testing import CliRunner
 
@@ -435,3 +436,347 @@ def test_cli_reindex_empty_active_model_uses_global_embedder() -> None:
     assert result.exit_code == 0, result.output
     mock_make.assert_not_called()
     pipeline.store.update_collection_meta.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# BE-5: collection migrate --dry-run subcommand
+# ---------------------------------------------------------------------------
+
+
+def _pending_response(collection: str, specs: list[dict], schema_version: int = 0) -> dict:
+    """Build a MigrationPendingResponse-shaped dict."""
+    return {
+        "collection": collection,
+        "pending": specs,
+        "schema_version": schema_version,
+    }
+
+
+def _mock_http_response(status_code: int, body: dict) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = body
+    return resp
+
+
+def test_migrate_cli_dry_run_prints_pending() -> None:
+    """--dry-run fetches GET /collections/{name}/migrations/pending and prints migration names."""
+    runner = CliRunner()
+    specs = [
+        {"name": "migrate_namespace", "kind": "in_place", "description": "Add namespace column", "introduced_at": 0},
+        {"name": "migrate_description_embedding", "kind": "in_place", "description": "Add description_embedding", "introduced_at": 0},
+    ]
+    get_resp = _mock_http_response(200, _pending_response("mycol", specs))
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=get_resp) as mock_get:
+        result = runner.invoke(collection, ["migrate", "mycol", "--dry-run", "--api-key", "test-key"])
+
+    assert result.exit_code == 0, result.output
+    assert "migrate_namespace" in result.output
+    assert "migrate_description_embedding" in result.output
+    mock_get.assert_called_once()
+    call_url = mock_get.call_args[0][0]
+    assert "/collections/mycol/migrations/pending" in call_url
+    _, call_kwargs = mock_get.call_args
+    assert call_kwargs.get("headers", {}).get("Authorization") == "Bearer test-key"
+
+
+def test_migrate_cli_no_flags_defaults_to_dry_run() -> None:
+    """Running without flags behaves identically to --dry-run (prints pending, no mutation)."""
+    runner = CliRunner()
+    specs = [
+        {"name": "migrate_acl", "kind": "in_place", "description": "Add ACL columns", "introduced_at": 0},
+    ]
+    get_resp = _mock_http_response(200, _pending_response("mycol", specs))
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=get_resp) as mock_get:
+        with patch("archon_search.cli.collection.httpx.post") as mock_post:
+            result = runner.invoke(collection, ["migrate", "mycol", "--api-key", "test-key"])
+
+    assert result.exit_code == 0, result.output
+    assert "migrate_acl" in result.output
+    mock_get.assert_called_once()
+    mock_post.assert_not_called()
+
+
+def test_migrate_cli_empty_pending_prints_up_to_date() -> None:
+    """When no migrations are pending, CLI prints an 'up to date' message."""
+    runner = CliRunner()
+    get_resp = _mock_http_response(200, _pending_response("mycol", []))
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=get_resp):
+        result = runner.invoke(collection, ["migrate", "mycol", "--dry-run", "--api-key", "test-key"])
+
+    assert result.exit_code == 0, result.output
+    assert "up to date" in result.output.lower() or "no pending" in result.output.lower()
+
+
+def test_migrate_cli_404_prints_not_found() -> None:
+    """404 response prints collection-not-found error and exits with code 1."""
+    runner = CliRunner()
+    get_resp = _mock_http_response(404, {"detail": "Collection 'mycol' not found"})
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=get_resp):
+        result = runner.invoke(collection, ["migrate", "mycol", "--api-key", "test-key"])
+
+    assert result.exit_code == 1
+    assert "not found" in result.output.lower()
+
+
+def test_migrate_cli_connection_error_exits_1() -> None:
+    """Connection failure prints error and exits with code 1."""
+    runner = CliRunner()
+
+    with patch("archon_search.cli.collection.httpx.get", side_effect=httpx.ConnectError("Connection refused")):
+        result = runner.invoke(collection, ["migrate", "mycol", "--api-key", "test-key"])
+
+    assert result.exit_code == 1
+    assert "error contacting server" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# BE-8: collection migrate --apply flag (in-place sync path)
+# ---------------------------------------------------------------------------
+
+
+def test_migrate_cli_apply_in_place_prints_summary() -> None:
+    """--apply calls POST /collections/{name}/migrate and prints applied migration names."""
+    runner = CliRunner()
+    post_resp = _mock_http_response(200, {"migrations_applied": ["migrate_namespace", "migrate_acl"]})
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp) as mock_post:
+        result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--api-key", "test-key"])
+
+    assert result.exit_code == 0, result.output
+    assert "migrate_namespace" in result.output
+    assert "migrate_acl" in result.output
+    mock_post.assert_called_once()
+    call_url = mock_post.call_args[0][0]
+    assert "/collections/mycol/migrate" in call_url
+    _, call_kwargs = mock_post.call_args
+    assert call_kwargs.get("headers", {}).get("Authorization") == "Bearer test-key"
+    assert call_kwargs.get("json") == {"dry_run": False, "backup_confirmed": False}
+
+
+def test_migrate_cli_apply_and_dry_run_mutually_exclusive() -> None:
+    """Passing both --apply and --dry-run raises a usage error and exits non-zero."""
+    runner = CliRunner()
+
+    result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--dry-run", "--api-key", "test-key"])
+
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.output.lower()
+
+
+def test_migrate_cli_apply_empty_migrations_prints_up_to_date() -> None:
+    """--apply with no pending migrations prints an 'up to date' message."""
+    runner = CliRunner()
+    post_resp = _mock_http_response(200, {"migrations_applied": []})
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp):
+        result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--api-key", "test-key"])
+
+    assert result.exit_code == 0, result.output
+    assert "up to date" in result.output.lower() or "no migrations" in result.output.lower()
+
+
+def test_migrate_cli_apply_404_prints_not_found() -> None:
+    """--apply with 404 response prints collection-not-found error and exits 1."""
+    runner = CliRunner()
+    post_resp = _mock_http_response(404, {"detail": "Not found"})
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp):
+        result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--api-key", "test-key"])
+
+    assert result.exit_code == 1
+    assert "not found" in result.output.lower()
+
+
+def test_migrate_cli_apply_connection_error_exits_1() -> None:
+    """--apply with connection failure prints error and exits 1."""
+    runner = CliRunner()
+
+    with patch("archon_search.cli.collection.httpx.post", side_effect=httpx.ConnectError("Connection refused")):
+        result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--api-key", "test-key"])
+
+    assert result.exit_code == 1
+    assert "error contacting server" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# BE-14: collection migrate --backup-first --wait flags (rewrite async path)
+# ---------------------------------------------------------------------------
+
+
+def _job_response(job_id: str, status: str, phase: str = "", processed: int = 0, total: int = 0) -> dict:
+    """Build a minimal GET /jobs/{id} response dict."""
+    body: dict = {"job_id": job_id, "status": status}
+    if phase or processed or total:
+        body["progress"] = {"phase": phase, "processed": processed, "total": total}
+    return body
+
+
+def test_migrate_cli_wait_polls_until_done_exits_0() -> None:
+    """--apply --backup-first --wait polls job until DONE and exits 0; progress output printed."""
+    runner = CliRunner()
+    job_id = "job-abc-123"
+
+    # POST /migrate returns 202 with job_id (rewrite job created)
+    post_resp = _mock_http_response(202, {"job_id": job_id, "status": "RUNNING"})
+
+    # GET /jobs/{id} returns QUEUED → RUNNING (with progress) → DONE
+    get_job_sequence = [
+        _mock_http_response(200, _job_response(job_id, "QUEUED")),
+        _mock_http_response(200, _job_response(job_id, "RUNNING", phase="rewrite", processed=100, total=250)),
+        _mock_http_response(200, _job_response(job_id, "DONE")),
+    ]
+
+    with (
+        patch("archon_search.cli.collection.httpx.post", return_value=post_resp) as mock_post,
+        patch("archon_search.cli.collection.httpx.get", side_effect=get_job_sequence),
+        patch("archon_search.cli.collection.time.sleep"),  # no real sleeping in tests
+    ):
+        result = runner.invoke(
+            collection,
+            ["migrate", "mycol", "--apply", "--backup-first", "--wait", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 0, result.output
+    # Progress line should appear: "rewrite: 100/250"
+    assert "100/250" in result.output
+    assert "rewrite" in result.output.lower()
+    # --backup-first must send backup_confirmed: True in POST body
+    _, post_kwargs = mock_post.call_args
+    assert post_kwargs.get("json", {}).get("backup_confirmed") is True
+
+
+def test_migrate_cli_wait_exits_1_on_failed() -> None:
+    """--wait exits with code 1 when the job reaches FAILED status."""
+    runner = CliRunner()
+    job_id = "job-fail-999"
+
+    post_resp = _mock_http_response(202, {"job_id": job_id, "status": "RUNNING"})
+    get_job_sequence = [
+        _mock_http_response(200, _job_response(job_id, "RUNNING", phase="rewrite", processed=50, total=200)),
+        _mock_http_response(200, _job_response(job_id, "FAILED")),
+    ]
+
+    with (
+        patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.collection.httpx.get", side_effect=get_job_sequence),
+        patch("archon_search.cli.collection.time.sleep"),
+    ):
+        result = runner.invoke(
+            collection,
+            ["migrate", "mycol", "--apply", "--backup-first", "--wait", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 1
+
+
+def test_migrate_cli_wait_exits_1_on_cancelled() -> None:
+    """--wait exits with code 1 when the job reaches CANCELLED status."""
+    runner = CliRunner()
+    job_id = "job-cancel-999"
+
+    post_resp = _mock_http_response(202, {"job_id": job_id, "status": "RUNNING"})
+    get_job_sequence = [
+        _mock_http_response(200, _job_response(job_id, "RUNNING", phase="rewrite", processed=50, total=200)),
+        _mock_http_response(200, _job_response(job_id, "CANCELLED")),
+    ]
+
+    with (
+        patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.collection.httpx.get", side_effect=get_job_sequence),
+        patch("archon_search.cli.collection.time.sleep"),
+    ):
+        result = runner.invoke(
+            collection,
+            ["migrate", "mycol", "--apply", "--backup-first", "--wait", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 1
+
+
+def test_migrate_cli_backup_first_without_wait_prints_job_id() -> None:
+    """--apply --backup-first without --wait submits job and prints job_id; no polling occurs."""
+    runner = CliRunner()
+
+    post_resp = _mock_http_response(202, {"job_id": "job-xyz", "status": "RUNNING"})
+
+    with (
+        patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.collection.httpx.get") as mock_get,
+    ):
+        result = runner.invoke(
+            collection,
+            ["migrate", "mycol", "--apply", "--backup-first", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "job-xyz" in result.output
+    mock_get.assert_not_called()
+
+
+def test_migrate_cli_wait_poll_error_exits_1() -> None:
+    """When GET /jobs returns 500 during polling, CLI exits 1 with an error message."""
+    runner = CliRunner()
+
+    post_resp = _mock_http_response(202, {"job_id": "job-poll-err", "status": "RUNNING"})
+    get_resp_500 = _mock_http_response(500, {"detail": "internal server error"})
+    get_resp_500.text = "internal server error"
+
+    with (
+        patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.collection.httpx.get", return_value=get_resp_500),
+        patch("archon_search.cli.collection.time.sleep"),
+    ):
+        result = runner.invoke(
+            collection,
+            ["migrate", "mycol", "--apply", "--backup-first", "--wait", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 1
+    assert "error" in result.output.lower() or "500" in result.output
+
+
+def test_migrate_cli_backup_first_required_for_rewrite() -> None:
+    """When rewrite migration is pending and --backup-first is omitted, server returns 422; CLI exits non-zero."""
+    runner = CliRunner()
+    # Server rejects because backup_confirmed is False/absent
+    post_resp = _mock_http_response(422, {"detail": "backup_confirmed required for rewrite migrations"})
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp):
+        result = runner.invoke(
+            collection,
+            ["migrate", "mycol", "--apply", "--wait", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code != 0
+    # CLI should propagate the error message
+    assert "422" in result.output or "backup_confirmed" in result.output.lower() or "error" in result.output.lower()
+
+
+def test_migrate_cli_wait_without_apply_is_error() -> None:
+    """--wait without --apply is a usage error (cannot poll a job that hasn't been created)."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        collection,
+        ["migrate", "mycol", "--wait", "--api-key", "test-key"],
+    )
+
+    assert result.exit_code != 0
+
+
+def test_migrate_cli_backup_first_without_apply_is_error() -> None:
+    """--backup-first without --apply is a usage error; prints a clear error and exits 1."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        collection,
+        ["migrate", "mycol", "--backup-first", "--api-key", "test-key"],
+    )
+
+    assert result.exit_code == 1
+    assert "--backup-first requires --apply" in result.output

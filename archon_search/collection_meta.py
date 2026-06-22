@@ -29,3 +29,4 @@ class CollectionMeta:
     described_at_doc_count: int | None = None
     namespace: str = DEFAULT_NAMESPACE
     description_embedding: list[float] | None = None
+    schema_version: int = 0

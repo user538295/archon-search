@@ -41,7 +41,6 @@ def _make_pipeline(
     pipeline.ingest_file = AsyncMock(return_value=MagicMock(status="ok"))
     pipeline.ingest_directory = AsyncMock(return_value=[])
     pipeline.recompute_collection_meta = AsyncMock()
-    pipeline._centroid_incremental_enabled = False
     pipeline._global_embedder = MagicMock()
     return pipeline
 

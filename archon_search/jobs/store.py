@@ -13,7 +13,7 @@ from typing import Literal
 from archon_search._durable_io import atomic_write_json
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import IngestJob, JobStatus, get_jobs_file
-from archon_search.types import DeleteJob, ExportJob, ImportJob, ReindexJob
+from archon_search.types import DeleteJob, ExportJob, ImportJob, MigrationJob, MigrationKind, ReindexJob
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,13 @@ class JobStore:
     # Public API
     # ------------------------------------------------------------------
 
-    def create(self, namespace: str = DEFAULT_NAMESPACE) -> IngestJob:
+    def create(
+        self,
+        namespace: str = DEFAULT_NAMESPACE,
+        source: Literal["user", "backup", "maintenance"] = "user",
+        path: str = "",
+        collection: str = "",
+    ) -> IngestJob:
         now = _now_iso()
         job = IngestJob(
             job_id=str(uuid.uuid4()),
@@ -52,6 +58,9 @@ class JobStore:
             created_at=now,
             updated_at=now,
             namespace=namespace,
+            source=source,
+            source_path=path,
+            collection=collection,
         )
         self._jobs[job.job_id] = job
         self._write_atomic()
@@ -158,12 +167,33 @@ class JobStore:
         )
         return self.create_job(job)  # type: ignore[return-value]
 
+    def create_migration(
+        self,
+        collection: str,
+        kind: MigrationKind,
+        backup_confirmed: bool | None,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> MigrationJob:
+        """Create a MigrationJob with QUEUED status and persist it."""
+        now = _now_iso()
+        job = MigrationJob(
+            job_id=str(uuid.uuid4()),
+            status=JobStatus.QUEUED,
+            created_at=now,
+            updated_at=now,
+            namespace=namespace,
+            collection=collection,
+            kind=kind,
+            backup_confirmed=backup_confirmed,
+        )
+        return self.create_job(job)  # type: ignore[return-value]
+
     def update_progress(self, job_id: str, processed: int, total: int, phase: str) -> None:
         """Set the progress dict on a job."""
         self.update(job_id, progress={"processed": processed, "total": total, "phase": phase})
 
-    def list_queued_bulk(self) -> list[ExportJob | ImportJob]:
-        """Return QUEUED ExportJob/ImportJob instances sorted by (source_priority, created_at).
+    def list_queued_bulk(self) -> list[ExportJob | ImportJob | MigrationJob]:
+        """Return QUEUED ExportJob/ImportJob/MigrationJob instances sorted by (source_priority, created_at).
 
         User-sourced jobs (``source="user"``) sort before backup-sourced jobs
         (``source="backup"``). Within each tier, FIFO is preserved by
@@ -172,7 +202,7 @@ class JobStore:
         bulk = [
             job
             for job in self._jobs.values()
-            if isinstance(job, (ExportJob, ImportJob)) and job.status == JobStatus.QUEUED
+            if isinstance(job, (ExportJob, ImportJob, MigrationJob)) and job.status == JobStatus.QUEUED
         ]
         bulk.sort(key=lambda j: (0 if j.source == "user" else 1, j.created_at))
         return bulk  # type: ignore[return-value]
@@ -208,19 +238,23 @@ class JobStore:
                 item["status"] = JobStatus(item["status"])
                 # Backward compatibility: pre-D1 jobs lack a "progress" key.
                 item.setdefault("progress", None)
+                # Backward compatibility: pre-D5 jobs lack new IngestJob base fields.
+                item.setdefault("source", "user")
+                item.setdefault("source_path", "")
+                item.setdefault("collection", "")
+                item.setdefault("retry_count", 0)
                 job_type = item.pop("job_type", "ingest")
                 if job_type == "export":
-                    # Backward compat: pre-D2 export jobs lack a "source" key.
-                    item.setdefault("source", "user")
                     job: IngestJob = ExportJob(**item)
                 elif job_type == "import":
-                    # Backward compat: pre-D2 import jobs lack a "source" key.
-                    item.setdefault("source", "user")
                     job = ImportJob(**item)
                 elif job_type == "reindex":
                     job = ReindexJob(**item)
                 elif job_type == "delete":
                     job = DeleteJob(**item)
+                elif job_type == "migration":
+                    item["kind"] = MigrationKind(item["kind"])
+                    job = MigrationJob(**item)
                 else:
                     job = IngestJob(**item)
                 if job.status in _CRASH_STATUSES:
@@ -246,7 +280,9 @@ class JobStore:
         for job in self._jobs.values():
             item = dataclasses.asdict(job)
             item["status"] = item["status"].value if hasattr(item["status"], "value") else item["status"]
-            if isinstance(job, ExportJob):
+            if isinstance(job, MigrationJob):
+                item["job_type"] = "migration"
+            elif isinstance(job, ExportJob):
                 item["job_type"] = "export"
             elif isinstance(job, ImportJob):
                 item["job_type"] = "import"

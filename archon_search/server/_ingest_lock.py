@@ -27,7 +27,7 @@ async def acquire_collection_lock_or_503(
     if store is None:
         return None
 
-    lock = store._lock_for(collection_name)
+    lock = store.lock_for(collection_name)
     try:
         await asyncio.wait_for(lock.acquire(), timeout=_constants.INGEST_LOCK_TIMEOUT_S)
     except asyncio.TimeoutError:

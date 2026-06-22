@@ -282,13 +282,14 @@ async def test_concurrent_ingest_and_delete_serializes_correctly(
         # This serializes the two ops without LanceDB write conflicts.
         original_ingest_chunks = store.ingest_chunks
 
-        async def _blocking_ingest_chunks(collection, records, *, embedding_model, namespace):
+        async def _blocking_ingest_chunks(collection, records, *, embedding_model, namespace, _is_continuation=False):
             # Block in a thread-pool worker — doesn't block the event loop.
             await asyncio.to_thread(hold_event.wait)
             return await original_ingest_chunks(
                 collection, records,
                 embedding_model=embedding_model,
                 namespace=namespace,
+                _is_continuation=_is_continuation,
             )
 
         monkeypatch.setattr(store, "ingest_chunks", _blocking_ingest_chunks)
@@ -393,5 +394,32 @@ async def test_pre_b5_collection_seeds_on_first_ingest(
         assert n > 0
         expected_sum = [v * n for v in stub_vec]
         _assert_vectors_close(meta.centroid_sum, expected_sum)
+    finally:
+        await store.disconnect()
+
+
+async def test_default_config_centroid_update_on_ingest(tmp_path: Path, monkeypatch) -> None:
+    """Centroid updates happen with default SearchConfig — no legacy flag required.
+
+    Verifies that the D4 removal of centroid_incremental_enabled does not break
+    incremental centroid maintenance: a plain ingest with no config customisation
+    must still populate centroid_sum.
+    """
+    store, pipeline = await make_real_pipeline(tmp_path, monkeypatch)
+    await store.ensure_collection("sync-unconditional", EMBEDDING_DIM)
+
+    try:
+        doc = _make_doc(tmp_path, "unconditional.txt", "document for unconditional centroid update test")
+        result = await pipeline.ingest_file(
+            doc, "sync-unconditional", embedder=pipeline._global_embedder
+        )
+        assert result.status == "ok" and result.chunks_created > 0
+
+        meta = await store.get_collection_meta("sync-unconditional")
+        assert meta is not None
+        assert meta.centroid_sum is not None, (
+            "centroid_sum must be set after ingest — centroid_incremental_enabled flag no longer exists"
+        )
+        assert meta.centroid is not None
     finally:
         await store.disconnect()

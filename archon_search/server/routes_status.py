@@ -15,10 +15,13 @@ from archon_search.server.readiness import collect_readiness
 from archon_search.server.schemas import (
     BackupStatusDetail,
     CollectionBackupStatus,
+    CollectionHealthEntry,
     ErrorDetail,
+    MaintenanceStatusDetail,
     StatusCollectionEntry,
     StatusResponse,
 )
+from archon_search.store import STORE_SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -97,8 +100,15 @@ async def status(request: Request) -> StatusResponse:
             )
         )
 
+    # D3 BE-15 — count collections whose schema_version is behind STORE_SCHEMA_VERSION.
+    # Uses already-fetched ns_meta to avoid N additional DB round-trips.
+    collections_schema_behind = sum(
+        1 for m in ns_meta if m.schema_version < STORE_SCHEMA_VERSION
+    )
+
     readiness = await collect_readiness(request.app.state, state)
     backup_detail = _build_backup_status(request, config, ns, sorted(ns_names))
+    maintenance_detail = _build_maintenance_status(request, config, ns)
     return StatusResponse(
         running=True,
         pid=pid,
@@ -106,6 +116,9 @@ async def status(request: Request) -> StatusResponse:
         collections=collection_entries,
         readiness=readiness,
         backup=backup_detail,
+        maintenance=maintenance_detail,
+        store_schema_version=STORE_SCHEMA_VERSION,
+        collections_schema_behind=collections_schema_behind,
     )
 
 
@@ -160,4 +173,61 @@ def _build_backup_status(
         next_run_at=next_run_at,
         collections_excluded=list(config.backup.exclude),
         collection_status=collection_status,
+    )
+
+
+def _build_maintenance_status(
+    request: Request, config: SearchConfig, ns: str
+) -> MaintenanceStatusDetail | None:
+    """Populate the ``maintenance`` sub-object for the caller's namespace.
+
+    Returns ``None`` when no ``MaintenanceLoop`` is wired on ``app.state`` — this
+    keeps the endpoint resilient to alternative app factories used in tests.
+
+    Namespace scoping: ``collection_health`` entries are filtered to those whose
+    ``{namespace}/{collection}`` key starts with ``{ns}/``, following the precedent
+    in ``_build_backup_status`` which scopes backup status to the caller's namespace.
+    """
+    maintenance_loop = getattr(request.app.state, "maintenance_loop", None)
+    if maintenance_loop is None:
+        return None
+
+    interval_hours = config.maintenance.interval_hours
+    enabled = interval_hours > 0
+    centroid_threshold = config.centroid_recompute_threshold
+
+    state = maintenance_loop._load_state()
+    last_run_at: str | None = state.get("last_run_at")
+    next_run_at: str | None = state.get("next_run_at")
+    all_health: dict = state.get("collection_health", {})
+    if not isinstance(all_health, dict):
+        all_health = {}
+
+    # Namespace-scope: only include entries whose key starts with "{ns}/"
+    ns_prefix = f"{ns}/"
+    collection_health: list[CollectionHealthEntry] = []
+    for key, entry in all_health.items():
+        if not key.startswith(ns_prefix):
+            continue
+        # Extract collection name from the "{ns}/{col}" key
+        col_name = key[len(ns_prefix):]
+        collection_health.append(
+            CollectionHealthEntry(
+                collection=col_name,
+                fts_optimized_at=entry.get("fts_optimized_at"),
+                orphans_removed_last_run=entry.get("orphans_removed_last_run", 0),
+                last_retry_at=entry.get("last_retry_at"),
+                last_error=entry.get("last_error"),
+                mutations_since_recompute=entry.get("mutations_since_recompute", 0),
+                centroid_recompute_threshold=centroid_threshold,
+                meta_chunk_count=entry.get("meta_chunk_count", 0),
+            )
+        )
+
+    return MaintenanceStatusDetail(
+        enabled=enabled,
+        interval_hours=interval_hours,
+        last_run_at=last_run_at,
+        next_run_at=next_run_at,
+        collection_health=collection_health,
     )

@@ -131,6 +131,21 @@ The dispatch closure is reassigned to `scheduler.dispatch_fn` inside `create_app
 
 `POST /backup/trigger` reuses the same dedup checks to enumerate-and-enqueue once on demand; `GET /status` reads `_last_tick_at` and the state file to expose `BackupStatusDetail`. The CLI `archon-search backup status` works offline by reading the state file directly.
 
+### Maintenance loop (D5)
+
+`archon_search/jobs/maintenance_loop.py` contains `MaintenanceLoop`, an in-process maintenance orchestrator. `create_app()` instantiates it in lifespan alongside `BackupLoop`, stores it on `app.state.maintenance_loop`, and starts `MaintenanceLoop.run()` as an asyncio background task. Unlike `BackupLoop` (which has two loops), `MaintenanceLoop` has a single `_trigger_loop`:
+
+- **Trigger loop** — uses `asyncio.wait_for(self._trigger_event.wait(), timeout=interval_seconds if interval_hours > 0 else None)`. When `interval_hours = 0` (default), `timeout=None` means the loop waits indefinitely — no scheduled passes fire, but a `POST /maintenance/trigger` can still unblock it. On interval timeout (`asyncio.TimeoutError`) or on `_trigger_event.set()`, the loop fires `_run_one_pass()`. After the pass completes (including `_save_state()`), the loop clears `_trigger_event`.
+
+Each `_run_one_pass()` execution:
+1. Calls `store.list_collections()` to enumerate all `(namespace, collection)` pairs.
+2. Filters out excluded collections (bare name or `{ns}/{col}` patterns from `maintenance.exclude`).
+3. For each non-excluded collection, runs `_run_fts_optimize` and `_run_orphan_cleanup` under separate per-policy lock acquisitions (not shared, to avoid reentrant-lock deadlocks).
+4. Calls `_run_failed_ingest_retry()` **once** at the pass level (not per-collection) to re-enqueue FAILED `IngestJob`s across all namespaces within `retry_max_age_hours` and `retry_max_attempts`.
+5. Writes `.maintenance-state.json` atomically (write-to-temp + rename).
+
+`POST /maintenance/trigger` sets `_trigger_event` on `app.state.maintenance_loop` for an immediate pass; returns `{"status": "triggered"}` (202) or `{"status": "already_triggered"}` (202) when a pass is already pending or running. `GET /status` reads the state file (via `_build_maintenance_status()` in `routes_status.py`) to expose `MaintenanceStatusDetail` (namespace-scoped `collection_health`). The CLI `archon-search maintenance status` works offline by reading `.maintenance-state.json` directly.
+
 ## Sequence: watcher-triggered sync
 
 This is the canonical end-to-end async flow. The watcher detects a change, debounces, and schedules a sync coroutine. Important: watcher-triggered syncs do **not** create a `JobStore` job — they only update the `IndexingStateStore` and call per-file pipeline primitives via `_apply_collection_changes`. Job records are created only by the REST routes (`POST /ingest`, `POST /collections/`, `POST /collections/{name}/reindex`).

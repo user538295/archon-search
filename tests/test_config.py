@@ -674,8 +674,32 @@ def test_centroid_recompute_threshold_default() -> None:
     assert SearchConfig().centroid_recompute_threshold == 10_000
 
 
-def test_centroid_incremental_enabled_default() -> None:
-    assert SearchConfig().centroid_incremental_enabled is True
+def test_deprecated_flag_emits_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Loading centroid_incremental_enabled from TOML must emit a deprecation WARNING and ignore it."""
+    import logging
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\ncentroid_incremental_enabled = false\n", encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        load_config(path=toml_file)
+    assert any("centroid_incremental_enabled" in r.message for r in caplog.records)
+
+
+def test_deprecated_flag_emits_warning_for_true_value(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """centroid_incremental_enabled = true also emits a deprecation WARNING — the handler is value-agnostic."""
+    import logging
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\ncentroid_incremental_enabled = true\n", encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        load_config(path=toml_file)
+    assert any("centroid_incremental_enabled" in r.message for r in caplog.records)
+
+
+def test_deprecated_flag_is_ignored(tmp_path: Path) -> None:
+    """centroid_incremental_enabled in TOML is silently ignored — SearchConfig has no such field."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[database]\ncentroid_incremental_enabled = false\n", encoding="utf-8")
+    cfg = load_config(path=toml_file)
+    assert not hasattr(cfg, "centroid_incremental_enabled")
 
 
 def test_centroid_recompute_threshold_loaded_from_toml(tmp_path: Path) -> None:
@@ -683,27 +707,6 @@ def test_centroid_recompute_threshold_loaded_from_toml(tmp_path: Path) -> None:
     toml_file.write_text("[database]\ncentroid_recompute_threshold = 500\n", encoding="utf-8")
     cfg = load_config(path=toml_file)
     assert cfg.centroid_recompute_threshold == 500
-
-
-def test_centroid_incremental_enabled_loaded_from_toml(tmp_path: Path) -> None:
-    toml_file = tmp_path / "cfg.toml"
-    toml_file.write_text("[database]\ncentroid_incremental_enabled = true\n", encoding="utf-8")
-    cfg = load_config(path=toml_file)
-    assert cfg.centroid_incremental_enabled is True
-
-
-# B5 Task 5.3 — flip default to True
-def test_centroid_incremental_enabled_default_true() -> None:
-    """After Task 5.3 the default must be True (B5 incremental path is live)."""
-    assert SearchConfig().centroid_incremental_enabled is True
-
-
-def test_centroid_incremental_enabled_can_be_disabled_via_toml(tmp_path: Path) -> None:
-    """Setting false in TOML still works as a rollback escape hatch."""
-    toml_file = tmp_path / "cfg.toml"
-    toml_file.write_text("[database]\ncentroid_incremental_enabled = false\n", encoding="utf-8")
-    cfg = load_config(path=toml_file)
-    assert cfg.centroid_incremental_enabled is False
 
 
 def test_centroid_recompute_threshold_validation(tmp_path: Path) -> None:

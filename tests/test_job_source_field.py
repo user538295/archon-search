@@ -136,9 +136,9 @@ def test_load_legacy_import_job_gets_user_source(tmp_path: Path) -> None:
     assert job.source == "user"
 
 
-def test_load_does_not_add_source_to_ingest_job(tmp_path: Path) -> None:
-    """IngestJob has no source field — the setdefault must not be applied to ingest type,
-    otherwise IngestJob(**item) would raise TypeError on the unexpected kwarg."""
+def test_load_ingest_job_gets_default_source(tmp_path: Path) -> None:
+    """D5-BE-7: IngestJob now has source='user' on the base class.
+    Legacy JSON entries without 'source' load with the default 'user' value."""
     jobs_file = tmp_path / "jobs.json"
     _write_legacy_jobs(
         jobs_file,
@@ -156,5 +156,5 @@ def test_load_does_not_add_source_to_ingest_job(tmp_path: Path) -> None:
     store = JobStore(path=jobs_file)
     job = store.get("ingest-1")
     assert isinstance(job, IngestJob)
-    # IngestJob has no `source` attribute
-    assert not hasattr(job, "source")
+    # D5-BE-7: IngestJob base class gains source='user' default
+    assert job.source == "user"

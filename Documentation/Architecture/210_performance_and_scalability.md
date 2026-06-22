@@ -156,7 +156,7 @@ As of B5, centroid maintenance cost is no longer O(chunks) on every ingest:
 - **Delete**: O(chunks-in-document) — deleting a document subtracts only that document's chunk vectors from the running sum. No full collection scan is needed.
 - **Full recompute** (`recompute_collection_meta`): O(chunks) — retained for explicit calls: `archon-search collection reindex <name>`, crash recovery (when `needs_recompute = True`), and periodic drift-reset checkpoints. This path is not triggered by normal ingest or delete.
 
-The `centroid_incremental_enabled` feature flag (default `True`) gates the incremental path. Set it to `False` in `archon-search.toml` to revert to full-recompute on every ingest (not recommended for large corpora). See `archon_search/store.py` and `CON-4` in `530_technical_debt_refactoring_roadmap.md` for the full rationale.
+As of D4, the incremental path is unconditional — `centroid_incremental_enabled` has been removed. The B5 incremental path is always used. See `archon_search/store.py` and `CON-4` in `530_technical_debt_refactoring_roadmap.md` for the full rationale.
 
 ## See also
 

@@ -7,6 +7,8 @@ from typing import Literal
 
 from archon_search.constants import DEFAULT_NAMESPACE
 
+_VALID_INGEST_SOURCES = frozenset({"user", "backup", "maintenance"})
+
 
 class JobStatus(str, Enum):
     PENDING = "PENDING"
@@ -28,6 +30,16 @@ class IngestJob:
     error: str | None = None
     namespace: str = DEFAULT_NAMESPACE
     progress: dict | None = None  # {"processed": int, "total": int, "phase": str}
+    source: Literal["user", "backup", "maintenance"] = "user"
+    source_path: str = ""   # absolute path of the ingested file; set by ingest worker
+    collection: str = ""    # target collection name; set by ingest worker
+    retry_count: int = 0    # incremented by MaintenanceLoop on each retry attempt
+
+    def __post_init__(self) -> None:
+        if self.source not in _VALID_INGEST_SOURCES:
+            raise ValueError(
+                f"Invalid source {self.source!r}; must be one of {sorted(_VALID_INGEST_SOURCES)}"
+            )
 
 
 @dataclass
@@ -55,6 +67,31 @@ class ImportJob(IngestJob):
     force_overwrite: bool = False
     ignore_schema_version: bool = False
     on_error: str = "fail"  # "fail" | "skip"
+    source: Literal["user", "backup"] = "user"
+
+
+# UPPER_CASE names follow the convention of JobStatus and IndexingStatus.
+# Wire values are snake_case to match the TypeSpec C1 contract and REST API.
+class MigrationKind(str, Enum):
+    IN_PLACE = "in_place"
+    REWRITE = "rewrite"
+    EXPORT_REBUILD = "export_rebuild"
+
+
+@dataclass
+class MigrationSpec:
+    name: str
+    kind: MigrationKind
+    description: str
+    introduced_at: int
+
+
+@dataclass
+class MigrationJob(IngestJob):
+    collection: str = ""
+    kind: MigrationKind = MigrationKind.IN_PLACE
+    migrations_applied: list[str] = field(default_factory=list)
+    backup_confirmed: bool | None = None
     source: Literal["user", "backup"] = "user"
 
 

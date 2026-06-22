@@ -723,36 +723,24 @@ class SearchCollectionSync:
                     dominant_lang = await self._pipeline.store.get_dominant_language(name)
                     await self._pipeline.store.rebuild_fts_index(name, language=dominant_lang)
 
-                # Centroid maintenance: incremental path fires only when checkpoint signal raised.
-                # Legacy (flag=False): unconditional full recompute on every sync.
-                if self._pipeline._centroid_incremental_enabled:
-                    try:
-                        store_cfg = getattr(self._pipeline.store, "_config", None)
-                        threshold = int(getattr(store_cfg, "centroid_recompute_threshold", 10_000))
-                        centroid_meta = await self._pipeline.store.get_collection_meta(name)
-                        if centroid_meta and (
-                            centroid_meta.needs_recompute
-                            or centroid_meta.mutations_since_recompute >= threshold
-                        ):
-                            logger.debug("Recompute collection meta for %r after sync", name)
-                            # TODO(C1): pass per-collection embedder once centroid IoC is updated
-                            await self._pipeline.recompute_collection_meta(name, self._pipeline._global_embedder)
-                    except Exception:  # noqa: BLE001
-                        logger.warning(
-                            "Failed to recompute collection meta for %r after sync; centroid may be stale",
-                            name,
-                            exc_info=True,
-                        )
-                else:
-                    try:
+                # Centroid maintenance: incremental path fires when checkpoint signal raised.
+                try:
+                    store_cfg = getattr(self._pipeline.store, "_config", None)
+                    threshold = int(getattr(store_cfg, "centroid_recompute_threshold", 10_000))
+                    centroid_meta = await self._pipeline.store.get_collection_meta(name)
+                    if centroid_meta and (
+                        centroid_meta.needs_recompute
+                        or centroid_meta.mutations_since_recompute >= threshold
+                    ):
+                        logger.debug("Recompute collection meta for %r after sync", name)
                         # TODO(C1): pass per-collection embedder once centroid IoC is updated
                         await self._pipeline.recompute_collection_meta(name, self._pipeline._global_embedder)
-                    except Exception:  # noqa: BLE001
-                        logger.warning(
-                            "Failed to recompute collection meta for %r after sync; centroid may be stale",
-                            name,
-                            exc_info=True,
-                        )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to recompute collection meta for %r after sync; centroid may be stale",
+                        name,
+                        exc_info=True,
+                    )
 
                 # Write DONE state
                 self._safe_state_update(name, CollectionProgress(

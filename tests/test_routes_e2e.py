@@ -58,7 +58,8 @@ def _make_client(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.ping = AsyncMock(return_value=True)
-    mock_store._lock_for = MagicMock(return_value=asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
+    mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     return TestClient(app, headers={"Authorization": f"Bearer {key}"})
@@ -733,7 +734,8 @@ def _make_two_namespace_clients(
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     mock_store.ping = AsyncMock(return_value=True)
-    mock_store._lock_for = MagicMock(return_value=asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
+    mock_store.pending_migrations = AsyncMock(return_value=[])
     app.state.search_store = mock_store
     # The Pipeline keeps its own reference to the real SearchStore at construction.
     # Patch it so namespace-isolation route checks (search, etc.) hit the mock.

@@ -530,7 +530,7 @@ def test_delete_active_job_returns_202(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
-    mock_store._lock_for = MagicMock(return_value=_asyncio.Lock())
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
     full_app.state.search_store = mock_store
 
     client = TestClient(full_app, raise_server_exceptions=False)

@@ -5,6 +5,7 @@ Pure data models — no business logic.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -96,6 +97,35 @@ class BackupStatusDetail(BaseModel):
     collection_status: list[CollectionBackupStatus] = []
 
 
+class CollectionHealthEntry(BaseModel):
+    """Per-collection health snapshot written after each maintenance pass (D5 C1)."""
+
+    collection: str
+    fts_optimized_at: str | None = None
+    orphans_removed_last_run: int = Field(default=0, ge=0)
+    last_retry_at: str | None = None
+    last_error: str | None = None
+    mutations_since_recompute: int = Field(default=0, ge=0)
+    centroid_recompute_threshold: int = Field(default=0, ge=0)
+    meta_chunk_count: int = Field(default=0, ge=0)
+
+
+class MaintenanceStatusDetail(BaseModel):
+    """Maintenance loop state for the caller's namespace (D5 C1)."""
+
+    enabled: bool
+    interval_hours: int = Field(default=0, ge=0)
+    last_run_at: str | None = None
+    next_run_at: str | None = None
+    collection_health: list[CollectionHealthEntry] = []
+
+
+class MaintenanceTriggerResponse(BaseModel):
+    """Response body for POST /maintenance/trigger (D5 C2)."""
+
+    status: Literal["triggered", "already_triggered"]
+
+
 class StatusResponse(BaseModel):
     running: bool
     pid: int
@@ -103,6 +133,11 @@ class StatusResponse(BaseModel):
     collections: list[StatusCollectionEntry]
     readiness: ReadinessDetail | None = None
     backup: BackupStatusDetail | None = None
+    # D3 BE-15 — schema migration health fields
+    store_schema_version: int = 0
+    collections_schema_behind: int = Field(default=0, ge=0)
+    # D5 BE-3 — maintenance health field (additive, nullable)
+    maintenance: MaintenanceStatusDetail | None = None
 
 
 class IndexingStateCollectionEntry(BaseModel):
@@ -149,17 +184,23 @@ class JobResponse(BaseModel):
     status: str
     created_at: str
     updated_at: str
-    result: str | None = None
+    result: str | dict | None = None
     error: str | None = None
     namespace: str
     progress: dict | None = None
-    # D2-1.4 bulk-job subclass fields. All nullable and additive: base
-    # IngestJob instances serialize them as None; ExportJob/ImportJob carry
-    # the real values.
-    source: str | None = None
-    collection: str | None = None
+    # D5-BE-7: source, source_path, collection, retry_count are now on the
+    # IngestJob base class. source defaults to "user"; collection and
+    # source_path default to ""; retry_count defaults to 0.
+    source: str = "user"
+    source_path: str = ""
+    collection: str = ""
+    retry_count: int = 0
     output_path: str | None = None
     archive_path: str | None = None
+    # D3 MigrationJob fields. Nullable and additive: non-migration jobs get None.
+    kind: str | None = None
+    migrations_applied: list[str] | None = None
+    backup_confirmed: bool | None = None
 
 
 class JobListResponse(BaseModel):
@@ -205,3 +246,33 @@ class PatchCollectionBody(BaseModel):
         if not v:
             raise ValueError("embedding_model field required")
         return v
+
+
+class MigrationSpecSchema(BaseModel):
+    """Serialized representation of a MigrationSpec for REST responses."""
+
+    name: str
+    kind: str
+    description: str
+    introduced_at: int
+
+
+class MigrationPendingResponse(BaseModel):
+    """Response body for GET /collections/{name}/migrations/pending."""
+
+    collection: str
+    pending: list[MigrationSpecSchema]
+    schema_version: int
+
+
+class MigrateRequest(BaseModel):
+    """Request body for POST /collections/{name}/migrate."""
+
+    backup_confirmed: bool = False
+    dry_run: bool = False
+
+
+class MigrateInPlaceResponse(BaseModel):
+    """Response body for POST /collections/{name}/migrate (in-place synchronous path)."""
+
+    migrations_applied: list[str]

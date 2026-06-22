@@ -247,6 +247,77 @@
         "title": "CollectionDetail",
         "type": "object"
       },
+      "CollectionHealthEntry": {
+        "description": "Per-collection health snapshot written after each maintenance pass (D5 C1).",
+        "properties": {
+          "centroid_recompute_threshold": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Centroid Recompute Threshold",
+            "type": "integer"
+          },
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "fts_optimized_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fts Optimized At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_retry_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Retry At"
+          },
+          "meta_chunk_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Meta Chunk Count",
+            "type": "integer"
+          },
+          "mutations_since_recompute": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Mutations Since Recompute",
+            "type": "integer"
+          },
+          "orphans_removed_last_run": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Orphans Removed Last Run",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collection"
+        ],
+        "title": "CollectionHealthEntry",
+        "type": "object"
+      },
       "CollectionStats": {
         "properties": {
           "ok": {
@@ -1248,16 +1319,21 @@
             ],
             "title": "Archive Path"
           },
-          "collection": {
+          "backup_confirmed": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "boolean"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Collection"
+            "title": "Backup Confirmed"
+          },
+          "collection": {
+            "default": "",
+            "title": "Collection",
+            "type": "string"
           },
           "created_at": {
             "title": "Created At",
@@ -1277,6 +1353,31 @@
           "job_id": {
             "title": "Job Id",
             "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "migrations_applied": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Migrations Applied"
           },
           "namespace": {
             "title": "Namespace",
@@ -1311,21 +1412,29 @@
                 "type": "string"
               },
               {
-                "type": "null"
-              }
-            ],
-            "title": "Result"
-          },
-          "source": {
-            "anyOf": [
-              {
-                "type": "string"
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Source"
+            "title": "Result"
+          },
+          "retry_count": {
+            "default": 0,
+            "title": "Retry Count",
+            "type": "integer"
+          },
+          "source": {
+            "default": "user",
+            "title": "Source",
+            "type": "string"
+          },
+          "source_path": {
+            "default": "",
+            "title": "Source Path",
+            "type": "string"
           },
           "status": {
             "title": "Status",
@@ -1376,6 +1485,164 @@
           "p95"
         ],
         "title": "LatencyPercentiles",
+        "type": "object"
+      },
+      "MaintenanceStatusDetail": {
+        "description": "Maintenance loop state for the caller's namespace (D5 C1).",
+        "properties": {
+          "collection_health": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CollectionHealthEntry"
+            },
+            "title": "Collection Health",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "interval_hours": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Interval Hours",
+            "type": "integer"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "MaintenanceStatusDetail",
+        "type": "object"
+      },
+      "MaintenanceTriggerResponse": {
+        "description": "Response body for POST /maintenance/trigger (D5 C2).",
+        "properties": {
+          "status": {
+            "enum": [
+              "triggered",
+              "already_triggered"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "MaintenanceTriggerResponse",
+        "type": "object"
+      },
+      "MigrateInPlaceResponse": {
+        "description": "Response body for POST /collections/{name}/migrate (in-place synchronous path).",
+        "properties": {
+          "migrations_applied": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Migrations Applied",
+            "type": "array"
+          }
+        },
+        "required": [
+          "migrations_applied"
+        ],
+        "title": "MigrateInPlaceResponse",
+        "type": "object"
+      },
+      "MigrateRequest": {
+        "description": "Request body for POST /collections/{name}/migrate.",
+        "properties": {
+          "backup_confirmed": {
+            "default": false,
+            "title": "Backup Confirmed",
+            "type": "boolean"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          }
+        },
+        "title": "MigrateRequest",
+        "type": "object"
+      },
+      "MigrationPendingResponse": {
+        "description": "Response body for GET /collections/{name}/migrations/pending.",
+        "properties": {
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "pending": {
+            "items": {
+              "$ref": "#/components/schemas/MigrationSpecSchema"
+            },
+            "title": "Pending",
+            "type": "array"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collection",
+          "pending",
+          "schema_version"
+        ],
+        "title": "MigrationPendingResponse",
+        "type": "object"
+      },
+      "MigrationSpecSchema": {
+        "description": "Serialized representation of a MigrationSpec for REST responses.",
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "introduced_at": {
+            "title": "Introduced At",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "description",
+          "introduced_at"
+        ],
+        "title": "MigrationSpecSchema",
         "type": "object"
       },
       "PatchCollectionBody": {
@@ -2132,6 +2399,22 @@
             "title": "Collections",
             "type": "array"
           },
+          "collections_schema_behind": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Collections Schema Behind",
+            "type": "integer"
+          },
+          "maintenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaintenanceStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "pid": {
             "title": "Pid",
             "type": "integer"
@@ -2149,6 +2432,11 @@
           "running": {
             "title": "Running",
             "type": "boolean"
+          },
+          "store_schema_version": {
+            "default": 0,
+            "title": "Store Schema Version",
+            "type": "integer"
           },
           "version": {
             "title": "Version",
@@ -2787,6 +3075,177 @@
         "summary": "Import Collection"
       }
     },
+    "/collections/{name}/migrate": {
+      "post": {
+        "description": "Apply pending migrations or report pending list (dry-run).\n\n**dry_run=true:** returns the same ``MigrationPendingResponse`` body as\n``GET /migrations/pending`` without applying anything.\n\n**In-place-only migrations:** applies synchronously, returns 200 with\n``{migrations_applied: [...]}``.  No ``MigrationJob`` is created.\n\n**Rewrite migrations:** requires ``backup_confirmed: true``; creates a\n``MigrationJob``, transitions it immediately to RUNNING, and returns 202\nwith ``{job_id, status: \"RUNNING\"}``.  The job is transitioned before the\ntask is spawned so the scheduler never sees it in QUEUED state.\n\n**export_rebuild migrations:** always returns 422 \u2014 D3 does not execute\nexport_rebuild; operators must re-ingest manually.\n\nReturns 404 if the collection is not found in the caller's namespace.\nReturns 409 if a ReindexJob is active for the same collection.\nReturns 422 if rewrite/export_rebuild migrations are pending without\n``backup_confirmed: true``, or if export_rebuild migrations are present.",
+        "operationId": "migrate_collection_collections__name__migrate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MigrateInPlaceResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MigrationPendingResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/JobResponse"
+                    }
+                  ],
+                  "title": "Response Migrate Collection Collections  Name  Migrate Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Migrate Collection"
+      }
+    },
+    "/collections/{name}/migrations/pending": {
+      "get": {
+        "description": "Return the list of pending migrations for a collection.\n\nReturns 404 if the collection is not found in the caller's namespace.\nReturns an empty ``pending`` list when the collection schema is current.",
+        "operationId": "get_migrations_pending_collections__name__migrations_pending_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationPendingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Migrations Pending"
+      }
+    },
     "/collections/{name}/reindex": {
       "post": {
         "description": "Start a reindex job for an existing collection. 404 if not found.",
@@ -3264,7 +3723,7 @@
     },
     "/jobs/{job_id}/resume": {
       "post": {
-        "description": "Transition a FAILED export or import job back to QUEUED so the scheduler can retry it.",
+        "description": "Transition a FAILED export, import, or migration job back to QUEUED so the scheduler can retry it.",
         "operationId": "resume_job_jobs__job_id__resume_post",
         "parameters": [
           {
@@ -3335,6 +3794,43 @@
           }
         ],
         "summary": "Resume Job"
+      }
+    },
+    "/maintenance/trigger": {
+      "post": {
+        "description": "Set the maintenance trigger event; the loop fires a pass asynchronously.\n\nIf the trigger event is already set (a trigger is pending or a pass is\nrunning), the request is acknowledged but the pass is not duplicated.\n``\"already_triggered\"`` is used (not ``\"already_running\"``) because\n``_trigger_event.is_set()`` means \"pending or running\", not \"definitely\nrunning\".",
+        "operationId": "trigger_maintenance_maintenance_trigger_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceTriggerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Trigger Maintenance",
+        "tags": [
+          "maintenance"
+        ]
       }
     },
     "/ready": {

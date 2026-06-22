@@ -1,13 +1,19 @@
 """Tests for shared REST response Pydantic schemas ."""
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.server.schemas import (
     CollectionDetail,
+    CollectionHealthEntry,
     CollectionSummary,
     HealthResponse,
     IndexingStateResponse,
     JobResponse,
+    MaintenanceStatusDetail,
+    MaintenanceTriggerResponse,
     StatusCollectionEntry,
     StatusResponse,
 )
@@ -103,3 +109,141 @@ def test_status_response_with_collection_entries() -> None:
     assert col.watching is False
     assert col.doc_count == 0
     assert col.chunk_count == 0
+
+
+# --- D5 BE-3: Maintenance schema tests ---
+
+
+def test_status_response_maintenance_field_optional() -> None:
+    """StatusResponse serialises with maintenance=None without error."""
+    entry = StatusCollectionEntry(name="col", path="/p", status="DONE", watching=False)
+    response = StatusResponse(running=True, pid=1, version="1.0.0", collections=[entry])
+    assert response.maintenance is None
+    # Serialisation should succeed without maintenance field
+    data = response.model_dump()
+    assert "maintenance" in data
+    assert data["maintenance"] is None
+
+
+def test_collection_health_entry_all_fields() -> None:
+    """All eight fields of CollectionHealthEntry round-trip through Pydantic serialisation."""
+    entry = CollectionHealthEntry(
+        collection="my-col",
+        fts_optimized_at="2026-01-01T00:00:00Z",
+        orphans_removed_last_run=5,
+        last_retry_at=None,
+        last_error="some error",
+        mutations_since_recompute=42,
+        centroid_recompute_threshold=100,
+        meta_chunk_count=200,
+    )
+    data = entry.model_dump()
+    assert data["collection"] == "my-col"
+    assert data["fts_optimized_at"] == "2026-01-01T00:00:00Z"
+    assert data["orphans_removed_last_run"] == 5
+    assert data["last_retry_at"] is None
+    assert data["last_error"] == "some error"
+    assert data["mutations_since_recompute"] == 42
+    assert data["centroid_recompute_threshold"] == 100
+    assert data["meta_chunk_count"] == 200
+
+    # Verify all-nullable scenario also works
+    entry_nulls = CollectionHealthEntry(
+        collection="col2",
+        fts_optimized_at=None,
+        orphans_removed_last_run=0,
+        last_retry_at=None,
+        last_error=None,
+        mutations_since_recompute=0,
+        centroid_recompute_threshold=0,
+        meta_chunk_count=0,
+    )
+    data_nulls = entry_nulls.model_dump()
+    assert data_nulls["fts_optimized_at"] is None
+    assert data_nulls["last_retry_at"] is None
+    assert data_nulls["last_error"] is None
+
+    # C1-T-1: verify all 7 defaults when only collection is supplied
+    entry_defaults = CollectionHealthEntry(collection="defaults-only")
+    assert entry_defaults.fts_optimized_at is None
+    assert entry_defaults.orphans_removed_last_run == 0
+    assert entry_defaults.last_retry_at is None
+    assert entry_defaults.last_error is None
+    assert entry_defaults.mutations_since_recompute == 0
+    assert entry_defaults.centroid_recompute_threshold == 0
+    assert entry_defaults.meta_chunk_count == 0
+
+
+def test_collection_health_entry_requires_collection() -> None:
+    """CollectionHealthEntry() with no arguments raises ValidationError (collection is required)."""
+    with pytest.raises(ValidationError):
+        CollectionHealthEntry()  # type: ignore[call-arg]
+
+
+def test_maintenance_trigger_response_literal() -> None:
+    """MaintenanceTriggerResponse status must be 'triggered' or 'already_triggered'."""
+    # Both valid values should work
+    r1 = MaintenanceTriggerResponse(status="triggered")
+    assert r1.status == "triggered"
+
+    r2 = MaintenanceTriggerResponse(status="already_triggered")
+    assert r2.status == "already_triggered"
+
+    # Invalid values should raise a ValidationError
+    with pytest.raises(ValidationError):
+        MaintenanceTriggerResponse(status="unknown_status")  # type: ignore[arg-type]
+
+
+def test_maintenance_status_detail_all_fields() -> None:
+    """MaintenanceStatusDetail round-trips with collection_health list."""
+    health_entry = CollectionHealthEntry(
+        collection="docs",
+        fts_optimized_at=None,
+        orphans_removed_last_run=3,
+        last_retry_at="2026-06-01T12:00:00Z",
+        last_error=None,
+        mutations_since_recompute=10,
+        centroid_recompute_threshold=50,
+        meta_chunk_count=300,
+    )
+    detail = MaintenanceStatusDetail(
+        enabled=True,
+        interval_hours=24,
+        last_run_at="2026-06-21T08:00:00Z",
+        next_run_at="2026-06-22T08:00:00Z",
+        collection_health=[health_entry],
+    )
+    assert detail.enabled is True
+    assert detail.interval_hours == 24
+    assert detail.last_run_at == "2026-06-21T08:00:00Z"
+    assert detail.next_run_at == "2026-06-22T08:00:00Z"
+    assert len(detail.collection_health) == 1
+    assert detail.collection_health[0].collection == "docs"
+
+    # C1-T-5: verify defaults when only required fields are supplied
+    detail_defaults = MaintenanceStatusDetail(enabled=False, interval_hours=0)
+    assert detail_defaults.last_run_at is None
+    assert detail_defaults.next_run_at is None
+    assert detail_defaults.collection_health == []
+
+
+def test_status_response_with_maintenance_populated() -> None:
+    """StatusResponse correctly carries a populated MaintenanceStatusDetail."""
+    maintenance = MaintenanceStatusDetail(
+        enabled=True,
+        interval_hours=12,
+        last_run_at=None,
+        next_run_at=None,
+        collection_health=[],
+    )
+    response = StatusResponse(
+        running=True,
+        pid=1,
+        version="1.0.0",
+        collections=[],
+        maintenance=maintenance,
+    )
+    assert response.maintenance is not None
+    assert response.maintenance.enabled is True
+    assert response.maintenance.interval_hours == 12
+    assert response.maintenance.collection_health == []

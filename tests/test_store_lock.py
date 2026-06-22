@@ -62,7 +62,7 @@ def test_store_busy_error_carries_timeout() -> None:
 async def test_two_ingests_serialize(connected_store: SearchStore, col_name: str) -> None:
     """The second ingest blocks until the holder releases the lock — no timing race."""
     await connected_store.ensure_collection(col_name, _DIM)
-    lock = connected_store._lock_for(col_name)
+    lock = connected_store.lock_for(col_name)
     holder_release = asyncio.Event()
     waiter_started = asyncio.Event()
     completed = asyncio.Event()
@@ -98,7 +98,7 @@ async def test_ingest_times_out_when_lock_held(
     await connected_store.ensure_collection(col_name, _DIM)
     monkeypatch.setattr("archon_search.store.INGEST_LOCK_TIMEOUT_S", 0.1)
 
-    lock = connected_store._lock_for(col_name)
+    lock = connected_store.lock_for(col_name)
     await lock.acquire()
     try:
         with pytest.raises(StoreBusyError):
@@ -117,7 +117,7 @@ async def test_ingest_other_collection_not_blocked(
     await connected_store.ensure_collection(col_a, _DIM)
     await connected_store.ensure_collection(col_b, _DIM)
 
-    lock_a = connected_store._lock_for(col_a)
+    lock_a = connected_store.lock_for(col_a)
     await lock_a.acquire()
     try:
         # Ingest into B should complete normally even while A's lock is held.
@@ -134,7 +134,7 @@ async def test_ingest_succeeds_after_holder_releases(
     connected_store: SearchStore, col_name: str
 ) -> None:
     await connected_store.ensure_collection(col_name, _DIM)
-    lock = connected_store._lock_for(col_name)
+    lock = connected_store.lock_for(col_name)
     await lock.acquire()
 
     async def release_soon() -> None:
@@ -157,7 +157,7 @@ async def test_hybrid_search_does_not_acquire_store_lock(
     await connected_store.ensure_collection(col_name, _DIM)
     await connected_store.ingest_chunks(col_name, [_chunk()])
     # materialize the lock entry
-    lock = connected_store._lock_for(col_name)
+    lock = connected_store.lock_for(col_name)
     assert not lock.locked()
     await connected_store.hybrid_search(col_name, [0.0] * _DIM, "hello", top_k=5)
     assert not lock.locked()
@@ -170,7 +170,7 @@ async def test_drop_collection_removes_lock_entry(
 ) -> None:
     col = f"test-{uuid.uuid4().hex[:8]}"
     await connected_store.ensure_collection(col, _DIM)
-    connected_store._lock_for(col)
+    connected_store.lock_for(col)
     assert col in connected_store._collection_locks
     await connected_store.drop_collection(col)
     assert col not in connected_store._collection_locks
@@ -178,7 +178,7 @@ async def test_drop_collection_removes_lock_entry(
     # Idempotency: dropping a collection without a lock entry must not raise.
     other = f"test-{uuid.uuid4().hex[:8]}"
     await connected_store.ensure_collection(other, _DIM)
-    await connected_store.drop_collection(other)  # no _lock_for() called
+    await connected_store.drop_collection(other)  # no lock_for() called
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +241,7 @@ async def test_ingest_chunks_skips_lock_when_locked_by_caller(
 ) -> None:
     """When _locked_by_caller=True, ingest_chunks skips lock acquire — no deadlock."""
     await connected_store.ensure_collection(col_name, _DIM)
-    lock = connected_store._lock_for(col_name)
+    lock = connected_store.lock_for(col_name)
     await lock.acquire()
     try:
         n = await connected_store.ingest_chunks(col_name, [_chunk()], _locked_by_caller=True)
@@ -258,7 +258,7 @@ async def test_ingest_chunks_default_still_acquires(
     """Without the flag, ingest_chunks tries to acquire and times out on a held lock."""
     await connected_store.ensure_collection(col_name, _DIM)
     monkeypatch.setattr("archon_search.store.INGEST_LOCK_TIMEOUT_S", 0.1)
-    lock = connected_store._lock_for(col_name)
+    lock = connected_store.lock_for(col_name)
     await lock.acquire()
     try:
         with pytest.raises(StoreBusyError):

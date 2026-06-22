@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — D4: `centroid_incremental_enabled` config field removed
+
+**Surface**: `archon-search.toml` `[database]` section.
+
+- The `centroid_incremental_enabled` field has been removed from `SearchConfig`. The B5 incremental centroid path is now unconditional.
+- If present in an existing TOML config, the value is discarded and a WARNING is logged at startup.
+- The per-operation full-recompute gate (previously activated by `centroid_incremental_enabled = false`) has been removed. The full-recompute path itself (`recompute_collection_meta`) still exists and fires on `needs_recompute = True` or periodic drift-reset checkpoints.
+
+**Migration**: remove `centroid_incremental_enabled` from your `archon-search.toml`. For operators who never set this flag (or had it set to `true`), there is no functional change — the incremental path was already the default since B5. If you had explicitly set it to `false`, your deployment will now use the B5 incremental centroid path; run `archon-search collection reindex <name>` if you observe centroid drift.
+
+---
+
 ### [next release] — D2 job contract: `JobResponse` gains bulk-job subclass fields
 
 **Surface**: `GET /jobs/{job_id}` and `GET /jobs` REST responses (`JobResponse`).
@@ -411,3 +423,85 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 **Change**: The `top_k` field in `SearchRequest` is now ignored at the route level; the pipeline uses `config.top_k_return` instead. Previously, each request could specify its own `top_k`.
 **Migration**: Configure `[search] top_k_return` in `archon-search.toml` to set the desired result count.
 **Announced in**: this release (the behavior was supported but never documented as stable).
+
+### [next release] — D3 migration tooling: new REST endpoints and `STORE_SCHEMA_VERSION` policy
+
+**Surface**: two new REST endpoints on `routes_collections.py`; `GET /status` response (`StatusResponse`).
+
+**New endpoints**:
+- `GET /collections/{name}/migrations/pending` — returns `{collection, pending: [MigrationSpec], schema_version}`. Each `MigrationSpec` has `name`, `kind` (`"in_place"`, `"rewrite"`, or `"export_rebuild"`), `description`, and `introduced_at`. Returns `404` for unknown or cross-namespace collections.
+- `POST /collections/{name}/migrate` — accepts `{backup_confirmed: bool, dry_run: bool}`. In-place-only migrations return `200` with `{migrations_applied: [name…]}` synchronously; no `MigrationJob` is created. Rewrite migrations require `backup_confirmed: true` (returns `422` without it) and return `202` with a `MigrationJob` job ID. `export_rebuild` migrations always return `422` (execution deferred to D5). `409` when a `ReindexJob` is active for the collection.
+
+**`StatusResponse` additions**:
+- `store_schema_version: int` — current `STORE_SCHEMA_VERSION` constant.
+- `collections_schema_behind: int` — count of collections whose `schema_version < STORE_SCHEMA_VERSION`.
+
+All changes are additive. Strict-schema clients will see new fields; tolerant clients are unaffected.
+
+**`STORE_SCHEMA_VERSION` bump policy**: increment this constant whenever a structural change to `_schema()` (the shared chunk-table schema) or `_meta_schema()` (the collection-metadata schema) requires existing rows to be migrated. **Exception:** per-collection chunk-table-only changes (e.g. `migrate_acl`) do NOT require a version bump — only changes to the shared `_schema()` or `_meta_schema()` require it. Every bump must also add a corresponding `MigrationSpec` entry to `SearchStore._all_migrations()`. `STORE_SCHEMA_VERSION = 0` for D3 (all five formalised startup migrations have `introduced_at = 0`).
+
+**Migration**: no action required for existing callers. Add the new endpoint paths to client schemas if strict validation is in use. Add `store_schema_version` and `collections_schema_behind` to `StatusResponse` type stubs.
+
+---
+
+### [next release] — D5 maintenance jobs: `IngestJob` base class gains `source`, `source_path`, `collection`, `retry_count` fields (BE-7)
+
+**Surface**: `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/ingest`, `DELETE /jobs/{job_id}` REST responses (`JobResponse`); all IngestJob-family subclasses (`ReindexJob`, `DeleteJob`).
+
+**Changes**:
+- `source: str` — moved to `IngestJob` base class with default `"user"`. Previously absent (`null`) for base `IngestJob`, `ReindexJob`, and `DeleteJob` responses. Now serializes as `"user"` for all IngestJob-family types. For `ExportJob`, `ImportJob`, and `MigrationJob`, the Literal type is narrower (`"user" | "backup"`) and is unchanged in practice. **Breaking for strict consumers**: `source` changes from `null` to `"user"` for base ingest, reindex, and delete jobs.
+- `source_path: str` — new field on `IngestJob` base; defaults to `""`. Set by the ingest worker when a file ingest job is created. `JobResponse` gains `source_path: str = ""`.
+- `collection: str` — moved to `IngestJob` base class with default `""`. Previously `null` for base `IngestJob`, `ReindexJob`, and `DeleteJob` responses. Now serializes as `""` for those types. **Breaking for strict consumers**: `collection` changes from `null` to `""` for base ingest, reindex, and delete jobs.
+- `retry_count: int` — new field on `IngestJob` base; defaults to `0`. Incremented by `MaintenanceLoop` on each retry attempt. `JobResponse` gains `retry_count: int = 0`.
+
+**Migration**: update client schemas to accept `source: "user"` (not `null`) for base ingest/reindex/delete job responses, and `collection: ""` (not `null`) for the same. Add `source_path: str` and `retry_count: int` to `JobResponse` type stubs.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — D5 maintenance jobs: `GET /status` gains `maintenance` field (BE-4, BE-8)
+
+**Surface**: `GET /status` REST response (`StatusResponse`).
+
+**Change** (additive):
+- `maintenance: MaintenanceStatusDetail | null` — new nullable field on `StatusResponse`. Present when `app.state.maintenance_loop` is set (always when the server starts normally). `null` only when the maintenance loop is absent (e.g. custom startup without `create_app`).
+- `MaintenanceStatusDetail` contains: `enabled: bool`, `last_run_at: string | null`, `next_run_at: string | null`, `collection_health: CollectionHealthEntry[]`.
+- `CollectionHealthEntry` contains: `collection: string`, `namespace: string`, `fts_optimized_at: string | null`, `orphans_removed_last_run: int`, `last_retry_at: string | null`, `last_error: string | null`, `mutations_since_recompute: int`, `centroid_recompute_threshold: int`, `meta_chunk_count: int`.
+- `collection_health` is namespace-scoped to the caller's API key namespace.
+
+**Additive change**: fully backward-compatible for tolerant consumers. Strict-validating REST clients (`extra="forbid"` schemas) must add `maintenance` to `StatusResponse`.
+
+**Migration**: regenerate client types from `GET /openapi.json`. No behavior changes to existing `GET /status` fields.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — D5 maintenance jobs: new `POST /maintenance/trigger` endpoint (BE-4)
+
+**Surface**: REST API — new route.
+
+**Change** (additive):
+- `POST /maintenance/trigger` — new endpoint. Triggers an immediate maintenance pass. Returns `202 Accepted` with `{"status": "triggered"}` when the pass is enqueued. Returns `202 Accepted` with `{"status": "already_triggered"}` when a pass is already pending or running. Requires `Bearer` token (same auth middleware as all other routes).
+
+**Additive change**: no existing endpoints changed. Strict-validating REST clients that enumerate allowed routes must add `/maintenance/trigger`.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — D3 migration tooling: new nullable fields on `JobResponse` (BE-11)
+
+**Surface**: REST (all endpoints that return `JobResponse`: `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/ingest`, `POST /jobs/export`, `POST /jobs/import`, `DELETE /jobs/{job_id}`, `POST /jobs/{id}/resume`)
+
+**Change**: `JobResponse` gains three new nullable fields (default `null`):
+- `kind: string | null` — migration sub-kind (`"in_place"`, `"rewrite"`, `"export_rebuild"`); `null` for all non-migration jobs
+- `migrations_applied: string[] | null` — list of migration names applied by a `MigrationJob`; `null` for all non-migration jobs
+- `backup_confirmed: boolean | null` — whether the operator confirmed a backup before a rewrite migration; `null` for all non-migration jobs
+
+For tolerant JSON consumers: fully additive — no client changes required. For strict-validating REST clients (`extra="forbid"` schemas): the three new keys are a true contract change — relax the client schema or regenerate from the updated OpenAPI snapshot.
+
+**Migration**: regenerate client types from `GET /openapi.json`. No behavior changes to existing job kinds.
+
+**Announced in**: this release.

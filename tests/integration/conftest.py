@@ -33,12 +33,14 @@ def make_real_app(
     monkeypatch,
     *,
     backup_enabled: bool = False,
+    maintenance_enabled: bool = False,
     namespaces: dict[str, str] | None = None,
 ) -> Iterator[tuple[TestClient, Any, str]]:
     """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
 
     Uses ``monkeypatch.setenv`` for env vars so they auto-revert after each test.
     Pass ``backup_enabled=True`` only in Task 2.2 backup tests.
+    Pass ``maintenance_enabled=True`` to enable the MaintenanceLoop with interval_hours=1.
     Pass ``namespaces={'key_hex': 'ns-name', ...}`` for multi-namespace tests.
     The TestClient lifespan (startup + shutdown) is managed by the context block.
     """
@@ -60,6 +62,9 @@ def make_real_app(
     if backup_enabled:
         cfg.backup.interval_hours = 1
         cfg.backup.output_dir = str(tmp_path / "backups")
+
+    if maintenance_enabled:
+        cfg.maintenance.interval_hours = 1  # enabled; manual trigger still fires immediately
 
     if namespaces is not None:
         cfg.namespaces = namespaces

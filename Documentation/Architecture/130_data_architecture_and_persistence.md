@@ -31,6 +31,7 @@ In the table below, paths are relative to the data-directory root — `~/.archon
 | `logs/archon-search.log` | server | server logs | `[logging].log_file` |
 | `archon-search-jobs.json` | `jobs/store.py` | job state for long-running ingest/reindex | `get_jobs_file()` in `jobs/model.py` |
 | `.indexing_state.json` | `progress.py` (`IndexingStateStore`) | per-collection indexing progress/status | atomic-rename writes; RMW serialized by an internal `RLock` (see "Indexing state") |
+| `.maintenance-state.json` | `jobs/maintenance_loop.py` (`MaintenanceLoop`) | last/next run timestamps, per-collection health, retry counts | atomic-rename write after each pass; absent/corrupt → fresh empty state (no error); see "Maintenance state" |
 | `models/` | `language_detector.py` | fasttext language detector (`lid.176.ftz`) | only if `multilingual=True`; resolved lazily via `get_fasttext_models_dir()` |
 | `history/sessions/` | `cli/ingest.py` | default `--sessions-dir` for the `ingest` subcommand | resolved lazily via `get_data_dir()` |
 
@@ -50,7 +51,7 @@ Every durable JSON/bytes write of runtime state routes through a single helper m
 
 The crucial property is that the helper fsyncs **both the file and the parent directory**: the parent-directory fsync is what makes the `os.replace` rename itself durable. fsync is never retried — on `EIO` the kernel may already have marked the page clean (POSIX "fsyncgate"), so a retry is unsafe. The helper is **not internally synchronized**; callers must serialize writes to the same path.
 
-The five durable-write sites that use the helper are:
+The seven durable-write sites that use the helper are:
 
 | Site | Helper | File written |
 |------|--------|--------------|
@@ -59,6 +60,8 @@ The five durable-write sites that use the helper are:
 | `sync.manifest_remove_entry` | `atomic_write_json` | sync manifest |
 | `jobs/store.py::JobStore._write_atomic` | `atomic_write_json` | `archon-search-jobs.json` |
 | `key_manager._generate_and_write` | `atomic_write_bytes` | `.search.env` (mode `0600`) |
+| `maintenance_loop._save_state` | `atomic_write_json` | `.maintenance-state.json` |
+| `backup_loop._save_state` | `atomic_write_json` | `.backup-state.json` |
 
 A CI lint gate, `tests/test_no_raw_durable_writes.py`, scans `archon_search/**/*.py` (excluding the helper itself) for raw write patterns and fails the build on new ones; a handful of out-of-scope one-shot writes (TOML config writers, OS service-unit files) carry a `# noqa: durable-write` allow-list comment.
 
@@ -138,6 +141,7 @@ The per-field partition map (**system** / **filterable** / **ranking** / **audit
 | `centroid_sum_json` | `utf8` | JSON-encoded `list[float]` — element-wise sum of all chunk vectors. Combined with `chunk_count`, satisfies `centroid = centroid_sum / chunk_count`. Added by B5 incremental-centroid maintenance; `""` when unset or not yet migrated. |
 | `mutations_since_recompute` | `int64` | Counter incremented on every ingest batch and every delete operation; reset to `0` after a full `recompute_collection_meta`. Used to detect high-churn collections that need a periodic drift-reset recompute. `-1` sentinel = pre-B5 row (treated as 0 at read time). |
 | `needs_recompute` | `bool` | Set `True` when incremental maintenance cannot proceed (model mismatch detected, NaN/Inf in a vector batch, or centroid sum absent from a pre-B5 store). The pipeline calls `recompute_collection_meta` automatically when this flag is `True` before the next search or routing query against the collection. Cleared to `False` on successful full recompute. |
+| `schema_version` | `int64` | **D3** — tracks which structural migrations (to the shared chunk-table schema or the collection-metadata schema) have been applied to this collection. Added by `_run_startup_migrations()` idempotently; defaults to `0` for all rows (including pre-D3 collections read before the migration runs). Compared against `STORE_SCHEMA_VERSION` by `pending_migrations()` to determine which migrations need to be applied. Updated to `STORE_SCHEMA_VERSION` by `apply_in_place_migrations()` on success; left unchanged if a rewrite migration is cancelled or fails mid-way. |
 
 The three B5 columns are additive and populated lazily: rows written by an older binary that lacks B5 will have `None` for all three fields, which the store treats identically to the `needs_recompute = True` state and triggers a full recompute on next access. See also `BREAKING.md` for mixed-version deployment caveats.
 
@@ -177,9 +181,20 @@ Because glob and ACL filtering happen after retrieval, the store over-fetches ca
 
 ### Migrations (idempotent, run at startup)
 
+**D3: `STORE_SCHEMA_VERSION`** — a module-level integer constant in `store.py` (currently `0`). Every structural change to `_schema()` or `_meta_schema()` that requires existing rows to be migrated must increment this constant and register a `MigrationSpec` in `SearchStore._all_migrations()`. `GET /collections/{name}/migrations/pending` compares each collection's `schema_version` against this constant and returns the list of unapplied specs. `GET /status` reports `store_schema_version` (the constant) and `collections_schema_behind` (count of collections below it).
+
+The five startup migrations below are formalised as `MigrationSpec` entries with `kind=in_place` and `introduced_at=0`. They run via `SearchStore._run_startup_migrations()` on every server startup (alongside a sixth infrastructure step, `_migrate_schema_version()`, which idempotently adds the `schema_version` column to `_archon_collection_meta` and is not a `MigrationSpec`).
+
 - `migrate_namespace` — adds `namespace` column to `_archon_collection_meta` if absent.
+- `migrate_description_embedding` — adds `description_embedding_json` column to `_archon_collection_meta` if absent (B4).
 - `migrate_acl` — adds nullable `acl` column to each chunk table that lacks it.
+- `migrate_centroid_sum` — adds `centroid_sum_json`, `mutations_since_recompute`, and `needs_recompute` columns to `_archon_collection_meta` if absent (B5).
 - `migrate_per_collection_model` — adds `active_embedding_model`, `pending_embedding_model`, `needs_reindex`, and `reindex_job_id` columns to `_archon_collection_meta` if absent, backfilling `active_embedding_model` from the pre-C1 `embedding_model` column. Idempotent: a second run is a no-op. The old `embedding_model` column is dropped after backfill.
+
+**D3 migration-kind taxonomy:**
+- `in_place` — idempotent `add_columns()` call; completes in under a second; no data rewrite required. Applied synchronously by `POST /collections/{name}/migrate` (returns `200`) or automatically at startup.
+- `rewrite` — batch read/transform/write of all chunks via `apply_rewrite_migration()`; runs as a `MigrationJob` (QUEUED → RUNNING → DONE); requires `backup_confirmed: true` before dispatch; acquires the per-collection `asyncio.Lock` for its duration. Each batch uses delete-then-add (non-atomic): a crash between delete and re-add loses that batch's rows. The `backup_confirmed` flag is the primary mitigation.
+- `export_rebuild` — classified and surfaced in the pending list; execution deferred to D5 (operators must re-ingest manually). `POST /collections/{name}/migrate` returns `422` for this kind.
 
 ## Entity relationships
 
@@ -199,6 +214,7 @@ erDiagram
         bool needs_reindex
         string reindex_job_id
         string namespace
+        int schema_version
     }
     COLLECTION {
         string name PK
@@ -241,10 +257,10 @@ flowchart LR
     D --> E[ACL resolution<br/>acl.py: front-matter _acl > sidecar]
     E --> F[store.py: ingest_chunks<br/>append to LanceDB chunk table]
     F --> G[FTS index<br/>optimize_fts at batch end; rebuild_fts_index for first-time or fallback]
-    F --> H[update_collection_meta<br/>doc_count, chunk_count, centroid, last_indexed]
+    F --> H[_do_update_meta_on_add<br/>doc_count, chunk_count, centroid<br/>per batch inside ingest_chunks]
 ```
 
-Note: step `H` (`update_collection_meta`) runs at the end of `ingest_directory` (`pipeline.py:277–289`); a bare `ingest_file` call does not refresh collection-level centroid/`last_indexed` on its own.
+Note: step `H` (`_do_update_meta_on_add`) runs inside `store.ingest_chunks()` on every batch — centroid, `doc_count`, and `chunk_count` are maintained incrementally (B5 incremental path, unconditional since D4). `ingest_directory` additionally calls `store.update_description()` (description + `last_indexed`) after each file. A drift-correction full recompute (`recompute_collection_meta`) fires if any batch sets `needs_recompute=True`.
 
 ### Reindex semantics
 
@@ -272,6 +288,33 @@ Long-running operations (ingest, reindex, delete) are tracked in `~/.archon-sear
 ## Indexing state
 
 Per-collection indexing progress (`status`, file counters, timestamps, `error_count`, and the path/mtime/hash bookkeeping) is persisted in `~/.archon-search/.indexing_state.json` by `IndexingStateStore` (`progress.py`). Each mutation writes the whole file via a tmp-file + `os.replace` atomic rename. The store is **thread-safe**: `write`, `update_collection`, `remove_collection`, `set_trigger`, and `reset_in_progress` are serialized by an internal `threading.RLock`, so concurrent cross-collection writers cannot lose updates (A6 closed `CON-3`; see `Architecture/530_technical_debt_refactoring_roadmap.md`). `read()` is an unlocked snapshot; read-modify-write must go through the locked composite methods. On-disk **durability** under power loss (fsync of the rename) is still open — tracked under A7.
+
+## Maintenance state (D5)
+
+`MaintenanceLoop` persists its pass state in `~/.archon-search/.maintenance-state.json` (resolved via `get_data_dir()`). Written atomically (write-to-temp + rename) by `_save_state()` after every completed pass. Absent or corrupt file → fresh empty state (no error; WARNING logged on corrupt JSON). Read by `routes_status.py::_build_maintenance_status()` and by `cli/maintenance_cmd.py status`.
+
+Schema (C3 contract):
+```json
+{
+  "last_run_at": "<ISO-8601> | null",
+  "next_run_at": "<ISO-8601> | null",
+  "collection_health": {
+    "{namespace}/{collection}": {
+      "fts_optimized_at":           "<ISO-8601> | null",
+      "orphans_removed_last_run":   <int>,
+      "last_retry_at":              "<ISO-8601> | null",
+      "last_error":                 "<string> | null",
+      "meta_chunk_count":           <int>,
+      "mutations_since_recompute":  <int>
+    }
+  },
+  "retry_counts": {
+    "{namespace}/{collection}/{absolute_source_file_path}": <int>
+  }
+}
+```
+
+`meta_chunk_count` comes from `CollectionMeta.chunk_count` (the O(1) metadata-row value from `store.get_collection_meta()`), not the live `count_rows()` from `CollectionInfo.chunk_count`. `retry_counts` keys use `{namespace}/{collection}/{absolute_source_file_path}` to scope retry limits correctly when the same file is ingested into multiple collections. Keys whose source path is no longer tracked in `JobStore.list()` and whose count is 0 are pruned at each retry-policy pass to bound growth.
 
 ## Backup and recovery
 

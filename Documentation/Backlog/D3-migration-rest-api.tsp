@@ -1,9 +1,4 @@
-// C3 — Migration REST / CLI seam (Presentation ↔ server; CLI ↔ server over HTTP)
-// Logical contract only. Realised by Pydantic models in archon_search/server/schemas.py
-// and routes in routes_collections.py / routes_status.py; consumed by the CLI in cli/.
-// Validate with: tsp compile D3-migration-rest-api.tsp --no-emit
-
-namespace MigrationRestContract;
+namespace MigrationRestApiContract;
 
 enum MigrationKind {
   in_place,
@@ -15,37 +10,46 @@ model MigrationSpec {
   name: string;
   kind: MigrationKind;
   description: string;
+  // introduced_at: version at which this migration was introduced; helps operators understand ordering
+  introduced_at: int32;
 }
 
-// GET /collections/{name}/migrations/pending  -> 200; 404 if collection unknown.
-model PendingMigrationsResponse {
+model MigrationPendingResponse {
   collection: string;
   pending: MigrationSpec[];
-  schemaVersion: int32;
+  schema_version: int32;
 }
 
 // POST /collections/{name}/migrate request body.
-// dry_run=true returns PendingMigrationsResponse without creating a job.
-// backup_confirmed is required for rewrite / export_rebuild kinds (else 422).
+// Response dispatch: dry_run=true → MigrationPendingResponse (alias for GET pending, no side effects);
+// in-place only → MigrateInPlaceResponse (200); rewrite/export_rebuild → MigrateResponse (202).
 model MigrateRequest {
-  backupConfirmed?: boolean = false;
-  dryRun?: boolean = false;
+  backup_confirmed?: boolean;
+  dry_run?: boolean;
 }
 
-// Additive nullable fields grafted onto the shared JobResponse for migration jobs.
-model JobResponseMigrationFields {
-  migrationsApplied?: string[];
-  backupConfirmed?: boolean;
+model MigrateResponse {
+  job_id: string;
+  status: string;
 }
 
-// Additive fields on GET /status.
-model StatusMigrationFields {
-  storeSchemaVersion: int32;
-  collectionsSchemaBehind: int32;
+// 200 response for in-place-only migrations (no MigrationJob created)
+model MigrateInPlaceResponse {
+  migrations_applied: string[];
 }
 
-interface MigrationApi {
-  // 200 dry-run / 200 in_place summary / 202 + job for rewrite; 404 / 409 / 422 on error.
-  pending(collection: string): PendingMigrationsResponse;
-  migrate(collection: string, body: MigrateRequest): PendingMigrationsResponse;
+model JobResponseMigrationExtension {
+  migrations_applied?: string[];
+  backup_confirmed?: boolean;
+}
+
+model StatusResponseSchemaExtension {
+  store_schema_version: int32;
+  collections_schema_behind: int32;
+}
+
+// Error response body (reuses existing ErrorDetail pattern from schemas.py).
+// Used for 404, 409, 422 responses from migration endpoints.
+model MigrateErrorResponse {
+  detail: string;
 }
