@@ -52,6 +52,12 @@ multilingual = false
 # Set interactively via `archon-search wizard` or with the `--eager-load / --no-eager-load` flag.
 # eager_load_embedders = false
 
+# Timeout (seconds) for the background model-validation task that runs at server startup.
+# Validation probes the configured embedding/reranker models and ONNX providers, then
+# surfaces the result in GET /status and GET /ready without blocking startup or queries.
+# Must be > 0; values <= 0 are rejected with a warning and fall back to the default 60.
+# validation_timeout_seconds = 60
+
 # Number of results returned per query (top-K return set).
 # Set via `archon-search wizard --top-k N` (valid wizard range: 1–100).
 # top_k_return = 5

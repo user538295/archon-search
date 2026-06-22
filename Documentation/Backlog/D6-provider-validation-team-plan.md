@@ -411,7 +411,7 @@ flowchart LR
         - [x] #unit_test — `test_maintenance_status_renders_model_validation` — status payload with `model_validation`; output contains `embedder_ok` and `reranker_ok`
         - [x] #unit_test — `test_maintenance_status_no_model_validation_key` — status payload without `model_validation`; no crash, section omitted
         - [x] #unit_test — `test_maintenance_status_json_includes_model_validation` — invoke with `--json` flag; assert JSON output includes `model_validation` key with `embedder_ok` and `reranker_ok` fields; assert `validated_at` is JSON-serializable (no raw datetime objects)
-- [ ] **BE-9** — Add `# validation_timeout_seconds = 60` comment+key under `[database]` in `archon-search.toml.example` #backend-role
+- [x] **BE-9** — Add `# validation_timeout_seconds = 60` comment+key under `[database]` in `archon-search.toml.example` #backend-role
     - Frameworks & Drivers · 0.5h
     - needs K1 · completes (documentation)
     - Tests
