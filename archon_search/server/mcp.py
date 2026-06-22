@@ -20,7 +20,7 @@ from archon_search._path_safety import PathUnsafeError, validate_archive_members
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.filters import SearchFilters
 from archon_search.hyde import resolve_hyde_vector
-from archon_search.key_manager import load_or_generate_key
+from archon_search.key_manager import KeyStore, load_or_generate_key
 from archon_search.pipeline import (
     CollectionNotFoundError,
     ExplainMultiCollectionNoRerankError,
@@ -1250,19 +1250,37 @@ def create_mcp_http_app(
     job_store: JobStore | None = None,
     hyde_generator: "HyDEGenerator | None" = None,
     rag_fusion_generator: "RAGFusionGenerator | None" = None,
+    key_store: "KeyStore | None" = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
     The underlying FastMCP app is exposed via the streamable HTTP transport
     (endpoint: /mcp).  APIKeyMiddleware is added so every request to /mcp
     requires a valid Bearer token; /health remains exempt per _EXEMPT_PATHS.
+
+    ``key_store`` — when provided, managed keys are also checked in addition to
+    the legacy ``api_key`` path.  The caller creates and owns the ``KeyStore``
+    instance; cross-process visibility is achieved because ``active_keys()``
+    re-reads from disk on every call.
+
+    Note: TOML ``[namespaces]`` synthetic records are written to ``keys.json``
+    by the HTTP app's lifespan (``create_app``).  The MCP app does not call
+    ``load_synthetic_records()`` itself — it relies on the HTTP app having run
+    first to populate ``keys.json``.  TOML tokens are also accepted via the
+    legacy ``namespaces={}`` path which the MCP caller should populate from
+    ``config.namespaces`` when TOML namespace support is needed.
     """
     from archon_search.server.middleware_context import RequestContextMiddleware
 
     fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator)
     starlette_app: Starlette = fastmcp_app.streamable_http_app()
     api_key, _ = load_or_generate_key()
-    starlette_app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces={})
+    starlette_app.add_middleware(
+        APIKeyMiddleware,
+        api_key=api_key,
+        namespaces={},
+        key_store=key_store,
+    )
     starlette_app.add_middleware(RequestContextMiddleware, header_name=request_id_header)
     return starlette_app
 

@@ -47,7 +47,7 @@ class KeyRecord(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    id: str
+    id: str | None
     token_hash: str
     namespace: str
     label: str | None = None
@@ -143,8 +143,11 @@ class KeyStore:
             if record.status != "active":
                 continue
             if record.expires_at is not None and record.expires_at <= now:
-                # Log only once per key ID per process lifetime
-                if record.id not in self._logged_expired_ids:
+                # Log only once per key ID per process lifetime.
+                # Synthetic TOML records (id=None) are never tracked in the set —
+                # synthetic records do not expire (expires_at is always None at creation),
+                # so this branch is only reached by managed keys with a non-None id.
+                if record.id is not None and record.id not in self._logged_expired_ids:
                     logger.info("Key %s has expired and will no longer be accepted", record.id)
                     self._logged_expired_ids.add(record.id)
                 continue
@@ -197,6 +200,25 @@ class KeyStore:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def load_synthetic_records(self, synthetic: list[KeyRecord]) -> None:
+        """Replace all synthetic (TOML) records in ``keys.json`` with ``synthetic``.
+
+        Called once at ``create_app()`` startup to persist the current TOML
+        ``[namespaces]`` tokens as synthetic ``KeyRecord`` objects.  Existing
+        managed records (``id is not None``) are preserved; synthetic records
+        (``id is None``) from the previous run are discarded and replaced with
+        the current set.  This ensures that removing a namespace from TOML is
+        reflected after the next restart.
+
+        The write acquires the internal asyncio.Lock to serialise against
+        concurrent ``create()`` / ``revoke()`` calls.
+        """
+        async with self._lock:
+            existing = await self.load()
+            managed = [r for r in existing if r.id is not None]
+            merged = managed + synthetic
+            self._write(merged)
 
     def _write(self, records: list[KeyRecord]) -> None:
         """Atomically write records to ``keys.json`` with mode 0o600."""

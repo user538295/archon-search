@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -22,7 +23,7 @@ from archon_search.jobs.backup_loop import BackupLoop
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.scheduler import JobScheduler
 from archon_search.jobs.store import JobStore
-from archon_search.key_manager import load_or_generate_key
+from archon_search.key_manager import KeyRecord, KeyStore, load_or_generate_key
 from archon_search.paths import get_data_dir
 from archon_search.logging_setup import configure_logging
 from archon_search.model_validation import ModelValidationResult, validate_models_async
@@ -150,6 +151,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        # Startup: persist TOML synthetic KeyRecord objects into keys.json so that
+        # GET /keys (BE-6) can surface them and active_keys() includes them.
+        # This replaces synthetic records from previous runs with the current TOML state.
+        await app.state.key_store.load_synthetic_records(_synthetic_records)
+
         # Startup: connect search store
         await app.state.search_store.connect()
         await app.state.search_store._run_startup_migrations()
@@ -318,14 +324,48 @@ def create_app(
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    # Instantiate the key store pointing to keys.json under the data directory.
+    # Each app (HTTP and MCP) creates its own KeyStore instance; cross-process
+    # visibility is achieved because active_keys() re-reads from disk on every call.
+    key_store = KeyStore(get_data_dir() / "keys.json")
+
+    # Build synthetic KeyRecord objects from the TOML [namespaces] map once at
+    # construction time. The actual write to keys.json happens inside the lifespan
+    # (async context). Synthetic records have id=None and no expires_at.
+    _synthetic_records = [
+        KeyRecord(
+            id=None,
+            token_hash=hashlib.sha256(raw_token.encode()).hexdigest(),
+            namespace=ns,
+            label=ns,  # label mirrors the TOML namespace name for operator identification
+            created_at=datetime.now(UTC),
+            expires_at=None,
+            status="active",
+        )
+        for raw_token, ns in config.namespaces.items()
+    ]
+
     app = FastAPI(title="archon-search", lifespan=lifespan)
-    app.add_middleware(APIKeyMiddleware, api_key=api_key, namespaces=config.namespaces)
+    # ``namespaces=config.namespaces`` is kept for backward compatibility. TOML
+    # tokens are also registered as synthetic KeyRecord objects (path 1, above),
+    # so the TOML namespace dict (path 2) is a defense-in-depth fallback that
+    # activates only if the synthetic write failed. The managed-key path always
+    # wins on early-exit, making path 2 redundant in normal operation, but
+    # removing it would silently break any direct construction of APIKeyMiddleware
+    # without a key_store — the plan requires backward-compat to be unchanged.
+    app.add_middleware(
+        APIKeyMiddleware,
+        api_key=api_key,
+        namespaces=config.namespaces,
+        key_store=key_store,
+    )
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.add_middleware(
         RequestContextMiddleware,
         header_name=config.observability.request_id_header,
     )
     logger.info("API key authentication enabled (source: %s)", key_source)
+    app.state.key_store = key_store
     app.state.config = config
     app.state.job_store = job_store
     app.state.config_path = Path(config_path) if config_path is not None else None

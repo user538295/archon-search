@@ -2,6 +2,21 @@
 
 ## What Has Worked
 
+**2026-06-22 — D7 BE-2: `Literal` status guard vs datetime expiry in security middleware**
+- Observation: The rotation-revocation guard in `APIKeyMiddleware` checked `r.status in ("revoked", "expired")`, but `KeyRecord.status` is `Literal["active", "revoked"]` — `"expired"` is not a valid value. Expiry in this codebase is temporal (`expires_at <= now`), not a status transition. Iterative-review DA agents caught this as Critical in cycle 1. Fix: replace the literal check with `r.status == "revoked" or (r.expires_at is not None and r.expires_at <= now)`.
+- Action: Whenever writing a guard that needs to catch both explicit revocation AND time-based expiry, always use a datetime comparison for the expiry branch — never assume a `"expired"` status value will exist unless you verify the `Literal` type in the entity model.
+- Confidence: high
+
+**2026-06-22 — D7 BE-2: cross-block variable scoping in security middleware**
+- Observation: `token_hash` was computed at line 57 inside `if self._key_store is not None:` and then redundantly recomputed at line 75 inside the same guard condition. Python `if` blocks do not create new scopes, so the variable was already in scope. Removing the redundant computation is safe, but requires a comment noting the cross-block dependency to prevent future `UnboundLocalError` when someone refactors the blocks.
+- Action: When reusing a variable across two separate `if` blocks that share the same condition, add an inline comment at the read site noting the dependency: `# token_hash computed at line N under the same guard`.
+- Confidence: high
+
+**2026-06-22 — D7 BE-2: iterative review catches datetime-based expiry branch with zero test coverage**
+- Observation: After the Cycle 1 fix that replaced the dead `"expired"` literal check with `r.expires_at <= now`, the new branch had zero test coverage. Cycle 2 DA agents independently flagged this as Moderate. The fix was a targeted test: create a record with `status="active"` and `expires_at` in the past, use the same token as `api_key`, assert 401. Without this test, a regression removing the `expires_at` branch would pass the full suite silently.
+- Action: After any security-guard fix that adds a new predicate branch, immediately add a test that exercises that exact branch. The existing passing tests are not sufficient coverage for the new code path.
+- Confidence: high
+
 **2026-06-15 — Parallel iterative review of already-merged commits**
 - Observation: `git reset --soft <parent>` inside a worktree exposes a commit's diff as staged changes, which `/iterative-review` can then inspect without needing an open branch.
 - Action: Use this pattern when spawning review agents on commits that are already merged to main; it avoids checking out detached HEAD and keeps the worktree clean.

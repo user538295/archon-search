@@ -432,7 +432,7 @@ flowchart LR
         - #unit_test — `test_middleware_legacy_path_unchanged` — existing `api_key` + `namespaces` path works when `key_store=None`
         - #integration_test — `test_middleware_managed_key_full_request` — managed key accepted on a real `TestClient` request
 
-- [ ] **BE-3** — Wire `KeyStore` into `app.py` `create_app()` (`app.state.key_store`, middleware update, `keys_router`); wire an independent `KeyStore` into `mcp.py create_mcp_http_app()` (add `key_store: KeyStore | None = None` param, update `APIKeyMiddleware` call at line 1265). Each app creates its own `KeyStore` instance pointing to the same `keys.json` path — cross-process changes are immediately visible because `active_keys()` re-reads from disk on every call (no IPC required). Load TOML `[namespaces]` tokens as synthetic `KeyRecord` objects (no `id`, `status=active`) into each app's `KeyStore` at startup. #backend-role
+- [x] **BE-3** — Wire `KeyStore` into `app.py` `create_app()` (`app.state.key_store`, middleware update, `keys_router`); wire an independent `KeyStore` into `mcp.py create_mcp_http_app()` (add `key_store: KeyStore | None = None` param, update `APIKeyMiddleware` call at line 1265). Each app creates its own `KeyStore` instance pointing to the same `keys.json` path — cross-process changes are immediately visible because `active_keys()` re-reads from disk on every call (no IPC required). Load TOML `[namespaces]` tokens as synthetic `KeyRecord` objects (no `id`, `status=active`) into each app's `KeyStore` at startup. #backend-role
     - Frameworks & Drivers · 1.5h
     - needs BE-2 · completes S7, S8
     - Tests
