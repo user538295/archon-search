@@ -146,6 +146,14 @@ Each `_run_one_pass()` execution:
 
 `POST /maintenance/trigger` sets `_trigger_event` on `app.state.maintenance_loop` for an immediate pass; returns `{"status": "triggered"}` (202) or `{"status": "already_triggered"}` (202) when a pass is already pending or running. `GET /status` reads the state file (via `_build_maintenance_status()` in `routes_status.py`) to expose `MaintenanceStatusDetail` (namespace-scoped `collection_health`). The CLI `archon-search maintenance status` works offline by reading `.maintenance-state.json` directly.
 
+### Background model validation (D6)
+
+Unlike `BackupLoop` and `MaintenanceLoop` (long-lived loops), D6 model validation is a **one-shot** background task. In the lifespan, `create_app()` sets `app.state.model_validation = None`, then spawns `validate_models_async(config, config.validation_timeout_seconds, embedder_is_warm=app.state.embedder.is_warm)` via `asyncio.create_task`, tracks it in `app.state._background_tasks`, and attaches `task.add_done_callback(app.state._background_tasks.discard)` (the same pattern as the backup/maintenance tasks). Startup never awaits the task — boot stays sub-2-second and the lazy-load contract is preserved.
+
+`validate_models_async` (in `model_validation.py`) runs the synchronous `validate_providers_shared` under `asyncio.to_thread` + `asyncio.wait_for(timeout=validation_timeout_seconds)`. It never raises: a timeout, `CancelledError`, or any other failure yields a `ModelValidationResult` with both `ok` flags `False` and a descriptive `provider_warnings` entry. The lifespan wrapper additionally catches `BaseException` and, on any escape, stores a failure `ModelValidationResult` with `provider_warnings=["validation task failed unexpectedly"]`; at shutdown it catches `asyncio.CancelledError`, logs "validation cancelled during shutdown", and re-raises.
+
+The result drives two read-only surfaces: `GET /status` exposes it as `model_validation: ModelValidationStatus | null` (null while pending), and `GET /ready` maps it to `checks.models: CheckStatus` (strict priority FAIL > WARN > OK; PENDING while unset) without ever gating the storage-only `ready: bool`. Validation runs once at startup; configuration drift after startup (e.g. a CUDA driver update) is not re-checked until the next restart.
+
 ## Sequence: watcher-triggered sync
 
 This is the canonical end-to-end async flow. The watcher detects a change, debounces, and schedules a sync coroutine. Important: watcher-triggered syncs do **not** create a `JobStore` job — they only update the `IndexingStateStore` and call per-file pipeline primitives via `_apply_collection_changes`. Job records are created only by the REST routes (`POST /ingest`, `POST /collections/`, `POST /collections/{name}/reindex`).

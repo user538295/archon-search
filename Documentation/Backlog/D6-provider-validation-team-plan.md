@@ -209,11 +209,11 @@ Boundaries where roles must agree. Changing one requires team agreement. Contrac
 - Frameworks & Drivers: BE-3 — `validation_timeout_seconds` in config · BE-4 — background task in `app.py` · BE-7 — wizard refactor · BE-8 — `routes_status.py` · BE-9 — `toml.example`
 
 **Done when**
-- [ ] `GET /status` returns `model_validation` sub-object with null-while-pending semantics — S1, S2
-- [ ] `GET /ready` returns `models: PENDING` pre-validation, `OK`/`WARN`/`FAIL` after — S3, S4, S5, S6, S7, S12
-- [ ] Reranker disabled → `reranker_ok = true`, no probe — S8
-- [ ] Warm embedder skipped when already loaded — S9
-- [ ] Timeout → both `ok = false`, warning string — S10
+- [x] `GET /status` returns `model_validation` sub-object with null-while-pending semantics — S1, S2
+- [x] `GET /ready` returns `models: PENDING` pre-validation, `OK`/`WARN`/`FAIL` after — S3, S4, S5, S6, S7, S12
+- [x] Reranker disabled → `reranker_ok = true`, no probe — S8
+- [x] Warm embedder skipped when already loaded — S9
+- [x] Timeout → both `ok = false`, warning string — S10
 
 ---
 
@@ -246,15 +246,16 @@ Boundaries where roles must agree. Changing one requires team agreement. Contrac
 
 ## Documentation update
 
-- [ ] `Documentation/Backlog/D6-provider-validation-brief.md` — no changes needed (source brief)
-- [ ] `Documentation/Backlog/D6-provider-validation-team-plan.md` — this file
-- [ ] `Documentation/Architecture/100_system_architecture_overview.md` — mention background model validation in runtime topology
-- [ ] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — add `model_validation.py` new exports (`ModelValidationResult`, `validate_models_async`, `validate_providers_shared`) and note `CheckStatus` enum extension
-- [ ] `Documentation/Architecture/120_services_and_integration_architecture.md` — document background validation task lifecycle (parallel to BackupLoop/MaintenanceLoop pattern)
-- [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — document `GET /status` `model_validation` sub-object; document `GET /ready` `models` check + new `CheckStatus` values; document `[database] validation_timeout_seconds`
-- [ ] `BREAKING.md` — additive enum change: `CheckStatus.PENDING` and `CheckStatus.WARN` (existing consumers asserting exhaustive match on `CheckStatus` will need updating; `tests/contract/test_readiness_schemas.py` currently asserts only `OK`/`FAIL`)
-- [ ] `archon-search.toml.example` — add `validation_timeout_seconds = 60` with comment under `[database]`
-- [ ] `CLAUDE.md` — update `model_validation.py` description to include new exports; note `validation_timeout_seconds` config key
+- [x] `Documentation/Backlog/D6-provider-validation-brief.md` — no changes needed (source brief)
+- [x] `Documentation/Backlog/D6-provider-validation-team-plan.md` — this file
+- [x] `Documentation/Architecture/100_system_architecture_overview.md` — mention background model validation in runtime topology
+- [x] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — add `model_validation.py` new exports (`ModelValidationResult`, `validate_models_async`, `validate_providers_shared`) and note `CheckStatus` enum extension
+- [x] `Documentation/Architecture/120_services_and_integration_architecture.md` — document background validation task lifecycle (parallel to BackupLoop/MaintenanceLoop pattern)
+- [x] `Documentation/Architecture/600_api_reference_or_public_interface.md` — document `GET /status` `model_validation` sub-object; document `GET /ready` `models` check + new `CheckStatus` values; document `[database] validation_timeout_seconds`
+- [x] `BREAKING.md` — additive enum change: `CheckStatus.PENDING` and `CheckStatus.WARN` (existing consumers asserting exhaustive match on `CheckStatus` will need updating; `tests/contract/test_readiness_schemas.py` currently asserts only `OK`/`FAIL`)
+- [x] `archon-search.toml.example` — add `validation_timeout_seconds = 60` with comment under `[database]`
+- [x] `CLAUDE.md` — update `model_validation.py` description to include new exports; note `validation_timeout_seconds` config key
+- [x] `Documentation/Architecture/140_error_handling_strategy.md` · `150_security_and_privacy_architecture.md` · `160_operational_readiness_monitoring_and_reliability.md` · `UserManual/08_running_with_docker.md` — update inline `GET /ready` response shapes for the new `checks.models` field (close-out review finding)
 
 ---
 
@@ -425,7 +426,7 @@ flowchart LR
         - #manual_test — /ready PENDING then OK — start server with `--log-level debug`; curl `/ready` immediately (within 1s of startup log); observe `checks.models = "pending"`. Note: with CPU-only models already cached, validation completes in < 1s — use a slow network or set `validation_timeout_seconds = 1` with a very large model to reliably observe PENDING. Poll with: `while true; do curl -s /ready | jq .checks.models; sleep 0.2; done`
 
 ### Phase 4 · Close-out
-- [ ] **T-2** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-2** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs all prior tasks · completes (acceptance gate)
     - Tests

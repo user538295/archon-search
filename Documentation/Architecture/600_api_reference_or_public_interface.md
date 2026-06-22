@@ -52,7 +52,35 @@ The machine-readable contract is `GET /openapi.json`. Tables below trace every e
 
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
-| GET | `/status` | Operator-facing service status: PID, version, per-collection progress, ETA (namespace-filtered). **D2** — Response carries `backup: BackupStatusDetail \| null` summarising scheduled-backup state. **D3** — Response gains `store_schema_version: int` (current `STORE_SCHEMA_VERSION` constant) and `collections_schema_behind: int` (count of collections with `schema_version < STORE_SCHEMA_VERSION`). **D5** — Response gains `maintenance: MaintenanceStatusDetail \| null` (see `routes_maintenance.py` section for field details). | — | `StatusResponse` (`schemas.py`) |
+| GET | `/status` | Operator-facing service status: PID, version, per-collection progress, ETA (namespace-filtered). **D2** — Response carries `backup: BackupStatusDetail \| null` summarising scheduled-backup state. **D3** — Response gains `store_schema_version: int` (current `STORE_SCHEMA_VERSION` constant) and `collections_schema_behind: int` (count of collections with `schema_version < STORE_SCHEMA_VERSION`). **D5** — Response gains `maintenance: MaintenanceStatusDetail \| null` (see `routes_maintenance.py` section for field details). **D6** — Response gains `model_validation: ModelValidationStatus \| null` (see `routes_ready.py` section). | — | `StatusResponse` (`schemas.py`) |
+
+The `model_validation` field added to `GET /status` (D6):
+
+`StatusResponse` gains `model_validation: ModelValidationStatus | null`. It is `null` while the background validation task is still running (and on app factories that never set `app.state.model_validation`). When populated, `ModelValidationStatus` contains:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `embedder_ok` | `bool \| null` | `true` if the embedder probe passed; `false` if it failed; `null` if not yet run. |
+| `reranker_ok` | `bool \| null` | `true` if the reranker probe passed (or `reranker_model = ""`, disabled); `false` if it failed; `null` if not yet run. |
+| `provider_warnings` | `list[str]` | Human-readable warnings (missing ONNX provider, probe failure, `"validation timed out after {N}s"`). Empty list when clean. |
+| `validated_at` | `str (ISO 8601) \| null` | UTC timestamp when validation finished; `null` while pending. |
+
+### `routes_ready.py` (B2; **D6** — `models` check)
+
+| Method | Path | Purpose | Request schema | Response schema |
+| --- | --- | --- | --- | --- |
+| GET | `/ready` | Unauthenticated readiness probe for load balancers. `ready: bool` is **storage-only** — `true` (200) when `SearchStore.ping()` succeeds, `false` (503) otherwise. **D6** — `checks` gains a `models: CheckStatus` field driven by the background model-validation result; it does **not** affect `ready` or the HTTP status. | — | `ReadinessResponse` (`schemas.py`) |
+
+`checks.models` mapping (D6, strict priority FAIL > WARN > OK):
+
+| `CheckStatus` | Condition |
+| --- | --- |
+| `pending` | Background validation has not produced a result yet (`app.state.model_validation` is `None`, or a probe flag is still unset). |
+| `fail` | Either `embedder_ok` or `reranker_ok` is `false` (a model could not load). |
+| `warn` | Both probes passed but `provider_warnings` is non-empty (provider fallback occurred). |
+| `ok` | Both probes passed with no warnings. |
+
+`CheckStatus` is an enum with values `ok`, `fail`, `pending`, `warn` (the latter two added in D6 — see `BREAKING.md`).
 
 ### `routes_search.py`
 
@@ -372,6 +400,14 @@ Entry point: `archon-search` (`archon_search/cli/main.py`, Click group). Most su
 | `maintenance` | — | **D5** — Maintenance Click group. Bare invocation prints help. | — |
 | `maintenance` | `status` | **D5** — Print maintenance state. Offline-capable: reads `.maintenance-state.json` directly and prints `last_run_at`, `next_run_at`, and per-collection health table. Optionally merges live `maintenance` block from `GET /status` when server is reachable. `--json` emits the raw state as JSON. | `--json`, `--api-url TEXT`, `--api-key TEXT` |
 | `maintenance` | `run` | **D5** — Trigger an immediate maintenance pass via `POST /maintenance/trigger`. Prints `"triggered"` and exits immediately. `--wait` polls `GET /status` until `maintenance.last_run_at` changes, then prints the updated health summary; exits 1 on timeout. | `--wait / --no-wait`, `--api-url TEXT`, `--api-key TEXT` |
+
+## `[database]` config section (D6 addition to an existing section)
+
+The `[database]` section pre-dates D6; D6 adds one key to it.
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `validation_timeout_seconds` | `int` | `60` | Timeout for the background model-validation task (D6) that probes the configured embedder, reranker, and ONNX providers at startup. On timeout, both `embedder_ok` and `reranker_ok` are `false` and `provider_warnings` contains `"validation timed out after {N}s"`. Must be `> 0`; values `<= 0` are rejected with a warning and fall back to `60`. |
 
 ## `[backup]` config section (D2)
 

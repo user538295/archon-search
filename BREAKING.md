@@ -8,6 +8,19 @@
 
 ## Changelog
 
+### [next release] — D6: `CheckStatus` gains `PENDING` and `WARN`; `GET /ready` gains `checks.models`; `GET /status` gains `model_validation`
+
+**Surface**: `GET /ready` and `GET /status` REST responses; `CheckStatus` enum.
+
+- `CheckStatus` now includes two additional values: `PENDING = "pending"` and `WARN = "warn"` (previously only `OK` and `FAIL`). Clients that exhaustively switch/match on `CheckStatus` must add cases for both.
+- `GET /ready` `checks` object gains a `models` field (`CheckStatus`): `"pending"` before background model validation completes, then `"ok"` (both probes pass), `"warn"` (provider fallback occurred), or `"fail"` (a model could not load). The top-level `ready: bool` is **NOT** gated on `models` — it remains storage-only, so load balancers keying on `ready` are unaffected.
+- `GET /status` gains an optional `model_validation: ModelValidationStatus | null` sub-object (`embedder_ok`, `reranker_ok`, `provider_warnings`, `validated_at`); all fields are `null` while validation is pending.
+- Both response changes are additive — permissive clients that ignore unknown fields are unaffected.
+
+**Migration**: add `PENDING` and `WARN` to any exhaustive `CheckStatus` switch/match. Add the `checks.models` and `model_validation` keys to client schema definitions if strict validation is in use. No action required for read-only callers that key only on `ready`.
+
+---
+
 ### [next release] — D4: `centroid_incremental_enabled` config field removed
 
 **Surface**: `archon-search.toml` `[database]` section.

@@ -134,7 +134,7 @@ The container speaks plaintext HTTP only. Put a reverse proxy (nginx, Caddy, Tra
 
 ## Known limitations
 
-- **`GET /ready` does not check model availability** — only that the LanceDB storage layer is connected. The first `/search` after a cold start may pay a multi-second model-load tax.
+- **`GET /ready` does not gate readiness on model availability** — `ready` reflects only whether the LanceDB storage layer is connected. D6 added a `checks.models` field that reports model-validation state (`pending`/`ok`/`warn`/`fail`) but does not affect the HTTP status or the `ready` flag. The first `/search` after a cold start may still pay a multi-second model-load tax.
 - **In-flight ingest jobs are not awaited on SIGTERM** — the container exits cleanly, but a job in progress is marked `FAILED` on the next start. Tune `stop_grace_period` to your workload.
 - **`archon-search collection add/remove` writes to the TOML file** — see `ARCHON_SEARCH_CONFIG` above. Operators who need dynamic collection management inside the container must mount a config file under `/data` and point at it explicitly.
 - **No Apple Silicon / Metal GPU image.** Apple GPUs are not supported in v1.
