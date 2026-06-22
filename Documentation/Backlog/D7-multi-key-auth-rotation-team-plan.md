@@ -92,6 +92,7 @@ An operator can issue, revoke, or rotate API keys — including the default key 
 - **MCP `api_key` not hot-reloaded on rotation** — `key rotate` updates `.search.env` and `keys.json` for the managed-key path, but the MCP server's `APIKeyMiddleware.api_key` (loaded at startup from `.search.env`) is **not** hot-reloaded. The old default key remains valid for the MCP path until the server restarts. Operators who use MCP auth must restart after rotation (S24).
 - **TOML + managed key SHA-256 collision** — if a TOML `[namespaces]` plaintext token happens to produce the same SHA-256 hash as a managed key's `token_hash`, the middleware will match whichever is found first (managed keys checked before TOML synthetic keys). This collision is astronomically unlikely with SHA-256 but is documented as an accepted edge case.
 - **TOML `[namespaces]` changes require restart** — TOML namespace tokens are loaded once at startup as synthetic `KeyRecord` objects. Adding or removing a namespace token in `archon-search.toml` requires a server restart to take effect. Managed keys (created via `POST /keys`) are hot-loaded without restart.
+- **`POST /keys` with `expires_at` in the past** — The server accepts creation of a key with a past `expires_at`. The key is immediately expired and will never be accepted by `active_keys()`. This is intentional: the server does not validate future-ness of `expires_at` at creation time. Operators should use this only for testing. No 422 is returned.
 
 ---
 
@@ -126,7 +127,7 @@ flowchart TD
 **What changes**
 - `archon_search/key_manager.py`: add `KeyRecord` Pydantic model, `KeyStore` class with `create`, `revoke`, `list_keys`, `load`, `active_keys`. **`KeyStore` has no in-memory key list** — `active_keys()` and `list_keys()` call `load()` on every invocation to get a fresh snapshot from disk. Only the `_logged_expired_ids: set[str]` set (for suppressing repeated expired-key INFO logs) is held in memory.
 - `archon_search/config.py`: add `AuthConfig` dataclass (`rotate_grace_seconds: int = 0`); add `auth: AuthConfig` field to `SearchConfig`; add `[auth]` TOML parsing in `_apply_toml`. **Grace seconds precedence:** the `POST /keys/rotate` request body `grace_seconds` field overrides the TOML `[auth] rotate_grace_seconds` default. If `grace_seconds` is absent from the request body, the TOML default is used. If both are 0, rotation is immediate.
-- `archon_search/server/middleware_auth.py`: `APIKeyMiddleware.__init__` gains `key_store: KeyStore | None = None`; `dispatch` loops over `key_store.active_keys()` before the legacy path. **Token comparison:** for managed-key lookups, the middleware computes `token_hash = hashlib.sha256(incoming_token.encode()).hexdigest()` **once per request** (not once per key), then calls `hmac.compare_digest(token_hash, record.token_hash)` for each active key. The existing legacy path continues to use `secrets.compare_digest(incoming_token, self._api_key)` for raw-token comparison. Both are constant-time for equal-length inputs; managed-key hex digests are always 64 characters. **Dispatch order (with early-exit on match):** managed keys (`key_store.active_keys()`) checked first — exit loop on first `hmac.compare_digest` match. If no managed key matches, check TOML `namespaces` dict. If no TOML match, check default `api_key`. This ordering means managed keys take precedence over TOML tokens when the same raw token appears in both (with different namespaces).
+- `archon_search/server/middleware_auth.py`: `APIKeyMiddleware.__init__` gains `key_store: KeyStore | None = None`; `dispatch` loops over `key_store.active_keys()` before the legacy path. **Token comparison:** for managed-key lookups, the middleware computes `token_hash = hashlib.sha256(incoming_token.encode()).hexdigest()` **once per request** (not once per key), then calls `hmac.compare_digest(token_hash, record.token_hash)` for each active key. The existing legacy path continues to use `secrets.compare_digest(incoming_token, self._api_key)` for raw-token comparison. Both are constant-time for equal-length inputs; managed-key hex digests are always 64 characters. **Dispatch order (with early-exit on match):** managed keys (`key_store.active_keys()`) checked first — exit loop on first `hmac.compare_digest` match. If no managed key matches, check TOML `namespaces` dict. If no TOML match, check default `api_key`. This ordering means managed keys take precedence over TOML tokens when the same raw token appears in both (with different namespaces). **The TOML `[namespaces]` loop retains its no-early-exit behavior (no `break` on match) to prevent timing leakage on namespace tokens, preserving the existing middleware design.** **Rotation-revocation guard:** after `POST /keys/rotate`, the old default token is revoked in `keys.json`; `active_keys()` filters it out. However, `APIKeyMiddleware._api_key` still holds the old raw token and the legacy `api_key` fallback path would accept it. To prevent bypassing revocation, the legacy `api_key` fallback must perform a negative check: before accepting a token via the legacy path, the middleware checks whether the incoming token matches any managed key with `status=revoked` or `status=expired` (by computing its SHA-256 hash and scanning `key_store.load()` for a matching revoked/expired record). If found, the request is rejected with 401 even though the raw token matches `self._api_key`. This negative check is only performed when `key_store` is not None. When `key_store` is None (legacy-only mode), the behavior is unchanged.
 - `archon_search/server/app.py`: instantiate `KeyStore`; pass `key_store=key_store` to `APIKeyMiddleware`; include `keys_router`; set `app.state.key_store`
 - `archon_search/server/mcp.py`: `create_app()` gains `key_store` param; wires it into `APIKeyMiddleware` at line 1265; registers four new MCP tools (`create_key`, `list_keys`, `revoke_key`, `rotate_key`)
 - `archon_search/server/routes_keys.py`: new file — POST/GET/DELETE/POST-rotate
@@ -140,7 +141,7 @@ flowchart TD
 - **`active_keys()` re-reads `keys.json` from disk on every call** — `keys.json` is small (typically <100KB); the I/O cost is negligible. Mutations (`create`, `revoke`, `rotate`) write to disk via `atomic_write_bytes` but do NOT maintain a separate in-memory cache. This eliminates cross-process staleness between the HTTP and MCP servers without requiring inotify, polling, or a shared-memory bus.
 - Grace period implemented via `expires_at`, not a separate field
 - TOML `[namespaces]` synthetic `KeyRecord` objects loaded at `create_app()` startup — no auto-migration
-- `key rotate`: `KeyStore.rotate_default_key()` returns new token + old record; `POST /keys/rotate` route handler writes `.search.env`
+- `key rotate`: `KeyStore.rotate_default_key()` returns `{new_key_id, new_token, old_record?}` — the new key's UUID id, the new raw token, and the old key record (if any); `POST /keys/rotate` route handler writes `.search.env`
 
 **Layer note:** `KeyStore` directly uses `atomic_write_bytes` and `_chmod_600` (Frameworks & Drivers utilities). This is an accepted pragmatic shortcut: `key_manager.py` intentionally spans the Use Cases and Frameworks boundary for these thin I/O utilities. The trade-off is that `KeyStore` unit tests must stub the filesystem (using `tmp_path`), not mock the write function.
 
@@ -155,7 +156,7 @@ Boundaries where roles must agree. Logical, not code. Changing one requires team
 - Realised by: BE-1 · Verified by: BE-1 (unit), BE-2 (integration)
 
 **C2 — KeyStore ↔ APIKeyMiddleware** *(Use Cases ↔ Interface Adapters)* — see [`d7-keystore-boundary.tsp`](d7-keystore-boundary.tsp)
-`active_keys()` calls `KeyStore.load()` on every invocation to get the current state from disk, then filters by `status=active` AND (`expires_at` is null OR `expires_at > now`); the comparison is **strict** (`expires_at > now`), so a key at exactly its expiry instant is considered expired. There is no in-memory key list to copy or replace — reads always go to disk. Writers use `atomic_write_bytes` for crash-safe disk writes. **Write serialization:** `KeyStore` holds an internal `asyncio.Lock`. Every read-modify-write cycle (`create`, `revoke`, `rotate`) must acquire this lock before reading `keys.json` and release it after writing. Because `active_keys()` reads from disk, it does not need the lock (each call gets a fresh snapshot). Middleware calls `active_keys()` on every authenticated request. `KeyStore` is the sole writer; middleware is read-only. `list_keys()` returns all records for operator display (no filtering by expiry). `create(ns: str, label: str | None, expires_at: datetime | None)` returns the new raw token (UUID hex); both `label` and `expires_at` are optional (None = not set). **Done in BE-1:** `d7-keystore-boundary.tsp` updated to `label?: string, expires_at?: utcDateTime`. `revoke(id)` is idempotent; raises `KeyError` for a nonexistent `id` (the route handler maps this to 404). `rotate_default_key(current_token: str, grace_seconds: int) -> (new_token: str, old_record: KeyRecord | None)`. The INFO log for expired-key rejection is emitted **at most once per key ID per process lifetime**; `KeyStore` maintains an in-memory `_logged_expired_ids: set[str]` to suppress repeated logs for the same key.
+`active_keys()` calls `KeyStore.load()` on every invocation to get the current state from disk, then filters by `status=active` AND (`expires_at` is null OR `expires_at > now`); the comparison is **strict** (`expires_at > now`), so a key at exactly its expiry instant is considered expired. There is no in-memory key list to copy or replace — reads always go to disk. Writers use `atomic_write_bytes` for crash-safe disk writes. **Write serialization:** `KeyStore` holds an internal `asyncio.Lock`. Every read-modify-write cycle (`create`, `revoke`, `rotate`) must acquire this lock before reading `keys.json` and release it after writing. Because `active_keys()` reads from disk, it does not need the lock (each call gets a fresh snapshot). Middleware calls `active_keys()` on every authenticated request. `KeyStore` is the sole writer; middleware is read-only. `list_keys()` returns all records for operator display (no filtering by expiry). `create(ns: str, label: str | None, expires_at: datetime | None)` returns `{id: str, token: str}` — the new key's UUID id and the raw bearer token; both `label` and `expires_at` are optional (None = not set). **Done in K1:** `d7-keystore-boundary.tsp` updated to `create(ns: string, label?: string, expires_at?: utcDateTime): {id: string, token: string}`. `revoke(id)` is idempotent for already-revoked keys (no-op); raises `KeyError` only for nonexistent IDs (unknown ID, never existed). The route handler relies on this distinction: already-revoked returns 200, nonexistent returns 404. `rotate_default_key(current_token: str, grace_seconds: int) -> {new_key_id: str, new_token: str, old_record: KeyRecord | None}` — returns the new key's UUID id, the new raw token, and the old key record (if any). **Done in K1:** `d7-keystore-boundary.tsp` updated to return `{new_key_id: string, new_token: string, old_record?: KeyRecord}`. The INFO log for expired-key rejection is emitted **at most once per key ID per process lifetime**; `KeyStore` maintains an in-memory `_logged_expired_ids: set[str]` to suppress repeated logs for the same key.
 - Realised by: BE-1, BE-5, BE-7 · Verified by: BE-1 (unit), BE-2 (integration), BE-5 (unit+integration)
 
 **C3 — REST /keys HTTP API** *(CLI → server; clients ↔ server)* — see [`d7-keys-api.tsp`](d7-keys-api.tsp)
@@ -194,6 +195,8 @@ Behavioural only — step-level detail produced by tasks below.
 | **S22** | **Given** CLI `key create` or `key rotate` · **When** output captured · **Then** raw token on stdout only; warning banner on stderr only |
 | **S23** | **Given** `ARCHON_SEARCH_API_KEY` is set in the environment · **When** operator calls `POST /keys/rotate` · **Then** 409 with message "Cannot rotate: ARCHON_SEARCH_API_KEY env var is set; unset it first and restart the server to use managed key rotation." |
 | **S24** | **Given** server started with MCP enabled AND `POST /keys/rotate` called · **When** MCP client authenticates after rotation · **Then** MCP's legacy `api_key` is unchanged until server restart (documented limitation, not a bug) |
+| **S25** | **Given** a raw token exists as both a managed key (namespace=A) and a TOML `[namespaces]` entry (namespace=B) · **When** client sends that token · **Then** 200; `request.state.namespace` = A (managed key wins per dispatch order) |
+| **S26** | **Given** operator calls `POST /keys` with `expires_at` in the past · **When** client sends that token · **Then** 201 on create; 401 on auth (immediately expired) |
 
 ---
 
@@ -273,6 +276,8 @@ Behavioural only — step-level detail produced by tasks below.
 | S22 (stdout/stderr split) | unit (FE-1) |
 | S23 (rotate blocked by env var) | unit (BE-8) |
 | S24 (MCP api_key not reloaded) | documentation (known limitation) |
+| S25 (managed key beats TOML same token) | unit (BE-2) |
+| S26 (born-expired key) | integration (BE-4) |
 | Full create→use→revoke e2e | **e2e** (T-1, T-2) |
 | Full rotate + grace e2e | **e2e** (T-3) |
 | TOML + managed coexist e2e | **e2e** (T-3) |
@@ -384,7 +389,7 @@ flowchart LR
 
 ### Phase 0 · Kickoff
 
-- [ ] **K1** — Agree contracts C1–C3, scenarios S1–S24, and open questions Q1–Q3 (Q2 pre-resolved) with the team #team
+- [x] **K1** — Agree contracts C1–C3, scenarios S1–S24, and open questions Q1–Q3 (Q2 pre-resolved) with the team #team
     - — · 1.0h
     - completes C1, C2, C3
     - Tests
@@ -393,12 +398,12 @@ flowchart LR
 
 ### Phase 1 · Issue a key and authenticate with it *(walking skeleton: thinnest e2e path; carries the data/model foundation)*
 
-- [ ] **BE-1** — Add `KeyRecord` Pydantic model + `AuthConfig` dataclass + `KeyStore.create()` and `load()` with `atomic_write_bytes(path, json.dumps(records, default=str).encode(), mode=0o600)` to `key_manager.py`; add `[auth]` TOML section to `config.py`; `KeyStore` holds an internal `asyncio.Lock` for write serialization; `KeyStore.load()` calls `_chmod_600(path)` after a successful read to tighten permissions on files that may have been created with a permissive umask. **TypeSpec update:** Update `d7-keystore-boundary.tsp` line 26 to `op create(ns: string, label?: string, expires_at?: utcDateTime): string;` before the contract review in K1. #backend-role
+- [ ] **BE-1** — Add `KeyRecord` Pydantic model + `AuthConfig` dataclass + `KeyStore.create()` and `load()` with `atomic_write_bytes(path, json.dumps(records, default=str).encode(), mode=0o600)` to `key_manager.py`; add `[auth]` TOML section to `config.py`; `KeyStore` holds an internal `asyncio.Lock` for write serialization; `KeyStore.load()` calls `_chmod_600(path)` after a successful read to tighten permissions on files that may have been created with a permissive umask. **TypeSpec update:** Already applied in K1 contract ratification: `d7-keystore-boundary.tsp` `create()` returns `{id: string, token: string}` (not bare `string`). No further `.tsp` changes needed for BE-1. #backend-role
     - Entities / Use Cases · 3.0h
     - needs K1 · completes C1, S1, S17, S20, S21
     - Tests
         - #unit_test — `test_key_record_model_valid` — KeyRecord Pydantic model accepts valid fields; rejects unknown fields with `extra='ignore'`
-        - #unit_test — `test_keystore_create_hashes_token` — `KeyStore.create()` stores SHA-256 hex, not raw token; raw token returned to caller
+        - #unit_test — `test_keystore_create_hashes_token` — `KeyStore.create()` stores SHA-256 hex, not raw token; returns `{id: str, token: str}` — both the new key's UUID id and the raw bearer token
         - #unit_test — `test_keystore_create_writes_file_mode_600` — verify mode `0600` on initial creation AND on overwrite of an existing file with wrong permissions (pre-set file to `0644`, then call `KeyStore.create()`, assert mode is now `0600`)
         - #unit_test — `test_keystore_load_tightens_mode` — create `keys.json` with mode `0644`; call `KeyStore.load()`; assert mode is now `0600`
         - #unit_test — `test_keystore_load_corrupted_returns_empty` — corrupted `keys.json` (unparseable JSON) logs ERROR and returns empty list (S17)
@@ -419,7 +424,10 @@ flowchart LR
         - #unit_test — `test_middleware_managed_key_accepted` — valid managed key resolves namespace (S2)
         - #unit_test — `test_middleware_unknown_token_401` — no matching key → 401 (S11)
         - #unit_test — `test_middleware_no_auth_header_401` — missing header → 401 with `WWW-Authenticate: Bearer` (S12)
-        - #unit_test — `test_middleware_timing_safe_no_early_exit` — assert `hmac.compare_digest` (not `secrets.compare_digest` or `==`) is used for each managed-key comparison; both arguments are 64-char hex strings; loop exits on first successful match (S19)
+        - #unit_test — `test_middleware_timing_safe_compare_digest` — assert `hmac.compare_digest` (not `secrets.compare_digest` or `==`) is used for each managed-key comparison; both arguments are 64-char hex strings; the managed-key loop exits on first match (early exit is intentional for managed keys) (S19)
+        - #unit_test — `test_middleware_toml_loop_no_early_exit` — assert the TOML namespace loop iterates all entries even after a match (no break), preserving timing-safe behavior
+        - #unit_test — `test_middleware_managed_beats_toml_same_token` — when same raw token matches both a managed key and a TOML entry with different namespaces, the managed key's namespace is used (S25)
+        - #unit_test — `test_middleware_revoked_managed_key_blocks_legacy_fallback` — after rotation, a token that was revoked in `keys.json` is rejected with 401 even if it matches `_api_key` on the legacy path (rotation-revocation guard)
         - #unit_test — `test_middleware_env_key_wins_over_revoked` — env-var key beats a `revoked` record with same token hash (S16)
         - #unit_test — `test_middleware_legacy_path_unchanged` — existing `api_key` + `namespaces` path works when `key_store=None`
         - #integration_test — `test_middleware_managed_key_full_request` — managed key accepted on a real `TestClient` request
@@ -444,6 +452,7 @@ flowchart LR
         - #integration_test — `test_post_keys_same_namespace_multiple_allowed` — create two keys with the same namespace; `GET /keys?namespace=ns` returns both
         - #integration_test — `test_post_keys_invalid_namespace_422` — `POST /keys` with unknown namespace returns 422 (S13)
         - #integration_test — `test_post_keys_requires_auth` — unauthenticated `POST /keys` returns 401
+        - #integration_test — `test_post_keys_with_past_expires_at_creates_expired_key` — `POST /keys` with `expires_at` in the past returns 201; subsequent auth with that token returns 401 (S26)
 
 - [ ] **FE-1** — Add `cli/key_cmd.py` with Click group `key` + `create` subcommand (`--namespace`, `--expires`, `--label`); duration parser (`30d`/`12h`/`3600s`/ISO-8601); token to stdout, banner to stderr; register `key_cmd` in `cli/main.py`; copy `_resolve_api_key()` pattern from `maintenance_cmd.py` (+0.5h pending Q1 refactor) #frontend-role
     - Presentation · 2.5h
@@ -480,6 +489,7 @@ flowchart LR
         - #unit_test — `test_keystore_active_keys_includes_null_expiry` — key with `expires_at=None` (no expiry) is included in `active_keys()`
         - #unit_test — `test_keystore_list_includes_revoked` — `list_keys()` returns all records including revoked
         - #unit_test — `test_keystore_revoke_nonexistent_raises_key_error` — `revoke('no-such-id')` raises `KeyError`
+        - #unit_test — `test_keystore_revoke_already_revoked_noop` — call `revoke(id)` on an already-revoked key; second call is a no-op (does not raise `KeyError`, key remains revoked)
         - #integration_test — `test_revoked_key_returns_401` — revoke key via `KeyStore`, send request → 401 via `TestClient` (S9)
 
 - [ ] **BE-6** — Add `KeyResponse` (with `id: str | None` to accommodate TOML synthetic keys), `KeyListResponse`, `KeyRevokeResponse` to `schemas.py`; add `GET /keys` and `DELETE /keys/{id}` to `routes_keys.py`; TOML synthetic `KeyRecord` objects have `id=null` and appear in `GET /keys`; 404 response body for TOML synthetic key IDs must include a message: "This key is managed via archon-search.toml [namespaces] — remove it from the config file and restart the server."; update `d7-keys-api.tsp` `KeyResponse.id` to `id?: string` to accommodate TOML synthetic keys #backend-role
@@ -524,7 +534,7 @@ flowchart LR
     - Use Cases · 2.5h
     - needs BE-5 · completes S6, S15
     - Tests
-        - #unit_test — `test_rotate_returns_new_token_and_old_record` — `rotate_default_key()` returns new raw token + old `KeyRecord`; does NOT write `.search.env` (S6)
+        - #unit_test — `test_rotate_returns_new_token_and_old_record` — `rotate_default_key()` returns `{new_key_id, new_token, old_record?}` — the new key's UUID id, new raw token, and old `KeyRecord` (or None); does NOT write `.search.env` (S6)
         - #unit_test — `test_rotate_immediate_revoke_grace_0` — old key status=revoked in `keys.json` when grace_seconds=0 (S6)
         - #unit_test — `test_rotate_grace_sets_expires_at` — old key gets `expires_at = now + grace` when grace_seconds > 0 (S15)
         - #unit_test — `test_rotate_no_old_key_ok` — rotate when no previous managed key exists; returns new token; no crash
