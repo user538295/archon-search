@@ -1556,6 +1556,112 @@
         "title": "KeyCreateResponse",
         "type": "object"
       },
+      "KeyListResponse": {
+        "description": "Response body for GET /keys (D7 BE-6).\n\n``hidden_revoked_count`` is the count of revoked keys excluded when the\n``status`` filter is ``'active'`` (default).  Always 0 when the filter is\n``'revoked'`` or ``'all'``.",
+        "properties": {
+          "hidden_revoked_count": {
+            "default": 0,
+            "title": "Hidden Revoked Count",
+            "type": "integer"
+          },
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/KeyResponse"
+            },
+            "title": "Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "title": "KeyListResponse",
+        "type": "object"
+      },
+      "KeyResponse": {
+        "description": "A single key record in list/revoke responses \u2014 no token field (D7 BE-6).\n\n``id`` is ``str | None`` to accommodate TOML synthetic keys (which have\n``id=None`` since they are not managed entries).  TOML synthetic keys\ncannot be targeted by ``DELETE /keys/{id}``.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "status": {
+            "default": "active",
+            "enum": [
+              "active",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "namespace",
+          "created_at"
+        ],
+        "title": "KeyResponse",
+        "type": "object"
+      },
+      "KeyRevokeResponse": {
+        "description": "Response body for DELETE /keys/{id} (D7 BE-6).\n\n``status`` is always ``'revoked'`` \u2014 a successful DELETE always produces a revoked key.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "revoked",
+            "default": "revoked",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "KeyRevokeResponse",
+        "type": "object"
+      },
       "LatencyPercentiles": {
         "properties": {
           "p50": {
@@ -3960,6 +4066,84 @@
       }
     },
     "/keys": {
+      "get": {
+        "description": "List API keys.\n\nBy default (``status=active``) only active keys are returned; revoked keys\nare counted in ``hidden_revoked_count`` as a hint to the operator.\n\nTOML synthetic keys (``id=null``) are always included in the active view\nbecause they are always active \u2014 they can only be removed by editing\n``archon-search.toml`` and restarting the server.\n\nQuery parameters:\n\n- ``status`` \u2014 ``active`` (default), ``revoked``, or ``all``.\n- ``namespace`` \u2014 optional namespace scope applied before status filtering;\n  ``hidden_revoked_count`` reflects only revoked keys within this namespace.",
+        "operationId": "list_keys_keys_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "default": "active",
+              "enum": [
+                "active",
+                "revoked",
+                "all"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Namespace"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Keys",
+        "tags": [
+          "keys"
+        ]
+      },
       "post": {
         "description": "Issue a new managed API key.\n\nThe raw bearer token is returned exactly once in the response ``token``\nfield. It is never stored on disk \u2014 only its SHA-256 hash is persisted.",
         "operationId": "create_key_keys_post",
@@ -4011,6 +4195,74 @@
           }
         ],
         "summary": "Create Key",
+        "tags": [
+          "keys"
+        ]
+      }
+    },
+    "/keys/{key_id}": {
+      "delete": {
+        "description": "Revoke a managed API key.\n\nIdempotent: calling this on an already-revoked key returns 200 (desired\nstate already achieved).\n\nReturns 404 for unknown IDs.  TOML synthetic keys (``id=null``) cannot be\ntargeted by this endpoint \u2014 the literal string ``\"null\"`` returns 404 with\na hint to edit ``archon-search.toml`` instead.",
+        "operationId": "revoke_key_keys__key_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRevokeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Revoke Key",
         "tags": [
           "keys"
         ]

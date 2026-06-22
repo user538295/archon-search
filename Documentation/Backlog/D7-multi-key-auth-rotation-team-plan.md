@@ -492,7 +492,7 @@ flowchart LR
         - #unit_test — `test_keystore_revoke_already_revoked_noop` — call `revoke(id)` on an already-revoked key; second call is a no-op (does not raise `KeyError`, key remains revoked)
         - #integration_test — `test_revoked_key_returns_401` — revoke key via `KeyStore`, send request → 401 via `TestClient` (S9)
 
-- [ ] **BE-6** — Add `KeyResponse` (with `id: str | None` to accommodate TOML synthetic keys), `KeyListResponse`, `KeyRevokeResponse` to `schemas.py`; add `GET /keys` and `DELETE /keys/{id}` to `routes_keys.py`; TOML synthetic `KeyRecord` objects have `id=null` and appear in `GET /keys`; 404 response body for TOML synthetic key IDs must include a message: "This key is managed via archon-search.toml [namespaces] — remove it from the config file and restart the server."; update `d7-keys-api.tsp` `KeyResponse.id` to `id?: string` to accommodate TOML synthetic keys #backend-role
+- [x] **BE-6** — Add `KeyResponse` (with `id: str | None` to accommodate TOML synthetic keys), `KeyListResponse`, `KeyRevokeResponse` to `schemas.py`; add `GET /keys` and `DELETE /keys/{id}` to `routes_keys.py`; TOML synthetic `KeyRecord` objects have `id=null` and appear in `GET /keys`; 404 response body for TOML synthetic key IDs must include a message: "This key is managed via archon-search.toml [namespaces] — remove it from the config file and restart the server."; update `d7-keys-api.tsp` `KeyResponse.id` to `id?: string` to accommodate TOML synthetic keys #backend-role
     - Interface Adapters · 2.0h
     - needs BE-5, BE-4 · completes C3, S3, S4, S5, S14
     - Tests

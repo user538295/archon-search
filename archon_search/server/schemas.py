@@ -278,6 +278,44 @@ class PatchCollectionBody(BaseModel):
         return v
 
 
+class KeyResponse(BaseModel):
+    """A single key record in list/revoke responses — no token field (D7 BE-6).
+
+    ``id`` is ``str | None`` to accommodate TOML synthetic keys (which have
+    ``id=None`` since they are not managed entries).  TOML synthetic keys
+    cannot be targeted by ``DELETE /keys/{id}``.
+    """
+
+    id: str | None
+    namespace: str
+    label: str | None = None
+    created_at: datetime
+    expires_at: datetime | None = None
+    status: Literal["active", "revoked"] = "active"
+
+
+class KeyListResponse(BaseModel):
+    """Response body for GET /keys (D7 BE-6).
+
+    ``hidden_revoked_count`` is the count of revoked keys excluded when the
+    ``status`` filter is ``'active'`` (default).  Always 0 when the filter is
+    ``'revoked'`` or ``'all'``.
+    """
+
+    keys: list[KeyResponse]
+    hidden_revoked_count: int = 0
+
+
+class KeyRevokeResponse(BaseModel):
+    """Response body for DELETE /keys/{id} (D7 BE-6).
+
+    ``status`` is always ``'revoked'`` — a successful DELETE always produces a revoked key.
+    """
+
+    id: str
+    status: Literal["revoked"] = "revoked"
+
+
 class KeyCreateRequest(BaseModel):
     """Request body for POST /keys (D7 BE-4)."""
 
