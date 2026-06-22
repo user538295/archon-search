@@ -1762,3 +1762,228 @@ def test_run_success_key_not_printed_in_dry_run(tmp_path: Path, capsys) -> None:
 
     # dry_run returns before success block; key must not appear
     assert _FAKE_KEY not in stdout
+
+
+# ---------------------------------------------------------------------------
+# FE-1: post-prewarm reranker provider re-validation (S11)
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _fe1_metal_patches(config_path: Path, fake_legacy: Path, validate_mock: MagicMock):
+    """Shared patch set for the Metal-GPU FE-1 wizard tests."""
+    from contextlib import ExitStack
+
+    patches = (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.METAL),
+        patch.object(SearchInstaller, "validate_providers", validate_mock),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    )
+    with ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
+        yield
+
+
+def test_wizard_warns_on_reranker_provider_failure(
+    tmp_path: Path, caplog: "pytest.LogCaptureFixture", capsys
+) -> None:
+    """GPU configured + reranker provider fails post-prewarm → WARNING logged, install does not raise.
+
+    ``validate_providers`` is called twice: the Step 9 GPU gate (passes, so the
+    GPU provider is configured) and the Step 14 post-prewarm reranker probe
+    (fails). The failure must log a WARNING, print to stdout, and complete.
+    """
+    import logging
+    from unittest.mock import call
+
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    # Step 9 gate passes (True), Step 14 reranker probe fails (False).
+    validate_mock = MagicMock(side_effect=[True, False])
+
+    with _fe1_metal_patches(config_path, fake_legacy, validate_mock):
+        installer = SearchInstaller(config_file=str(config_path))
+        with caplog.at_level(logging.WARNING):
+            rc = installer.run(
+                non_interactive=True,
+                profile="balanced",
+                skip_preload=False,
+            )
+
+    assert rc == 0
+    # Step 9 gate + Step 14 reranker probe = two calls; the second probes the
+    # configured CoreML provider specifically.
+    assert validate_mock.call_count == 2
+    assert validate_mock.call_args_list[1] == call(["CoreMLExecutionProvider"])
+    assert any(
+        "reranker" in r.message.lower() and "CPU" in r.message
+        for r in caplog.records
+    ), f"expected reranker-fallback WARNING in {[r.message for r in caplog.records]}"
+    # The user-facing print also surfaces the fallback.
+    out = capsys.readouterr().out
+    assert "reranker will fall back to CPU" in out
+
+
+def test_wizard_install_completes_when_reranker_provider_unavailable(
+    tmp_path: Path,
+) -> None:
+    """Full wizard flow with reranker provider failure → install writes config and returns 0."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    validate_mock = MagicMock(side_effect=[True, False])
+
+    with _fe1_metal_patches(config_path, fake_legacy, validate_mock):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="balanced",
+            skip_preload=False,
+        )
+
+    assert rc == 0
+    assert config_path.exists()
+    # Config was written with the balanced reranker model (install did not abort).
+    assert "Xenova/ms-marco-MiniLM-L-12-v2" in config_path.read_text()
+
+
+def test_wizard_no_reranker_warning_when_both_validations_pass(
+    tmp_path: Path, caplog: "pytest.LogCaptureFixture"
+) -> None:
+    """Both validations pass → no reranker fallback warning (guards against an inverted condition)."""
+    import logging
+
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    validate_mock = MagicMock(side_effect=[True, True])
+
+    with _fe1_metal_patches(config_path, fake_legacy, validate_mock):
+        installer = SearchInstaller(config_file=str(config_path))
+        with caplog.at_level(logging.WARNING):
+            rc = installer.run(
+                non_interactive=True,
+                profile="balanced",
+                skip_preload=False,
+            )
+
+    assert rc == 0
+    assert validate_mock.call_count == 2
+    assert not any(
+        "fall back to CPU" in r.message for r in caplog.records
+    ), "post-prewarm probe passed; no reranker fallback warning expected"
+
+
+def test_wizard_fe1_skipped_when_no_gpu(
+    tmp_path: Path,
+) -> None:
+    """CPU-only install (gpu_provider None) → no Step 14 reranker probe."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    validate_mock = MagicMock(return_value=True)
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", validate_mock),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="balanced",
+            skip_preload=False,
+        )
+
+    assert rc == 0
+    # GpuType.NONE never sets gpu_provider → the FE-1 block is skipped.
+    validate_mock.assert_not_called()
+
+
+def test_wizard_fe1_skipped_for_cuda(
+    tmp_path: Path,
+) -> None:
+    """CUDA install is out of scope → no post-prewarm reranker probe.
+
+    The CUDA branch configures providers without a Step 9 validate gate and
+    leaves ``gpu_provider`` None, so ``validate_providers`` is never called.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    validate_mock = MagicMock(return_value=True)
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.CUDA),
+        patch.object(SearchInstaller, "validate_providers", validate_mock),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file"),
+        patch.object(SearchInstaller, "load_service", return_value=0),
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="balanced",
+            skip_preload=False,
+        )
+
+    assert rc == 0
+    validate_mock.assert_not_called()
+
+
+def test_wizard_fe1_skipped_when_profile_has_no_reranker(
+    tmp_path: Path,
+) -> None:
+    """Profile without a reranker (minimal multilingual) → no Step 14 reranker probe.
+
+    Metal still runs the Step 9 gate (call 1), but the FE-1 block is skipped
+    because ``prof.reranker is None``, so ``validate_providers`` is called once.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    validate_mock = MagicMock(return_value=True)
+
+    with (
+        _fe1_metal_patches(config_path, fake_legacy, validate_mock),
+        patch("archon_search.install._download_fasttext_model"),
+    ):
+        installer = SearchInstaller(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            multilingual=True,
+            skip_preload=False,
+            accept_fasttext_license=True,
+        )
+
+    assert rc == 0
+    # Step 9 gate only — the FE-1 block is skipped (no reranker in the profile).
+    assert validate_mock.call_count == 1

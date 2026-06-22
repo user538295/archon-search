@@ -1715,6 +1715,12 @@ class SearchInstaller:
 
             # Step 9: GPU provider configuration (detection + user confirm already done in Step 2b)
             providers: list[str] = []
+            # ONNX provider string configured for the Metal/CoreML GPU path, or
+            # None otherwise. Drives the post-prewarm reranker re-validation in
+            # Step 14 (FE-1). CUDA install-time validation is out of scope (D6
+            # plan, "Out of Scope"), so the CUDA branch deliberately leaves this
+            # None — no post-prewarm probe runs for CUDA.
+            gpu_provider: str | None = None
             if not enable_gpu:
                 # User declined GPU — write providers = [] explicitly to override any previous setting
                 gpu_config_path = Path(self.config_file) if self.config_file else get_default_config_path()
@@ -1728,11 +1734,14 @@ class SearchInstaller:
                 if self.validate_providers(["CoreMLExecutionProvider"]):
                     self.configure_providers(gpu=gpu)
                     providers = ["CoreML (Apple Silicon)"]
+                    gpu_provider = "CoreMLExecutionProvider"
                 else:
                     print("Warning: CoreML validation failed — falling back to CPU.")
             elif gpu == GpuType.CUDA:
                 self.configure_providers(gpu=gpu)
                 providers = ["CUDA"]
+                # CUDA post-prewarm validation is out of scope (D6); leave
+                # gpu_provider None so the FE-1 block does not probe CUDA.
             else:
                 self.configure_providers(gpu=gpu)
 
@@ -1810,6 +1819,34 @@ class SearchInstaller:
                                 shutil.copy2(bak, config_path)
                         # branch == "force": leave backup, new config stays
                         return 1
+
+                    # FE-1: re-validate the configured GPU provider now that the
+                    # reranker model files are downloaded. The Step 9 gate runs
+                    # before pre-warm, so the reranker model is not yet on disk
+                    # and probing it there would trigger a blocking download;
+                    # this is the first point it can be probed cheaply under the
+                    # GPU provider. Only the Metal/CoreML path reaches here
+                    # (gpu_provider is None for CUDA — out of scope). A failure
+                    # warns and continues: the providers list is a single shared
+                    # key, so no per-model config is rewritten and ONNX falls
+                    # back to CPU per-session at runtime. validate_providers
+                    # probes both models and returns a combined result, so the
+                    # message names the provider rather than blaming the reranker
+                    # alone (the embedder already passed the Step 9 gate, making
+                    # the reranker the likely cause, but not the certain one).
+                    if gpu_provider is not None and prof.reranker is not None:
+                        if not self.validate_providers([gpu_provider]):
+                            logger.warning(
+                                "Model validation under provider %s failed after "
+                                "download — the reranker (%r) will fall back to "
+                                "CPU at runtime.",
+                                gpu_provider,
+                                prof.reranker,
+                            )
+                            print(
+                                f"Warning: model validation failed under {gpu_provider} — "
+                                "the reranker will fall back to CPU."
+                            )
 
             # Step 15: register and start service
             print("[5/5] Starting search service...")

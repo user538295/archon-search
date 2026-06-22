@@ -398,7 +398,7 @@ flowchart LR
         - #unit_test — `test_validate_providers_reranker_none_no_probe` — profile without reranker skips reranker probe
         - #unit_test — `test_validate_providers_returns_bool_never_raises` — exception in `validate_providers_shared`; method returns False, no raise
         - #integration_test — `test_wizard_validate_providers_returns_false_on_bad_provider` — unavailable provider → returns False without raising
-- [ ] **FE-1** — In `SearchInstaller` wizard flow: after `_prewarm_models`, call refactored `validate_providers()` for the reranker; log `WARNING` + fallback message if reranker provider unavailable; install continues #frontend-role
+- [x] **FE-1** — In `SearchInstaller` wizard flow: after `_prewarm_models`, call refactored `validate_providers()` for the reranker; log `WARNING` + fallback message if reranker provider unavailable; install continues #frontend-role
     - Presentation · 2.0h
     - needs BE-7 · completes S11
     - Tests
