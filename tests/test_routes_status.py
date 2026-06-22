@@ -782,3 +782,96 @@ def test_get_status_collections_schema_behind_namespace_scoped(tmp_db: Path) -> 
         data = c.get("/status").json()
     # col-b is in "other" namespace, filtered out by ns_meta. Only col-a counts.
     assert data["collections_schema_behind"] == 1
+
+
+# ---------------------------------------------------------------------------
+# BE-8 — model_validation sub-object in GET /status (D6 C1, S1, S2)
+# ---------------------------------------------------------------------------
+
+
+def _make_client_with_model_validation(tmp_db: Path, result: object) -> TestClient:
+    """Build a TestClient and explicitly set ``app.state.model_validation = result``.
+
+    ``result`` may be ``None`` (pending) or a ``ModelValidationResult``. Setting the
+    attribute explicitly (rather than relying on the attribute being absent) proves
+    the route's ``getattr`` guard reads the live ``app.state`` value — distinguishing
+    the intended code path from the Pydantic field default.
+    """
+    config = SearchConfig()
+    config.db_path = str(tmp_db)
+    job_store = JobStore(path=tmp_db / "jobs.json")
+    app = create_app(config, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
+    app.state.search_store = mock_store
+    app.state.model_validation = result
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+
+def test_status_model_validation_null_while_pending(tmp_db: Path) -> None:
+    """While the background validation task has not completed, the route returns
+    ``model_validation: null`` (S2). ``app.state.model_validation`` is explicitly
+    set to ``None`` so this exercises the route's ``getattr`` guard — not merely the
+    Pydantic field default (which would mask a route that ignored the field)."""
+    c = _make_client_with_model_validation(tmp_db, None)
+    response = c.get("/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "model_validation" in data
+    assert data["model_validation"] is None
+
+
+def test_status_model_validation_populated_after_validation(tmp_db: Path) -> None:
+    """When ``app.state.model_validation`` holds a completed success result, the route
+    mirrors every field into the ``model_validation`` sub-object (S1)."""
+    from archon_search.model_validation import ModelValidationResult
+
+    validated_at = datetime.now(UTC)
+    result = ModelValidationResult(
+        embedder_ok=True,
+        reranker_ok=True,
+        provider_warnings=["used CPU fallback"],
+        validated_at=validated_at,
+    )
+    c = _make_client_with_model_validation(tmp_db, result)
+    response = c.get("/status")
+    assert response.status_code == 200
+    mv = response.json()["model_validation"]
+    assert mv is not None
+    assert mv["embedder_ok"] is True
+    assert mv["reranker_ok"] is True
+    assert mv["provider_warnings"] == ["used CPU fallback"]
+    # Faithful mirroring of the timestamp, not a fabricated non-null value.
+    # Pydantic serialises UTC with a "Z" suffix; compare as parsed datetimes.
+    assert datetime.fromisoformat(mv["validated_at"]) == validated_at
+
+
+def test_status_model_validation_failure_with_empty_warnings(tmp_db: Path) -> None:
+    """Both probes failed and ``provider_warnings`` is empty: the route mirrors the
+    ``False`` booleans and the empty list (not omitted, not null)."""
+    from archon_search.model_validation import ModelValidationResult
+
+    validated_at = datetime.now(UTC)
+    result = ModelValidationResult(
+        embedder_ok=False,
+        reranker_ok=False,
+        provider_warnings=[],
+        validated_at=validated_at,
+    )
+    c = _make_client_with_model_validation(tmp_db, result)
+    response = c.get("/status")
+    assert response.status_code == 200
+    mv = response.json()["model_validation"]
+    assert mv is not None
+    assert mv["embedder_ok"] is False
+    assert mv["reranker_ok"] is False
+    assert mv["provider_warnings"] == []
+    assert datetime.fromisoformat(mv["validated_at"]) == validated_at

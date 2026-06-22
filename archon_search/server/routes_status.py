@@ -18,6 +18,7 @@ from archon_search.server.schemas import (
     CollectionHealthEntry,
     ErrorDetail,
     MaintenanceStatusDetail,
+    ModelValidationStatus,
     StatusCollectionEntry,
     StatusResponse,
 )
@@ -109,6 +110,7 @@ async def status(request: Request) -> StatusResponse:
     readiness = await collect_readiness(request.app.state, state)
     backup_detail = _build_backup_status(request, config, ns, sorted(ns_names))
     maintenance_detail = _build_maintenance_status(request, config, ns)
+    model_validation = _build_model_validation_status(request)
     return StatusResponse(
         running=True,
         pid=pid,
@@ -119,6 +121,25 @@ async def status(request: Request) -> StatusResponse:
         maintenance=maintenance_detail,
         store_schema_version=STORE_SCHEMA_VERSION,
         collections_schema_behind=collections_schema_behind,
+        model_validation=model_validation,
+    )
+
+
+def _build_model_validation_status(request: Request) -> ModelValidationStatus | None:
+    """Mirror the background validation result into the ``model_validation`` sub-object.
+
+    Returns ``None`` while the background task has not yet completed (D6 S2) — the
+    ``getattr`` guard also keeps the endpoint resilient to app factories that never
+    set ``app.state.model_validation`` (mirrors ``_build_maintenance_status``).
+    """
+    result = getattr(request.app.state, "model_validation", None)
+    if result is None:
+        return None
+    return ModelValidationStatus(
+        embedder_ok=result.embedder_ok,
+        reranker_ok=result.reranker_ok,
+        provider_warnings=list(result.provider_warnings),
+        validated_at=result.validated_at,
     )
 
 

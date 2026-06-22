@@ -357,7 +357,7 @@ flowchart LR
         - #unit_test — `test_model_validation_state_none_before_task` — immediately after lifespan startup, `app.state.model_validation` is None
         - #integration_test — `test_background_validation_completes_and_sets_app_state` — `make_real_app`; poll `app.state.model_validation` with a deadline loop (`deadline = time.monotonic() + 5.0; while time.monotonic() < deadline and app.state.model_validation is None: time.sleep(0.05)`); assert non-None with `validated_at` set. Do NOT use bare `time.sleep` without a deadline.
         - #unit_test — `test_background_task_exception_sets_failure_result` — patch `validate_models_async` to raise RuntimeError; assert `app.state.model_validation.embedder_ok == False` and warnings contain "failed unexpectedly"
-- [ ] **BE-8** — In `routes_status.py`, read `app.state.model_validation` and include `model_validation` in `StatusResponse`; null if task not yet complete #backend-role
+- [x] **BE-8** — In `routes_status.py`, read `app.state.model_validation` and include `model_validation` in `StatusResponse`; null if task not yet complete #backend-role
     - Interface Adapters · 2.0h
     - needs BE-4 · completes S1, S2
     - Tests
