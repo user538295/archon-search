@@ -42,10 +42,17 @@ def test_status_endpoint_includes_model_validation_after_startup(tmp_path, monke
 
 
 def test_ready_models_transitions_from_pending_to_ok(tmp_path, monkeypatch) -> None:
-    """Poll GET /ready until checks.models leaves "pending"; assert it lands on "ok" (D6 BE-6, S4)."""
+    """Poll GET /ready until checks.models leaves "pending"; assert it lands on "ok" (D6 BE-6, S4).
+
+    Note: with stub models the background validation can complete before the first
+    poll, so observing the "pending" window is not guaranteed here — the "pending"
+    state itself is proven deterministically by the unit test
+    ``test_ready_models_pending_when_validation_none``. This test guarantees the
+    end state is "ok" (never stuck on "pending") under a real lifespan.
+    """
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, _api_key):
         deadline = time.monotonic() + 5.0
-        models = "pending"
+        models = None
         while time.monotonic() < deadline:
             models = client.get("/ready").json()["checks"]["models"]
             if models != "pending":
