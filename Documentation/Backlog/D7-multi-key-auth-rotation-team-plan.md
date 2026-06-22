@@ -508,7 +508,7 @@ flowchart LR
         - #integration_test — `test_delete_keys_already_revoked_200` — `DELETE /keys/{id}` on an already-revoked key returns 200 (idempotent)
         - #integration_test — `test_delete_keys_null_string_404` — `DELETE /keys/null` (literal string 'null') returns 404 with message distinguishing TOML synthetic key from unknown ID
 
-- [ ] **FE-2** — Add `key list` subcommand (`--namespace`, `--status`) and `key revoke <id>` subcommand to `cli/key_cmd.py`; `key list` emits hint line for hidden revoked count #frontend-role
+- [x] **FE-2** — Add `key list` subcommand (`--namespace`, `--status`) and `key revoke <id>` subcommand to `cli/key_cmd.py`; `key list` emits hint line for hidden revoked count #frontend-role
     - Presentation · 2.0h
     - needs BE-6 · completes S3, S4
     - Tests

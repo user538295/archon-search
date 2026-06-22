@@ -1,10 +1,15 @@
-"""``archon-search key`` CLI group (D7 FE-1).
+"""``archon-search key`` CLI group (D7 FE-1, FE-2).
 
 Provides:
 
 * ``archon-search key create --namespace NS [--label LABEL] [--expires EXPR]``
   Issue a new managed API key.  The raw token is printed to stdout exactly once;
   a warning banner is printed to stderr.
+* ``archon-search key list [--namespace NS] [--status active|revoked|all]``
+  List managed API keys.  Active keys only by default; revoked count hint shown
+  when hidden revoked keys exist.
+* ``archon-search key revoke <ID>``
+  Revoke a managed API key immediately.
 
 Duration strings accepted by ``--expires``:
   ``30d``, ``12h``, ``3600s`` (relative to now, UTC) or an ISO-8601 datetime
@@ -202,3 +207,151 @@ def create_subcommand(
 
     # Raw token to stdout only (S22).
     click.echo(token)
+
+
+# ---------------------------------------------------------------------------
+# list subcommand
+# ---------------------------------------------------------------------------
+
+
+@key_cmd.command("list")
+@click.option(
+    "--namespace",
+    default=None,
+    help="Filter keys by namespace.",
+)
+@click.option(
+    "--status",
+    "status_filter",
+    default=None,
+    type=click.Choice(["active", "revoked", "all"]),
+    help="Show active (default), revoked, or all keys.",
+)
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def list_subcommand(
+    namespace: str | None,
+    status_filter: str | None,
+    api_url: str,
+    api_key: str | None,
+) -> None:
+    """List managed API keys.
+
+    Active keys are shown by default.  When revoked keys exist but are hidden,
+    a hint count is displayed.  Use ``--status all`` to show all keys.
+    """
+    try:
+        key = _resolve_api_key(api_key)
+    except Exception as exc:
+        click.echo(f"Error resolving API key: {exc}", err=True)
+        raise SystemExit(1) from exc
+
+    headers = {"Authorization": f"Bearer {key}"}
+    url = f"{api_url.rstrip('/')}/keys"
+
+    params: dict[str, str] = {}
+    if status_filter is not None:
+        params["status"] = status_filter
+    if namespace is not None:
+        params["namespace"] = namespace
+
+    try:
+        with httpx.Client() as client:
+            resp = client.get(url, headers=headers, params=params if params else None)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1) from exc
+
+    if resp.status_code != 200:
+        click.echo(
+            f"Error: server returned {resp.status_code}: {resp.text}", err=True
+        )
+        raise SystemExit(1)
+
+    try:
+        data = resp.json()
+    except ValueError:
+        click.echo("Error: server returned invalid JSON", err=True)
+        raise SystemExit(1)
+
+    keys = data.get("keys", [])
+    hidden_revoked_count: int = data.get("hidden_revoked_count", 0)
+
+    if not keys:
+        click.echo("No keys found.")
+    else:
+        for record in keys:
+            key_id = record.get("id") or "null"
+            ns = record.get("namespace", "")
+            status = record.get("status", "")
+            label = record.get("label") or ""
+            created_at = record.get("created_at", "")
+            expires_at = record.get("expires_at") or ""
+            label_part = f"  label: {label}" if label else ""
+            expires_part = f"  expires_at: {expires_at}" if expires_at else ""
+            click.echo(
+                f"id: {key_id}  namespace: {ns}  status: {status}"
+                f"  created_at: {created_at}{label_part}{expires_part}"
+            )
+
+    if hidden_revoked_count > 0:
+        click.echo(
+            f"\n({hidden_revoked_count} revoked key(s) hidden — use --status all or --status revoked to show)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# revoke subcommand
+# ---------------------------------------------------------------------------
+
+
+@key_cmd.command("revoke")
+@click.argument("key_id")
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def revoke_subcommand(key_id: str, api_url: str, api_key: str | None) -> None:
+    """Revoke a managed API key immediately.
+
+    Idempotent: revoking an already-revoked key returns success.
+    """
+    try:
+        key = _resolve_api_key(api_key)
+    except Exception as exc:
+        click.echo(f"Error resolving API key: {exc}", err=True)
+        raise SystemExit(1) from exc
+
+    headers = {"Authorization": f"Bearer {key}"}
+    url = f"{api_url.rstrip('/')}/keys/{key_id}"
+
+    try:
+        with httpx.Client() as client:
+            resp = client.delete(url, headers=headers)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1) from exc
+
+    if resp.status_code not in (200, 204):
+        click.echo(
+            f"Error: server returned {resp.status_code}: {resp.text}", err=True
+        )
+        raise SystemExit(1)
+
+    click.echo(f"Key {key_id} revoked.")
