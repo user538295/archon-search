@@ -321,7 +321,7 @@ flowchart LR
     - Tests
 
 ### Phase 1 · Background validation visible in GET /status *(walking skeleton: validation runs, result stored, status shows it)*
-- [ ] **BE-1** — Add `ModelValidationResult` dataclass, `validate_providers_shared()`, and `validate_models_async()` to `model_validation.py` #backend-role
+- [x] **BE-1** — Add `ModelValidationResult` dataclass, `validate_providers_shared()`, and `validate_models_async()` to `model_validation.py` #backend-role
     - Use Cases (+ DTO) · 6.0h
     - needs K1 · completes C1, C3, S1, S5, S6, S7, S8, S9, S10, S12
     - Tests
