@@ -10,18 +10,201 @@ bootstrap where the env is set after the package is loaded.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import logging
 import os
 import re
 import secrets
 import sys
 import time
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
 
 from archon_search._durable_io import atomic_write_bytes
 from archon_search.paths import get_data_dir
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# KeyRecord entity (C1)
+# ---------------------------------------------------------------------------
+
+
+class KeyRecord(BaseModel):
+    """A single API key record stored in keys.json.
+
+    Raw bearer tokens are never stored — only the SHA-256 hex digest
+    (``token_hash``) is persisted. The raw token is printed once to
+    stdout at creation time and is never recoverable from disk.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    token_hash: str
+    namespace: str
+    label: str | None = None
+    created_at: datetime
+    expires_at: datetime | None = None
+    status: Literal["active", "revoked"] = "active"
+
+
+# ---------------------------------------------------------------------------
+# KeyStore use-case class (C2)
+# ---------------------------------------------------------------------------
+
+
+class KeyStore:
+    """Durable key store backed by ``keys.json``.
+
+    Design:
+    - No in-memory key list is maintained. ``active_keys()`` and ``load()``
+      always re-read from disk (disk-read-on-demand). This eliminates
+      cross-process staleness between the HTTP and MCP servers that each
+      create their own ``KeyStore`` pointing to the same file.
+    - An internal ``asyncio.Lock`` serialises every read-modify-write cycle
+      (``create``; extended in later tasks). ``active_keys()`` / ``load()``
+      do NOT need the lock (each call gets a fresh snapshot from disk).
+    - ``_logged_expired_ids`` suppresses repeated INFO logs for the same
+      expired key across calls within one process lifetime.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._lock = asyncio.Lock()
+        self._logged_expired_ids: set[str] = set()
+
+    # ------------------------------------------------------------------
+    # Read-only helpers (no lock required)
+    # ------------------------------------------------------------------
+
+    async def load(self) -> list[KeyRecord]:
+        """Read ``keys.json`` from disk and return all records.
+
+        Returns an empty list (and logs ERROR) if the file is missing,
+        unreadable, non-array JSON, or contains any invalid record —
+        implementing the all-or-nothing corruption policy (S17).
+        """
+        try:
+            raw = self._path.read_bytes()
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            logger.error("keys.json read error: %s", exc)
+            return []
+
+        # Tighten permissions on files that may have been created with a
+        # permissive umask (e.g. by a different tool or manual creation).
+        _chmod_600(self._path)
+
+        if not raw:
+            logger.error("keys.json is empty — treating as corrupted key store")
+            return []
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.error("keys.json is not valid JSON — treating as corrupted key store: %s", exc)
+            return []
+
+        if not isinstance(data, list):
+            logger.error(
+                "keys.json does not contain a JSON array — treating as corrupted key store"
+            )
+            return []
+
+        try:
+            return [KeyRecord.model_validate(item) for item in data]
+        except Exception as exc:
+            logger.error(
+                "keys.json contains invalid records — treating as corrupted key store: %s", exc
+            )
+            return []
+
+    async def active_keys(self) -> list[KeyRecord]:
+        """Return all non-expired active records.
+
+        Reads ``keys.json`` from disk on every call. Filters by:
+        - ``status == "active"``
+        - ``expires_at is None`` OR ``expires_at > now`` (strict: key at
+          exact expiry instant is considered expired)
+        """
+        records = await self.load()
+        now = datetime.now(UTC)
+        active = []
+        for record in records:
+            if record.status != "active":
+                continue
+            if record.expires_at is not None and record.expires_at <= now:
+                # Log only once per key ID per process lifetime
+                if record.id not in self._logged_expired_ids:
+                    logger.info("Key %s has expired and will no longer be accepted", record.id)
+                    self._logged_expired_ids.add(record.id)
+                continue
+            active.append(record)
+        return active
+
+    # ------------------------------------------------------------------
+    # Write operations (lock required)
+    # ------------------------------------------------------------------
+
+    async def create(
+        self,
+        ns: str,
+        label: str | None,
+        expires_at: datetime | None,
+    ) -> dict[str, str]:
+        """Generate a new API key, persist its hash, return ``{id, token}``.
+
+        The raw bearer token is returned exactly once — it is never stored
+        on disk. ``keys.json`` stores only the SHA-256 hex digest.
+
+        Returns:
+            dict with ``id`` (UUID4 str) and ``token`` (raw 64-hex-char bearer token).
+        """
+        if expires_at is not None and expires_at.tzinfo is None:
+            raise ValueError("expires_at must be timezone-aware")
+
+        key_id = str(uuid.uuid4())
+        raw_token = secrets.token_hex(32)  # 64 hex chars
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        created_at = datetime.now(UTC)
+
+        record = KeyRecord(
+            id=key_id,
+            token_hash=token_hash,
+            namespace=ns,
+            label=label,
+            created_at=created_at,
+            expires_at=expires_at,
+            status="active",
+        )
+
+        async with self._lock:
+            records = await self.load()
+            records.append(record)
+            self._write(records)
+
+        return {"id": key_id, "token": raw_token}
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _write(self, records: list[KeyRecord]) -> None:
+        """Atomically write records to ``keys.json`` with mode 0o600."""
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(
+            [r.model_dump(mode="json") for r in records],
+        ).encode()
+        atomic_write_bytes(self._path, payload, mode=0o600)
 
 ENV_VAR: str = "ARCHON_SEARCH_API_KEY"
 

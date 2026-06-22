@@ -81,6 +81,11 @@ class MaintenanceConfig:
 
 
 @dataclass
+class AuthConfig:
+    rotate_grace_seconds: int = 0
+
+
+@dataclass
 class SearchConfig:
     # [server]
     host: str = "127.0.0.1"
@@ -141,6 +146,8 @@ class SearchConfig:
     backup: BackupConfig = field(default_factory=BackupConfig)
     # [maintenance]
     maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
+    # [auth]
+    auth: AuthConfig = field(default_factory=AuthConfig)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -576,6 +583,15 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     if "exclude" in maintenance_cfg:
         maintenance.exclude = [str(p) for p in maintenance_cfg["exclude"]]
     config.maintenance = maintenance
+
+    auth_cfg = doc.get("auth", {})
+    auth = AuthConfig()
+    if "rotate_grace_seconds" in auth_cfg:
+        grace = _coerce_int(auth_cfg["rotate_grace_seconds"], "[auth].rotate_grace_seconds")
+        if grace < 0:
+            raise ConfigError(f"[auth].rotate_grace_seconds must be >= 0, got {grace}")
+        auth.rotate_grace_seconds = grace
+    config.auth = auth
 
 
 def _post_process_maintenance(config: SearchConfig) -> None:

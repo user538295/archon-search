@@ -184,6 +184,10 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "retry_max_age_hours": 72,
             "exclude": [],
         },
+        # [auth]
+        "auth": {
+            "rotate_grace_seconds": 0,
+        },
     }
 
     # Keyset guard — fails when a new top-level field is added to SearchConfig

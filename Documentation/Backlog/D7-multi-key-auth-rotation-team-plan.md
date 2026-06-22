@@ -398,7 +398,7 @@ flowchart LR
 
 ### Phase 1 · Issue a key and authenticate with it *(walking skeleton: thinnest e2e path; carries the data/model foundation)*
 
-- [ ] **BE-1** — Add `KeyRecord` Pydantic model + `AuthConfig` dataclass + `KeyStore.create()` and `load()` with `atomic_write_bytes(path, json.dumps(records, default=str).encode(), mode=0o600)` to `key_manager.py`; add `[auth]` TOML section to `config.py`; `KeyStore` holds an internal `asyncio.Lock` for write serialization; `KeyStore.load()` calls `_chmod_600(path)` after a successful read to tighten permissions on files that may have been created with a permissive umask. **TypeSpec update:** Already applied in K1 contract ratification: `d7-keystore-boundary.tsp` `create()` returns `{id: string, token: string}` (not bare `string`). No further `.tsp` changes needed for BE-1. #backend-role
+- [x] **BE-1** — Add `KeyRecord` Pydantic model + `AuthConfig` dataclass + `KeyStore.create()` and `load()` with `atomic_write_bytes(path, json.dumps(records, default=str).encode(), mode=0o600)` to `key_manager.py`; add `[auth]` TOML section to `config.py`; `KeyStore` holds an internal `asyncio.Lock` for write serialization; `KeyStore.load()` calls `_chmod_600(path)` after a successful read to tighten permissions on files that may have been created with a permissive umask. **TypeSpec update:** Already applied in K1 contract ratification: `d7-keystore-boundary.tsp` `create()` returns `{id: string, token: string}` (not bare `string`). No further `.tsp` changes needed for BE-1. #backend-role
     - Entities / Use Cases · 3.0h
     - needs K1 · completes C1, S1, S17, S20, S21
     - Tests
