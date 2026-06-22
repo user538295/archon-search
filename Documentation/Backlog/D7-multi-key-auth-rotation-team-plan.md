@@ -454,7 +454,7 @@ flowchart LR
         - #integration_test — `test_post_keys_requires_auth` — unauthenticated `POST /keys` returns 401
         - #integration_test — `test_post_keys_with_past_expires_at_creates_expired_key` — `POST /keys` with `expires_at` in the past returns 201; subsequent auth with that token returns 401 (S26)
 
-- [ ] **FE-1** — Add `cli/key_cmd.py` with Click group `key` + `create` subcommand (`--namespace`, `--expires`, `--label`); duration parser (`30d`/`12h`/`3600s`/ISO-8601); token to stdout, banner to stderr; register `key_cmd` in `cli/main.py`; copy `_resolve_api_key()` pattern from `maintenance_cmd.py` (+0.5h pending Q1 refactor) #frontend-role
+- [x] **FE-1** — Add `cli/key_cmd.py` with Click group `key` + `create` subcommand (`--namespace`, `--expires`, `--label`); duration parser (`30d`/`12h`/`3600s`/ISO-8601); token to stdout, banner to stderr; register `key_cmd` in `cli/main.py`; copy `_resolve_api_key()` pattern from `maintenance_cmd.py` (+0.5h pending Q1 refactor) #frontend-role
     - Presentation · 2.5h
     - needs BE-4 · completes S22
     - Tests

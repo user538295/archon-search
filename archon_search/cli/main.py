@@ -4,6 +4,7 @@ import click
 
 from archon_search.cli.backup_cmd import backup_cmd
 from archon_search.cli.collection import collection
+from archon_search.cli.key_cmd import key_cmd
 from archon_search.cli.maintenance_cmd import maintenance_cmd
 from archon_search.cli.config_cmd import config
 from archon_search.cli.export_cmd import export_cmd, import_cmd
@@ -42,6 +43,7 @@ main.add_command(export_cmd)
 main.add_command(import_cmd)
 main.add_command(backup_cmd)
 main.add_command(maintenance_cmd)
+main.add_command(key_cmd)
 
 
 if __name__ == "__main__":
