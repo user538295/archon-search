@@ -2,6 +2,16 @@
 
 ## What Has Worked
 
+**2026-06-22 — D7 T-1: `store.ingest_chunks` does not forward `namespace` to `_do_update_meta_on_add`**
+- Observation: `ingest_chunks` accepts a `namespace` kwarg but does NOT forward it to `_do_update_meta_on_add`, which always defaults to `DEFAULT_NAMESPACE` when called internally. The test helper omits `embedding_model` from the `ingest_chunks` call so `_do_update_meta_on_add` short-circuits (returns False when `embedding_model is None`) and the explicit `update_collection_meta` call remains the sole source of namespace truth. Adding `embedding_model=...` to `ingest_chunks` without fixing the propagation gap would create a wrong-namespace meta row under 'default', breaking isolation assertions.
+- Action: When writing e2e tests that inject data under a specific namespace, use `update_collection_meta` as the authoritative namespace setter — not the `namespace` kwarg on `ingest_chunks`. Always document this fragility in the helper's docstring.
+- Confidence: high
+
+**2026-06-22 — D7 T-1: e2e namespace isolation proof pattern for managed-key auth**
+- Observation: `request.state.namespace` is not directly accessible from outside the HTTP boundary in e2e tests. The correct proof technique is a two-step isolation check: (1) managed token + search → 200 with non-empty results (collection accessible); (2) default key + same search → 404 (collection invisible to different namespace). Step 1 alone is vacuous (200 doesn't prove correct namespace). Step 2 alone doesn't prove the managed key's namespace is correct. Together they form a sound proof. The assertion message for step 1 should explicitly reference step 2 as the complementary isolation proof.
+- Action: For any e2e test that must prove namespace resolution, combine a "managed key sees data" assertion with a "different-namespace key cannot see the same data" assertion. Never claim either assertion alone proves namespace resolution.
+- Confidence: high
+
 **2026-06-22 — D7 BE-3: `KeyRecord.id: str | None` widens for synthetic TOML records; `_logged_expired_ids` guard**
 - Observation: Widening `id: str` to `str | None` to accommodate synthetic TOML records (no UUID) also introduced a latent bug in `active_keys()`: the `_logged_expired_ids.add(record.id)` call would add `None` to a `set[str]`, causing all synthetic expired records to share the same suppression slot. Fix: guard with `if record.id is not None` before touching `_logged_expired_ids`. Synthetic records never have `expires_at` set (they expire only when the TOML entry is removed and the server restarted), so the guard is purely defensive.
 - Action: Whenever widening an entity field from a non-nullable type to `T | None`, grep all in-memory tracking structures that use that field as a key (sets, dicts) and add a `None` guard before any insertion.
@@ -85,6 +95,21 @@
 **2026-06-22 — D7 BE-4: "label echoed in response" test is tautological when route builds response from `body.label`**
 - Observation: After eliminating the double-read, the route builds `KeyCreateResponse(label=body.label, ...)` directly. A test asserting `body["label"] == "my-label"` only proves the route echoes the input — it does NOT prove the label was persisted. A bug in `KeyStore.create()` ignoring the label would pass silently. Fix: add a persistence assertion by reading keys.json directly and checking the stored record's label.
 - Action: For any create endpoint where the response is built from request inputs (not from the stored record), always add a separate persistence assertion that reads the storage layer directly and confirms the field was actually written.
+- Confidence: high
+
+**2026-06-22 — D7 FE-1: `strftime("%Y-%m-%dT%H:%M:%SZ")` silently corrupts non-UTC datetime offsets**
+- Observation: `expires_dt.strftime("%Y-%m-%dT%H:%M:%SZ")` appends a literal "Z" (UTC) without converting the datetime to UTC first. For a user-supplied `+05:30` offset, the server receives a timestamp 5.5 hours off. Fix: use `expires_dt.isoformat()` which preserves the original offset. Pydantic's `AwareDatetime` accepts both `+00:00` and `+05:30` formats.
+- Action: Never use `strftime("...Z")` to format a timezone-aware datetime unless you have already called `.astimezone(UTC)` first. Default to `.isoformat()` which is unambiguous.
+- Confidence: high
+
+**2026-06-22 — D7 FE-1: S22 (stdout/stderr split) — Click 8.x `result.stdout` and `result.stderr` are available without `mix_stderr=False`**
+- Observation: `CliRunner` in Click 8.3.x does NOT accept `mix_stderr` as a constructor param (it was removed in Click 8.0). However, `result.stdout` and `result.stderr` ARE available on the `Result` object — they correctly separate the two streams. The old approach of patching `click.echo` to detect `err=True` calls works but is fragile; using `result.stdout`/`result.stderr` directly is more reliable.
+- Action: For S22-style tests (token on stdout, banner on stderr), assert `token in result.stdout`, `token not in result.stderr`, `"WARNING" in result.stderr`, `"WARNING" not in result.stdout`. Do not use `CliRunner(mix_stderr=False)` — it raises `TypeError` in Click 8.x.
+- Confidence: high
+
+**2026-06-22 — D7 FE-1: metadata vs token stdout/stderr assignment — spec says "raw token on stdout only"**
+- Observation: Initial implementation printed metadata (`id:`, `namespace:`, `created_at:`) to stdout alongside the token. S22 explicitly says "raw token on stdout only; warning banner on stderr only" — the "only" applies to BOTH: only the token on stdout, only the banner on stderr. Metadata lines belong on stderr so `$()` capture yields a clean token for scripting.
+- Action: In any CLI command that must print a sensitive token, send ALL contextual metadata to `err=True` and print ONLY the raw token to stdout. Verify with `result.stdout`/`result.stderr` split.
 - Confidence: high
 
 ## What Has Failed

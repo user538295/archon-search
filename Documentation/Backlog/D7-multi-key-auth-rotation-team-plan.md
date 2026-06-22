@@ -465,7 +465,7 @@ flowchart LR
         - #unit_test — `test_duration_parser_invalid_raises` — invalid string raises `click.BadParameter`
         - #integration_test — `test_cli_key_create_calls_post_keys` — CLI create calls `POST /keys` with correct JSON body and Bearer header
 
-- [ ] **T-1** — E2e: issue a key via `POST /keys`, authenticate a search request with the returned token, confirm 200 and namespace stamped #tester-role
+- [x] **T-1** — E2e: issue a key via `POST /keys`, authenticate a search request with the returned token, confirm 200 and namespace stamped #tester-role
     - — · 2.0h
     - needs FE-1 · completes S1, S2
     - Tests
