@@ -1303,38 +1303,34 @@ class SearchInstaller:
     # ------------------------------------------------------------------
 
     def validate_providers(self, providers: list[str]) -> bool:
-        """Check that all non-CPU providers are available and embedding works.
+        """Check that all non-CPU providers are available and both models load.
 
-        Returns True only if:
-        1. Every non-CPU provider in `providers` is listed by onnxruntime.get_available_providers().
-        2. TextEmbedding can be instantiated and produces an embedding without error.
+        Delegates to :func:`validate_providers_shared` (C3) so the wizard and the
+        background startup check probe identically. Returns True only if BOTH the
+        embedder and the reranker pass under *providers*; a disabled reranker
+        (``reranker_model == ""``) reports ``reranker_ok = True`` with no probe.
 
-        Never raises — caller handles fallback.
+        Never raises — caller handles fallback. The whole body is guarded so that
+        a broken lazy import (``model_validation`` imports ``fastembed`` at module
+        scope) or a future contract breach in ``validate_providers_shared`` yields
+        ``False`` rather than crashing the install wizard.
         """
-        non_cpu = [p for p in providers if "CPU" not in p]
-        if non_cpu:
-            try:
-                import onnxruntime  # lazy — not installed on all systems
-                available = onnxruntime.get_available_providers()
-            except Exception as exc:
-                logger.warning("validate_providers: could not query onnxruntime providers: %s", exc)
-                return False
-            missing = [p for p in non_cpu if p not in available]
-            if missing:
-                logger.warning(
-                    "validate_providers: providers not available in onnxruntime: %s", missing
-                )
-                return False
-
         try:
-            from fastembed import TextEmbedding  # lazy — not installed on all systems
-            model = TextEmbedding(self.cfg.embedding_model, providers=providers)
-            list(model.embed(["archon search test"]))
-        except Exception as exc:
-            logger.warning("validate_providers: embedding test failed: %s", exc)
-            return False
+            # Lazy import — model_validation imports fastembed/onnxruntime at
+            # module scope; importing it here keeps that cost off CLI startup.
+            from archon_search.model_validation import validate_providers_shared
 
-        return True
+            embedder_ok, reranker_ok, warnings = validate_providers_shared(
+                providers,
+                self.cfg.embedding_model,
+                self.cfg.reranker_model,
+            )
+        except Exception as exc:
+            logger.warning("validate_providers: provider validation failed: %s", exc)
+            return False
+        for warning in warnings:
+            logger.warning("validate_providers: %s", warning)
+        return embedder_ok and reranker_ok
 
     # ------------------------------------------------------------------
     # Provider configuration

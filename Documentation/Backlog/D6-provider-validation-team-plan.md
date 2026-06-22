@@ -389,7 +389,7 @@ flowchart LR
         - #integration_test — `test_ready_models_transitions_from_pending_to_ok` — `make_real_app`, poll GET /ready until `models != "pending"`, assert `models == "ok"`
 
 ### Phase 3 · Install wizard validates reranker *(install-time misconfiguration surfaces before first query)*
-- [ ] **BE-7** — Refactor `SearchInstaller.validate_providers()` in `install.py` to call `validate_providers_shared()` from `model_validation.py`; add `TextCrossEncoder` reranker test when `config.reranker_model != ""` (there is no `profile.reranker` attribute — `config.reranker_model` is the correct field, consistent with S8); **signature `(self, providers: list[str]) -> bool` must be preserved** — ~70 existing test sites use `patch.object(SearchInstaller, "validate_providers", return_value=False/True)`; changing the signature breaks them all. Existing tests only mock the method body; add NEW unit tests for body behaviour #backend-role
+- [x] **BE-7** — Refactor `SearchInstaller.validate_providers()` in `install.py` to call `validate_providers_shared()` from `model_validation.py`; add `TextCrossEncoder` reranker test when `config.reranker_model != ""` (there is no `profile.reranker` attribute — `config.reranker_model` is the correct field, consistent with S8); **signature `(self, providers: list[str]) -> bool` must be preserved** — ~70 existing test sites use `patch.object(SearchInstaller, "validate_providers", return_value=False/True)`; changing the signature breaks them all. Existing tests only mock the method body; add NEW unit tests for body behaviour #backend-role
     - Use Cases · 4.0h
     - needs BE-1 · completes C3, S7, S11
     - Tests

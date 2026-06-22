@@ -965,37 +965,54 @@ class TestRunUninstall:
 # ---------------------------------------------------------------------------
 
 
+_MV = "archon_search.model_validation"
+
+
+def _ok_embedder() -> MagicMock:
+    """A TextEmbedding stub whose embed() yields one vector."""
+    model = MagicMock()
+    model.embed.return_value = iter([[0.1, 0.2]])
+    return MagicMock(return_value=model)
+
+
+def _ok_cross_encoder() -> MagicMock:
+    """A _load_cross_encoder stub whose rerank() yields one score."""
+    ce = MagicMock()
+    ce.rerank.return_value = iter([0.5])
+    return MagicMock(return_value=ce)
+
+
 class TestValidateProviders:
+    """Body-behaviour tests for the refactored ``validate_providers`` (BE-7).
+
+    The method now delegates to ``validate_providers_shared`` in
+    ``model_validation.py``, so these tests patch that module's seams
+    (``TextEmbedding``, ``_load_cross_encoder``, ``_available_providers``)
+    rather than ``sys.modules`` directly.
+    """
+
     def test_validate_providers_returns_true_on_empty_list(self, tmp_path: Path) -> None:
-        """Empty providers list → no GPU provider check needed → embed test passes → True."""
+        """Empty providers list → no GPU provider check → both probes pass → True."""
         installer = _make_installer(tmp_path)
+        te, ce = _ok_embedder(), _ok_cross_encoder()
 
-        mock_model = MagicMock()
-        mock_model.embed.return_value = iter([[0.1, 0.2]])
-        mock_te_module = MagicMock()
-        mock_te_module.TextEmbedding = MagicMock(return_value=mock_model)
-
-        with patch.dict("sys.modules", {"fastembed": mock_te_module}):
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", ce):
             result = installer.validate_providers([])
 
         assert result is True
-        mock_te_module.TextEmbedding.assert_called_once_with(
-            installer.cfg.embedding_model, providers=[]
-        )
+        # `providers or None`: empty list coerced to None for fastembed default.
+        te.assert_called_once_with(installer.cfg.embedding_model, providers=None)
 
     def test_validate_providers_returns_true_on_success(self, tmp_path: Path) -> None:
-        """All GPU providers available and embed succeeds → True."""
+        """All GPU providers available and both probes succeed → True."""
         installer = _make_installer(tmp_path)
+        te, ce = _ok_embedder(), _ok_cross_encoder()
 
-        mock_model = MagicMock()
-        mock_model.embed.return_value = iter([[0.1, 0.2]])
-
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        mock_te_module = MagicMock()
-        mock_te_module.TextEmbedding = MagicMock(return_value=mock_model)
-
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", ce), \
+             patch(f"{_MV}._available_providers",
+                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is True
@@ -1003,13 +1020,12 @@ class TestValidateProviders:
     def test_validate_providers_returns_false_on_exception(self, tmp_path: Path) -> None:
         """TextEmbedding constructor raises → False, no exception propagated."""
         installer = _make_installer(tmp_path)
+        te = MagicMock(side_effect=RuntimeError("init failed"))
 
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        mock_te_module = MagicMock()
-        mock_te_module.TextEmbedding = MagicMock(side_effect=RuntimeError("init failed"))
-
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", _ok_cross_encoder()), \
+             patch(f"{_MV}._available_providers",
+                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
@@ -1017,45 +1033,38 @@ class TestValidateProviders:
     def test_validate_providers_returns_false_on_embed_exception(self, tmp_path: Path) -> None:
         """embed() call raises → False, no exception propagated."""
         installer = _make_installer(tmp_path)
+        model = MagicMock()
+        model.embed.side_effect = RuntimeError("embed failed")
+        te = MagicMock(return_value=model)
 
-        mock_model = MagicMock()
-        mock_model.embed.side_effect = RuntimeError("embed failed")
-
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        mock_te_module = MagicMock()
-        mock_te_module.TextEmbedding = MagicMock(return_value=mock_model)
-
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", _ok_cross_encoder()), \
+             patch(f"{_MV}._available_providers",
+                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
 
     def test_validate_providers_returns_false_when_provider_not_in_available(self, tmp_path: Path) -> None:
-        """GPU provider not in onnxruntime available providers → False immediately."""
+        """GPU provider not in available providers → False, no model probed."""
         installer = _make_installer(tmp_path)
+        te, ce = _ok_embedder(), _ok_cross_encoder()
 
-        mock_model = MagicMock()
-        mock_model.embed.return_value = iter([[0.1, 0.2]])
-
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
-        mock_te_cls = MagicMock(return_value=mock_model)
-        mock_te_module = MagicMock()
-        mock_te_module.TextEmbedding = mock_te_cls
-
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", ce), \
+             patch(f"{_MV}._available_providers", return_value=["CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
-        # TextEmbedding should NOT be called — returned False early
-        mock_te_cls.assert_not_called()
+        # Pre-flight gate failed → neither model instantiated.
+        te.assert_not_called()
+        ce.assert_not_called()
 
     def test_validate_providers_returns_false_when_onnxruntime_not_installed(self, tmp_path: Path) -> None:
-        """onnxruntime not importable → False."""
+        """onnxruntime query raises → provider gate fails → False."""
         installer = _make_installer(tmp_path)
 
-        with patch.dict("sys.modules", {"onnxruntime": None}):
+        with patch(f"{_MV}._available_providers", side_effect=ImportError("no onnxruntime")):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
@@ -1064,74 +1073,179 @@ class TestValidateProviders:
         """The exact providers list is forwarded to TextEmbedding constructor."""
         installer = _make_installer(tmp_path)
         providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        te, ce = _ok_embedder(), _ok_cross_encoder()
 
-        mock_model = MagicMock()
-        mock_model.embed.return_value = iter([[0.1, 0.2]])
-
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
-        mock_te_cls = MagicMock(return_value=mock_model)
-        mock_te_module = MagicMock()
-        mock_te_module.TextEmbedding = mock_te_cls
-
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", ce), \
+             patch(f"{_MV}._available_providers",
+                   return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(providers)
 
         assert result is True
-        mock_te_cls.assert_called_once_with(installer.cfg.embedding_model, providers=providers)
+        te.assert_called_once_with(installer.cfg.embedding_model, providers=providers)
 
     def test_validate_providers_uses_configured_embedding_model(self, tmp_path: Path) -> None:
         """validate_providers uses self.cfg.embedding_model, not a hardcoded string."""
         installer = _make_installer(tmp_path)
         installer.cfg.embedding_model = "custom/model-v2"
+        te, ce = _ok_embedder(), _ok_cross_encoder()
 
-        mock_model = MagicMock()
-        mock_model.embed.return_value = iter([[0.1, 0.2]])
-
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        mock_te_cls = MagicMock(return_value=mock_model)
-        mock_te_module = MagicMock()
-        mock_te_module.TextEmbedding = mock_te_cls
-
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", ce), \
+             patch(f"{_MV}._available_providers",
+                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is True
-        mock_te_cls.assert_called_once_with("custom/model-v2", providers=["CUDAExecutionProvider"])
+        te.assert_called_once_with("custom/model-v2", providers=["CUDAExecutionProvider"])
 
     def test_validate_providers_returns_false_when_fastembed_not_installed(self, tmp_path: Path) -> None:
-        """fastembed not importable → False, no exception propagated."""
+        """fastembed import failure inside the probe → False, no exception propagated."""
         installer = _make_installer(tmp_path)
+        te = MagicMock(side_effect=ImportError("no fastembed"))
 
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": None}):
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", _ok_cross_encoder()), \
+             patch(f"{_MV}._available_providers",
+                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
 
     def test_validate_providers_cpu_only_skips_onnxruntime(self, tmp_path: Path) -> None:
-        """CPUExecutionProvider-only list → onnxruntime check skipped → embed test still runs."""
+        """CPU-only list → provider gate skipped → both probes still run."""
         installer = _make_installer(tmp_path)
+        te, ce = _ok_embedder(), _ok_cross_encoder()
+        avail = MagicMock()
 
-        mock_model = MagicMock()
-        mock_model.embed.return_value = iter([[0.1, 0.2]])
-        mock_te_cls = MagicMock(return_value=mock_model)
-        mock_te_module = MagicMock()
-        mock_te_module.TextEmbedding = mock_te_cls
-
-        mock_ort = MagicMock()
-
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort, "fastembed": mock_te_module}):
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", ce), \
+             patch(f"{_MV}._available_providers", avail):
             result = installer.validate_providers(["CPUExecutionProvider"])
 
         assert result is True
-        # onnxruntime.get_available_providers must NOT have been called — non_cpu is empty
-        mock_ort.get_available_providers.assert_not_called()
-        # but embed test still ran
-        mock_te_cls.assert_called_once()
+        # non_cpu is empty → provider query must NOT have been called.
+        avail.assert_not_called()
+        # but both model probes still ran
+        te.assert_called_once()
+        ce.assert_called_once()
+
+    # ------------------------------------------------------------------
+    # BE-7: new body-behaviour tests for shared-function delegation
+    # ------------------------------------------------------------------
+
+    def test_validate_providers_calls_shared_function(self, tmp_path: Path) -> None:
+        """validate_providers delegates to validate_providers_shared (C3)."""
+        installer = _make_installer(tmp_path)
+
+        with patch(f"{_MV}.validate_providers_shared",
+                   return_value=(True, True, [])) as mock_shared:
+            result = installer.validate_providers(["CPUExecutionProvider"])
+
+        assert result is True
+        mock_shared.assert_called_once_with(
+            ["CPUExecutionProvider"],
+            installer.cfg.embedding_model,
+            installer.cfg.reranker_model,
+        )
+
+    def test_validate_providers_reranker_tested(self, tmp_path: Path) -> None:
+        """A configured reranker triggers the reranker probe."""
+        installer = _make_installer(tmp_path)
+        installer.cfg.reranker_model = "BAAI/bge-reranker-v2-m3"
+        te, ce = _ok_embedder(), _ok_cross_encoder()
+
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", ce):
+            result = installer.validate_providers([])
+
+        assert result is True
+        ce.assert_called_once()
+
+    def test_validate_providers_reranker_none_no_probe(self, tmp_path: Path) -> None:
+        """Disabled reranker (reranker_model == '') skips the reranker probe."""
+        installer = _make_installer(tmp_path)
+        installer.cfg.reranker_model = ""
+        te, ce = _ok_embedder(), _ok_cross_encoder()
+
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", ce):
+            result = installer.validate_providers([])
+
+        assert result is True
+        ce.assert_not_called()
+
+    def test_validate_providers_returns_bool_never_raises(self, tmp_path: Path) -> None:
+        """An exception inside the shared function does not propagate → False.
+
+        validate_providers_shared never raises by contract, but if a future
+        change (or a broken lazy import) made it raise, the wizard must still
+        get a clean False instead of an unhandled exception.
+        """
+        installer = _make_installer(tmp_path)
+
+        with patch(f"{_MV}.validate_providers_shared",
+                   side_effect=RuntimeError("contract broken")):
+            result = installer.validate_providers(["CUDAExecutionProvider"])
+
+        assert result is False
+
+    def test_validate_providers_reranker_fails_embedder_ok(self, tmp_path: Path) -> None:
+        """Reranker probe fails while embedder passes → False (S6)."""
+        installer = _make_installer(tmp_path)
+
+        with patch(f"{_MV}.validate_providers_shared",
+                   return_value=(True, False, ["reranker probe failed"])):
+            result = installer.validate_providers([])
+
+        assert result is False
+
+    def test_validate_providers_both_ok_with_warnings_returns_true(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Both probes pass but warnings present (CPU fallback) → True, warning logged (S12)."""
+        installer = _make_installer(tmp_path)
+
+        with patch(f"{_MV}.validate_providers_shared",
+                   return_value=(True, True, ["fell back to CPU"])):
+            with caplog.at_level("WARNING"):
+                result = installer.validate_providers([])
+
+        assert result is True
+        assert any("fell back to CPU" in r.message for r in caplog.records)
+
+    def test_validate_providers_logs_shared_warnings(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Warnings from the shared function are logged at WARNING level."""
+        installer = _make_installer(tmp_path)
+
+        with patch(f"{_MV}.validate_providers_shared",
+                   return_value=(False, False, ["configured ONNX providers not available: X"])):
+            with caplog.at_level("WARNING"):
+                result = installer.validate_providers(["X"])
+
+        assert result is False
+        assert any("not available: X" in r.message for r in caplog.records)
+
+    def test_wizard_validate_providers_returns_false_on_bad_provider(self, tmp_path: Path) -> None:
+        """Integration: an unavailable provider → False without raising.
+
+        Exercises the real ``validate_providers_shared`` provider gate (only the
+        host onnxruntime query is stubbed) so the wizard's end-to-end fallback
+        path is covered, not just the delegation seam.
+        """
+        installer = _make_installer(tmp_path)
+        te, ce = _ok_embedder(), _ok_cross_encoder()
+
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(f"{_MV}._load_cross_encoder", ce), \
+             patch(f"{_MV}._available_providers", return_value=["CPUExecutionProvider"]):
+            result = installer.validate_providers(["CUDAExecutionProvider"])
+
+        assert result is False
+        te.assert_not_called()
+        ce.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1320,27 +1434,23 @@ class TestRunServiceReadiness:
         assert "Waiting for search service" not in captured.out
 
     def test_validate_providers_returns_false_when_get_available_providers_raises(self, tmp_path: Path) -> None:
-        """onnxruntime imports fine but get_available_providers() raises → False."""
+        """Querying available providers raises → provider gate fails → False."""
         installer = _make_installer(tmp_path)
 
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.side_effect = RuntimeError("ort internal error")
-
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+        with patch("archon_search.model_validation._available_providers",
+                   side_effect=RuntimeError("ort internal error")):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
 
     def test_validate_providers_logs_warning_on_missing_provider(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        """A warning is logged when a provider is not in onnxruntime's available list."""
+        """A warning is logged when a provider is not in the available list."""
         import logging
         installer = _make_installer(tmp_path)
 
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
-
         with caplog.at_level(logging.WARNING, logger="archon"), \
-             patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+             patch("archon_search.model_validation._available_providers",
+                   return_value=["CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
