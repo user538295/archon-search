@@ -1,4 +1,5 @@
-"""Contract tests for readiness schemas — Task 4.1 (B2)."""
+"""Contract tests for readiness schemas — Task 4.1 (B2); extended for D6 BE-5
+(CheckStatus.PENDING/WARN and ReadinessChecks.models)."""
 from __future__ import annotations
 
 import json
@@ -9,20 +10,71 @@ def test_check_status_values() -> None:
 
     assert CheckStatus.OK.value == "ok"
     assert CheckStatus.FAIL.value == "fail"
+    assert CheckStatus.PENDING.value == "pending"
+    assert CheckStatus.WARN.value == "warn"
+    assert {s.value for s in CheckStatus} == {"ok", "fail", "pending", "warn"}
+
+
+def test_check_status_pending_value() -> None:
+    from archon_search.server.schemas import CheckStatus
+
+    assert CheckStatus.PENDING.value == "pending"
+
+
+def test_check_status_warn_value() -> None:
+    from archon_search.server.schemas import CheckStatus
+
+    assert CheckStatus.WARN.value == "warn"
+
+
+def test_readiness_checks_has_models_field() -> None:
+    from archon_search.server.schemas import CheckStatus, ReadinessChecks
+
+    checks = ReadinessChecks(storage=CheckStatus.OK, models=CheckStatus.PENDING)
+    dumped = checks.model_dump()
+    assert dumped == {"storage": "ok", "models": "pending"}
+
+
+def test_readiness_checks_models_defaults_to_pending() -> None:
+    from archon_search.server.schemas import CheckStatus, ReadinessChecks
+
+    checks = ReadinessChecks(storage=CheckStatus.OK)
+    assert checks.models == CheckStatus.PENDING
+
+
+def test_readiness_response_ready_not_gated_on_models() -> None:
+    from archon_search.server.schemas import (
+        CheckStatus,
+        ReadinessChecks,
+        ReadinessResponse,
+    )
+
+    obj = ReadinessResponse(
+        ready=True,
+        checks=ReadinessChecks(storage=CheckStatus.OK, models=CheckStatus.FAIL),
+    )
+    assert obj.ready is True
+    assert obj.checks.models == CheckStatus.FAIL
 
 
 def test_readiness_response_ok_shape() -> None:
     from archon_search.server.schemas import CheckStatus, ReadinessChecks, ReadinessResponse
 
     obj = ReadinessResponse(ready=True, checks=ReadinessChecks(storage=CheckStatus.OK))
-    assert obj.model_dump() == {"ready": True, "checks": {"storage": "ok"}}
+    assert obj.model_dump() == {
+        "ready": True,
+        "checks": {"storage": "ok", "models": "pending"},
+    }
 
 
 def test_readiness_response_fail_shape() -> None:
     from archon_search.server.schemas import CheckStatus, ReadinessChecks, ReadinessResponse
 
     obj = ReadinessResponse(ready=False, checks=ReadinessChecks(storage=CheckStatus.FAIL))
-    assert obj.model_dump() == {"ready": False, "checks": {"storage": "fail"}}
+    assert obj.model_dump() == {
+        "ready": False,
+        "checks": {"storage": "fail", "models": "pending"},
+    }
 
 
 def test_watcher_report_empty_by_default() -> None:
@@ -93,9 +145,12 @@ def test_readiness_response_ok_snapshot() -> None:
     from archon_search.server.schemas import CheckStatus, ReadinessChecks, ReadinessResponse
 
     obj = ReadinessResponse(ready=True, checks=ReadinessChecks(storage=CheckStatus.OK))
-    assert obj.model_dump(mode="json") == {"ready": True, "checks": {"storage": "ok"}}
+    assert obj.model_dump(mode="json") == {
+        "ready": True,
+        "checks": {"storage": "ok", "models": "pending"},
+    }
     assert json.dumps(obj.model_dump(mode="json"), sort_keys=True) == (
-        '{"checks": {"storage": "ok"}, "ready": true}'
+        '{"checks": {"models": "pending", "storage": "ok"}, "ready": true}'
     )
 
 
@@ -104,7 +159,7 @@ def test_readiness_response_fail_snapshot() -> None:
 
     obj = ReadinessResponse(ready=False, checks=ReadinessChecks(storage=CheckStatus.FAIL))
     assert json.dumps(obj.model_dump(mode="json"), sort_keys=True) == (
-        '{"checks": {"storage": "fail"}, "ready": false}'
+        '{"checks": {"models": "pending", "storage": "fail"}, "ready": false}'
     )
 
 

@@ -108,10 +108,12 @@
         "type": "object"
       },
       "CheckStatus": {
-        "description": "Storage check result for readiness probes.",
+        "description": "Check result for readiness probes.\n\n``PENDING`` and ``WARN`` (D6 C2) are additive values used by the model\nvalidation check: ``PENDING`` while background validation has not yet\ncompleted, ``WARN`` when a model loaded via provider fallback (e.g. CPU\ninstead of GPU). See contract C2 in\n``Documentation/Backlog/D6-provider-validation-team-plan.md``.",
         "enum": [
           "ok",
-          "fail"
+          "fail",
+          "pending",
+          "warn"
         ],
         "title": "CheckStatus",
         "type": "string"
@@ -1735,6 +1737,10 @@
       },
       "ReadinessChecks": {
         "properties": {
+          "models": {
+            "$ref": "#/components/schemas/CheckStatus",
+            "default": "pending"
+          },
           "storage": {
             "$ref": "#/components/schemas/CheckStatus"
           }

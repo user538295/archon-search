@@ -12,14 +12,27 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class CheckStatus(str, Enum):
-    """Storage check result for readiness probes."""
+    """Check result for readiness probes.
+
+    ``PENDING`` and ``WARN`` (D6 C2) are additive values used by the model
+    validation check: ``PENDING`` while background validation has not yet
+    completed, ``WARN`` when a model loaded via provider fallback (e.g. CPU
+    instead of GPU). See contract C2 in
+    ``Documentation/Backlog/D6-provider-validation-team-plan.md``.
+    """
 
     OK = "ok"
     FAIL = "fail"
+    PENDING = "pending"
+    WARN = "warn"
 
 
 class ReadinessChecks(BaseModel):
     storage: CheckStatus
+    # D6 BE-5 — model validation check; PENDING until background validation
+    # completes. Default required: routes_ready.py constructs this with only
+    # ``storage=`` while validation may still be running.
+    models: CheckStatus = CheckStatus.PENDING
 
 
 class ReadinessResponse(BaseModel):
