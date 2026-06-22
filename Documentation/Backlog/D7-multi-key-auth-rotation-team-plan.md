@@ -417,7 +417,7 @@ flowchart LR
         - #unit_test — `test_auth_config_defaults` — `AuthConfig.rotate_grace_seconds` defaults to 0
         - #integration_test — `test_keystore_create_and_load_roundtrip` — create key, server restart (reload), key survives
 
-- [ ] **BE-2** — Update `APIKeyMiddleware.__init__` with additive `key_store: KeyStore | None = None` param; `dispatch` loops `key_store.active_keys()` before legacy path; timing-safe `hmac.compare_digest` over SHA-256 hex #backend-role
+- [x] **BE-2** — Update `APIKeyMiddleware.__init__` with additive `key_store: KeyStore | None = None` param; `dispatch` loops `key_store.active_keys()` before legacy path; timing-safe `hmac.compare_digest` over SHA-256 hex #backend-role
     - Interface Adapters · 2.0h
     - needs BE-1 · completes C2, S2, S11, S12, S16, S19
     - Tests

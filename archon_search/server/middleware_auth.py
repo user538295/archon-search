@@ -1,9 +1,12 @@
 """Bearer token authentication middleware for archon-search (Task 1.2)."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import secrets
-from typing import Callable
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -11,16 +14,26 @@ from starlette.responses import Response
 
 from archon_search.constants import DEFAULT_NAMESPACE, _validate_namespace
 
+if TYPE_CHECKING:
+    from archon_search.key_manager import KeyStore
+
 logger = logging.getLogger(__name__)
 
 _EXEMPT_PATHS: frozenset[str] = frozenset({"/health", "/docs", "/openapi.json", "/redoc", "/ready"})
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app: object, api_key: str, namespaces: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        app: object,
+        api_key: str,
+        namespaces: dict[str, str] | None = None,
+        key_store: "KeyStore | None" = None,
+    ) -> None:
         super().__init__(app)  # type: ignore[arg-type]
         self._api_key = api_key
         self._namespaces = namespaces or {}
+        self._key_store = key_store
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if request.url.path in _EXEMPT_PATHS:
@@ -35,16 +48,42 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             )
 
         token = parts[1]
-
-        # Resolve namespace: iterate all entries (no early exit — prevents timing leakage)
         resolved_namespace: str | None = None
-        for key_hex, ns in self._namespaces.items():
-            if secrets.compare_digest(token, key_hex):
-                resolved_namespace = ns  # no break
 
-        # Fallback: check against the single default api_key
+        # --- Managed keys (KeyStore) — checked first; early exit on first match ---
+        # Token hash is computed once per request when key_store is present (not once per key).
+        # hmac.compare_digest is used for constant-time comparison of equal-length
+        # 64-char hex strings (SHA-256 digests).
+        if self._key_store is not None:
+            token_hash = hashlib.sha256(token.encode()).hexdigest()
+            for record in await self._key_store.active_keys():
+                if hmac.compare_digest(token_hash, record.token_hash):
+                    resolved_namespace = record.namespace
+                    break  # early exit on first match (intentional; timing guarantee is per-comparison)
+
+        # --- TOML namespace tokens — no early exit (preserves existing timing-safe design) ---
+        if resolved_namespace is None:
+            for key_hex, ns in self._namespaces.items():
+                if secrets.compare_digest(token, key_hex):
+                    resolved_namespace = ns  # no break
+
+        # --- Legacy api_key fallback ---
         if resolved_namespace is None and secrets.compare_digest(token, self._api_key):
-            resolved_namespace = DEFAULT_NAMESPACE
+            # Rotation-revocation guard: if key_store is present, reject the token if it
+            # appears as a revoked or expired record in keys.json — even if it matches _api_key.
+            # This prevents bypassing revocation via the legacy fallback after key rotation.
+            if self._key_store is not None:
+                all_records = await self._key_store.load()
+                now = datetime.now(UTC)
+                is_revoked_or_expired = any(
+                    hmac.compare_digest(token_hash, r.token_hash)
+                    for r in all_records
+                    if r.status == "revoked" or (r.expires_at is not None and r.expires_at <= now)
+                )
+                if not is_revoked_or_expired:
+                    resolved_namespace = DEFAULT_NAMESPACE
+            else:
+                resolved_namespace = DEFAULT_NAMESPACE
 
         if resolved_namespace is None:
             return Response(
