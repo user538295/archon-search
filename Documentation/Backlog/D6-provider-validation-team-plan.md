@@ -4,7 +4,7 @@ feature: Install-time / Background Provider Validation
 brief: D6-provider-validation-brief.md
 purpose: Operators discover misconfigured ONNX providers and reranker models at install or startup — not silently on the first production query.
 audience: Operators installing archon-search with GPU acceleration (CoreML, CUDA) or changing reranker_model/providers after initial install.
-status: draft
+status: planned
 roles: [frontend, backend, tester]
 architecture: clean
 ---
@@ -59,6 +59,7 @@ Provider and model configuration is validated before it fails a user query. A mi
 - Live config reload validation
 - MCP tool `get_model_status()`
 - Per-collection embedder pool validation
+- CUDA install-time validation — `install.py:1737` (CUDA path) calls `configure_providers` without validation today; extending validation to CUDA is deferred (only CoreML/Metal is gated by `validate_providers` at install time)
 
 ---
 
@@ -122,12 +123,12 @@ flowchart TD
 | Frameworks & Drivers | Backend | `archon_search/server/app.py` (lifespan) · `archon_search/config.py` · `archon-search.toml.example` |
 
 **What changes**
-- `model_validation.py`: add `ModelValidationResult` dataclass, `validate_models_async()`, `_validate_providers_shared()` (extracted from `SearchInstaller`)
-- `install.py`: `validate_providers()` calls `_validate_providers_shared()` + adds reranker `TextCrossEncoder` instantiation
-- `config.py` / `SearchConfig`: add `validation_timeout_seconds: int = 60`
-- `schemas.py`: `CheckStatus` gains `PENDING = "pending"` and `WARN = "warn"`; new `ModelValidationStatus` Pydantic model; `ReadinessChecks` gains `models: CheckStatus`; `StatusResponse` gains `model_validation: ModelValidationStatus | None`
+- `model_validation.py`: add `ModelValidationResult` dataclass, `validate_models_async()`, `_validate_providers_shared()` alongside existing `validate_embedding_model()` + `ModelValidationError` (those existing exports must not change — 4 live callers)
+- `install.py`: `validate_providers(self, providers) -> bool` calls `_validate_providers_shared()` + adds reranker `TextCrossEncoder` instantiation; **signature `(self, providers) -> bool` must be preserved** — ~70 test patch sites use `patch.object(SearchInstaller, "validate_providers", return_value=False)`
+- `config.py` / `SearchConfig`: add `validation_timeout_seconds: int = 60` under `[database]` (flat field on `SearchConfig`; no `DatabaseConfig` sub-object exists)
+- `schemas.py`: `CheckStatus` gains `PENDING = "pending"` and `WARN = "warn"`; new `ModelValidationStatus` Pydantic model; `ReadinessChecks` gains `models: CheckStatus = CheckStatus.PENDING` (**default required** — existing `routes_ready.py:22` constructs `ReadinessChecks(storage=...)` with no `models` kwarg); `StatusResponse` gains `model_validation: ModelValidationStatus | None`
 - `app.py`: background task spawned in lifespan after eager-preload; `app.state.model_validation = None` before task
-- `routes_status.py`: read `app.state.model_validation` and add field to response
+- `routes_status.py`: read `app.state.model_validation` and add field to response (use `getattr(request.app.state, "model_validation", None)` guard — mirrors `_build_maintenance_status` pattern)
 - `routes_ready.py`: populate `checks.models` from `app.state.model_validation`
 
 **Key decisions (from the brief)**
@@ -255,10 +256,12 @@ Boundaries where roles must agree. Changing one requires team agreement. Contrac
 
 ## Open questions
 
-| id | Area | Question |
+_All resolved (see below)._
+
+| id | Area | Resolution |
 |----|------|----------|
-| **Q1** | CLI | The brief says `archon-search status` CLI "renders model_validation in existing status output" — but `cli/status.py` calls the platform service status, not `GET /status` HTTP. Plan targets `maintenance_cmd.py` status subcommand (which already fetches `GET /status`). Confirm this is the right home, or add a new `model-validation` CLI group. |
-| **Q2** | testing | The contract test `tests/contract/test_readiness_schemas.py` currently asserts `CheckStatus` has exactly `OK` and `FAIL`. Adding `PENDING` and `WARN` will break that test. BE-5 must update the contract test. Confirm no other exhaustive-match guards exist on `CheckStatus`. |
+| **Q1** | CLI | **Resolved:** `cli/status.py` (24 lines) calls only `_get_service().status()` — launchd/systemd process status, no HTTP, no API-key handling. It does NOT call `GET /status`. Plan is correct: render `model_validation` in `maintenance_cmd.py` `_print_status_text` only (confirmed by d6-frontend agent). |
+| **Q2** | testing | **Resolved:** `tests/contract/test_readiness_schemas.py` is the only exhaustive-match guard on `CheckStatus` (confirmed by d6-tester and d6-scenarios agents). BE-5 must update that test. No other guard sites found. |
 
 ---
 
@@ -326,6 +329,7 @@ flowchart LR
         - #unit_test — `test_validate_models_async_reranker_disabled` — reranker_model=""; reranker_ok=True, no reranker probe
         - #unit_test — `test_validate_models_async_embedder_warm_skip` — is_warm=True; embedder probe skipped, embedder_ok=True
         - #unit_test — `test_validate_models_async_never_raises` — any exception during validation; function returns result (not raises)
+        - #integration_test — `test_validate_models_async_pending_state_visible` — gate validation with an asyncio.Event so it never completes; assert `app.state.model_validation` is still None while task is blocked (use event-gate, not sleep — avoids flakiness)
 - [ ] **BE-2** — Add `ModelValidationStatus` Pydantic model and `model_validation: ModelValidationStatus | None = None` to `StatusResponse` in `schemas.py` #backend-role
     - Interface Adapters · 1.0h
     - needs BE-1 · completes C1
@@ -353,7 +357,7 @@ flowchart LR
         - #integration_test — `test_status_endpoint_includes_model_validation_after_startup` — `make_real_app`, poll GET /status until `model_validation` non-null, assert `embedder_ok` field present
 
 ### Phase 2 · GET /ready gains models check *(operator/load balancer sees model health)*
-- [ ] **BE-5** — Add `CheckStatus.PENDING = "pending"` and `CheckStatus.WARN = "warn"` to `schemas.py`; add `models: CheckStatus` to `ReadinessChecks` (default `PENDING`); update `tests/contract/test_readiness_schemas.py` #backend-role
+- [ ] **BE-5** — Add `CheckStatus.PENDING = "pending"` and `CheckStatus.WARN = "warn"` to `schemas.py`; add `models: CheckStatus = CheckStatus.PENDING` to `ReadinessChecks` (**default is required** — existing `routes_ready.py:22` passes only `storage=`; no default = immediate runtime crash); update `tests/contract/test_readiness_schemas.py` (currently asserts exhaustive `OK`/`FAIL` only — confirmed single guard site) #backend-role
     - Interface Adapters · 2.0h
     - needs BE-8 · completes C2, S3
     - Tests
@@ -373,13 +377,14 @@ flowchart LR
         - #integration_test — `test_ready_models_transitions_from_pending_to_ok` — `make_real_app`, poll GET /ready until `models != "pending"`, assert `models == "ok"`
 
 ### Phase 3 · Install wizard validates reranker *(install-time misconfiguration surfaces before first query)*
-- [ ] **BE-7** — Refactor `SearchInstaller.validate_providers()` in `install.py` to call `_validate_providers_shared()` from `model_validation.py`; add `TextCrossEncoder` reranker test when `profile.reranker is not None` #backend-role
-    - Use Cases · 3.0h
+- [ ] **BE-7** — Refactor `SearchInstaller.validate_providers()` in `install.py` to call `_validate_providers_shared()` from `model_validation.py`; add `TextCrossEncoder` reranker test when `profile.reranker is not None`; **signature `(self, providers: list[str]) -> bool` must be preserved** — ~70 existing test sites use `patch.object(SearchInstaller, "validate_providers", return_value=False/True)`; changing the signature breaks them all. Existing tests only mock the method body; add NEW unit tests for body behaviour #backend-role
+    - Use Cases · 4.0h
     - needs BE-1 · completes C3, S7, S11
     - Tests
         - #unit_test — `test_validate_providers_calls_shared_function` — `SearchInstaller.validate_providers()` invokes `_validate_providers_shared`
         - #unit_test — `test_validate_providers_reranker_tested` — profile with reranker triggers reranker probe
         - #unit_test — `test_validate_providers_reranker_none_no_probe` — profile without reranker skips reranker probe
+        - #unit_test — `test_validate_providers_returns_bool_never_raises` — exception in `_validate_providers_shared`; method returns False, no raise
         - #integration_test — `test_wizard_validate_providers_returns_false_on_bad_provider` — unavailable provider → returns False without raising
 - [ ] **FE-1** — In `SearchInstaller` wizard flow: after `_prewarm_models`, call refactored `validate_providers()` for the reranker; log `WARNING` + fallback message if reranker provider unavailable; install continues #frontend-role
     - Presentation · 2.0h
