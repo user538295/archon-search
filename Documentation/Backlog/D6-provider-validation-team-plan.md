@@ -341,7 +341,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_model_validation_status_all_null` — `ModelValidationStatus` with null fields serialises correctly
         - #unit_test — `test_model_validation_status_populated` — fully populated instance round-trips through Pydantic
-- [ ] **BE-3** — Add `validation_timeout_seconds: int = 60` to `SearchConfig` in `config.py`; parse from `[database]` TOML section; explicitly update `_apply_toml` in `config.py` to read `database.get("validation_timeout_seconds")` with `_coerce_int` and a `> 0` guard (value ≤ 0 should log a warning and fall back to the default 60) #backend-role
+- [x] **BE-3** — Add `validation_timeout_seconds: int = 60` to `SearchConfig` in `config.py`; parse from `[database]` TOML section; explicitly update `_apply_toml` in `config.py` to read `database.get("validation_timeout_seconds")` with `_coerce_int` and a `> 0` guard (value ≤ 0 should log a warning and fall back to the default 60) #backend-role
     - Frameworks & Drivers · 1.0h
     - needs K1 · completes S10
     - Tests

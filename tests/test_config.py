@@ -1150,3 +1150,36 @@ def test_rag_fusion_config_num_queries_one_warns(tmp_path: Path, caplog: pytest.
         config = load_config(path=toml_file)
     assert config.rag_fusion.num_queries == 1
     assert any("num_queries" in r.message and "overhead" in r.message for r in caplog.records)
+
+
+def test_validation_timeout_seconds_default() -> None:
+    assert SearchConfig().validation_timeout_seconds == 60
+
+
+def test_validation_timeout_seconds_from_toml(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[database]\nvalidation_timeout_seconds = 30\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.validation_timeout_seconds == 30
+
+
+def test_validation_timeout_seconds_zero_rejected(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[database]\nvalidation_timeout_seconds = 0\n", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        config = load_config(path=toml_file)
+    assert config.validation_timeout_seconds == 60
+    assert any("validation_timeout_seconds" in r.message for r in caplog.records)
+
+
+def test_validation_timeout_seconds_negative_rejected(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[database]\nvalidation_timeout_seconds = -5\n", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        config = load_config(path=toml_file)
+    assert config.validation_timeout_seconds == 60
+    assert any("validation_timeout_seconds" in r.message for r in caplog.records)

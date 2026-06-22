@@ -94,6 +94,8 @@ class SearchConfig:
     providers: list[str] = field(default_factory=list)
     top_k_retrieve: int = 15
     top_k_return: int = 5
+    # [database] — D6 install-time / background provider validation
+    validation_timeout_seconds: int = 60
     # [search] — multi-collection fan-out execution bounds (B3)
     max_fanout: int = 8
     fanout_leg_trim: int = 40
@@ -289,6 +291,18 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         if top_k_return <= 0:
             raise ConfigError(f"top_k_return must be > 0, got {top_k_return}")
         config.top_k_return = top_k_return
+    if "validation_timeout_seconds" in database:
+        validation_timeout = _coerce_int(
+            database["validation_timeout_seconds"], "validation_timeout_seconds"
+        )
+        if validation_timeout > 0:
+            config.validation_timeout_seconds = validation_timeout
+        else:
+            _logger.warning(
+                "validation_timeout_seconds must be > 0, got %s; falling back to default %s",
+                validation_timeout,
+                config.validation_timeout_seconds,
+            )
     if "centroid_recompute_threshold" in database:
         threshold = _coerce_int(database["centroid_recompute_threshold"], "centroid_recompute_threshold")
         if threshold < 1:

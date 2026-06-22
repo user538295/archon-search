@@ -102,6 +102,8 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "providers": [],
         "top_k_retrieve": 15,
         "top_k_return": 5,
+        # [database] — D6 install-time / background provider validation
+        "validation_timeout_seconds": 60,
         # [search] — multi-collection fan-out execution bounds (B3)
         "max_fanout": 8,
         "fanout_leg_trim": 40,
