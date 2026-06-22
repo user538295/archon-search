@@ -2,6 +2,21 @@
 
 ## What Has Worked
 
+**2026-06-22 — D7 BE-3: `KeyRecord.id: str | None` widens for synthetic TOML records; `_logged_expired_ids` guard**
+- Observation: Widening `id: str` to `str | None` to accommodate synthetic TOML records (no UUID) also introduced a latent bug in `active_keys()`: the `_logged_expired_ids.add(record.id)` call would add `None` to a `set[str]`, causing all synthetic expired records to share the same suppression slot. Fix: guard with `if record.id is not None` before touching `_logged_expired_ids`. Synthetic records never have `expires_at` set (they expire only when the TOML entry is removed and the server restarted), so the guard is purely defensive.
+- Action: Whenever widening an entity field from a non-nullable type to `T | None`, grep all in-memory tracking structures that use that field as a key (sets, dicts) and add a `None` guard before any insertion.
+- Confidence: high
+
+**2026-06-22 — D7 BE-3: `asyncio.Lock` is NOT event-loop-bound in Python 3.10+**
+- Observation: A DA agent flagged `asyncio.run()` inside `TestClient` context as a Critical issue, citing pre-3.10 behavior where `asyncio.Lock` was bound to the creating event loop. Verified empirically: in Python 3.12, `asyncio.Lock` can be acquired from a different event loop created by `asyncio.run()` — no DeprecationWarning, no RuntimeError. The test pattern (`asyncio.run(key_store.create(...))` while TestClient active in background thread) is safe and matches 15+ existing tests in the codebase.
+- Action: For Python 3.10+ projects, do not reject `asyncio.run()` in tests due to Lock binding concerns. Verify by running the actual test rather than reasoning from pre-3.10 docs.
+- Confidence: high
+
+**2026-06-22 — D7 BE-3: `load_synthetic_records` calling `load()` inside the asyncio.Lock is safe**
+- Observation: `KeyStore.load()` is documented as "no lock needed" because it is read-only. Calling it inside `async with self._lock:` in `load_synthetic_records()` does NOT deadlock because `asyncio.Lock` is not reentrant but `load()` never tries to re-acquire the lock — it is purely read-only. The lock in `load_synthetic_records` serializes the full read-modify-write cycle against concurrent `create()` / `revoke()` calls; `load()` called inside is just a disk read.
+- Action: Calling a non-locking read method inside a lock block is safe as long as the read method does not itself acquire the same lock. Always verify by checking whether the read method has `async with self._lock:` before calling it from within a locked block.
+- Confidence: high
+
 **2026-06-22 — D7 BE-2: `Literal` status guard vs datetime expiry in security middleware**
 - Observation: The rotation-revocation guard in `APIKeyMiddleware` checked `r.status in ("revoked", "expired")`, but `KeyRecord.status` is `Literal["active", "revoked"]` — `"expired"` is not a valid value. Expiry in this codebase is temporal (`expires_at <= now`), not a status transition. Iterative-review DA agents caught this as Critical in cycle 1. Fix: replace the literal check with `r.status == "revoked" or (r.expires_at is not None and r.expires_at <= now)`.
 - Action: Whenever writing a guard that needs to catch both explicit revocation AND time-based expiry, always use a datetime comparison for the expiry branch — never assume a `"expired"` status value will exist unless you verify the `Literal` type in the entity model.
