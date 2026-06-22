@@ -119,6 +119,80 @@ def test_ready_does_not_call_collect_readiness() -> None:
     assert "collect_readiness" not in source
 
 
+def _set_validation(client: TestClient, **kwargs: object) -> None:
+    """Set ``app.state.model_validation`` to a ModelValidationResult on the client app."""
+    from archon_search.model_validation import ModelValidationResult
+
+    client.app.state.model_validation = ModelValidationResult(**kwargs)
+
+
+def test_ready_models_pending_when_validation_none(client_ping_true: TestClient) -> None:
+    client_ping_true.app.state.model_validation = None
+    response = client_ping_true.get("/ready")
+    assert response.json()["checks"]["models"] == "pending"
+
+
+def test_ready_models_ok_when_both_pass(client_ping_true: TestClient) -> None:
+    _set_validation(client_ping_true, embedder_ok=True, reranker_ok=True)
+    response = client_ping_true.get("/ready")
+    assert response.json()["checks"]["models"] == "ok"
+
+
+def test_ready_models_fail_when_embedder_fails(client_ping_true: TestClient) -> None:
+    _set_validation(client_ping_true, embedder_ok=False, reranker_ok=True)
+    response = client_ping_true.get("/ready")
+    assert response.json()["checks"]["models"] == "fail"
+
+
+def test_ready_models_fail_when_reranker_fails(client_ping_true: TestClient) -> None:
+    _set_validation(client_ping_true, embedder_ok=True, reranker_ok=False)
+    response = client_ping_true.get("/ready")
+    assert response.json()["checks"]["models"] == "fail"
+
+
+def test_ready_models_fail_precedence_over_warn(client_ping_true: TestClient) -> None:
+    _set_validation(
+        client_ping_true,
+        embedder_ok=True,
+        reranker_ok=False,
+        provider_warnings=["CPU fallback"],
+    )
+    response = client_ping_true.get("/ready")
+    assert response.json()["checks"]["models"] == "fail"
+
+
+def test_ready_models_warn_on_provider_warning(client_ping_true: TestClient) -> None:
+    _set_validation(
+        client_ping_true,
+        embedder_ok=True,
+        reranker_ok=True,
+        provider_warnings=["CPU fallback"],
+    )
+    response = client_ping_true.get("/ready")
+    assert response.json()["checks"]["models"] == "warn"
+
+
+def test_ready_models_pending_when_probe_flag_unset(client_ping_true: TestClient) -> None:
+    """A non-None result with a still-None probe flag must read as PENDING, not OK/WARN."""
+    _set_validation(
+        client_ping_true,
+        embedder_ok=None,
+        reranker_ok=True,
+        provider_warnings=["CPU fallback"],
+    )
+    response = client_ping_true.get("/ready")
+    assert response.json()["checks"]["models"] == "pending"
+
+
+def test_ready_always_200_regardless_of_model_status(client_ping_true: TestClient) -> None:
+    _set_validation(client_ping_true, embedder_ok=False, reranker_ok=False)
+    response = client_ping_true.get("/ready")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ready"] is True
+    assert body["checks"]["models"] == "fail"
+
+
 @pytest.mark.integration
 def test_ready_returns_503_after_store_disconnect(tmp_path: Path) -> None:
     """After disconnect, GET /ready must return 503."""

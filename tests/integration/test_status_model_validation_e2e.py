@@ -39,3 +39,16 @@ def test_status_endpoint_includes_model_validation_after_startup(tmp_path, monke
         assert "provider_warnings" in mv
         assert "validated_at" in mv
         assert mv["validated_at"] is not None
+
+
+def test_ready_models_transitions_from_pending_to_ok(tmp_path, monkeypatch) -> None:
+    """Poll GET /ready until checks.models leaves "pending"; assert it lands on "ok" (D6 BE-6, S4)."""
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, _api_key):
+        deadline = time.monotonic() + 5.0
+        models = "pending"
+        while time.monotonic() < deadline:
+            models = client.get("/ready").json()["checks"]["models"]
+            if models != "pending":
+                break
+            time.sleep(0.05)
+        assert models == "ok"

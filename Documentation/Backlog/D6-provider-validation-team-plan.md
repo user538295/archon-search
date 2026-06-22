@@ -375,7 +375,7 @@ flowchart LR
         - #unit_test — `test_readiness_checks_has_models_field` — `ReadinessChecks(storage=CheckStatus.OK, models=CheckStatus.PENDING)` round-trips
         - #unit_test — `test_readiness_response_ready_not_gated_on_models` — `ready=True` even when `models=FAIL`
         - #unit_test — `test_openapi_snapshot_matches` — ensure `tests/server/openapi_snapshot.json` is regenerated (add this as a reminder; the snapshot test will fail automatically if not regenerated, catching the omission at CI time)
-- [ ] **BE-6** — Update `routes_ready.py` to populate `checks.models` from `app.state.model_validation`; `PENDING` while None, `OK`/`WARN`/`FAIL` from result; mapping priority (strict): FAIL (either `ok=False`) > WARN (both `ok=True`, `provider_warnings` non-empty) > OK (both `ok=True`, no warnings) #backend-role
+- [x] **BE-6** — Update `routes_ready.py` to populate `checks.models` from `app.state.model_validation`; `PENDING` while None, `OK`/`WARN`/`FAIL` from result; mapping priority (strict): FAIL (either `ok=False`) > WARN (both `ok=True`, `provider_warnings` non-empty) > OK (both `ok=True`, no warnings) #backend-role
     - Interface Adapters · 2.0h
     - needs BE-5 · completes C2, S3, S4, S12
     - Tests
