@@ -173,7 +173,7 @@ Boundaries where roles must agree. Changing one requires team agreement. Contrac
 | **S4** | **Given** background validation completed successfully · **When** `GET /ready` is called · **Then** `checks.models = "ok"` and `ready = true` |
 | **S5** | **Given** embedder model cannot be loaded (bad model name / network error) · **When** validation runs · **Then** `embedder_ok = false`, `provider_warnings` contains an error string, `GET /ready` returns `checks.models = "fail"` |
 | **S6** | **Given** reranker model cannot be loaded · **When** validation runs · **Then** `reranker_ok = false`, `provider_warnings` contains an error string |
-| **S7** | **Given** a non-CPU provider (e.g. CoreML) is configured but unavailable · **When** validation runs · **Then** `provider_warnings` contains the missing provider name; `embedder_ok = false`; `reranker_ok = false` (provider check is a pre-flight gate applied to both models before individual probes run) |
+| **S7** | **Given** a non-CPU provider (e.g. CoreML) is configured but unavailable · **When** validation runs · **Then** `provider_warnings` contains the missing provider name; `embedder_ok = false`; `reranker_ok = false` (provider check is a pre-flight gate applied to both models before individual probes run). **Edge case (S7 ∩ S8):** when `reranker_model = ""` (disabled) AND the provider is unavailable, the disabled rule wins for the reranker — `reranker_ok = true` (nothing to probe), while `embedder_ok = false` from the provider gate. Disabled-reranker short-circuits before the provider gate applies to the reranker. |
 | **S8** | **Given** `reranker_model = ""` (disabled) · **When** validation runs · **Then** `reranker_ok = true` with no reranker probe attempted |
 | **S9** | **Given** caller passes `embedder_is_warm=True` (e.g. after the global embedder has been directly exercised) · **When** validation runs · **Then** embedder probe is skipped; `embedder_ok = true`. Note: `eager_load_embedders = true` does NOT set this flag — it warms per-collection cache instances, not `app.state.embedder` |
 | **S10** | **Given** validation exceeds `validation_timeout_seconds` · **When** timeout fires · **Then** both `ok = false`, `provider_warnings` contains `"validation timed out after {N}s"` |
@@ -315,7 +315,7 @@ flowchart LR
 ```
 
 ### Phase 0 · Kickoff *(prerequisite; the one cross-cutting step)*
-- [ ] **K1** — Agree Contracts and Scenarios with the team; resolve Q1 (CLI home for model_validation rendering) #team
+- [x] **K1** — Agree Contracts and Scenarios with the team; resolve Q1 (CLI home for model_validation rendering) #team
     - — · 1.0h
     - completes C1, C2, C3
     - Tests
