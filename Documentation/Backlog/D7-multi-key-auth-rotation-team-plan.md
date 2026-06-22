@@ -518,7 +518,7 @@ flowchart LR
         - #unit_test — `test_cli_key_revoke_calls_delete` — `key revoke <id>` sends `DELETE /keys/{id}`
         - #integration_test — `test_cli_key_list_integration` — CLI list against `TestClient` returns formatted key rows
 
-- [ ] **T-2** — E2e: create key → use it → revoke it → confirm 401; create expired key → confirm 401; `key list` shows correct counts #tester-role
+- [x] **T-2** — E2e: create key → use it → revoke it → confirm 401; create expired key → confirm 401; `key list` shows correct counts #tester-role
     - — · 2.0h
     - needs FE-2 · completes S3, S4, S9, S10
     - Tests
