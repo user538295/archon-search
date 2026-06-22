@@ -52,7 +52,7 @@ The machine-readable contract is `GET /openapi.json`. Tables below trace every e
 
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
-| GET | `/status` | Operator-facing service status: PID, version, per-collection progress, ETA (namespace-filtered). **D2** — Response carries `backup: BackupStatusDetail \| null` summarising scheduled-backup state. **D3** — Response gains `store_schema_version: int` (current `STORE_SCHEMA_VERSION` constant) and `collections_schema_behind: int` (count of collections with `schema_version < STORE_SCHEMA_VERSION`). | — | `StatusResponse` (`schemas.py`) |
+| GET | `/status` | Operator-facing service status: PID, version, per-collection progress, ETA (namespace-filtered). **D2** — Response carries `backup: BackupStatusDetail \| null` summarising scheduled-backup state. **D3** — Response gains `store_schema_version: int` (current `STORE_SCHEMA_VERSION` constant) and `collections_schema_behind: int` (count of collections with `schema_version < STORE_SCHEMA_VERSION`). **D5** — Response gains `maintenance: MaintenanceStatusDetail \| null` (see `routes_maintenance.py` section for field details). | — | `StatusResponse` (`schemas.py`) |
 
 ### `routes_search.py`
 
@@ -143,6 +143,37 @@ All paths under `/collections`. Namespace gating: cross-namespace access surface
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
 | POST | `/backup/trigger` | **D2** — Trigger an immediate backup pass for every collection in the caller's namespace. Returns `202` with `BackupTriggerResponse` listing the `queued` job IDs and `skipped` collections (each with `reason` in `excluded` / `already_active` / `already_queued`). Jobs are created with `source="backup"` and dispatch via the standard `JobScheduler` behind any user-sourced bulk jobs. Archives land in `{backup.output_dir}/{namespace}/{collection}.backup.{timestamp}.tar.gz`. | — | `BackupTriggerResponse` — `{"queued": list[str], "skipped": list[{"collection": str, "reason": str}]}` |
+
+### `routes_maintenance.py` (D5)
+
+| Method | Path | Purpose | Request schema | Response schema |
+| --- | --- | --- | --- | --- |
+| POST | `/maintenance/trigger` | **D5** — Trigger an immediate maintenance pass. Sets `MaintenanceLoop._trigger_event`; the pass runs asynchronously. Returns `{"status": "triggered"}` when enqueued. Returns `{"status": "already_triggered"}` (also `202`) when a pass is already pending or running (`_trigger_event.is_set()`); the in-progress pass completes normally. Requires `Bearer` token. | — | `202 MaintenanceTriggerResponse` — `{"status": "triggered" \| "already_triggered"}` |
+
+The `maintenance` field added to `GET /status` (D5):
+
+`StatusResponse` gains `maintenance: MaintenanceStatusDetail | null`. `null` only when `app.state.maintenance_loop` is absent (non-standard startup). When present, `MaintenanceStatusDetail` contains:
+
+| Field | Type | Notes |
+|---|---|---|
+| `enabled` | `bool` | `true` when `interval_hours > 0` |
+| `interval_hours` | `int` | Configured interval in hours (`0` = disabled) |
+| `last_run_at` | `str \| null` | ISO-8601 timestamp of last completed pass |
+| `next_run_at` | `str \| null` | ISO-8601 timestamp of next scheduled pass; `null` when disabled |
+| `collection_health` | `list[CollectionHealthEntry]` | Namespace-scoped to caller's namespace; each entry is a collection within that namespace |
+
+Each `CollectionHealthEntry` (namespace is implied by the caller's API key; the key in the state file is `{ns}/{col}` and the `collection` field holds just the bare `{col}` part):
+
+| Field | Type | Notes |
+|---|---|---|
+| `collection` | `str` | Collection name (bare, without namespace prefix) |
+| `fts_optimized_at` | `str \| null` | Last FTS optimize timestamp |
+| `orphans_removed_last_run` | `int` | Orphaned source paths removed in the last pass |
+| `last_retry_at` | `str \| null` | Last failed-ingest retry timestamp |
+| `last_error` | `str \| null` | Most recent per-collection error; `null` when last pass was clean |
+| `meta_chunk_count` | `int` | O(1) metadata-row chunk count |
+| `mutations_since_recompute` | `int` | Mutations since last centroid recompute |
+| `centroid_recompute_threshold` | `int` | Current threshold from `config.centroid_recompute_threshold` |
 
 ### `routes_explain.py` (A4)
 
@@ -338,6 +369,9 @@ Entry point: `archon-search` (`archon_search/cli/main.py`, Click group). Most su
 | `import` | — | **D1/D2** — Start an import job from a `.tar.gz` archive via `POST /collections/{collection}/import`. `--wait` polls until DONE/FAILED, printing imported/skipped/total counts; warns when `skipped > 0`. Exits 1 on FAILED. | `collection: str`, `path: str`, `--force-overwrite / --no-force-overwrite`, `--ignore-schema-version / --no-ignore-schema-version`, `--on-error [fail\|skip]`, `--wait / --no-wait`, `--api-url TEXT`, `--api-key TEXT` |
 | `backup` | — | **D2** — Backup Click group. Bare invocation prints help. `--now` calls `POST /backup/trigger` and prints each queued `job_id` plus skipped collections with reason; `--wait` polls each job to DONE/FAILED (exits `1` on FAILED). | `--now`, `--wait`, `--api-url TEXT`, `--api-key TEXT` |
 | `backup` | `status` | **D2** — Print scheduled-backup state. Offline-capable: reads `.backup-state.json` and counts archives on disk; merges `last_tick_at` / `next_run_at` from `GET /status` when the server is reachable. `--json` emits a `BackupStatusDetail`-shaped payload. | `--json`, `--api-url TEXT`, `--api-key TEXT` |
+| `maintenance` | — | **D5** — Maintenance Click group. Bare invocation prints help. | — |
+| `maintenance` | `status` | **D5** — Print maintenance state. Offline-capable: reads `.maintenance-state.json` directly and prints `last_run_at`, `next_run_at`, and per-collection health table. Optionally merges live `maintenance` block from `GET /status` when server is reachable. `--json` emits the raw state as JSON. | `--json`, `--api-url TEXT`, `--api-key TEXT` |
+| `maintenance` | `run` | **D5** — Trigger an immediate maintenance pass via `POST /maintenance/trigger`. Prints `"triggered"` and exits immediately. `--wait` polls `GET /status` until `maintenance.last_run_at` changes, then prints the updated health summary; exits 1 on timeout. | `--wait / --no-wait`, `--api-url TEXT`, `--api-key TEXT` |
 
 ## `[backup]` config section (D2)
 
@@ -351,6 +385,22 @@ Controls scheduled-backup behaviour. All fields have defaults that take effect w
 | `output_dir` | `str` | `get_data_dir() / "backups"` | Root directory for archives. Resolved at load time when empty. Config loader logs an ERROR and falls back to the default when the configured path has fewer than 3 components (guards against rotation scanning near-root directories). |
 
 **Backup lifecycle**: `BackupLoop` enumerates collections per namespace, deduplicates against `_in_flight` and `list_queued_bulk()`, then calls `job_store.create_export(..., source="backup")`. Jobs dispatch via the standard `JobScheduler` but `list_queued_bulk()` sorts `source="backup"` behind `source="user"` so manual operations always win. On DONE the completion loop updates `~/.archon-search/.backup-state.json` and runs rotation; FAILED leaves `last_backup_at` untouched.
+
+## `[maintenance]` config section (D5)
+
+Controls scheduled-maintenance behaviour. All fields have defaults that take effect when the section is absent from `archon-search.toml`. Disabled by default (`interval_hours = 0`).
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `interval_hours` | `int` | `0` | Hours between automatic maintenance passes. `0` = no scheduled passes; `POST /maintenance/trigger` still works. Must be ≥ 0 (config load raises `ConfigError` for negative values). |
+| `fts_optimize` | `bool` | `true` | Enable FTS index optimization per collection during each pass. |
+| `orphan_cleanup` | `bool` | `true` | Enable removal of chunks whose `source_path` no longer exists on disk (URL chunks are skipped). |
+| `failed_ingest_retry` | `bool` | `true` | Enable automatic re-enqueue of FAILED `IngestJob`s within age and attempt limits. |
+| `retry_max_attempts` | `int` | `3` | Maximum retry attempts per `{namespace}/{collection}/{source_path}` key. Must be ≥ 1. |
+| `retry_max_age_hours` | `int` | `72` | Only retry jobs created within this many hours. Must be ≥ 0; config loader logs WARNING when `0` (all failed jobs regardless of age). |
+| `exclude` | `list[str]` | `[]` | Patterns to skip: bare `{col}` matches across all namespaces, `{ns}/{col}` matches exactly one. Same syntax as `[backup].exclude`. |
+
+**Maintenance lifecycle**: `MaintenanceLoop` (always instantiated, stored on `app.state.maintenance_loop`) runs a single `_trigger_loop`. When `interval_hours = 0`, the loop waits indefinitely on `_trigger_event`; manual triggers via `POST /maintenance/trigger` still fire a pass. Each pass runs all three enabled policies per non-excluded collection (FTS optimize, orphan cleanup, then pass-level failed-ingest retry), then writes `.maintenance-state.json` atomically. `GET /status` reads this file to expose `MaintenanceStatusDetail`; the CLI `archon-search maintenance status` works offline by reading it directly.
 
 ## `[jobs]` config section (D1/D2 additions)
 

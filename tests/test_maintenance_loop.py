@@ -495,7 +495,14 @@ async def test_run_one_pass_health_entry_conforms_to_c3_schema(tmp_path: Path) -
     state_file = tmp_path / ".maintenance-state.json"
     loaded = json.loads(state_file.read_text(encoding="utf-8"))
     health_entry = loaded["collection_health"]["default/docs"]
-    expected_keys = {"fts_optimized_at", "orphans_removed_last_run", "last_retry_at", "last_error", "meta_chunk_count"}
+    expected_keys = {
+        "fts_optimized_at",
+        "orphans_removed_last_run",
+        "last_retry_at",
+        "last_error",
+        "meta_chunk_count",
+        "mutations_since_recompute",
+    }
     assert set(health_entry.keys()) == expected_keys
 
 

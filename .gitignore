@@ -28,6 +28,9 @@ venv/
 # Obsidian vault config
 .obsidian/
 
+# Generated OpenAPI export (root-level convenience export; canonical snapshot is tests/server/openapi_snapshot.json)
+/openapi.json
+
 # Claude Code and Serena agent state
 .claude/
 .serena/

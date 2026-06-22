@@ -65,9 +65,10 @@ _EMPTY_STATE: dict[str, Any] = {
 class MaintenanceLoop:
     """Drives scheduled per-collection maintenance passes.
 
-    Owns the ``.maintenance-state.json`` file. Does not perform the
-    maintenance work itself — concrete policies are implemented in
-    later tasks (BE-5 FTS, BE-6 orphan cleanup, BE-8 retry).
+    Owns the ``.maintenance-state.json`` file. Implements all three
+    per-collection policies inline: FTS optimize (``_run_fts_optimize``),
+    orphan chunk cleanup (``_run_orphan_cleanup``), and failed-ingest
+    retry (``_run_failed_ingest_retry``).
     """
 
     def __init__(
@@ -508,16 +509,19 @@ class MaintenanceLoop:
 
             # Collect O(1) metadata values.
             meta_chunk_count = 0
+            mutations_since_recompute = 0
             try:
                 meta = await self._search_store.get_collection_meta(col, ns)
                 if meta is not None:
                     meta_chunk_count = meta.chunk_count
+                    mutations_since_recompute = meta.mutations_since_recompute
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "MaintenanceLoop: get_collection_meta failed for %s: %s", key, exc
                 )
 
             col_health["meta_chunk_count"] = meta_chunk_count
+            col_health["mutations_since_recompute"] = mutations_since_recompute
 
             # Expose current collection's health dict to per-policy methods so they
             # can update it (e.g. fts_optimized_at, orphans_removed_last_run).

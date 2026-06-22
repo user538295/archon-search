@@ -31,6 +31,7 @@ In the table below, paths are relative to the data-directory root — `~/.archon
 | `logs/archon-search.log` | server | server logs | `[logging].log_file` |
 | `archon-search-jobs.json` | `jobs/store.py` | job state for long-running ingest/reindex | `get_jobs_file()` in `jobs/model.py` |
 | `.indexing_state.json` | `progress.py` (`IndexingStateStore`) | per-collection indexing progress/status | atomic-rename writes; RMW serialized by an internal `RLock` (see "Indexing state") |
+| `.maintenance-state.json` | `jobs/maintenance_loop.py` (`MaintenanceLoop`) | last/next run timestamps, per-collection health, retry counts | atomic-rename write after each pass; absent/corrupt → fresh empty state (no error); see "Maintenance state" |
 | `models/` | `language_detector.py` | fasttext language detector (`lid.176.ftz`) | only if `multilingual=True`; resolved lazily via `get_fasttext_models_dir()` |
 | `history/sessions/` | `cli/ingest.py` | default `--sessions-dir` for the `ingest` subcommand | resolved lazily via `get_data_dir()` |
 
@@ -50,7 +51,7 @@ Every durable JSON/bytes write of runtime state routes through a single helper m
 
 The crucial property is that the helper fsyncs **both the file and the parent directory**: the parent-directory fsync is what makes the `os.replace` rename itself durable. fsync is never retried — on `EIO` the kernel may already have marked the page clean (POSIX "fsyncgate"), so a retry is unsafe. The helper is **not internally synchronized**; callers must serialize writes to the same path.
 
-The five durable-write sites that use the helper are:
+The seven durable-write sites that use the helper are:
 
 | Site | Helper | File written |
 |------|--------|--------------|
@@ -59,6 +60,8 @@ The five durable-write sites that use the helper are:
 | `sync.manifest_remove_entry` | `atomic_write_json` | sync manifest |
 | `jobs/store.py::JobStore._write_atomic` | `atomic_write_json` | `archon-search-jobs.json` |
 | `key_manager._generate_and_write` | `atomic_write_bytes` | `.search.env` (mode `0600`) |
+| `maintenance_loop._save_state` | `atomic_write_json` | `.maintenance-state.json` |
+| `backup_loop._save_state` | `atomic_write_json` | `.backup-state.json` |
 
 A CI lint gate, `tests/test_no_raw_durable_writes.py`, scans `archon_search/**/*.py` (excluding the helper itself) for raw write patterns and fails the build on new ones; a handful of out-of-scope one-shot writes (TOML config writers, OS service-unit files) carry a `# noqa: durable-write` allow-list comment.
 
@@ -285,6 +288,33 @@ Long-running operations (ingest, reindex, delete) are tracked in `~/.archon-sear
 ## Indexing state
 
 Per-collection indexing progress (`status`, file counters, timestamps, `error_count`, and the path/mtime/hash bookkeeping) is persisted in `~/.archon-search/.indexing_state.json` by `IndexingStateStore` (`progress.py`). Each mutation writes the whole file via a tmp-file + `os.replace` atomic rename. The store is **thread-safe**: `write`, `update_collection`, `remove_collection`, `set_trigger`, and `reset_in_progress` are serialized by an internal `threading.RLock`, so concurrent cross-collection writers cannot lose updates (A6 closed `CON-3`; see `Architecture/530_technical_debt_refactoring_roadmap.md`). `read()` is an unlocked snapshot; read-modify-write must go through the locked composite methods. On-disk **durability** under power loss (fsync of the rename) is still open — tracked under A7.
+
+## Maintenance state (D5)
+
+`MaintenanceLoop` persists its pass state in `~/.archon-search/.maintenance-state.json` (resolved via `get_data_dir()`). Written atomically (write-to-temp + rename) by `_save_state()` after every completed pass. Absent or corrupt file → fresh empty state (no error; WARNING logged on corrupt JSON). Read by `routes_status.py::_build_maintenance_status()` and by `cli/maintenance_cmd.py status`.
+
+Schema (C3 contract):
+```json
+{
+  "last_run_at": "<ISO-8601> | null",
+  "next_run_at": "<ISO-8601> | null",
+  "collection_health": {
+    "{namespace}/{collection}": {
+      "fts_optimized_at":           "<ISO-8601> | null",
+      "orphans_removed_last_run":   <int>,
+      "last_retry_at":              "<ISO-8601> | null",
+      "last_error":                 "<string> | null",
+      "meta_chunk_count":           <int>,
+      "mutations_since_recompute":  <int>
+    }
+  },
+  "retry_counts": {
+    "{namespace}/{collection}/{absolute_source_file_path}": <int>
+  }
+}
+```
+
+`meta_chunk_count` comes from `CollectionMeta.chunk_count` (the O(1) metadata-row value from `store.get_collection_meta()`), not the live `count_rows()` from `CollectionInfo.chunk_count`. `retry_counts` keys use `{namespace}/{collection}/{absolute_source_file_path}` to scope retry limits correctly when the same file is ingested into multiple collections. Keys whose source path is no longer tracked in `JobStore.list()` and whose count is 0 are pruned at each retry-policy pass to bound growth.
 
 ## Backup and recovery
 

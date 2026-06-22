@@ -478,6 +478,19 @@ All changes are additive. Strict-schema clients will see new fields; tolerant cl
 
 ---
 
+### [next release] — D5 maintenance jobs: new `POST /maintenance/trigger` endpoint (BE-4)
+
+**Surface**: REST API — new route.
+
+**Change** (additive):
+- `POST /maintenance/trigger` — new endpoint. Triggers an immediate maintenance pass. Returns `202 Accepted` with `{"status": "triggered"}` when the pass is enqueued. Returns `202 Accepted` with `{"status": "already_triggered"}` when a pass is already pending or running. Requires `Bearer` token (same auth middleware as all other routes).
+
+**Additive change**: no existing endpoints changed. Strict-validating REST clients that enumerate allowed routes must add `/maintenance/trigger`.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — D3 migration tooling: new nullable fields on `JobResponse` (BE-11)
 
 **Surface**: REST (all endpoints that return `JobResponse`: `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/ingest`, `POST /jobs/export`, `POST /jobs/import`, `DELETE /jobs/{job_id}`, `POST /jobs/{id}/resume`)

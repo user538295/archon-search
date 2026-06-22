@@ -321,6 +321,16 @@
 - Action: For any retry loop that iterates all FAILED jobs from `JobStore.list()`, add a `seen_keys: set[str]` tracker keyed by the retry key. Skip jobs whose key is already in `seen_keys` after processing the first occurrence.
 - Confidence: high
 
+**2026-06-21 — D5 FE-1: `--wait` polling must capture baseline BEFORE triggering**
+- Observation: `_wait_for_pass` initially captured `original_last_run_at` AFTER the POST trigger returned. For fast passes (empty collections, dev/test env), the pass can complete in the <50 ms window, making the baseline already equal to the new value. The loop then exhausts `_WAIT_MAX_POLLS` with no change, returning a false timeout on success.
+- Action: Always capture the polling baseline (e.g., `last_run_at`) BEFORE issuing the trigger POST. Pass it as a parameter to the wait function.
+- Confidence: high
+
+**2026-06-21 — D5 FE-1: `side_effect` mock count must account for pre-loop calls**
+- Observation: `test_maintenance_run_wait_maintenance_null` provided 3 `side_effect` GET responses with `_WAIT_MAX_POLLS=3`. But `_wait_for_pass` (when baseline capture is done inside) calls `_get_last_run_at` once before the loop + 3 times in the loop = 4 total. The 4th call raised `StopIteration`, which CliRunner surfaced as a non-zero exit — passing the test for the wrong reason.
+- Action: When mocking a `side_effect` list for a polling loop, count ALL calls including any pre-loop baseline call and any initial setup call. Or patch `_WAIT_MAX_POLLS` to a smaller value so the total stays within the mocked count.
+- Confidence: high
+
 **2026-06-20 — BE-4 (D4): `sample_chunk_texts` must be mocked in all store stubs**
 - Observation: After BE-3 replaced the in-memory text accumulator with `store.sample_chunk_texts()`, any test helper that builds a mock store (`_make_mock_store_c1`, `_make_stub_store_for_embedding_tests`) must add `store.sample_chunk_texts = AsyncMock(return_value=[])` or a meaningful list. Missing this causes `AttributeError: 'AsyncMock' object has no attribute 'sample_chunk_texts'` at runtime in tests that exercise description generation.
 - Action: After any new async method is added to `SearchStore`, grep all test files for mock store builders and add the new method as an `AsyncMock` attribute. Prefer `AsyncMock(return_value=[])` for collection-returning methods unless the test specifically exercises the non-empty path.

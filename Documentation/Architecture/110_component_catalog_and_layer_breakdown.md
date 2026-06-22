@@ -96,14 +96,15 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/server/_ingest_lock.py` | Shared helper for `POST /ingest` and `POST /collections/` to pre-acquire the per-collection ingest lock and return a `503` + `Retry-After` (`{"error": "store_busy", ...}`) when a reindex holds it. | `acquire_collection_lock_or_503` |
 | `archon_search/server/routes_telemetry.py` | `GET /telemetry/stats`, `GET /telemetry/entries`. | `router` |
 | `archon_search/server/routes_backup.py` | **D2** — `POST /backup/trigger`. Enumerates the caller's namespace collections, dedups against `BackupLoop._in_flight` and `JobStore.list_queued_bulk()`, then enqueues backup-sourced `ExportJob`s; returns `BackupTriggerResponse` with `queued` job IDs and `skipped` reasons. | `router`, `BackupTriggerResponse`, `SkippedItem` |
-| `archon_search/server/schemas.py` | REST response models: `HealthResponse`, `StatusCollectionEntry`, `StatusResponse`, `IndexingStateCollectionEntry`, `IndexingStateResponse`, `CollectionSummary`, `CollectionDetail`, `JobResponse`, `DeleteResponse`, `ErrorDetail`. | (Pydantic models) |
+| `archon_search/server/routes_maintenance.py` | **D5** — `POST /maintenance/trigger`. Sets `MaintenanceLoop._trigger_event` for an immediate on-demand pass; returns `{"status": "triggered"}` (202) or `{"status": "already_triggered"}` (202) when a pass is already pending or running. | `router`, `MaintenanceTriggerResponse` |
+| `archon_search/server/schemas.py` | REST response models: `HealthResponse`, `StatusCollectionEntry`, `StatusResponse` (D5: gains `maintenance: MaintenanceStatusDetail \| None`), `IndexingStateCollectionEntry`, `IndexingStateResponse`, `CollectionSummary`, `CollectionDetail`, `JobResponse`, `DeleteResponse`, `ErrorDetail`. **D5** adds `MaintenanceStatusDetail`, `CollectionHealthEntry`, `MaintenanceTriggerResponse`. | (Pydantic models) |
 | `archon_search/server/schemas_telemetry.py` | Pydantic models for telemetry routes. | see source: `archon_search/server/schemas_telemetry.py` |
 
 ## CLI
 
 | Module | Purpose | Key public symbols |
 |---|---|---|
-| `archon_search/cli/main.py` | `archon-search` Click group; registers subcommands: `start`, `stop`, `status`, `serve`, `install`, `uninstall`, `ingest`, `sync`, `collection`, `config`, `export`, `import`, `backup`. | `main` |
+| `archon_search/cli/main.py` | `archon-search` Click group; registers subcommands: `start`, `stop`, `status`, `serve`, `install`, `uninstall`, `ingest`, `sync`, `collection`, `config`, `export`, `import`, `backup`, `maintenance` (D5). | `main` |
 | `archon_search/cli/start.py` | `start` subcommand; validates config, delegates to `launchctl` / `systemctl --user`. | see source |
 | `archon_search/cli/stop.py` | `stop` subcommand. | see source |
 | `archon_search/cli/status.py` | `status` subcommand; hits the HTTP control plane. | see source |
@@ -114,6 +115,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/cli/collection.py` | `collection` subgroup; list/add/remove/info/reindex. | see source |
 | `archon_search/cli/config_cmd.py` | `config` subgroup; show/edit `~/.archon-search/archon-search.toml`. | see source |
 | `archon_search/cli/backup_cmd.py` | **D2** — `backup` Click group. Bare invocation prints help. `--now` POSTs `/backup/trigger` and prints queued job IDs and skipped collections; `--wait` polls each job to terminal state. `backup status` subcommand reads `.backup-state.json` offline, counts archives on disk, and merges `last_tick_at`/`next_run_at` from `GET /status` when reachable; `--json` emits a `BackupStatusDetail`-shaped payload. | `backup_cmd` |
+| `archon_search/cli/maintenance_cmd.py` | **D5** — `maintenance` Click group. `status` subcommand reads `.maintenance-state.json` offline (S25) and optionally merges live `maintenance` block from `GET /status` when server is reachable; `--json` flag. `run` subcommand POSTs `/maintenance/trigger` and exits immediately; `--wait` polls `GET /status` until `maintenance.last_run_at` changes (S26, S27). | `maintenance_cmd` |
 | `archon_search/cli/_helpers.py` | Shared CLI infrastructure (auth header, base URL resolution, error printing). | internal |
 
 ## Platform
@@ -143,6 +145,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/jobs/store.py` | Persistent JSON-backed job store with atomic writes, 7-day eviction, RUNNING/CANCELLING crash-to-FAILED recovery, and `transition()` for atomic state changes. | `JobStore` |
 | `archon_search/jobs/model.py` | Re-exports `IngestJob`/`JobStatus`, exposes `get_jobs_file()` (lazy, honours `ARCHON_SEARCH_DATA_DIR`), provides `job_to_dict` for response shaping. | `IngestJob`, `JobStatus`, `get_jobs_file`, `job_to_dict` |
 | `archon_search/jobs/backup_loop.py` | **D2** — In-process scheduled-backup orchestrator. Two async loops (`_trigger_loop` enumerates collections per `interval_hours` and enqueues `ExportJob` with `source="backup"`; `_completion_loop` polls in-flight jobs, persists `last_backup_at` to `.backup-state.json`, and rotates archives per `keep`). Run together via `asyncio.gather`. | `BackupLoop` |
+| `archon_search/jobs/maintenance_loop.py` | **D5** — In-process maintenance orchestrator. Single `_trigger_loop` waits on `asyncio.wait_for(_trigger_event.wait(), timeout=interval_seconds)` (or indefinitely when `interval_hours=0`); fires `_run_one_pass` on timeout or trigger. Each pass: iterates all collections via `store.list_collections()`, skips excludes, runs `_run_fts_optimize` + `_run_orphan_cleanup` per-collection, then calls `_run_failed_ingest_retry` once at the pass level; writes `.maintenance-state.json` atomically after the pass. | `MaintenanceLoop` |
 
 ## Eval
 
@@ -161,7 +164,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 
 | Helper | Purpose | Signature |
 |---|---|---|
-| `make_real_app` | Build a `TestClient` backed by real `SearchStore` + `SearchPipeline` in `tmp_path`. Uses `monkeypatch.setenv` for `ARCHON_SEARCH_DATA_DIR` + `ARCHON_SEARCH_API_KEY` so env vars auto-revert after each test. Creates a real `JobScheduler` so export/import/backup dispatch works without mocking. | `make_real_app(tmp_path, monkeypatch, *, backup_enabled=False, namespaces=None) -> tuple[TestClient, config, api_key]` |
+| `make_real_app` | Build a `TestClient` backed by real `SearchStore` + `SearchPipeline` in `tmp_path`. Uses `monkeypatch.setenv` for `ARCHON_SEARCH_DATA_DIR` + `ARCHON_SEARCH_API_KEY` so env vars auto-revert after each test. Creates a real `JobScheduler` so export/import/backup dispatch works without mocking. **D5**: `maintenance_enabled=True` sets `interval_hours=1` so `POST /maintenance/trigger` fires an immediate pass during tests. | `make_real_app(tmp_path, monkeypatch, *, backup_enabled=False, maintenance_enabled=False, namespaces=None) -> tuple[TestClient, config, api_key]` |
 | `ingest_doc` | POST ingest with inline text + poll `GET /jobs/{id}` until `status == 'done'` (max 10s, 100ms intervals). | `ingest_doc(client, col, text, path, *, timeout_s=10)` |
 | `ingest_file_via_path` | POST ingest by filesystem path + poll until DONE. | `ingest_file_via_path(client, col, path, *, timeout_s=10)` |
 | `search` | POST `/search`, assert 200, return items list. | `search(client, col, query, **filters)` |
