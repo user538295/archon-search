@@ -121,9 +121,11 @@ def test_lifespan_prune_runs_in_thread_not_event_loop(tmp_path: Path) -> None:
         with TestClient(app):
             pass
 
-    assert len(to_thread_calls) == 1, "asyncio.to_thread should be called exactly once"
-    # The callable passed must be a bound method named prune_once
-    assert getattr(to_thread_calls[0], "__name__", None) == "prune_once"
+    # prune_once must be dispatched to a thread (the background model-validation
+    # task also uses asyncio.to_thread, so prune_once is one of the calls, not
+    # necessarily the only one).
+    call_names = [getattr(c, "__name__", None) for c in to_thread_calls]
+    assert "prune_once" in call_names, "prune_once should be dispatched to a thread"
 
 
 # ---------------------------------------------------------------------------

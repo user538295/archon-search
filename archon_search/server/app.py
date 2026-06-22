@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
@@ -24,6 +25,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.key_manager import load_or_generate_key
 from archon_search.paths import get_data_dir
 from archon_search.logging_setup import configure_logging
+from archon_search.model_validation import ModelValidationResult, validate_models_async
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingStateStore
@@ -161,6 +163,39 @@ def create_app(
             await embedder_cache.preload(list(distinct_models))
 
         # All startup migrations complete before the lifespan context yields control to the request loop
+
+        # Startup: spawn background model validation (D6 / BE-4). Never blocks
+        # startup — the lazy-load contract is hard. The result is stored on
+        # ``app.state.model_validation`` (None while pending) and surfaced via
+        # ``GET /status`` and ``GET /ready``. ``embedder_is_warm`` is read from
+        # the global default embedder: only True when it has been exercised
+        # directly (eager_load_embedders warms per-collection caches, not this
+        # global instance, so it is typically False at startup).
+        app.state.model_validation = None
+
+        async def _run_model_validation() -> None:
+            embedder_is_warm = app.state.embedder.is_warm
+            try:
+                app.state.model_validation = await validate_models_async(
+                    config,
+                    timeout_seconds=config.validation_timeout_seconds,
+                    embedder_is_warm=embedder_is_warm,
+                )
+            except asyncio.CancelledError:
+                logger.info("validation cancelled during shutdown")
+                raise
+            except BaseException as exc:  # noqa: BLE001 — never let the task escape
+                logger.warning("model validation task failed unexpectedly: %s", exc)
+                app.state.model_validation = ModelValidationResult(
+                    embedder_ok=False,
+                    reranker_ok=False,
+                    provider_warnings=["validation task failed unexpectedly"],
+                    validated_at=datetime.now(UTC),
+                )
+
+        validation_task = asyncio.create_task(_run_model_validation())
+        app.state._background_tasks.add(validation_task)
+        validation_task.add_done_callback(app.state._background_tasks.discard)
 
         # Startup: warn if the multi-collection fan-out validation cap is out of
         # sync with the configured max_fanout.

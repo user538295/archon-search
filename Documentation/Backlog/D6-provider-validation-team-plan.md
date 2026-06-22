@@ -349,7 +349,7 @@ flowchart LR
         - #unit_test — `test_validation_timeout_seconds_from_toml` — TOML with `validation_timeout_seconds = 30` produces config with 30
         - #unit_test — `test_validation_timeout_seconds_zero_rejected` — TOML with `validation_timeout_seconds = 0`; config loader falls back to 60 and logs a warning (zero timeout would make `asyncio.wait_for` raise immediately)
         - #unit_test — `test_validation_timeout_seconds_negative_rejected` — TOML with `validation_timeout_seconds = -5`; config loader falls back to 60 and logs a warning
-- [ ] **BE-4** — In `app.py` lifespan: set `app.state.model_validation = None`, then spawn `validate_models_async()` as a background task tracked in `app.state._background_tasks` #backend-role
+- [x] **BE-4** — In `app.py` lifespan: set `app.state.model_validation = None`, then spawn `validate_models_async()` as a background task tracked in `app.state._background_tasks` #backend-role
     - Frameworks & Drivers · 3.0h
     - needs BE-1, BE-2, BE-3 · completes S1, S2
         - The background task wrapper MUST: (a) catch `BaseException` (not just `Exception`) around the `validate_models_async` call, and on any escape set `app.state.model_validation` to a failure `ModelValidationResult` with `provider_warnings=["validation task failed unexpectedly"]`; (b) apply `task.add_done_callback(app.state._background_tasks.discard)` (same pattern as backup_task at `app.py:244` and maintenance_task at `app.py:258`); (c) catch `asyncio.CancelledError` at shutdown and log "validation cancelled during shutdown" before re-raising
