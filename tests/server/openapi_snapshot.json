@@ -1645,6 +1645,54 @@
         "title": "MigrationSpecSchema",
         "type": "object"
       },
+      "ModelValidationStatus": {
+        "description": "API-facing mirror of ModelValidationResult, nested under GET /status (D6 C1).\n\nA null (``None``) boolean field means the corresponding probe has not run /\ncompleted. ``validated_at`` is ``None`` while validation is pending and a UTC\ntimestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1).",
+        "properties": {
+          "embedder_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedder Ok"
+          },
+          "provider_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Provider Warnings",
+            "type": "array"
+          },
+          "reranker_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker Ok"
+          },
+          "validated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validated At"
+          }
+        },
+        "title": "ModelValidationStatus",
+        "type": "object"
+      },
       "PatchCollectionBody": {
         "properties": {
           "embedding_model": {
@@ -2409,6 +2457,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/MaintenanceStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model_validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelValidationStatus"
               },
               {
                 "type": "null"

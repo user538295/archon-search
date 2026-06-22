@@ -335,7 +335,7 @@ flowchart LR
         - #unit_test — `test_validate_models_async_embedder_warm_skip` — call `validate_models_async(..., embedder_is_warm=True)`; embedder probe skipped, embedder_ok=True
         - #unit_test — `test_validate_models_async_never_raises` — any exception during validation; function returns result (not raises)
         - #integration_test — `test_validate_models_async_pending_state_visible` — patch `validate_models_async` with a coroutine that blocks on a `threading.Event` (not `asyncio.Event`) so it is controllable from synchronous test code; enter the `TestClient` context (triggers lifespan), immediately assert `app.state.model_validation is None` before releasing the event. Use `threading.Event` not `asyncio.Event` because `TestClient` runs the event loop in a worker thread and cross-thread asyncio primitives are not safe.
-- [ ] **BE-2** — Add `ModelValidationStatus` Pydantic model and `model_validation: ModelValidationStatus | None = None` to `StatusResponse` in `schemas.py` #backend-role
+- [x] **BE-2** — Add `ModelValidationStatus` Pydantic model and `model_validation: ModelValidationStatus | None = None` to `StatusResponse` in `schemas.py` #backend-role
     - Interface Adapters · 1.0h
     - needs BE-1 · completes C1
     - Tests

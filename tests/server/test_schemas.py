@@ -1,6 +1,8 @@
 """Tests for shared REST response Pydantic schemas ."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from pydantic import ValidationError
 
@@ -14,6 +16,7 @@ from archon_search.server.schemas import (
     JobResponse,
     MaintenanceStatusDetail,
     MaintenanceTriggerResponse,
+    ModelValidationStatus,
     StatusCollectionEntry,
     StatusResponse,
 )
@@ -247,3 +250,75 @@ def test_status_response_with_maintenance_populated() -> None:
     assert response.maintenance.enabled is True
     assert response.maintenance.interval_hours == 12
     assert response.maintenance.collection_health == []
+
+
+def test_model_validation_status_all_null() -> None:
+    """ModelValidationStatus with null fields serialises correctly (pending state)."""
+    status = ModelValidationStatus()
+    assert status.embedder_ok is None
+    assert status.reranker_ok is None
+    assert status.provider_warnings == []
+    assert status.validated_at is None
+    dumped = status.model_dump()
+    assert dumped == {
+        "embedder_ok": None,
+        "reranker_ok": None,
+        "provider_warnings": [],
+        "validated_at": None,
+    }
+
+
+def test_model_validation_status_populated() -> None:
+    """A fully populated ModelValidationStatus round-trips through Pydantic."""
+    ts = datetime(2026, 6, 22, 12, 0, 0, tzinfo=UTC)
+    status = ModelValidationStatus(
+        embedder_ok=True,
+        reranker_ok=False,
+        provider_warnings=["CoreMLExecutionProvider unavailable"],
+        validated_at=ts,
+    )
+    restored = ModelValidationStatus.model_validate(status.model_dump())
+    assert restored.embedder_ok is True
+    assert restored.reranker_ok is False
+    assert restored.provider_warnings == ["CoreMLExecutionProvider unavailable"]
+    assert restored.validated_at == ts
+
+
+def test_model_validation_status_validated_at_serialises_to_iso_string() -> None:
+    """validated_at (datetime) serialises to an ISO-8601 string in JSON mode.
+
+    The REST path serialises StatusResponse via JSON mode; this locks in that the
+    datetime field becomes a string on the wire (not a raw datetime object).
+    """
+    ts = datetime(2026, 6, 22, 12, 0, 0, tzinfo=UTC)
+    status = ModelValidationStatus(embedder_ok=True, reranker_ok=True, validated_at=ts)
+    dumped = status.model_dump(mode="json")
+    assert dumped["validated_at"] == "2026-06-22T12:00:00Z"
+    assert isinstance(dumped["validated_at"], str)
+
+
+def test_status_response_with_model_validation_populated() -> None:
+    """StatusResponse correctly carries a populated ModelValidationStatus."""
+    model_validation = ModelValidationStatus(
+        embedder_ok=True,
+        reranker_ok=True,
+        provider_warnings=[],
+        validated_at=None,
+    )
+    response = StatusResponse(
+        running=True,
+        pid=1,
+        version="1.0.0",
+        collections=[],
+        model_validation=model_validation,
+    )
+    assert response.model_validation is not None
+    assert response.model_validation.embedder_ok is True
+    assert response.model_validation.reranker_ok is True
+
+
+def test_status_response_model_validation_field_optional() -> None:
+    """StatusResponse serialises with model_validation=None by default."""
+    entry = StatusCollectionEntry(name="col", path="/p", status="DONE", watching=False)
+    response = StatusResponse(running=True, pid=1, version="1.0.0", collections=[entry])
+    assert response.model_validation is None

@@ -4,6 +4,7 @@ Pure data models — no business logic.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Literal
 
@@ -126,6 +127,20 @@ class MaintenanceTriggerResponse(BaseModel):
     status: Literal["triggered", "already_triggered"]
 
 
+class ModelValidationStatus(BaseModel):
+    """API-facing mirror of ModelValidationResult, nested under GET /status (D6 C1).
+
+    A null (``None``) boolean field means the corresponding probe has not run /
+    completed. ``validated_at`` is ``None`` while validation is pending and a UTC
+    timestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1).
+    """
+
+    embedder_ok: bool | None = None
+    reranker_ok: bool | None = None
+    provider_warnings: list[str] = Field(default_factory=list)
+    validated_at: datetime | None = None
+
+
 class StatusResponse(BaseModel):
     running: bool
     pid: int
@@ -138,6 +153,8 @@ class StatusResponse(BaseModel):
     collections_schema_behind: int = Field(default=0, ge=0)
     # D5 BE-3 — maintenance health field (additive, nullable)
     maintenance: MaintenanceStatusDetail | None = None
+    # D6 BE-2 — model validation health field (additive, nullable)
+    model_validation: ModelValidationStatus | None = None
 
 
 class IndexingStateCollectionEntry(BaseModel):
