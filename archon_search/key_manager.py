@@ -154,9 +154,44 @@ class KeyStore:
             active.append(record)
         return active
 
+    async def list_keys(self) -> list[KeyRecord]:
+        """Return all records for operator display — no expiry filtering.
+
+        Unlike ``active_keys()``, this returns revoked and expired-by-time
+        records too, so operators can audit the full key history.
+        """
+        return await self.load()
+
     # ------------------------------------------------------------------
     # Write operations (lock required)
     # ------------------------------------------------------------------
+
+    async def revoke(self, key_id: str) -> None:
+        """Mark a managed key as revoked.
+
+        - Idempotent for already-revoked keys (no-op, no disk write).
+        - Raises ``KeyError`` for unknown IDs (never-existed keys).
+        - ``key_id`` must be a non-None string; ``None`` is explicitly rejected
+          to prevent accidental matches against synthetic TOML records
+          (which have ``id=None``).
+        """
+        if not isinstance(key_id, str):
+            raise KeyError(f"Key not found: {key_id!r}")
+
+        async with self._lock:
+            records = await self.load()
+            found = False
+            for record in records:
+                if record.id == key_id:
+                    found = True
+                    if record.status == "revoked":
+                        # Already revoked — idempotent no-op; no disk write needed.
+                        return
+                    record.status = "revoked"
+                    break
+            if not found:
+                raise KeyError(f"Key not found: {key_id!r}")
+            self._write(records)
 
     async def create(
         self,

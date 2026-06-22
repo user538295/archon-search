@@ -2,6 +2,21 @@
 
 ## What Has Worked
 
+**2026-06-22 — D7 BE-5: `None == None` is True — `revoke(None)` would silently match synthetic TOML records without an explicit guard**
+- Observation: `KeyRecord.id` is typed `str | None`, so synthetic TOML records have `id=None`. If `revoke(key_id)` is called with `key_id=None` (possible despite `str` type hint because Python doesn't enforce type hints at runtime), the loop condition `record.id == key_id` evaluates `None == None` → True, silently revoking a TOML synthetic record. Fix: `if not isinstance(key_id, str): raise KeyError(...)` at the top of `revoke()`, before the lock is acquired.
+- Action: For any method that matches against a nullable entity field (especially when `None` is a valid field value), add an explicit type guard at the entry point. Never rely on the type annotation alone.
+- Confidence: high
+
+**2026-06-22 — D7 BE-5: `patch("module.datetime")` correctly intercepts `datetime.now(UTC)` in tests**
+- Observation: When `active_keys()` calls `datetime.now(UTC)` and the test patches `archon_search.key_manager.datetime` with `mock_dt.now.return_value = fixed_now`, the mock intercepts the call correctly. The `asyncio.run()` call inside the `patch()` context still sees the mocked datetime because patches are process-wide for the patched module. This pattern is safe for testing strict time boundaries (`expires_at <= now`).
+- Action: For any time-boundary test (e.g., "key expired at exactly NOW"), always use `patch("module.datetime")` to freeze the clock. Using a past timestamp only tests `<`, not `<=`. The frozen-clock pattern is the only way to test exact-equality expiry.
+- Confidence: high
+
+**2026-06-22 — D7 BE-5: already-revoked no-op must skip the disk write, not just skip the status mutation**
+- Observation: Initial implementation mutated `record.status = "revoked"` before checking `if record.status == "revoked"`. Reordering to check-first-then-return skips the disk write for the already-revoked case. This is the correct "no-op" behavior per spec — the plan explicitly says "already-revoked returns 200 [from the route handler]" implying no state change should occur. Calling `_write()` on an already-revoked key is semantically a no-op but wastes I/O and could race with concurrent writers.
+- Action: For any idempotent write operation on a resource, always add an early-return guard that checks the current state BEFORE the mutation, not after. Avoids spurious disk writes and makes the idempotency intent explicit.
+- Confidence: high
+
 **2026-06-22 — D7 T-1: `store.ingest_chunks` does not forward `namespace` to `_do_update_meta_on_add`**
 - Observation: `ingest_chunks` accepts a `namespace` kwarg but does NOT forward it to `_do_update_meta_on_add`, which always defaults to `DEFAULT_NAMESPACE` when called internally. The test helper omits `embedding_model` from the `ingest_chunks` call so `_do_update_meta_on_add` short-circuits (returns False when `embedding_model is None`) and the explicit `update_collection_meta` call remains the sole source of namespace truth. Adding `embedding_model=...` to `ingest_chunks` without fixing the propagation gap would create a wrong-namespace meta row under 'default', breaking isolation assertions.
 - Action: When writing e2e tests that inject data under a specific namespace, use `update_collection_meta` as the authoritative namespace setter — not the `namespace` kwarg on `ingest_chunks`. Always document this fragility in the helper's docstring.

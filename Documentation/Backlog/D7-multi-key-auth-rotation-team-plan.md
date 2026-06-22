@@ -475,7 +475,7 @@ flowchart LR
 
 ### Phase 2 · Revoke a key and see it rejected
 
-- [ ] **BE-5** — Add `KeyStore.revoke()`, `list_keys()`, `active_keys()` (with expiry enforcement and INFO log on first expired rejection) to `key_manager.py` #backend-role
+- [x] **BE-5** — Add `KeyStore.revoke()`, `list_keys()`, `active_keys()` (with expiry enforcement and INFO log on first expired rejection) to `key_manager.py` #backend-role
     - Use Cases · 2.0h
     - needs BE-1 · completes C2, S4, S9, S10, S18
     - Tests
