@@ -341,6 +341,16 @@
 - Action: When investigation agents for plan-maker go idle without findings, do NOT wait or retry. Immediately fall back to inline investigation: read the brief, key source files, and existing patterns, then synthesize the plan directly. The fallback is explicitly documented in the skill.
 - Confidence: high
 
+**2026-06-22 — D6 iterative review of team plan: fix agent idle without summary**
+- Observation: The fix agent went idle (idle_notification) without returning a summary message. Checking `git diff HEAD` revealed it had applied all changes correctly. The idle state was a notification artefact, not a failure. Cycle 2 reviewers caught one remaining Moderate (TypeSpec `.tsp` file signature mismatch) that the fix agent's prompt had not explicitly covered — the plan text was updated but the linked contract file was missed.
+- Action: After a fix agent goes idle, always `git diff HEAD` the target file before assuming anything is missing. For plan reviews that also touch linked contract files (`.tsp`, `.yaml`, etc.), explicitly add those files to the fix agent's scope in the prompt — prose-only fixes will miss them.
+- Confidence: high
+
+**2026-06-22 — D6 iterative review: `EmbedderCache.preload()` does NOT warm `app.state.embedder`**
+- Observation: S9 acceptance criterion claimed "With `eager_load_embedders = true`, embedder probe is skipped if `app.state.embedder.is_warm` is already true." This is wrong: `app.py:158-161` calls `EmbedderCache.preload()` which creates per-collection `Embedder` instances — it never touches `app.state.embedder`. DA review caught this because agents read the actual `app.py` lifespan code, not just the plan prose. The fix: `validate_models_async` takes an explicit `embedder_is_warm: bool = False` from the caller rather than reaching into `app.state` itself.
+- Action: When writing acceptance criteria involving `is_warm` or eager-preload state, verify which object is actually warmed by the preload path before writing the criterion. `EmbedderCache.preload()` is not the same as warming `app.state.embedder`.
+- Confidence: high
+
 **2026-06-22 — git mv to Completed/ — stage both halves**
 - Observation: A previous session moved D3/D4/D5 docs to Completed/ using a method that only staged the additions (new files in Completed/) but not the deletions from Backlog/. The commit 8ad5130 shows 12 file additions and 0 deletions. The Backlog/ files were deleted from disk but remained in the git index, showing as ` D` (working-tree deleted, unstaged) in git status.
 - Action: When moving doc files between directories, always use `git mv` (which stages both the rename as delete+add atomically) rather than OS-level move + git add of the target. If OS-level move was already used, run `git rm <old-paths>` to stage the deletions before committing.

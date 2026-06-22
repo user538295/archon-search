@@ -24,6 +24,11 @@ model ModelValidationStatus {
 }
 
 interface ModelValidator {
-  /** Run model validation asynchronously and return the result. Never raises. */
-  validateModels(timeoutSeconds: float64): ModelValidationResult;
+  /** Run model validation asynchronously and return the result. Never raises.
+   * @param timeoutSeconds Maximum seconds before both probes are marked failed.
+   * @param embedderIsWarm When true, skip the embedder probe (caller confirms it is already exercised).
+   *        NOTE: eager_load_embedders does NOT set this — it warms per-collection cache instances,
+   *        not the global default embedder. Pass app.state.embedder.is_warm from the lifespan.
+   */
+  validateModels(timeoutSeconds: float64, embedderIsWarm?: boolean): ModelValidationResult;
 }
