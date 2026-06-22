@@ -61,6 +61,16 @@
 
 ## Patterns and Preferences
 
+**2026-06-22 — D6 BE-2: Pydantic `model_` field prefix does NOT auto-warn**
+- Observation: A `model_validation` field on a Pydantic v2 `BaseModel` (`StatusResponse`) does NOT trigger the protected-namespace warning, because Pydantic only flags `model_*` field names that actually collide with a real `model_*` attribute/method (model_dump, model_config, etc.). Verified empirically with `uv run python -W error -c "from ... import StatusResponse"` — clean import. A devils-advocate agent flagged this as a Major issue reasoning from training data; the empirical check refuted it. No `model_config = ConfigDict(protected_namespaces=())` is needed for `model_validation`.
+- Action: When a DA agent claims a Pydantic protected-namespace warning, verify with `uv run python -W error` before adding `model_config`. Do not add the workaround speculatively.
+- Confidence: high
+
+**2026-06-22 — D6 BE-2: timestamp type choice — follow the TSP contract, not legacy str convention**
+- Observation: All 9 existing timestamp fields in `schemas.py` use `str | None`, but the D6 C1 TSP contract specifies `utcDateTime` and the source dataclass `ModelValidationResult.validated_at` is `datetime | None`. Used `datetime | None` to mirror the contract + dataclass faithfully (the binding cross-role agreement), not the legacy `str` fields which predate the contract. JSON-mode serialization produces correct ISO-8601 (`"2026-06-22T12:00:00Z"`); verified via `model_dump(mode="json")`. Added an explicit JSON-mode serialization test since `datetime` is novel in the response-schema layer.
+- Action: When a new schema field has a binding TSP contract + source dataclass type, mirror those over the legacy in-file convention. Always add a `model_dump(mode="json")` assertion when introducing a `datetime` field to a response model (REST path uses JSON mode; non-JSON `model_dump()` round-trip does not catch serialization regressions).
+- Confidence: high
+
 **2026-06-17 — Team plan generation (D3) — TypeSpec + role mapping**
 - Observation: (1) `namespace` is a reserved keyword in TypeSpec — using it as a model field name fails to compile; rename to e.g. `jobNamespace`. Core-construct `.tsp` files (model/enum/interface, no `@typespec/http` import) compile standalone with `tsp compile <file> --no-emit`. (2) This repo has no GUI: the `/plan-maker-for-team` Frontend role is always N/A — Presentation (FastAPI routes, Pydantic schemas, Click CLI) is server-side Python owned by Backend.
 - Action: For archon-search team plans, mark Frontend N/A and fold Presentation into Backend; when authoring TypeSpec contracts, avoid reserved keywords (`namespace`, `interface`, `model`, etc.) as field names and validate each file before referencing it.
