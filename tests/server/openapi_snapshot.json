@@ -1457,6 +1457,105 @@
         "title": "JobResponse",
         "type": "object"
       },
+      "KeyCreateRequest": {
+        "description": "Request body for POST /keys (D7 BE-4).",
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace"
+        ],
+        "title": "KeyCreateRequest",
+        "type": "object"
+      },
+      "KeyCreateResponse": {
+        "description": "Response body for POST /keys (D7 BE-4).\n\nThe ``token`` field is present only in the create response \u2014 it is printed\nonce and never recoverable from the server thereafter.  ``status`` is always\n``'active'`` at creation time (for consistency with ``KeyResponse`` which\ncarries the live status value).\n\nSee contract C3 in ``Documentation/Backlog/D7-multi-key-auth-rotation-team-plan.md``.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "status": {
+            "default": "active",
+            "enum": [
+              "active",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "token",
+          "namespace",
+          "created_at"
+        ],
+        "title": "KeyCreateResponse",
+        "type": "object"
+      },
       "LatencyPercentiles": {
         "properties": {
           "p50": {
@@ -3858,6 +3957,63 @@
           }
         ],
         "summary": "Resume Job"
+      }
+    },
+    "/keys": {
+      "post": {
+        "description": "Issue a new managed API key.\n\nThe raw bearer token is returned exactly once in the response ``token``\nfield. It is never stored on disk \u2014 only its SHA-256 hash is persisted.",
+        "operationId": "create_key_keys_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyCreateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create Key",
+        "tags": [
+          "keys"
+        ]
       }
     },
     "/maintenance/trigger": {

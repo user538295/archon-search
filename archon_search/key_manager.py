@@ -163,14 +163,17 @@ class KeyStore:
         ns: str,
         label: str | None,
         expires_at: datetime | None,
-    ) -> dict[str, str]:
-        """Generate a new API key, persist its hash, return ``{id, token}``.
+    ) -> dict[str, str | datetime]:
+        """Generate a new API key, persist its hash, return ``{id, token, created_at}``.
 
         The raw bearer token is returned exactly once — it is never stored
         on disk. ``keys.json`` stores only the SHA-256 hex digest.
 
         Returns:
-            dict with ``id`` (UUID4 str) and ``token`` (raw 64-hex-char bearer token).
+            dict with ``id`` (UUID4 str), ``token`` (raw 64-hex-char bearer token),
+            and ``created_at`` (UTC datetime used when persisting the record — callers
+            should use this value to avoid timestamp divergence between the response
+            and what ``GET /keys`` will return from disk).
         """
         if expires_at is not None and expires_at.tzinfo is None:
             raise ValueError("expires_at must be timezone-aware")
@@ -195,7 +198,7 @@ class KeyStore:
             records.append(record)
             self._write(records)
 
-        return {"id": key_id, "token": raw_token}
+        return {"id": key_id, "token": raw_token, "created_at": created_at}
 
     # ------------------------------------------------------------------
     # Internal helpers

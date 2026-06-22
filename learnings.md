@@ -72,6 +72,21 @@
 - Action: When testing an "event already set" branch in a route, replace the actual `asyncio.Event` with a `MagicMock` whose `is_set()` always returns `True`. Do not set the real event from the sync test thread when an async loop is consuming it in the background.
 - Confidence: high
 
+**2026-06-22 — D7 BE-4: `KeyStore.create()` should return `created_at` to prevent response/storage timestamp divergence**
+- Observation: The route initially captured `datetime.now(UTC)` itself before calling `create()`. Under asyncio lock contention (concurrent creates), the gap between the route's timestamp and the store's internally-captured timestamp could be seconds — creating an observable inconsistency between the POST response and future GET /keys (which reads from disk). Fix: have `create()` return `created_at` in the result dict so the route uses the exact timestamp stored in keys.json.
+- Action: Whenever a Use Case method sets a server-side timestamp internally (like `created_at = datetime.now(UTC)`), return it to callers rather than making callers compute their own approximate value. The timestamp in the response must match what is persisted.
+- Confidence: high
+
+**2026-06-22 — D7 BE-4: `AwareDatetime` from pydantic is the correct type for timezone-required datetime fields in request schemas**
+- Observation: `KeyCreateRequest.expires_at: datetime | None` accepted naive datetimes at Pydantic level. `KeyStore.create()` raised `ValueError` for naive datetimes — but this was NOT caught by the route's `try/except` (which only wrapped `_validate_namespace`). Result: naive expires_at input caused uncaught 500. Fix: use `from pydantic import AwareDatetime` and type the field as `AwareDatetime | None`.
+- Action: Any request schema field that requires timezone-aware datetimes (where the downstream code validates tzinfo) must use `AwareDatetime` from pydantic, not bare `datetime`. Never rely on the downstream layer's ValueError to provide the 422 — wire validation at the schema boundary.
+- Confidence: high
+
+**2026-06-22 — D7 BE-4: "label echoed in response" test is tautological when route builds response from `body.label`**
+- Observation: After eliminating the double-read, the route builds `KeyCreateResponse(label=body.label, ...)` directly. A test asserting `body["label"] == "my-label"` only proves the route echoes the input — it does NOT prove the label was persisted. A bug in `KeyStore.create()` ignoring the label would pass silently. Fix: add a persistence assertion by reading keys.json directly and checking the stored record's label.
+- Action: For any create endpoint where the response is built from request inputs (not from the stored record), always add a separate persistence assertion that reads the storage layer directly and confirms the field was actually written.
+- Confidence: high
+
 ## What Has Failed
 
 **2026-06-15 — Mocking `asyncio.wait_for` to simulate timeout**

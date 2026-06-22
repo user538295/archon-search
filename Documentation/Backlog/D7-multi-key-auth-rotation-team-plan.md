@@ -441,7 +441,7 @@ flowchart LR
         - #integration_test — `test_toml_namespaces_still_work` — TOML `[namespaces]` token accepted on a real `TestClient` (S7)
         - #integration_test — `test_toml_and_managed_key_coexist` — both TOML and managed key tokens accepted simultaneously (S8)
 
-- [ ] **BE-4** — Add `KeyCreateRequest`, `KeyCreateResponse` to `schemas.py`; add `routes_keys.py` with `POST /keys` only; include `keys_router` in `app.py` (depends on BE-3) #backend-role
+- [x] **BE-4** — Add `KeyCreateRequest`, `KeyCreateResponse` to `schemas.py`; add `routes_keys.py` with `POST /keys` only; include `keys_router` in `app.py` (depends on BE-3) #backend-role
     - Interface Adapters · 2.5h
     - needs BE-3 · completes C3, S1, S13
     - Tests

@@ -8,7 +8,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, Field, field_validator
 
 
 class CheckStatus(str, Enum):
@@ -276,6 +276,34 @@ class PatchCollectionBody(BaseModel):
         if not v:
             raise ValueError("embedding_model field required")
         return v
+
+
+class KeyCreateRequest(BaseModel):
+    """Request body for POST /keys (D7 BE-4)."""
+
+    namespace: str
+    label: str | None = None
+    expires_at: AwareDatetime | None = None
+
+
+class KeyCreateResponse(BaseModel):
+    """Response body for POST /keys (D7 BE-4).
+
+    The ``token`` field is present only in the create response — it is printed
+    once and never recoverable from the server thereafter.  ``status`` is always
+    ``'active'`` at creation time (for consistency with ``KeyResponse`` which
+    carries the live status value).
+
+    See contract C3 in ``Documentation/Backlog/D7-multi-key-auth-rotation-team-plan.md``.
+    """
+
+    id: str
+    token: str
+    namespace: str
+    label: str | None = None
+    created_at: datetime
+    expires_at: datetime | None = None
+    status: Literal["active", "revoked"] = "active"
 
 
 class MigrationSpecSchema(BaseModel):
