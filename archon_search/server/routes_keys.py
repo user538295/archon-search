@@ -247,11 +247,13 @@ async def rotate_key(body: KeyRotateRequest, request: Request) -> KeyRotateRespo
         new_raw_token = secrets.token_hex(32)  # 64 hex chars
 
         # Write new token to .search.env BEFORE mutating keys.json.
+        # Wrapped in asyncio.to_thread so the fsync chain (os.write → os.fsync →
+        # os.replace → os.fsync(parent_dir)) does not block the event loop.
         key_file = get_key_file()
         key_file.parent.mkdir(parents=True, exist_ok=True)
         payload = f"{ENV_VAR}={new_raw_token}\n".encode()
         try:
-            atomic_write_bytes(key_file, payload, mode=0o600)
+            await asyncio.to_thread(atomic_write_bytes, key_file, payload, mode=0o600)
         except OSError as exc:
             logger.error(
                 "rotate: failed to write %s — keys.json NOT modified; "
@@ -271,14 +273,16 @@ async def rotate_key(body: KeyRotateRequest, request: Request) -> KeyRotateRespo
             new_token=new_raw_token,
         )
 
-        new_token: str = result["new_token"]  # type: ignore[assignment]
         new_key_id: str = result["new_key_id"]  # type: ignore[assignment]
         old_record = result["old_record"]
+        # Defensive: rotate_default_key must echo back the token we passed in.
+        # If this ever diverges, .search.env and keys.json would be out of sync.
+        assert result["new_token"] == new_raw_token, "rotate_default_key returned unexpected token"
 
         # Update app.state.api_key so subsequent calls to POST /keys/rotate read the
         # correct current_token, and so the middleware's dynamic api_key lookup
         # (request.app.state.api_key) uses the new key immediately.
-        request.app.state.api_key = new_token
+        request.app.state.api_key = new_raw_token
 
     # Log rotation event for audit trail.
     old_key_id_str = old_record.id if old_record is not None else None
@@ -298,7 +302,7 @@ async def rotate_key(body: KeyRotateRequest, request: Request) -> KeyRotateRespo
 
     return KeyRotateResponse(
         new_key_id=new_key_id,
-        token=new_token,
+        token=new_raw_token,
         status="active",
         old_key_id=old_key_id_str,
         old_key_expires_at=old_key_expires_at,
