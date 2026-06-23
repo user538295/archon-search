@@ -277,7 +277,8 @@ async def rotate_key(body: KeyRotateRequest, request: Request) -> KeyRotateRespo
         old_record = result["old_record"]
         # Defensive: rotate_default_key must echo back the token we passed in.
         # If this ever diverges, .search.env and keys.json would be out of sync.
-        assert result["new_token"] == new_raw_token, "rotate_default_key returned unexpected token"
+        if result["new_token"] != new_raw_token:
+            raise RuntimeError("rotate_default_key returned unexpected token — BUG")
 
         # Update app.state.api_key so subsequent calls to POST /keys/rotate read the
         # correct current_token, and so the middleware's dynamic api_key lookup

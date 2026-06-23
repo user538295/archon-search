@@ -62,6 +62,21 @@
 - Action: For any time-boundary test (e.g., "key expired at exactly NOW"), always use `patch("module.datetime")` to freeze the clock. Using a past timestamp only tests `<`, not `<=`. The frozen-clock pattern is the only way to test exact-equality expiry.
 - Confidence: high
 
+**2026-06-23 — D7 BE-9: `assert` in production code is stripped by `python -O` — use explicit RuntimeError**
+- Observation: `assert result["new_token"] == new_raw_token` was used as a postcondition invariant check in both `mcp.py` and `routes_keys.py`. Python's `-O` flag silently removes all `assert` statements, so this invariant would be invisible in optimised deployments. For any invariant that guards data integrity (e.g., verifying a write result matches what was computed), replace `assert` with `if ... != ...: raise RuntimeError(...)`. The exception text should include "BUG" to distinguish it from user-facing errors.
+- Action: Never use `assert` for production data-integrity invariants. Use `assert` only in tests and in code paths that are exclusively executed during development/debugging. Any postcondition that would indicate a programming error (not a user error) must be an explicit `if ... raise RuntimeError(...)`.
+- Confidence: high
+
+**2026-06-23 — D7 BE-9: exception message leakage via `f"Failed to create key: {exc}"` in MCP tools**
+- Observation: Catching `Exception as exc` and returning `f"...: {exc}"` in an MCP tool leaks internal error details (file paths, permission errors, internal class names) to the caller. MCP tool callers may be LLM agents or external systems. For `internal_error` responses, use a fixed message without the exception string.
+- Action: In MCP tool exception handlers (and any API boundary), for `code="internal_error"` responses, never interpolate `{exc}` into the error message. Use a fixed string. Log the exception internally if needed, but strip it from the response.
+- Confidence: high
+
+**2026-06-23 — D7 BE-9: cross-surface asyncio.Lock does NOT prevent REST+MCP concurrent race**
+- Observation: `_mcp_rotate_lock` (in `mcp.py`) and `_rotate_lock` (in `routes_keys.py`) are two separate `asyncio.Lock` instances. They prevent intra-surface races (two concurrent MCP rotates, or two concurrent REST rotates) but NOT cross-surface races (one MCP + one REST rotate simultaneously). `KeyStore._lock` serialises `keys.json` mutations per-process but does not cover the `.search.env` write, which happens outside `KeyStore`. This is an accepted limitation: key rotation is an infrequent administrative operation.
+- Action: When adding a new surface to an operation that already has a per-surface lock, document the cross-surface limitation explicitly in a comment near the lock definition. Never claim a per-surface lock provides cross-surface serialisation. If the operation is infrequent enough that races are acceptable, accept and document it explicitly rather than attempting a cross-surface lock (which would require a shared lock instance or a different coordination mechanism).
+- Confidence: high
+
 **2026-06-22 — D7 BE-5: already-revoked no-op must skip the disk write, not just skip the status mutation**
 - Observation: Initial implementation mutated `record.status = "revoked"` before checking `if record.status == "revoked"`. Reordering to check-first-then-return skips the disk write for the already-revoked case. This is the correct "no-op" behavior per spec — the plan explicitly says "already-revoked returns 200 [from the route handler]" implying no state change should occur. Calling `_write()` on an already-revoked key is semantically a no-op but wastes I/O and could race with concurrent writers.
 - Action: For any idempotent write operation on a resource, always add an early-return guard that checks the current state BEFORE the mutation, not after. Avoids spurious disk writes and makes the idempotency intent explicit.

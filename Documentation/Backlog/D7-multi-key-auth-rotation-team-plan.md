@@ -551,7 +551,7 @@ flowchart LR
         - #integration_test — `test_post_keys_rotate_body_grace_overrides_config` — server configured with `rotate_grace_seconds=300`; `POST /keys/rotate {"grace_seconds": 0}` → old key immediately revoked (body wins)
         - #integration_test — `test_corruption_graceful_degradation` — write garbage to `keys.json`; `create_app()` starts; default key still works (S17)
 
-- [ ] **BE-9** — Add MCP tools `create_key`, `list_keys`, `revoke_key`, `rotate_key` to `mcp.py`; update `mcp.py create_app()` to accept and wire `key_store` parameter. The MCP `rotate_key` tool calls `KeyStore.rotate_default_key()` (same Use Cases method as the REST route) and then writes `.search.env` using the same `atomic_write_bytes` helper as `POST /keys/rotate` — it does NOT call the REST endpoint internally; it reuses the same service logic directly. #backend-role
+- [x] **BE-9** — Add MCP tools `create_key`, `list_keys`, `revoke_key`, `rotate_key` to `mcp.py`; update `mcp.py create_app()` to accept and wire `key_store` parameter. The MCP `rotate_key` tool calls `KeyStore.rotate_default_key()` (same Use Cases method as the REST route) and then writes `.search.env` using the same `atomic_write_bytes` helper as `POST /keys/rotate` — it does NOT call the REST endpoint internally; it reuses the same service logic directly. #backend-role
     - Interface Adapters · 2.0h
     - needs BE-3, BE-4, BE-6, BE-7, BE-8 · completes S1, S3, S4, S6
     - Tests

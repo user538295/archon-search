@@ -1,6 +1,7 @@
 """FastMCP HTTP server for RAG search."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import ExitStack
@@ -72,6 +73,14 @@ if TYPE_CHECKING:
     from archon_search.rag_fusion import RAGFusionGenerator
 
 logger = logging.getLogger(__name__)
+
+# Module-level lock serialising the MCP key rotation sequence (read current_token →
+# write .search.env → rotate_default_key). Prevents concurrent MCP rotate_key calls
+# from creating orphaned active key records (mirrors _rotate_lock in routes_keys.py).
+# NOTE: This lock is INDEPENDENT of _rotate_lock in routes_keys.py. Concurrent calls
+# to REST POST /keys/rotate and MCP rotate_key are NOT serialised against each other.
+# This is an accepted limitation: cross-surface concurrent rotation is unsupported.
+_mcp_rotate_lock = asyncio.Lock()
 
 # Language filter parameter for the ``search`` tool (single-collection path).
 # Defined at module level so FastMCP can resolve the Annotated type inside closures.
@@ -166,8 +175,9 @@ def create_app(
     job_store: JobStore | None = None,
     hyde_generator: "HyDEGenerator | None" = None,
     rag_fusion_generator: "RAGFusionGenerator | None" = None,
+    key_store: "KeyStore | None" = None,
 ) -> FastMCP:
-    """Create a FastMCP app with 13 RAG tools registered.
+    """Create a FastMCP app with 13 RAG tools + up to 4 optional key-management tools.
 
     ``config`` is required only for the collectionless ``explain`` routing path;
     when omitted, ``explain`` without a collection falls back to
@@ -175,6 +185,10 @@ def create_app(
 
     ``job_store`` is required for the ``update_collection`` tool's 409 guard
     (active reindex check).
+
+    ``key_store`` — when provided, the four key-management tools (``create_key``,
+    ``list_keys``, ``revoke_key``, ``rotate_key``) are registered and can
+    create/list/revoke/rotate managed API keys stored in ``keys.json``.
     """
     # Late-bound import: archon_search.rag_fusion may be reloaded in tests,
     # so we import lazily here (inside create_app) so the closures below always
@@ -1233,6 +1247,254 @@ def create_app(
         )
         return job_to_dict(job)
 
+    # -----------------------------------------------------------------------
+    # Key-management tools (D7 BE-9) — registered only when key_store is set.
+    # These tools mirror the REST /keys endpoints but are exposed over MCP.
+    # rotate_key writes .search.env via the same atomic_write_bytes helper used
+    # by POST /keys/rotate — it does NOT call the REST endpoint internally.
+    # -----------------------------------------------------------------------
+
+    if key_store is not None:
+        import asyncio as _asyncio  # noqa: PLC0415
+        import os as _os  # noqa: PLC0415
+        import secrets as _secrets  # noqa: PLC0415
+
+        from archon_search.constants import _validate_namespace  # noqa: PLC0415
+        from archon_search._durable_io import atomic_write_bytes as _atomic_write  # noqa: PLC0415
+        from archon_search.key_manager import ENV_VAR as _ENV_VAR, get_key_file as _get_key_file  # noqa: PLC0415
+
+        @app.tool()
+        async def create_key(
+            namespace: str,
+            label: str | None = None,
+            expires_at: str | None = None,
+        ) -> dict[str, Any]:
+            """Issue a new managed API key.
+
+            The raw bearer token is returned exactly once in the response ``token``
+            field. It is never stored on disk — only its SHA-256 hash is persisted.
+
+            ``expires_at`` must be an ISO-8601 datetime string with timezone offset
+            (e.g. ``"2030-01-01T00:00:00Z"``), or ``null`` for no expiry.
+            """
+            try:
+                _validate_namespace(namespace)
+            except ValueError as exc:
+                return McpErrorResponse(error=str(exc), code="validation_error")
+
+            from datetime import datetime  # noqa: PLC0415
+
+            parsed_expires_at = None
+            if expires_at is not None:
+                try:
+                    parsed_expires_at = datetime.fromisoformat(
+                        expires_at.replace("Z", "+00:00")
+                    )
+                except ValueError as exc:
+                    return McpErrorResponse(
+                        error=f"invalid expires_at: {exc}", code="validation_error"
+                    )
+                if parsed_expires_at.tzinfo is None:
+                    return McpErrorResponse(
+                        error="expires_at must be timezone-aware (include UTC offset or Z suffix)",
+                        code="validation_error",
+                    )
+
+            try:
+                result = await key_store.create(
+                    ns=namespace,
+                    label=label,
+                    expires_at=parsed_expires_at,
+                )
+            except Exception:
+                return McpErrorResponse(error="Failed to create key", code="internal_error")
+            return {
+                "id": result["id"],
+                "token": result["token"],
+                "namespace": namespace,
+                "label": label,
+                "created_at": str(result["created_at"]),
+                "expires_at": str(parsed_expires_at) if parsed_expires_at is not None else None,
+                "status": "active",
+            }
+
+        @app.tool()
+        async def list_keys(
+            status: str = "active",
+            namespace: str | None = None,
+        ) -> dict[str, Any]:
+            """List managed API keys.
+
+            ``status`` — ``"active"`` (default), ``"revoked"``, or ``"all"``.
+            ``namespace`` — optional filter; when set, only keys for that namespace
+            are returned and ``hidden_revoked_count`` reflects only that namespace.
+            """
+            if status not in {"active", "revoked", "all"}:
+                return McpErrorResponse(
+                    error="status must be 'active', 'revoked', or 'all'",
+                    code="validation_error",
+                )
+
+            all_records = await key_store.list_keys()
+
+            if namespace is not None:
+                scope = [r for r in all_records if r.namespace == namespace]
+            else:
+                scope = all_records
+
+            if status == "active":
+                filtered = [r for r in scope if r.status == "active"]
+                hidden_revoked_count = sum(1 for r in scope if r.status == "revoked")
+            elif status == "revoked":
+                filtered = [r for r in scope if r.status == "revoked"]
+                hidden_revoked_count = 0
+            else:  # "all"
+                filtered = list(scope)
+                hidden_revoked_count = 0
+
+            return {
+                "keys": [
+                    {
+                        "id": r.id,
+                        "namespace": r.namespace,
+                        "label": r.label,
+                        "created_at": str(r.created_at),
+                        "expires_at": str(r.expires_at) if r.expires_at is not None else None,
+                        "status": r.status,
+                    }
+                    for r in filtered
+                ],
+                "hidden_revoked_count": hidden_revoked_count,
+            }
+
+        @app.tool()
+        async def revoke_key(key_id: str) -> dict[str, Any]:
+            """Revoke a managed API key by its ID.
+
+            Idempotent: revoking an already-revoked key returns success.
+            Returns an error for unknown IDs (key never existed).
+            TOML synthetic keys (``id=null``) cannot be targeted — pass the
+            literal string ``"null"`` to get a helpful error message.
+            """
+            if key_id == "null":
+                return McpErrorResponse(
+                    error=(
+                        "This key is managed via archon-search.toml [namespaces] — "
+                        "remove it from the config file and restart the server."
+                    ),
+                    code="not_found",
+                )
+
+            try:
+                await key_store.revoke(key_id)
+            except KeyError:
+                return McpErrorResponse(
+                    error=f"Key not found: {key_id!r}", code="not_found"
+                )
+
+            return {"id": key_id, "status": "revoked"}
+
+        @app.tool()
+        async def rotate_key(grace_seconds: int | None = None) -> dict[str, Any]:
+            """Rotate the default API key.
+
+            Generates a new managed API key, writes the new raw token to
+            ``.search.env``, and revokes (or grace-expires) the old default key
+            in ``keys.json``.
+
+            ``grace_seconds`` overrides the TOML ``[auth].rotate_grace_seconds``
+            default.  When ``null``, the TOML default is used.  When both are 0,
+            the old key is immediately revoked.
+
+            Returns 409 (conflict) when ``ARCHON_SEARCH_API_KEY`` env var is set —
+            the env var overrides ``.search.env``, so rotation would be a silent
+            no-op (same behaviour as ``POST /keys/rotate``, S23).
+
+            Note: the MCP server's in-memory ``api_key`` is NOT hot-reloaded after
+            rotation (S24 documented limitation) — the old token remains valid for
+            the MCP auth path until the server restarts.
+            """
+            # Determine grace_seconds: argument wins over config default.
+            _grace: int
+            if grace_seconds is not None:
+                if grace_seconds < 0:
+                    return McpErrorResponse(
+                        error="grace_seconds must be >= 0", code="validation_error"
+                    )
+                _grace = grace_seconds
+            else:
+                _grace = getattr(getattr(config, "auth", None), "rotate_grace_seconds", 0)
+
+            # Serialise the full rotate sequence under a module-level lock to
+            # prevent concurrent MCP rotate_key calls from creating orphaned keys.
+            async with _mcp_rotate_lock:
+                # Guard: if ARCHON_SEARCH_API_KEY is set, the env var overrides
+                # .search.env so rotation is silently ineffective (S23 parity).
+                if _os.environ.get(_ENV_VAR):
+                    return McpErrorResponse(
+                        error=(
+                            "Cannot rotate: ARCHON_SEARCH_API_KEY env var is set; "
+                            "unset it first and restart the server to use managed key rotation."
+                        ),
+                        code="conflict",
+                    )
+
+                # Read the current default key from .search.env (re-read on each call
+                # so that a prior REST rotation is visible here without restart).
+                current_token, _ = load_or_generate_key()
+
+                # Generate the new raw token here so we can write .search.env FIRST
+                # (same crash-safe write order as POST /keys/rotate in routes_keys.py).
+                new_raw_token = _secrets.token_hex(32)  # 64 hex chars
+
+                key_file = _get_key_file()
+                key_file.parent.mkdir(parents=True, exist_ok=True)
+                payload = f"{_ENV_VAR}={new_raw_token}\n".encode()
+                try:
+                    await _asyncio.to_thread(_atomic_write, key_file, payload, mode=0o600)
+                except OSError as exc:
+                    return McpErrorResponse(
+                        error=f"Failed to write .search.env — rotation aborted: {exc}",
+                        code="internal_error",
+                    )
+
+                try:
+                    result = await key_store.rotate_default_key(
+                        current_token=current_token,
+                        grace_seconds=_grace,
+                        new_token=new_raw_token,
+                    )
+                except ValueError as exc:
+                    return McpErrorResponse(error=str(exc), code="validation_error")
+
+                # Defensive: rotate_default_key must echo back the token we passed in.
+                # If this ever diverges, .search.env and keys.json would be out of sync.
+                if result["new_token"] != new_raw_token:
+                    raise RuntimeError("rotate_default_key returned unexpected token — BUG")
+
+                new_key_id: str = result["new_key_id"]  # type: ignore[assignment]
+                old_record = result["old_record"]
+
+                old_key_id_str = old_record.id if old_record is not None else None
+                old_key_expires_at = old_record.expires_at if old_record is not None else None
+                old_key_status = old_record.status if old_record is not None else None
+
+                logger.info(
+                    "mcp rotate_key: new_key_id=%s old_key_id=%s grace_seconds=%d",
+                    new_key_id,
+                    old_key_id_str,
+                    _grace,
+                )
+
+                return {
+                    "new_key_id": new_key_id,
+                    "token": new_raw_token,
+                    "status": "active",
+                    "old_key_id": old_key_id_str,
+                    "old_key_expires_at": str(old_key_expires_at) if old_key_expires_at is not None else None,
+                    "old_key_status": old_key_status,
+                }
+
     @app.custom_route("/health", methods=["GET"])
     async def health_check(request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
@@ -1272,7 +1534,7 @@ def create_mcp_http_app(
     """
     from archon_search.server.middleware_context import RequestContextMiddleware
 
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator)
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store)
     starlette_app: Starlette = fastmcp_app.streamable_http_app()
     api_key, _ = load_or_generate_key()
     starlette_app.add_middleware(
