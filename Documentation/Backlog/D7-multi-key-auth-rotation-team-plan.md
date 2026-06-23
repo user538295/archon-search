@@ -540,7 +540,7 @@ flowchart LR
         - #unit_test — `test_rotate_no_old_key_ok` — rotate when no previous managed key exists; returns new token; no crash
         - #integration_test — `test_rotate_old_key_rejected_after_grace` — freeze time past grace window; old token → 401 (S15)
 
-- [ ] **BE-8** — Add `KeyRotateRequest`, `KeyRotateResponse` to `schemas.py`; add `POST /keys/rotate` to `routes_keys.py` (route handler writes `.search.env` via `atomic_write_bytes` using the token returned by `KeyStore.rotate_default_key()`; the `.search.env` write uses the existing format: `ARCHON_SEARCH_API_KEY=<hex_token>\n`, matching the format written by `_generate_and_write()` in `key_manager.py`; returns 409 when `ARCHON_SEARCH_API_KEY` env var is set); add `keys.json` corruption handling in `KeyStore.load()` (TOML synthetic loading moved to BE-3); update `d7-keys-api.tsp` `KeyCreateResponse` to add `status: KeyStatus` #backend-role
+- [x] **BE-8** — Add `KeyRotateRequest`, `KeyRotateResponse` to `schemas.py`; add `POST /keys/rotate` to `routes_keys.py` (route handler writes `.search.env` via `atomic_write_bytes` using the token returned by `KeyStore.rotate_default_key()`; the `.search.env` write uses the existing format: `ARCHON_SEARCH_API_KEY=<hex_token>\n`, matching the format written by `_generate_and_write()` in `key_manager.py`; returns 409 when `ARCHON_SEARCH_API_KEY` env var is set); add `keys.json` corruption handling in `KeyStore.load()` (TOML synthetic loading moved to BE-3); update `d7-keys-api.tsp` `KeyCreateResponse` to add `status: KeyStatus` #backend-role
     - Interface Adapters · 3.0h
     - needs BE-7, BE-6 · completes C3, S6, S15, S17, S23, S24
     - Tests

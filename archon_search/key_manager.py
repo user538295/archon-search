@@ -239,6 +239,7 @@ class KeyStore:
         self,
         current_token: str,
         grace_seconds: int,
+        new_token: str | None = None,
     ) -> dict[str, str | KeyRecord | None]:
         """Rotate the default API key.
 
@@ -254,6 +255,13 @@ class KeyStore:
         Writing ``.search.env`` with the new raw token is the caller's
         responsibility (i.e. the ``POST /keys/rotate`` route handler in BE-8).
 
+        **Safe write order (DA hardening):** callers that need crash-safe
+        atomicity should generate the new token themselves, write it to
+        ``.search.env`` first, then call this method with ``new_token=`` so
+        that if ``.search.env`` write fails, ``keys.json`` is never mutated.
+        Pass ``new_token`` only when the caller has already written the token
+        to disk (or a safe temporary location).
+
         Args:
             current_token: The raw bearer token of the current default key.
                 The caller (route handler) reads this from
@@ -263,6 +271,12 @@ class KeyStore:
                 If > 0, the old key gets ``expires_at = now + grace_seconds``
                 (and remains ``status="active"`` so it is accepted during the
                 grace window). Negative values raise ``ValueError``.
+            new_token: Optional pre-generated raw bearer token for the new key.
+                When provided, this token is used (and its hash stored) rather
+                than generating a fresh one internally.  The caller is
+                responsible for having written this token to ``.search.env``
+                before calling this method.  When ``None`` (the default), a
+                new 64-hex-char token is generated internally.
 
         Returns:
             dict with keys:
@@ -280,6 +294,8 @@ class KeyStore:
             raise ValueError(f"grace_seconds must be >= 0, got {grace_seconds!r}")
         if not current_token or not current_token.strip():
             raise ValueError("current_token must not be empty")
+        if new_token is not None and (not new_token or not new_token.strip()):
+            raise ValueError("new_token must not be empty when provided")
 
         current_hash = hashlib.sha256(current_token.encode()).hexdigest()
 
@@ -309,9 +325,9 @@ class KeyStore:
                     old_record.expires_at = now + timedelta(seconds=grace_seconds)
                     # Keep status="active" so the key is accepted during grace window.
 
-            # Create the new key record.
+            # Create the new key record, using the caller-supplied token if provided.
             new_key_id = str(uuid.uuid4())
-            new_raw_token = secrets.token_hex(32)
+            new_raw_token = new_token if new_token is not None else secrets.token_hex(32)
             new_token_hash = hashlib.sha256(new_raw_token.encode()).hexdigest()
             new_record = KeyRecord(
                 id=new_key_id,

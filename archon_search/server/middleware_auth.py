@@ -68,10 +68,20 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                     resolved_namespace = ns  # no break
 
         # --- Legacy api_key fallback ---
-        if resolved_namespace is None and secrets.compare_digest(token, self._api_key):
+        # Read the current api_key dynamically from app.state when available so
+        # that POST /keys/rotate (which updates app.state.api_key) is reflected
+        # immediately without a restart.  Fall back to self._api_key only when
+        # app.state does not carry "api_key" at all (e.g., unit tests that build
+        # the middleware without a full app).  Use `is not None` — not truthiness
+        # — so an empty-string app.state.api_key does not silently reactivate the
+        # stale construction-time key.
+        _state_api_key = getattr(getattr(request.app, "state", None), "api_key", None)
+        current_api_key: str = _state_api_key if _state_api_key is not None else self._api_key
+        if resolved_namespace is None and secrets.compare_digest(token, current_api_key):
             # Rotation-revocation guard: if key_store is present, reject the token if it
-            # appears as a revoked or expired record in keys.json — even if it matches _api_key.
-            # This prevents bypassing revocation via the legacy fallback after key rotation.
+            # appears as a revoked or expired record in keys.json — even if it matches
+            # the current legacy api_key.  This prevents bypassing revocation via the
+            # legacy fallback after key rotation.
             if self._key_store is not None:
                 all_records = await self._key_store.load()
                 now = datetime.now(UTC)

@@ -1662,6 +1662,89 @@
         "title": "KeyRevokeResponse",
         "type": "object"
       },
+      "KeyRotateRequest": {
+        "description": "Request body for POST /keys/rotate (D7 BE-8).\n\n``grace_seconds`` overrides the TOML ``[auth].rotate_grace_seconds`` default.\nIf absent, the TOML default is used.  If both are 0, rotation is immediate.",
+        "properties": {
+          "grace_seconds": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grace Seconds"
+          }
+        },
+        "title": "KeyRotateRequest",
+        "type": "object"
+      },
+      "KeyRotateResponse": {
+        "description": "Response body for POST /keys/rotate (D7 BE-8).\n\nThe ``token`` field carries the new raw bearer token \u2014 printed once and\nnever recoverable.  Optional ``old_key_*`` fields are populated when a\nprevious default managed key was found and mutated (revoked or\ngrace-expiring).",
+        "properties": {
+          "new_key_id": {
+            "title": "New Key Id",
+            "type": "string"
+          },
+          "old_key_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Key Expires At"
+          },
+          "old_key_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Key Id"
+          },
+          "old_key_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "active",
+                  "revoked"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Status of the old key after rotation.  ``'active'`` with a non-null ``old_key_expires_at`` means the key is grace-expiring \u2014 it will be rejected after ``old_key_expires_at`` but is still valid until then.  ``'revoked'`` means the old key is immediately invalid.  ``null`` means no previous managed key was found (e.g., first rotation from an auto-generated key that was never in keys.json).",
+            "title": "Old Key Status"
+          },
+          "status": {
+            "const": "active",
+            "default": "active",
+            "title": "Status",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_key_id",
+          "token"
+        ],
+        "title": "KeyRotateResponse",
+        "type": "object"
+      },
       "LatencyPercentiles": {
         "properties": {
           "p50": {
@@ -4195,6 +4278,73 @@
           }
         ],
         "summary": "Create Key",
+        "tags": [
+          "keys"
+        ]
+      }
+    },
+    "/keys/rotate": {
+      "post": {
+        "description": "Rotate the default API key.\n\nGenerates a new managed API key, writes the new raw token to ``.search.env``,\nand revokes (or grace-expires) the old default key in ``keys.json``.\n\nReturns 409 when ``ARCHON_SEARCH_API_KEY`` env var is set \u2014 the env var\nalways overrides ``.search.env`` in the running process, so rotation would\nbe a silent no-op from the operator's perspective (S23).\n\nThe ``grace_seconds`` request body field overrides the TOML\n``[auth].rotate_grace_seconds`` config default.  When absent, the config\ndefault is used.  When both are 0, the old key is immediately revoked.",
+        "operationId": "rotate_key_keys_rotate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyRotateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRotateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Rotate Key",
         "tags": [
           "keys"
         ]

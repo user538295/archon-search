@@ -344,6 +344,43 @@ class KeyCreateResponse(BaseModel):
     status: Literal["active", "revoked"] = "active"
 
 
+class KeyRotateRequest(BaseModel):
+    """Request body for POST /keys/rotate (D7 BE-8).
+
+    ``grace_seconds`` overrides the TOML ``[auth].rotate_grace_seconds`` default.
+    If absent, the TOML default is used.  If both are 0, rotation is immediate.
+    """
+
+    grace_seconds: int | None = Field(default=None, ge=0)
+
+
+class KeyRotateResponse(BaseModel):
+    """Response body for POST /keys/rotate (D7 BE-8).
+
+    The ``token`` field carries the new raw bearer token — printed once and
+    never recoverable.  Optional ``old_key_*`` fields are populated when a
+    previous default managed key was found and mutated (revoked or
+    grace-expiring).
+    """
+
+    new_key_id: str
+    token: str
+    status: Literal["active"] = "active"
+    old_key_id: str | None = None
+    old_key_expires_at: datetime | None = None
+    old_key_status: Literal["active", "revoked"] | None = Field(
+        default=None,
+        description=(
+            "Status of the old key after rotation.  ``'active'`` with a non-null "
+            "``old_key_expires_at`` means the key is grace-expiring — it will be "
+            "rejected after ``old_key_expires_at`` but is still valid until then.  "
+            "``'revoked'`` means the old key is immediately invalid.  ``null`` "
+            "means no previous managed key was found (e.g., first rotation from "
+            "an auto-generated key that was never in keys.json)."
+        ),
+    )
+
+
 class MigrationSpecSchema(BaseModel):
     """Serialized representation of a MigrationSpec for REST responses."""
 

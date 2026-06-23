@@ -367,6 +367,10 @@ def create_app(
     )
     logger.info("API key authentication enabled (source: %s)", key_source)
     app.state.key_store = key_store
+    # Store the raw api_key token so POST /keys/rotate can read the current
+    # default key without re-reading .search.env.  The route handler updates
+    # this in-process value after a successful rotation.
+    app.state.api_key = api_key
     app.state.config = config
     app.state.job_store = job_store
     app.state.config_path = Path(config_path) if config_path is not None else None

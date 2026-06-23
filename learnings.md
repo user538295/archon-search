@@ -2,6 +2,56 @@
 
 ## What Has Worked
 
+**2026-06-23 — D7 BE-8: safe write order for dual-file atomic rotation**
+- Observation: Generating the new token in the route handler and writing `.search.env` FIRST (before calling `rotate_default_key()` to mutate `keys.json`) requires passing a pre-generated token as an optional param to the Use Cases layer. This is a pragmatic layering shortcut — the Interface Adapter layer owns token generation to enable the crash-safe write order. The key_manager method gets an optional `new_token` param with empty-string validation.
+- Action: For any multi-file atomic operation where write order matters for crash safety (file A must succeed before file B is mutated), generate the content in the Interface Adapter layer, write file A first, then pass the content to the Use Cases layer for file B. Document the partial-state recovery path clearly in comments.
+- Confidence: high
+
+**2026-06-23 — D7 BE-8: `or self._fallback` is wrong for falsy-valid values — use `is not None`**
+- Observation: `getattr(..., "api_key", None) or self._api_key` silently falls back to the stale construction-time key if `app.state.api_key` is ever set to `""` (empty string, which is falsy). The correct pattern is `... if ... is not None else self._api_key`. The `or` idiom is incorrect whenever the attribute's falsy value (empty string, `0`, `False`) is semantically different from "attribute not set" (None).
+- Action: Never use `or fallback` for attribute lookups where the valid value could be falsy. Always use `is not None` guard explicitly.
+- Confidence: high
+
+**2026-06-23 — D7 BE-8: datetime patches must match the module that calls `datetime.now()`**
+- Observation: `patch.object(km_mod, "datetime", mock_dt)` patches `datetime.now()` in `key_manager.py` only. `middleware_auth.py` imports `datetime` separately and is NOT covered by this patch. Tests that fast-forward time to expire grace windows must either (a) patch both modules or (b) use a code path where only one module's datetime determines the outcome. Always comment in the test which datetime calls are mocked and which are real, and explain why the test still produces the correct result.
+- Action: When writing time-sensitive tests involving multiple modules, enumerate which modules call `datetime.now()` and explicitly decide which need patching. Document the mechanism in the test comment.
+- Confidence: high
+
+**2026-06-23 — D7 T-2: e2e tester tasks against already-implemented code start green**
+- Observation: T-2 is a tester task that writes e2e tests against functionality already implemented by BE-5, BE-6, and FE-2. All 3 tests passed immediately on first run (no red phase). This is correct: the "TDD red phase" only applies when the tests are written before the implementation. For tester-role e2e tasks that close out completed backend/frontend tasks, the tests should pass immediately if the implementation is correct.
+- Action: For tester-role e2e tasks in phase close-out position, expect tests to pass on first run. The value of the task is the coverage and regression protection, not the TDD cycle. Still run the tests to confirm — a failing test would indicate an implementation bug.
+- Confidence: high
+
+**2026-06-23 — D7 T-2: iterative review found two meaningful improvements to e2e assertion strength**
+- Observation: The initial 3-test file had: (1) S4 verified only via auth-rejection (indirect), not via GET /keys read-back; (2) status=all view asserted key presence but not `status=="revoked"` field; (3) no `WWW-Authenticate: Bearer` header check on 401 responses. All three were legitimate Moderate findings caught by DA review. The fixes added one-line to one-paragraph additions that materially strengthen coverage without changing test structure.
+- Action: For any e2e test that verifies a revocation, always add a GET read-back assertion (not just auth rejection) to directly prove on-disk persistence. Always check `WWW-Authenticate: Bearer` on 401 responses in e2e middleware tests.
+- Confidence: high
+
+**2026-06-23 — D7 FE-2: `pytest.mark.integration` as a bare expression vs decorator — dead code trap**
+- Observation: Placing `pytest.mark.integration` as the last statement inside an integration test function (instead of as a decorator on the function definition) is silently valid Python but does nothing. The test receives no mark. `uv run pytest -m integration` misses it entirely. The correct form is `@pytest.mark.integration` above the `def`. When a file mixes unit and integration tests, use the decorator form — NOT `pytestmark` at module level, which would incorrectly mark all unit tests in the file as integration tests.
+- Action: When adding an integration test to a file that also contains unit tests, use `@pytest.mark.integration` as a decorator directly on the function. Never use a trailing bare expression statement as a marker. Always verify with `uv run pytest -m integration <file> -n0 -v --no-cov` that the test appears in the collected output.
+- Confidence: high
+
+**2026-06-23 — D7 FE-2: hint line assertions must use specific substrings, not generic character matches**
+- Observation: `"2" in result.output` is a vacuous assertion for a hint-count check — the digit "2" appears in key IDs ("abc-123"), timestamps ("2026-01-01"), and other output fields. The assertion would pass even if the hint line were never printed. Fix: assert the full specific substring, e.g., `"2 revoked key(s) hidden" in result.output`. This verifies both the count and the surrounding text uniquely.
+- Action: For any CLI test that checks a count or number in formatted output, never assert `str(N) in result.output`. Always assert the full surrounding phrase that makes the assertion unique within the expected output.
+- Confidence: high
+
+**2026-06-22 — D7 BE-6: `hidden_revoked_count` must be scoped to the namespace filter, not computed globally**
+- Observation: `GET /keys?namespace=ns-a` should show a `hidden_revoked_count` that counts only revoked keys in `ns-a`. Computing the count from all records before namespace filtering means revoked keys in `ns-b` inflate the count shown to the operator, who is looking at a namespace-scoped view. Fix: apply namespace filter first to get `scope`, then compute `hidden_revoked_count = sum(r.status == "revoked" for r in scope)`.
+- Action: For any list endpoint that has both a visibility filter (status) and a scope filter (namespace), always apply the scope filter first so all derived counts (e.g., "hidden" counts) reflect the scoped view, not the global store.
+- Confidence: high
+
+**2026-06-22 — D7 BE-6: `Literal["revoked"]` vs `Literal["active", "revoked"]` in response schemas where only one value is valid**
+- Observation: `KeyRevokeResponse.status` was initially typed as `Literal["active", "revoked"]` matching the `KeyStatus` TypeSpec enum. But `DELETE /keys/{id}` always returns `status="revoked"` — there is no execution path that returns `"active"`. Narrowing to `Literal["revoked"] = "revoked"` is a valid subtype of the TypeSpec contract and makes the schema self-documenting. API consumers reading the OpenAPI spec no longer have to wonder whether DELETE can return `status: "active"`.
+- Action: For any response schema field where the set of actually-returned values is smaller than the domain type, narrow the `Literal` to the actual set. The narrowed Pydantic type is still a valid subtype of the TypeSpec `KeyStatus` enum.
+- Confidence: high
+
+**2026-06-22 — D7 BE-6: Docstring ordering in route handlers propagates to OpenAPI spec**
+- Observation: A route handler docstring that said "namespace filter applied after the status filter" became stale when the implementation was refactored to apply namespace first. The docstring propagates verbatim into the OpenAPI `description` field, which is the authoritative contract. The mismatch was caught by iterative-review DA agents checking architectural alignment.
+- Action: When changing filter ordering in a route handler that describes its ordering in the docstring, update the docstring in the same edit. The OpenAPI snapshot test will catch the diff, but the semantic accuracy must be verified manually.
+- Confidence: high
+
 **2026-06-22 — D7 BE-5: `None == None` is True — `revoke(None)` would silently match synthetic TOML records without an explicit guard**
 - Observation: `KeyRecord.id` is typed `str | None`, so synthetic TOML records have `id=None`. If `revoke(key_id)` is called with `key_id=None` (possible despite `str` type hint because Python doesn't enforce type hints at runtime), the loop condition `record.id == key_id` evaluates `None == None` → True, silently revoking a TOML synthetic record. Fix: `if not isinstance(key_id, str): raise KeyError(...)` at the top of `revoke()`, before the lock is acquired.
 - Action: For any method that matches against a nullable entity field (especially when `None` is a valid field value), add an explicit type guard at the entry point. Never rely on the type annotation alone.
