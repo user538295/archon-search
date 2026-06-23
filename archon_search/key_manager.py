@@ -20,7 +20,7 @@ import secrets
 import sys
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -234,6 +234,100 @@ class KeyStore:
             self._write(records)
 
         return {"id": key_id, "token": raw_token, "created_at": created_at}
+
+    async def rotate_default_key(
+        self,
+        current_token: str,
+        grace_seconds: int,
+    ) -> dict[str, str | KeyRecord | None]:
+        """Rotate the default API key.
+
+        Generates a new managed ``KeyRecord`` for the default key and, if
+        ``current_token`` matches an existing managed key record in
+        ``keys.json``, marks that old record revoked (``grace_seconds=0``) or
+        grace-expired (``grace_seconds > 0``).
+
+        If no matching record exists (the current default was never in
+        ``keys.json``), only the new record is created — no revocation.
+
+        **File I/O responsibility:** this method only mutates ``keys.json``.
+        Writing ``.search.env`` with the new raw token is the caller's
+        responsibility (i.e. the ``POST /keys/rotate`` route handler in BE-8).
+
+        Args:
+            current_token: The raw bearer token of the current default key.
+                The caller (route handler) reads this from
+                ``APIKeyMiddleware._api_key`` or re-reads ``.search.env``.
+            grace_seconds: Seconds the old key remains valid after rotation.
+                Must be >= 0. If 0, the old key is immediately revoked.
+                If > 0, the old key gets ``expires_at = now + grace_seconds``
+                (and remains ``status="active"`` so it is accepted during the
+                grace window). Negative values raise ``ValueError``.
+
+        Returns:
+            dict with keys:
+            - ``new_key_id`` (str): UUID of the newly created key.
+            - ``new_token`` (str): Raw bearer token for the new key (printed
+              once; never stored on disk).
+            - ``old_record`` (KeyRecord | None): The old key record **after**
+              mutation (status/expires_at already updated), or ``None`` if no
+              active matching managed record was found.
+
+        Raises:
+            ValueError: If ``grace_seconds`` is negative.
+        """
+        if grace_seconds < 0:
+            raise ValueError(f"grace_seconds must be >= 0, got {grace_seconds!r}")
+
+        current_hash = hashlib.sha256(current_token.encode()).hexdigest()
+
+        async with self._lock:
+            now = datetime.now(UTC)
+            records = await self.load()
+
+            # Locate the active old managed key by token_hash.
+            # Filtering status=="active" makes double-rotation safe: a retry
+            # with the same current_token finds the already-revoked record and
+            # skips it, returning old_record=None instead of re-mutating it.
+            old_record: KeyRecord | None = None
+            for record in records:
+                if (
+                    record.id is not None
+                    and record.token_hash == current_hash
+                    and record.status == "active"
+                ):
+                    old_record = record
+                    break
+
+            # Mark old record revoked or grace-expired.
+            if old_record is not None:
+                if grace_seconds == 0:
+                    old_record.status = "revoked"
+                else:
+                    old_record.expires_at = now + timedelta(seconds=grace_seconds)
+                    # Keep status="active" so the key is accepted during grace window.
+
+            # Create the new key record.
+            new_key_id = str(uuid.uuid4())
+            new_raw_token = secrets.token_hex(32)
+            new_token_hash = hashlib.sha256(new_raw_token.encode()).hexdigest()
+            new_record = KeyRecord(
+                id=new_key_id,
+                token_hash=new_token_hash,
+                namespace="default",
+                label=None,
+                created_at=now,
+                expires_at=None,
+                status="active",
+            )
+            records.append(new_record)
+            self._write(records)
+
+        return {
+            "new_key_id": new_key_id,
+            "new_token": new_raw_token,
+            "old_record": old_record,
+        }
 
     # ------------------------------------------------------------------
     # Internal helpers
