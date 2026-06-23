@@ -110,10 +110,12 @@ Backup access to `~/.archon-search/` should be limited to the same user; otherwi
 
 ### 8. Keys are rotated on personnel changes
 
-There is no expiry or revocation in v1 (`SEC-1` in [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md); roadmap item **D7** in [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md)). Bake rotation into your operational runbook:
+**D7** adds live key rotation and revocation — no server restart required. Bake rotation into your operational runbook:
 
-- Anyone who once had access to `.search.env` or to the `[namespaces]` block of `archon-search.toml` retains that token until you rotate.
-- Rotation procedure: stop the server, edit the key file or the `[namespaces]` block, restart. See [`02_authentication_and_keys.md`](./02_authentication_and_keys.md) "Manual rotation procedure".
+- Anyone who once had a managed key token retains it until you revoke it: `archon-search key revoke <id>`.
+- To rotate the default key without downtime: `archon-search key rotate` (or `POST /keys/rotate`). Use `--grace <duration>` to allow in-flight requests to drain before the old key expires.
+- Anyone who had access to `.search.env` or the TOML `[namespaces]` block can still use those tokens until you rotate via the legacy procedure (edit file + restart). Legacy TOML tokens cannot be revoked via `key revoke` — remove them from `archon-search.toml` and restart.
+- See [`02_authentication_and_keys.md`](./02_authentication_and_keys.md) for both the managed-key and legacy rotation procedures.
 
 **Backed by**: [`02_authentication_and_keys.md`](./02_authentication_and_keys.md); `archon_search/key_manager.py`, `archon_search/server/middleware_auth.py`.
 
@@ -150,7 +152,7 @@ These are explicitly out of scope for v1 hardening; recording them so operators 
 - **No request-correlation IDs** across middleware → pipeline → telemetry (`ARCH-3` in the debt register). Incident triage across modules is harder than it should be.
 - **No native rate limiting.** The reverse proxy must provide it.
 - **No CORS config knob.** Hardcoded wildcard in `app.py:122`; reverse-proxy override only.
-- **No key expiry / revocation list.** `SEC-1`, roadmap item D7.
+- ~~**No key expiry / revocation list.** `SEC-1`, roadmap item D7.~~ **Resolved by D7** — `archon-search key create/revoke/rotate`, `POST /keys`, `DELETE /keys/{id}`, `POST /keys/rotate`.
 - **Path-derived `doc_id` in telemetry.** `SEC-2`, roadmap item D8.
 
 ## Related documents

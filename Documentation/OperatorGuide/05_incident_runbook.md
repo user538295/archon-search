@@ -63,7 +63,19 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 
 **Symptoms**: clients receive `401 Unauthorized`; or the key file no longer exists; or the key has been published.
 
-**Triage — rotate**:
+**Triage — rotate (D7 live rotation — preferred, no restart required)**:
+
+1. Rotate the default key with a grace window so in-flight requests can drain:
+   ```bash
+   archon-search key rotate --grace 60s
+   ```
+2. The new raw token is printed to stdout once — record it immediately.
+3. Update every client (CLI users, MCP integrations, monitoring scraper) with the new token.
+4. The old key is rejected after the grace window expires. To revoke it immediately: `archon-search key rotate` (no `--grace`).
+
+**Triage — rotate (legacy procedure — requires restart)**:
+
+For deployments using only the env var / `.search.env` file path (no managed keys), or when `ARCHON_SEARCH_API_KEY` env var is set (which blocks `key rotate`):
 
 1. Stop the service: `archon-search stop`.
 2. Edit or replace `~/.archon-search/.search.env`, preserving mode `0600`:
@@ -79,7 +91,7 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 
 1. If `.search.env` is deleted entirely, `key_manager.py:_generate_and_write` mints a new key on next start. **All existing clients break**.
 2. Alternative: set `ARCHON_SEARCH_API_KEY=<known-value>` in the service environment and restart — env-var takes precedence over the file (`key_manager.py:25-36`). Useful for emergency restoration.
-3. There is no live-reload — every rotation requires a restart. Tracked as `SEC-1` (rotation primitives), roadmap `D7`.
+3. **D7**: once the server is running again, use `archon-search key rotate` for future rotations without a restart. The only path that requires a restart is the first-start key-file recreation after total loss.
 
 ### LanceDB lock contention or "table busy"
 

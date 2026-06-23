@@ -23,6 +23,7 @@ Verified against the codebase as of 2026-05-20:
 | --- | --- | --- | --- |
 | `archon-search.toml` | `config.py:get_default_config_path` | All server configuration (host, port, db_path, collections, telemetry, namespaces). | Critical. |
 | `.search.env` (mode 0600) | `key_manager.py:KEY_FILE` | `ARCHON_SEARCH_API_KEY=<hex>`. Auto-generated on first start if missing. | Critical — without this, clients lose access. |
+| `keys.json` (mode 0600) | `key_manager.py:KeyStore` | Durable multi-key store: all managed API keys issued via D7 (`id`, `token_hash`, `namespace`, `label`, `expires_at`, `status`). Created on first `archon-search key create/rotate`. | Critical — without this, all managed keys must be reissued. |
 | `search/` (default `db_path`) | `store.py` (LanceDB), `progress.py` (state) | LanceDB tables (vectors + FTS), per-collection metadata, centroids. | Critical. |
 | `<db_path>/.indexing_state.json` | `progress.py:IndexingStateStore` (`self._state_file = self._state_dir / ".indexing_state.json"`, line 86) | Per-collection indexing progress, last_updated, trigger. Lives inside whatever `db_path` resolves to (default `~/.archon-search/search`). | Important — recoverable by re-sync but loses progress. |
 | `archon-search-jobs.json` | `jobs/model.py:get_jobs_file()` (resolves lazily under `get_data_dir() / "archon-search-jobs.json"`; default `~/.archon-search/archon-search-jobs.json`) | Async job records. Crash recovery marks `RUNNING`/`CANCELLING` jobs as failed on next start. | Low — transient. |
@@ -109,7 +110,7 @@ If `/status` shows collections in `failed` or stale `indexing` states, run `arch
 
 | Scenario | Recovery |
 | --- | --- |
-| Lost key file but data intact | Delete the file; restart. `key_manager.py:_generate_and_write` mints a new key. **All existing clients break** until rekeyed. See `OperatorGuide/05_incident_runbook.md` "Key file lost". |
+| Lost key file but data intact | Delete the file; restart. `key_manager.py:_generate_and_write` mints a new key. **All existing clients break** until rekeyed. See `OperatorGuide/05_incident_runbook.md` "Key file lost". If `keys.json` (managed key store, D7) is also lost, all managed keys must be reissued via `archon-search key create`. |
 | Lost data, key file intact | Restore `search/` from backup, or re-ingest from source. The key remains valid. |
 | Lost both | Restore from backup. Without a backup, re-ingest from source and rotate the key (clients must update anyway). |
 | LanceDB corruption (process won't start) | Restore `search/` from the last cold backup. If unavailable, drop `search/` and re-ingest. Roadmap item `D5` tracks integrity checks. |

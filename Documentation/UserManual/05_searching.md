@@ -249,7 +249,7 @@ HyDE is designed to **never degrade availability**. It falls back silently (retu
 ### Operator notes
 
 - **Multi-worker deployments**: the rate limit is per-process. With N workers the effective call rate can be up to `N * max_requests_per_minute`.
-- **API key rotation**: the key is read from the environment at startup; restart the server after changing it.
+- **API key rotation**: use `archon-search key rotate` (or `POST /keys/rotate`) for live rotation without restart. For legacy single-key deployments (env var / key file only), restart the server after changing the file.
 - **Model choice**: `claude-haiku-4-5-20251001` (the default) is fast and cheap. Larger models may produce better hypotheses at higher latency and cost.
 
 ## RAG Fusion multi-query recall (C5)

@@ -12,6 +12,15 @@
 #   ARCHON_SEARCH_KEY_FILE, or supply the key directly via the
 #   ARCHON_SEARCH_API_KEY environment variable (takes precedence over the file).
 
+[auth]
+# Grace period for key rotation (seconds). When > 0, the old default key gets
+# expires_at = now + rotate_grace_seconds after a successful `key rotate` or
+# POST /keys/rotate call, allowing in-flight requests to drain before rejection.
+# Set to 0 (the default) for immediate revocation of the old key.
+# The POST /keys/rotate request body grace_seconds field overrides this default
+# for an individual rotation call.
+# rotate_grace_seconds = 0
+
 [server]
 # Bind address and port for the HTTP API.
 host = "127.0.0.1"

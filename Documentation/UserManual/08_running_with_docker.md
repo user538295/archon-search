@@ -102,7 +102,7 @@ The container reads the same env vars as a host-installed server, plus two that 
 | `ARCHON_SEARCH_API_KEY` | unset | Bearer token. If unset and no `/data/.search.env` exists, the server auto-generates one on startup. **Without a persistent volume this regenerates every restart.** |
 | `ARCHON_SEARCH_HOST` | `0.0.0.0` (set by `serve`) | Bind address. The `serve` subcommand defaults host to `0.0.0.0`; explicit env or TOML still wins. |
 | `ARCHON_SEARCH_PORT` | `8765` | Bind port. 1–65535. |
-| `ARCHON_SEARCH_DATA_DIR` | `/data` (baked into image) | Root of every runtime path: `db_path` (`/data/search`), `log_file` (`/data/logs/archon-search.log`), `telemetry.log_dir` (`/data/search-logs`), key file (`/data/.search.env`), jobs file (`/data/archon-search-jobs.json`), fasttext models (`/data/models`), ingest history (`/data/history/sessions`). Do not change unless you also remount the volume. |
+| `ARCHON_SEARCH_DATA_DIR` | `/data` (baked into image) | Root of every runtime path: `db_path` (`/data/search`), `log_file` (`/data/logs/archon-search.log`), `telemetry.log_dir` (`/data/search-logs`), key file (`/data/.search.env`), managed key store (`/data/keys.json`), jobs file (`/data/archon-search-jobs.json`), fasttext models (`/data/models`), ingest history (`/data/history/sessions`). Do not change unless you also remount the volume. |
 | `ARCHON_SEARCH_CONTAINER` | `1` (baked into image) | Adds `StreamHandler(sys.stderr)` to the `archon_search` logger so `docker logs` captures output. |
 | `FASTEMBED_CACHE_PATH` | `/data/fastembed-cache` (baked into image) | Persists fastembed-downloaded model weights on the mounted volume instead of the ephemeral container layer. |
 | `ARCHON_SEARCH_KEY_FILE` | unset | Overrides the key file path. Takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file only. |
@@ -115,6 +115,7 @@ When `/data` is mounted, the volume looks like this after a few requests:
 ```
 /data
 ├── .search.env                  # API key, mode 0600
+├── keys.json                    # Managed key store (D7), mode 0600; created on first key create/rotate
 ├── archon-search-jobs.json      # JobStore, atomic-rename writes
 ├── search/                      # LanceDB index
 ├── logs/

@@ -202,6 +202,11 @@
 - Action: For any test that must prove a rotated key fails after its grace window, patch `archon_search.key_manager.datetime` (not middleware_auth) and assert the actual rotated token returns 401. Never use a different key as a proxy. The middleware's legacy-fallback expiry guard is only entered when the submitted token matches `current_api_key`, which is not the case for the old token after a successful rotation.
 - Confidence: high
 
+**2026-06-23 — Documentation-only fix pass: read exact file text before every Edit**
+- Observation: Several Edit calls failed with "String not found" because the old_string had subtle whitespace or line-break differences from the actual file. Reading the specific lines just before each Edit (using the offset+limit form of Read) eliminates this class of failure entirely.
+- Action: For any documentation fix pass with many targeted edits, always Read the exact surrounding lines from the file before writing the Edit old_string. Never construct old_string from memory or from an earlier read of a different section.
+- Confidence: high
+
 **2026-06-23 — D7 T-3: `caplog` captures TestClient background-thread logs correctly**
 - Observation: `TestClient` runs the ASGI lifespan (including `KeyStore.load()` which emits the corruption ERROR) in a background thread. `caplog.at_level(logging.ERROR, logger="archon_search.key_manager")` correctly captures those logs because Python logging handlers are process-global. The `caplog.at_level` context must wrap the entire `TestClient(app) as client:` block, not just the post-startup assertions.
 - Action: For any e2e test that must assert logs emitted during ASGI lifespan startup, wrap the `TestClient(app) as client:` context with `caplog.at_level(...)`. The lifespan runs during `TestClient.__enter__()`, so the context must start before the `with TestClient(app)` line.

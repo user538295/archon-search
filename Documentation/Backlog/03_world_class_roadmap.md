@@ -112,7 +112,7 @@ Goal: support real operational workflows — backup, migration, key rotation, ma
 - [ ] **D4. Streaming / incremental chunking (item 18)** — avoid full-document materialisation above a configurable threshold.
 - [ ] **D5. Maintenance jobs and policies (item 26)** — stale-collection detection, compaction/vacuum where the backend needs it, orphan cleanup, failed-ingest retry, periodic integrity checks.
 - [ ] **D6. Install-time / background provider validation (item 23)** — validate reranker provider config at install or warm-up while preserving the lazy-load startup contract.
-- [ ] **D7. Hardening: multi-key auth with rotation (`SEC-1`)** — build on the existing `namespaces` map; key file format with expiry and revocation.
+- [x] **D7. Hardening: multi-key auth with rotation (`SEC-1`)** — build on the existing `namespaces` map; key file format with expiry and revocation.
 - [ ] **D8. Hardening: hashed `doc_id` mode for telemetry (`SEC-2`)** — opt-in; ADR-05 is the design anchor.
 
 ## Phase E — Surface and integrations
@@ -143,7 +143,7 @@ These items from the original ordering are complete in the standalone repo:
 
 - [x] **1. Extract Search into a standalone package and service** — this repo.
 - [x] **4. Evaluation harness baseline** — `tests/eval/`; production-model lane is open as `B6`.
-- [x] **5. Auth, authorization, namespace isolation, security trimming** — middleware + ACL + namespace map; rotation still open as `D7`.
+- [x] **5. Auth, authorization, namespace isolation, security trimming** — middleware + ACL + namespace map; live key rotation delivered in `D7`.
 - [x] **6. Stable external APIs: REST + MCP** — OpenAPI is authoritative; contract drift items `API‑*` tracked in the debt register.
 
 ## Out of scope until earlier items land
@@ -272,7 +272,7 @@ If only one ordering is used for planning, use this — each phase is a coherent
 33. ⬜ D4. Streaming / incremental chunking (item 18).
 34. ⬜ D5. Maintenance jobs and policies (item 26).
 35. ⬜ D6. Install-time / background provider validation (item 23).
-36. ⬜ D7. Multi-key auth with rotation (`SEC-1`).
+36. ✅ D7. Multi-key auth with rotation (`SEC-1`).
 37. ⬜ D8. Hashed `doc_id` for telemetry (`SEC-2`).
 
 **Phase E — Surface and integrations**
@@ -307,7 +307,7 @@ The biggest mistakes this ordering protects against (Phases A–C have shipped; 
 
 - Shipping HyDE / RAG Fusion (C4/C5) before observability (B1) and the production-model eval lane (B6) — you will not know whether they helped. *(B1 + B6 shipped before C4 + C5, as ordered.)*
 - Building filters (A2) without a metadata schema (A1) — they will be re-built within one release. *(A1 shipped before A2.)*
-- Letting hardening (A3–A7, B5, C6, C7, D7, D8) accumulate behind features — the production incident curve is exponential. *(D7/D8 still open — Phase D priority.)*
+- Letting hardening (A3–A7, B5, C6, C7, D7, D8) accumulate behind features — the production incident curve is exponential. *(D7 shipped; D8 still open — Phase D priority.)*
 
 ## Related documents
 

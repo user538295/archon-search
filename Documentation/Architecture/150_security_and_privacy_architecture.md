@@ -35,23 +35,41 @@ Out of scope:
 
 ### Key bootstrap (`archon_search/key_manager.py`)
 
-`load_or_generate_key()` resolves a key from the first source that succeeds, in this priority order:
+`load_or_generate_key()` resolves the **default** API key from the first source that succeeds, in this priority order:
 
 1. `ARCHON_SEARCH_API_KEY` env var — must be a non-empty lowercase hex string (`^[0-9a-f]+$`). Invalid values are ignored with a warning, falling through to the next source.
 2. Key file — by default `~/.archon-search/.search.env`; `ARCHON_SEARCH_KEY_FILE` overrides the path. File must contain a line `ARCHON_SEARCH_API_KEY=<hex>`.
 3. Auto-generation — `secrets.token_hex(32)` writes a 64-char hex key through the durable helper `_durable_io.atomic_write_bytes` (mode `0600` set at creation via `O_EXCL`, then fsync file → `os.replace` → fsync parent dir; see the [durability contract](130_data_architecture_and_persistence.md#durability-contract)). Concurrent first-start writers raise `FileExistsError` and are recovered by retrying via `_load_from_file()`.
 
+### Managed key store (`archon_search/key_manager.py` — D7)
+
+D7 introduces `KeyStore`, a durable multi-key store backed by `get_data_dir() / "keys.json"`. Operators issue, revoke, and rotate keys **without restarting the server**. Key properties:
+
+- Raw bearer tokens are **never stored** — only their SHA-256 hex digest (`token_hash`) is persisted. The raw token is printed once at creation time and never retrievable again.
+- `keys.json` is written with mode `0o600` via `atomic_write_bytes`. An internal `asyncio.Lock` serialises all read-modify-write cycles.
+- `active_keys()` re-reads `keys.json` from disk on every call (no in-memory cache). Managed keys are checked before TOML namespace tokens in the middleware dispatch order.
+- Expiry is enforced via wall-clock comparison: `expires_at > now` (strict). A key at exactly its expiry instant is considered expired.
+- The first INFO log for an expired key is emitted once per key ID per process lifetime (suppressed by `_logged_expired_ids: set[str]`).
+- A corrupted `keys.json` (unparseable JSON, non-array JSON, or any record failing Pydantic validation) triggers an ERROR log and the server starts with an empty managed key store — the default env/file key still works.
+- TOML `[namespaces]` tokens are loaded at startup as synthetic `KeyRecord` objects (no `id`, `status="active"`, no expiry). They cannot be revoked via the CLI/API; manage them by editing `archon-search.toml` and restarting.
+- **Rotation guard**: after `POST /keys/rotate`, the old default token's SHA-256 is stored in `keys.json` with `status="revoked"`. The middleware performs a negative check before accepting the token via the legacy `api_key` fallback: if the token hash matches a revoked managed key record, the request is rejected even if the raw token still matches `APIKeyMiddleware._api_key`.
+- **`ARCHON_SEARCH_API_KEY` wins unconditionally**: when the env var is set, `POST /keys/rotate` returns `409`. The env var cannot be overridden by `keys.json` state.
+
 ### File permissions
 
-- The key file is created with mode `0600` (owner read/write only) at creation time by `atomic_write_bytes` — there is no chmod-after-rename window on the write path.
+- The key file (`.search.env`) is created with mode `0600` (owner read/write only) at creation time by `atomic_write_bytes` — there is no chmod-after-rename window on the write path.
+- `keys.json` is also written with mode `0600` on every `atomic_write_bytes` call.
 - On subsequent reads, if the mode has drifted, `_chmod_600` attempts to retighten it. Failure is logged as a warning, not fatal.
 - On Windows, the read-path chmod step is skipped (`key_manager.py:112–115`).
 
 ### Bearer enforcement (`archon_search/server/middleware_auth.py`)
 
-- Every request except `/health`, `/docs`, `/openapi.json`, `/redoc` requires `Authorization: Bearer <token>`.
-- Token is compared with `secrets.compare_digest` against (a) every entry in the per-namespace key map and (b) the default API key. The loop does not short-circuit on match (no early `break`) — this is deliberate and labelled in the source as timing-leak mitigation (`middleware_auth.py:39`: comment `no early exit — prevents timing leakage`).
-- A successful match stamps `request.state.namespace`; the rest of the app uses that to scope reads and writes.
+- Every request except `/health`, `/ready`, `/docs`, `/openapi.json`, `/redoc` requires `Authorization: Bearer <token>`.
+- **D7 dispatch order (with early-exit on managed-key match):**
+  1. Managed keys (`key_store.active_keys()`) — token hash computed once per request via `sha256(token).hexdigest()`, compared with `hmac.compare_digest` against each record's `token_hash`. Exits loop on first match (constant-time per comparison; both operands are 64-char hex strings). If a match is found and `request.state.namespace` is set, processing continues.
+  2. TOML `[namespaces]` loop — no early `break` (preserving the pre-D7 timing-safe design).
+  3. Default `api_key` legacy fallback — before accepting, performs a negative check: if the token hash matches a revoked or expired managed key record, the request is rejected with `401` even if the raw token matches `self._api_key`.
+- On all paths, a successful match stamps `request.state.namespace`; the rest of the app uses that to scope reads and writes.
 - Failure → `401` with `WWW-Authenticate: Bearer`, empty body.
 
 ### Unauthenticated endpoints
@@ -212,5 +230,5 @@ When `[rag_fusion] enabled = true` in config *and* a request includes `rag_fusio
 - The server binds to `127.0.0.1` by default (`[server].host`). Binding to `0.0.0.0` is not recommended and the threat model does not cover it. **C9 exception**: `archon-search serve` (used by the Docker image) flips the host default to `0.0.0.0` so containers are reachable on the mapped port. Operators running `serve` outside a container assume responsibility for upstream isolation (reverse proxy, firewall). See [`UserManual/08_running_with_docker.md`](../UserManual/08_running_with_docker.md).
 - The key file, the LanceDB directory, and the telemetry logs all live under `~/.archon-search/` by default. `ARCHON_SEARCH_DATA_DIR` relocates the entire tree to a single root (used by the Docker image to put everything under `/data`). The relocation is structural: `paths.get_data_dir()` is read lazily by every path accessor (`key_manager.get_key_file()`, `jobs.get_jobs_file()`, `language_detector.get_fasttext_models_dir()`, `cli/ingest.py` history default, and `config.load_config()` for `db_path` / `log_file` / `telemetry.log_dir`) on every call — no module-level capture. The operator should ensure the chosen root is not on a shared filesystem with looser permissions; the same trust-boundary expectation applies regardless of location.
 - `ARCHON_SEARCH_KEY_FILE` still takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file path specifically. The key file's separate-security-lifecycle override is preserved by design.
-- Rotating the API key requires editing/regenerating `.search.env` and restarting the server. There is no in-process rotation API.
+- **D7**: Rotating the API key no longer requires a server restart. `archon-search key rotate` (or `POST /keys/rotate`) generates a new default key, writes it atomically to `.search.env`, and revokes (or grace-expires) the old key in `keys.json` — all without restarting. The old key is rejected on the next request if `grace_seconds = 0` (the default). Set `[auth] rotate_grace_seconds` in `archon-search.toml` (or pass `grace_seconds` in the request body) to allow in-flight requests to drain before the old key expires. **Note**: `POST /keys/rotate` returns `409` when `ARCHON_SEARCH_API_KEY` is set in the environment — the env var always wins and rotation would be a no-op from the operator's perspective.
 - **Container logging (C9)**: when `ARCHON_SEARCH_CONTAINER=1` is set (baked into the Docker image), `logging_setup.configure_logging()` attaches a `StreamHandler(sys.stderr)` to the `archon_search` logger so `docker logs` captures application output even with an empty `log_file`. The structured-log invariants (no raw queries, HyDE/RAG Fusion query fingerprints) apply identically across file and stderr handlers — the handler is a transport switch, not a content filter.

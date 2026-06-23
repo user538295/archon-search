@@ -44,7 +44,8 @@ The client is not presenting a valid Bearer token, or it is presenting one the s
    - **Env var invalid:** logged at WARNING and ignored; loader falls back to the file (`_load_from_env`).
    - **File invalid:** logged at ERROR and `_load_from_file` returns `None`; `load_or_generate_key` then falls through to `_generate_and_write`, which **overwrites the existing key file with a freshly generated key** via the durable helper `_durable_io.atomic_write_bytes` (mode `0600` at creation, fsync file → `os.replace` → fsync parent dir). There is no "next source" after the file — invalid file content silently triggers key rotation.
 3. The loader tries to tighten file permissions to `600` via `_chmod_600`, but a chmod failure is swallowed (`try`/`except OSError` in `_load_from_file`) and reading proceeds. The load only aborts if the subsequent `read_text` itself raises `OSError`. So `600` is enforced best-effort, not a hard precondition for loading.
-4. To rotate: delete `~/.archon-search/.search.env` and restart — a fresh key is generated.
+4. **To rotate the default key (no restart required, D7)**: `archon-search key rotate`. The old key is revoked and a new token is written to `.search.env`. Use `--grace <duration>` if in-flight requests need time to drain. Returns `409` if `ARCHON_SEARCH_API_KEY` env var is set (unset it first).
+   **Legacy (requires restart)**: delete `~/.archon-search/.search.env` and restart — a fresh key is generated.
 
 ## Symptom: empty results from `/search`
 

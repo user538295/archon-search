@@ -208,13 +208,12 @@ This triggers a full re-ingest (re-parse, re-embed, `rebuild_fts_index`). The FT
 
 ### API key rotation
 
-The key is auto-generated on first start at `~/.archon-search/.search.env` with mode `0600` (`key_manager.py`). To rotate:
+The key is auto-generated on first start at `~/.archon-search/.search.env` with mode `0600` (`key_manager.py`). Options for rotation:
 
+- **Live rotation (D7 — no restart required)**: `archon-search key rotate` (or `POST /keys/rotate`) generates a new default key, writes it atomically to `.search.env`, and revokes the old key in `keys.json`. The old key is rejected on the next request (or grace-expires if `[auth].rotate_grace_seconds > 0`). Returns `409` when `ARCHON_SEARCH_API_KEY` env var is set — unset it first.
 - **Overwrite the file**: edit `~/.archon-search/.search.env` (preserve `0600`) and restart the service.
-- **Override at runtime**: set `ARCHON_SEARCH_API_KEY=<new-key>` in the environment; this takes precedence over the file.
+- **Override at runtime**: set `ARCHON_SEARCH_API_KEY=<new-key>` in the environment; this takes precedence over the file and over managed keys.
 - **Relocate the file**: set `ARCHON_SEARCH_KEY_FILE=<path>` and restart. The new path is read with the same `0600` expectation.
-
-There is no live-reload — every rotation requires a service restart. Clients holding the old key will receive `401` immediately after restart.
 
 ### Stale centroid — symptoms, causes, and recovery
 

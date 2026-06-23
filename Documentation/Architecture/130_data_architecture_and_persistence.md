@@ -26,6 +26,7 @@ In the table below, paths are relative to the data-directory root — `~/.archon
 |------|-------|----------|-------|
 | `archon-search.toml` | user (or `config_cmd` CLI) | runtime config | optional; missing file → all defaults (`config.py::load_config`). **Note**: not relocated by `ARCHON_SEARCH_DATA_DIR` — use `ARCHON_SEARCH_CONFIG` instead. |
 | `.search.env` | `key_manager.py` | `ARCHON_SEARCH_API_KEY=<hex>` | mode `0600`; auto-generated on first start if missing. Resolved lazily via `get_key_file()`. |
+| `keys.json` | `key_manager.py` (`KeyStore`) | Durable multi-key store: JSON array of `KeyRecord` objects (`id`, `token_hash`, `namespace`, `label`, `created_at`, `expires_at`, `status`). Written with mode `0o600` via `atomic_write_bytes`. Created on first managed-key operation (D7). |
 | `search/` | `store.py` (LanceDB) | vector + FTS + collection meta tables | `db_path` config key; created on `SearchStore.connect()` |
 | `search-logs/` | `telemetry/writer.py` | `YYYY-MM-DD.jsonl` per UTC day | only if `[telemetry].enabled = true` |
 | `logs/archon-search.log` | server | server logs | `[logging].log_file` |
@@ -51,7 +52,7 @@ Every durable JSON/bytes write of runtime state routes through a single helper m
 
 The crucial property is that the helper fsyncs **both the file and the parent directory**: the parent-directory fsync is what makes the `os.replace` rename itself durable. fsync is never retried — on `EIO` the kernel may already have marked the page clean (POSIX "fsyncgate"), so a retry is unsafe. The helper is **not internally synchronized**; callers must serialize writes to the same path.
 
-The seven durable-write sites that use the helper are:
+The eight durable-write sites that use the helper are:
 
 | Site | Helper | File written |
 |------|--------|--------------|
@@ -60,6 +61,7 @@ The seven durable-write sites that use the helper are:
 | `sync.manifest_remove_entry` | `atomic_write_json` | sync manifest |
 | `jobs/store.py::JobStore._write_atomic` | `atomic_write_json` | `archon-search-jobs.json` |
 | `key_manager._generate_and_write` | `atomic_write_bytes` | `.search.env` (mode `0600`) |
+| `key_manager.KeyStore._write` | `atomic_write_bytes` | `keys.json` (mode `0600`) |
 | `maintenance_loop._save_state` | `atomic_write_json` | `.maintenance-state.json` |
 | `backup_loop._save_state` | `atomic_write_json` | `.backup-state.json` |
 
@@ -318,4 +320,4 @@ Schema (C3 contract):
 
 ## Backup and recovery
 
-There is **no built-in backup**. To preserve state, the user must back up `~/.archon-search/` (specifically `search/`, `.search.env`, `archon-search.toml`, and `archon-search-jobs.json`). LanceDB tables are file-based and can be copied while the service is stopped. There is no incremental backup, no snapshot tooling, and no disaster-recovery automation — accepted scope for a local single-user service.
+There is **no built-in backup**. To preserve state, the user must back up `~/.archon-search/` (specifically `search/`, `.search.env`, `keys.json`, `archon-search.toml`, and `archon-search-jobs.json`). `keys.json` contains all managed keys issued via D7 (`KeyStore`); losing it without a backup means all managed keys must be reissued. LanceDB tables are file-based and can be copied while the service is stopped. There is no incremental backup, no snapshot tooling, and no disaster-recovery automation — accepted scope for a local single-user service.

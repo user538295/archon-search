@@ -44,7 +44,7 @@ Where to set ANTHROPIC_API_KEY today (depends on how you start the server):
   - The description-generator call site is silent on missing key (debug log only), so no UX nudge needed.
 
   If you do want a wizard-level improvement, a safer design: mirror the existing ~/.archon-search/.search.env pattern. Add EnvironmentFile=~/.archon-search/.secrets.env (mode 600, gitignored) to both service
-  templates; the wizard creates the empty file with right perms; the operator drops the key into the file. No secret ever lands in a wizard-prompted text and rotation = edit one file + restart. That's a separate,
+  templates; the wizard creates the empty file with right perms; the operator drops the key into the file. No secret ever lands in a wizard-prompted text and rotation = edit one file + restart [Superseded by D7 — use `archon-search key rotate`]. That's a separate,
   meaningful design ticket — not in scope for C18.
 
   

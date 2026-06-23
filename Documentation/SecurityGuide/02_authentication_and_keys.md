@@ -6,29 +6,29 @@
 
 # Authentication and Keys
 
-`archon-search` authenticates every non-`/health` request with a static bearer token. There is a single default key plus an optional map of additional keys, one per namespace. There is no rotation, expiry, or revocation primitive in v1.
+`archon-search` authenticates every request with a bearer token, except a small set of exempt paths: `/health`, `/ready`, `/docs`, `/openapi.json`, `/redoc`. D7 added a durable multi-key store (`KeyStore` in `key_manager.py`) backed by `~/.archon-search/keys.json`. Operators can now issue, revoke, and rotate API keys **without restarting the server**. The legacy single-key path (env var + TOML `[namespaces]`) is unchanged and continues to work with zero config changes.
 
 For context on where this fits, see [`01_threat_model.md`](./01_threat_model.md) and [`../Architecture/150_security_and_privacy_architecture.md`](../Architecture/150_security_and_privacy_architecture.md).
 
 ## Principles
 
-1. **One default key, optional per-namespace map.** The minimum useful model; nothing more.
-2. **Key file is owner-only.** Mode `0600` on creation, and re-tightened on every read.
-3. **Constant-time comparison and no early exit.** Timing-side-channel exposure is bounded.
+1. **One default key, optional per-namespace map.** The minimum useful model; nothing more. **D7** adds a durable multi-key store as an additive layer.
+2. **Key file is owner-only.** Mode `0600` on creation, and re-tightened on every read. `keys.json` is also written with mode `0600`.
+3. **Constant-time comparison.** Timing-side-channel exposure is bounded. Managed-key loop exits early on match (constant-time per-comparison, not per-key-count); TOML namespace loop retains its no-early-exit design.
 4. **No silent key minting on disk.** Auto-generation happens once; subsequent starts reuse the file.
+5. **Raw tokens never stored.** Managed keys store only the SHA-256 hex digest (`token_hash`). The raw token is printed once at creation time and is never retrievable.
 
 ## Authentication model
 
-The middleware lives at `archon_search/server/middleware_auth.py`. Two key sources are checked, in order:
+The middleware lives at `archon_search/server/middleware_auth.py`. Three key sources are checked, in order (D7 dispatch order):
 
-1. **Per-namespace map.** Every entry in `config.namespaces` (`<key_hex> = <namespace>`) is compared against the incoming token. The loop iterates all entries without an early `break` (`middleware_auth.py:40–43`) — deliberate, to avoid leaking which key prefix matched via timing.
-2. **Default key fallback.** If no namespace key matched, the token is compared against the single default key returned by `load_or_generate_key()`. A match here stamps the namespace as `DEFAULT_NAMESPACE` (`archon_search/constants.py`).
+1. **Managed keys (`KeyStore.active_keys()`).** `active_keys()` re-reads `keys.json` from disk on every call (no in-memory cache; ~<1 ms I/O for the typical small file). The token hash is computed once per request (`sha256(token).hexdigest()`), then compared with `hmac.compare_digest` against each managed key's `token_hash`. The loop exits on first match. Expired keys (`expires_at <= now`) and revoked keys (`status="revoked"`) are excluded by `active_keys()`.
+2. **TOML `[namespaces]` map.** Every entry in `config.namespaces` (`<key_hex> = <namespace>`) is compared against the incoming token. The loop iterates all entries without an early `break` — deliberate, to preserve the timing-safe design from before D7.
+3. **Default key fallback.** The token is compared against the single default key returned by `load_or_generate_key()`. **Rotation-revocation guard**: before accepting via this path, the middleware checks whether the token hash matches a revoked or expired managed key record in `keys.json`; if found, `401` is returned even if the raw token matches `_api_key`. A match on all other paths stamps the namespace as `DEFAULT_NAMESPACE` (`archon_search/constants.py`).
 
-A failure on both paths returns `401` with `WWW-Authenticate: Bearer` and an empty body. A success stamps `request.state.namespace`, which the rest of the app uses to scope reads, writes, and ACL filtering.
+A failure on all paths returns `401` with `WWW-Authenticate: Bearer` and an empty body. A success stamps `request.state.namespace`, which the rest of the app uses to scope reads, writes, and ACL filtering.
 
-Exempt paths (no auth): `/health`, `/docs`, `/openapi.json`, `/redoc` (`middleware_auth.py:16`). Only `/health` exposes runtime data; the other three are schema only and are not even included in the OpenAPI `paths` table at runtime (`archon_search/server/app.py:67–69`). #Unverified — the runtime-data vs schema-only distinction was not cross-checked against `routes_health.py`.
-
-Token comparison uses `secrets.compare_digest` end-to-end (`middleware_auth.py:42`, `46`).
+Exempt paths (no auth): `/health`, `/ready`, `/docs`, `/openapi.json`, `/redoc` (`middleware_auth.py`). Only `/health` and `/ready` expose runtime data; the other three are schema only.
 
 ## Key bootstrap
 
@@ -72,26 +72,48 @@ Each entry adds another bearer token that, when presented, scopes the request to
 
 ## Current limitations
 
-The v1 model deliberately omits several features that production deployments typically need. They are tracked, not hidden:
+Several features remain out of scope:
 
-- **No rotation.** There is no in-process API to swap the key. Restart with a new file or env var is the only path. Tracked as `SEC-1` in [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) and as item **D7** in [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md). #Unverified — these references were not cross-checked against the linked files.
-- **No expiry.** Keys live forever once issued.
-- **No revocation list.** Removing a leaked per-namespace key requires editing the config file and restarting.
-- **No audit log of authentication failures beyond the application log.** Failures log at `debug` (`middleware_auth.py:62` is only on success); 401s are not separately recorded.
+- **No audit log of authentication failures beyond the application log.** 401s are not separately recorded beyond the application log.
 - **No CIDR / origin restrictions inside the middleware.** Bind address and reverse proxy are the only network controls — see `05_network_exposure_and_tls.md`.
+- **No per-key ACL scoping.** All managed keys have equal power (no admin vs. client role distinction). Deferred to v2.
+- **TOML `[namespaces]` changes require restart.** Managed keys hot-load from disk; TOML namespace tokens are read once at startup.
+- **MCP `api_key` not hot-reloaded on rotation.** `POST /keys/rotate` updates `.search.env` and `keys.json`; the MCP server's `APIKeyMiddleware.api_key` is not reloaded until restart (documented limitation S24).
+- **`POST /keys/rotate` blocked when `ARCHON_SEARCH_API_KEY` env var is set** — returns `409` (the env var always wins).
 
-## Manual rotation procedure
+Previously tracked as `SEC-1` ("no rotation, expiry, or revocation primitive") in [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md): **resolved by D7**.
 
-Rotation is a stop-edit-start sequence:
+## Managed key rotation procedure (D7 — no restart required)
+
+```bash
+# Issue a key for a specific namespace
+archon-search key create --namespace my-team
+
+# List active keys
+archon-search key list
+
+# Revoke a key immediately
+archon-search key revoke <id>
+
+# Rotate the default key (old key immediately revoked)
+archon-search key rotate
+
+# Rotate with a 60-second grace window for in-flight requests to drain
+archon-search key rotate --grace 60s
+```
+
+The raw token is printed to **stdout only** once at creation time — store it immediately. The same operations are available via `POST /keys`, `GET /keys`, `DELETE /keys/{id}`, and `POST /keys/rotate` REST endpoints, and via the `create_key`, `list_keys`, `revoke_key`, `rotate_key` MCP tools.
+
+## Legacy rotation procedure (requires restart)
+
+For deployments using only the env var / file path (no managed keys):
 
 1. **Stop the server.** `archon-search stop` (or stop the OS service).
-2. **Rotate the default key.** Edit `~/.archon-search/.search.env` and replace the `ARCHON_SEARCH_API_KEY=<hex>` line with a new lowercase hex string. To generate a fresh value: `python -c "import secrets; print(secrets.token_hex(32))"`.
-3. **Rotate per-namespace keys** by editing the `[namespaces]` block in `~/.archon-search/archon-search.toml`. Remove the old entry and add the new one — both per-namespace keys remain valid only if both entries remain in the file. Note: the default key from `~/.archon-search/.search.env` is a single value, so old and new *default* keys cannot be valid concurrently — the file holds only one default at a time.
-4. **Verify permissions.** `ls -l ~/.archon-search/.search.env` should show `-rw-------`. If not, `chmod 600` it before restart; the loader will also fix it on next read.
-5. **Restart the server.** `archon-search start`. The startup log line `API key authentication enabled (source: …)` confirms which source was used (`app.py:123`).
+2. **Replace the default key.** Edit `~/.archon-search/.search.env` and replace the `ARCHON_SEARCH_API_KEY=<hex>` line with a new lowercase hex string. To generate a fresh value: `python -c "import secrets; print(secrets.token_hex(32))"`.
+3. **Rotate per-namespace keys** by editing the `[namespaces]` block in `~/.archon-search/archon-search.toml`. Remove the old entry and add the new one.
+4. **Verify permissions.** `ls -l ~/.archon-search/.search.env` should show `-rw-------`. If not, `chmod 600` it before restart.
+5. **Restart the server.** `archon-search start`.
 6. **Update clients.** Any client still presenting the old key now receives `401`.
-
-The rotation is atomic at the *file* level (writes to the file replace it) but not atomic across clients — there is a window during step 5 in which clients with the old key will fail. There is no overlap mode in v1.
 
 ## Verifying authentication is working
 

@@ -8,17 +8,18 @@
 ## Guiding principles
 
 1. **Source of truth is code, not prose.** Every row in this document traces to a route module under `archon_search/server/` or a file under `archon_search/cli/`. The machine-readable contract is `GET /openapi.json`; this page is its narrative companion.
-2. **One auth model everywhere.** Both REST and MCP run through the same `APIKeyMiddleware` (`archon_search/server/middleware_auth.py`). Only `GET /health` is unauthenticated. Note: the MCP transport is constructed with an empty `namespaces={}` dict (`mcp.py::create_mcp_http_app`), so only the bootstrap default key authenticates on `/mcp` — per-namespace keys configured in `[namespaces]` are not accepted there.
+2. **One auth model everywhere.** Both REST and MCP run through the same `APIKeyMiddleware` (`archon_search/server/middleware_auth.py`). Only `GET /health` and `GET /ready` are unauthenticated on the REST surface; the MCP transport has only a `/health` handler (no `/ready` route). Note: the MCP transport is constructed with an empty `namespaces={}` dict (`mcp.py::create_mcp_http_app`), so only the bootstrap default key authenticates on `/mcp` — per-namespace keys configured in `[namespaces]` are not accepted there.
 3. **Breaking changes go in `BREAKING.md`.** CalVer segments do not encode compatibility; consult [`/BREAKING.md`](../../BREAKING.md) before upgrading.
 4. **No raw queries on the wire.** Telemetry never stores query strings; this is a structural invariant — see [`150_security_and_privacy_architecture.md`](./150_security_and_privacy_architecture.md).
 5. **Namespaces are enforced server-side (REST).** Every authenticated REST request resolves to a namespace; cross-namespace access yields `404`, never `403`. MCP tools currently do not apply namespace gating to pipeline calls (`mcp.py` invokes `pipeline.search(...)` without a `namespace=` argument); this is an asymmetry with the REST surface. #Unverified — intentional vs. drift not documented in code
 
 ## Authentication
 
-- All endpoints except `GET /health` require an `Authorization: Bearer <token>` header.
-- The token is checked against (a) per-namespace keys configured in `[namespaces]` and (b) the bootstrapped default key from `~/.archon-search/.search.env` (override via `ARCHON_SEARCH_API_KEY` / `ARCHON_SEARCH_KEY_FILE`).
-- Comparison uses `secrets.compare_digest` against every entry — no early exit — to prevent timing leakage (`middleware_auth.py`).
-- Exempt paths (`middleware_auth.py::_EXEMPT_PATHS`): `/health`, `/docs`, `/openapi.json`, `/redoc`. Only `/health` actually appears in the OpenAPI schema; the others are defensive (FastAPI never includes them).
+- All endpoints except `GET /health` and `GET /ready` require an `Authorization: Bearer <token>` header.
+- **D7 dispatch order**: the middleware checks (1) managed keys (`KeyStore.active_keys()` — SHA-256 hash comparison via `hmac.compare_digest`, exits on first match), then (2) TOML `[namespaces]` tokens (no early exit, timing-safe), then (3) the default key from `~/.archon-search/.search.env` (with a rotation-revocation guard: rejects tokens that match a revoked or expired `keys.json` record even if the raw token still matches the legacy `_api_key` fallback).
+- Managed keys are issued, revoked, and rotated via the `/keys` REST endpoints or `archon-search key` CLI commands — no server restart required.
+- The default key is resolved from `ARCHON_SEARCH_API_KEY` env var → `~/.archon-search/.search.env` (or `ARCHON_SEARCH_KEY_FILE` override) → auto-generated.
+- Exempt paths (`middleware_auth.py::_EXEMPT_PATHS`): `/health`, `/ready`, `/docs`, `/openapi.json`, `/redoc`. Only `/health` and `/ready` actually appear in the OpenAPI schema; the others are defensive (FastAPI never includes them).
 - On success, the resolved namespace is attached to `request.state.namespace` and used for filtering by every handler.
 - Failure responses return `401` with `WWW-Authenticate: Bearer`.
 
@@ -203,6 +204,21 @@ Each `CollectionHealthEntry` (namespace is implied by the caller's API key; the 
 | `mutations_since_recompute` | `int` | Mutations since last centroid recompute |
 | `centroid_recompute_threshold` | `int` | Current threshold from `config.centroid_recompute_threshold` |
 
+### `routes_keys.py` (D7)
+
+All paths under `/keys`. Require `Bearer` token (same auth as all other routes). Manage the durable multi-key store (`KeyStore` in `key_manager.py`).
+
+| Method | Path | Purpose | Request schema | Response schema |
+| --- | --- | --- | --- | --- |
+| POST | `/keys` | Issue a new managed API key. Returns `201` with the new key ID, raw token (printed once — never retrievable again), namespace, label, created_at, expires_at, and `status: "active"`. | `KeyCreateRequest` — `{namespace: str (required), label?: str, expires_at?: ISO-8601 datetime (timezone-aware)}` | `KeyCreateResponse` (`schemas.py`) — `{id, token, namespace, label, created_at, expires_at, status: "active"}` |
+| GET | `/keys` | List keys visible to the caller's namespace. Active-only by default; `status=all` or `status=revoked` to filter. `namespace=` query param scopes the list to a specific namespace. Response includes `hidden_revoked_count` (count of revoked keys in the scoped view, omitted from the default active-only view). TOML synthetic keys (no `id`) appear with `id: null`. | Query: `status=` (`active` default, `revoked`, `all`), `namespace=` | `KeyListResponse` — `{keys: [KeyResponse…], hidden_revoked_count?: int}` |
+| DELETE | `/keys/{id}` | Revoke a managed key by ID. Idempotent — already-revoked returns `200`. `404` for nonexistent IDs. `DELETE /keys/null` (TOML synthetic key) returns `404` with a message explaining the TOML lifecycle. | — | `KeyRevokeResponse` — `{id, status: "revoked"}` |
+| POST | `/keys/rotate` | Generate a new default API key. Writes the new token to `.search.env` via `atomic_write_bytes`. Revokes (or grace-expires) the old key in `keys.json`. Returns the new token once. Returns `409` when `ARCHON_SEARCH_API_KEY` env var is set (rotation would be a silent no-op). | `KeyRotateRequest` — `{grace_seconds?: int}` (overrides `[auth].rotate_grace_seconds` TOML default) | `KeyRotateResponse` (`schemas.py`) — `{new_key_id, token, status: "active", old_key_id?, old_key_expires_at?, old_key_status?}` |
+
+`KeyResponse` fields: `id: str | null`, `namespace: str`, `label: str | null`, `created_at: str`, `expires_at: str | null`, `status: "active" | "revoked"`. The `token` field is **absent** from `KeyResponse` and `KeyListResponse` (only present on `KeyCreateResponse` and `KeyRotateResponse`).
+
+**Known limitations**: `POST /keys/rotate` blocked when `ARCHON_SEARCH_API_KEY` env var is set (returns `409`). MCP `rotate_key` updates `keys.json` and `.search.env` but does not hot-reload the MCP server's legacy `api_key` — the old default key remains valid for the MCP path until restart. TOML `[namespaces]` tokens require a server restart to take effect; they cannot be targeted by `DELETE /keys/{id}`.
+
 ### `routes_explain.py` (A4)
 
 | Method | Path | Purpose | Request schema | Response schema |
@@ -339,7 +355,7 @@ When telemetry is disabled, both endpoints return `DisabledResponse` (`schemas_t
 
 ## MCP tools
 
-Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mounts at `/mcp` and is wrapped with the same `APIKeyMiddleware`; only `/health` is exempt. **13 tools total** as of D1/D2.
+Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mounts at `/mcp` and is wrapped with the same `APIKeyMiddleware`; only `/health` is exempt. **17 tools total** as of D7.
 
 | Tool name | Purpose | Arguments | Returns |
 | --- | --- | --- | --- |
@@ -356,6 +372,10 @@ Defined in `archon_search/server/mcp.py` via `FastMCP`. The HTTP transport mount
 | `update_collection` | **C1** — Update the embedding model for a collection. Implements the same per-collection model state machine as `PATCH /collections/{name}`. Validated through `CollectionDetailSchema`. | `collection_name: str`, `embedding_model: str` | `CollectionDetailSchema dict` or `{error, code: "not_found" \| "conflict" \| "validation_error" \| "internal_error"}`. See `BREAKING.md` C7 entry. |
 | `export_collection` | **D1/D2** — Start an export job for a collection. Non-blocking: returns a `JobResponse` dict immediately (job is `QUEUED`); client polls `GET /jobs/{job_id}` for progress. Uses `DEFAULT_NAMESPACE`. | `collection: str`, `output_path: str = ""` | `job_to_dict(job)` on success. `{error, code: "path_unsafe"}` on unsafe path. `{error, code: "not_found"}` if collection missing. |
 | `import_collection` | **D1/D2** — Start an import job from a `.tar.gz` archive. Non-blocking: returns a `JobResponse` dict immediately (job is `QUEUED`). Pre-validates archive (schema version, embedding model match, tar safety). Uses `DEFAULT_NAMESPACE`. | `collection: str`, `path: str`, `force_overwrite: bool = False`, `ignore_schema_version: bool = False`, `on_error: str = "fail"` | `job_to_dict(job)` on success. `{error, code}` on validation failure. |
+| `create_key` | **D7** — Issue a new managed API key. Returns the raw token once; never retrievable again. | `namespace: str`, `label?: str`, `expires_at?: str` (ISO-8601 with timezone) | `{id, token, namespace, label, created_at, expires_at, status: "active"}`. On error: `{error, code}`. |
+| `list_keys` | **D7** — List managed keys. Active-only by default. | `status?: "active" \| "revoked" \| "all"` (default `"active"`), `namespace?: str` | `{keys: [{id, namespace, label, created_at, expires_at, status}…], hidden_revoked_count?: int}`. No `token` field. |
+| `revoke_key` | **D7** — Revoke a managed key by ID. Idempotent. | `key_id: str` | `{id, status: "revoked"}`. On error: `{error, code}`. |
+| `rotate_key` | **D7** — Generate a new default API key, write it to `.search.env`, revoke/grace-expire the old one. Returns the new token once. Returns error when `ARCHON_SEARCH_API_KEY` env var is set. | `grace_seconds?: int` | `{new_key_id, token, grace_seconds}`. On error: `{error, code}`. |
 
 **Breaking-change note (from [`/BREAKING.md`](../../BREAKING.md)):**
 
@@ -400,6 +420,19 @@ Entry point: `archon-search` (`archon_search/cli/main.py`, Click group). Most su
 | `maintenance` | — | **D5** — Maintenance Click group. Bare invocation prints help. | — |
 | `maintenance` | `status` | **D5** — Print maintenance state. Offline-capable: reads `.maintenance-state.json` directly and prints `last_run_at`, `next_run_at`, and per-collection health table. Optionally merges live `maintenance` block from `GET /status` when server is reachable. `--json` emits the raw state as JSON. | `--json`, `--api-url TEXT`, `--api-key TEXT` |
 | `maintenance` | `run` | **D5** — Trigger an immediate maintenance pass via `POST /maintenance/trigger`. Prints `"triggered"` and exits immediately. `--wait` polls `GET /status` until `maintenance.last_run_at` changes, then prints the updated health summary; exits 1 on timeout. | `--wait / --no-wait`, `--api-url TEXT`, `--api-key TEXT` |
+| `key` | — | **D7** — Key management Click group. Bare invocation prints help. | — |
+| `key` | `create` | **D7** — Issue a new managed API key via `POST /keys`. Prints the raw token to **stdout only** and a contextual banner to **stderr only** (safe for shell `$()` capture). | `--namespace TEXT (required)`, `--label TEXT`, `--expires EXPR` (accepts `30d`, `12h`, `3600s`, or ISO-8601 datetime with timezone), `--api-url TEXT`, `--api-key TEXT` |
+| `key` | `list` | **D7** — List managed keys via `GET /keys`. Active-only by default; shows hint line when revoked keys are hidden. | `--namespace TEXT`, `--status [active\|revoked\|all]` (default `active`), `--api-url TEXT`, `--api-key TEXT` |
+| `key` | `revoke <id>` | **D7** — Revoke a managed key by ID via `DELETE /keys/{id}`. Idempotent. | `--api-url TEXT`, `--api-key TEXT` |
+| `key` | `rotate` | **D7** — Rotate the default API key via `POST /keys/rotate`. Prints the new raw token to **stdout only**. `--grace` sets the grace period during which the old key remains valid. | `--grace DURATION` (same formats as `--expires`; converted to seconds integer), `--api-url TEXT`, `--api-key TEXT` |
+
+## `[auth]` config section (D7)
+
+Controls managed-key rotation behaviour. All fields have defaults; the section may be omitted entirely.
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `rotate_grace_seconds` | `int` | `0` | Seconds the old default key remains valid after `key rotate` / `POST /keys/rotate`. `0` = immediate revocation. Overridable per-call via the `grace_seconds` field in the `POST /keys/rotate` request body. Must be ≥ 0 (config load raises `ConfigError` otherwise). |
 
 ## `[database]` config section (D6 addition to an existing section)
 

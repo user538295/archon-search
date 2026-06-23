@@ -112,7 +112,7 @@ The ACL surface is narrower than its name suggests. It does **not**:
 - **Encrypt at rest.** ACL is metadata on plaintext chunk rows. Anyone with filesystem read access bypasses it.
 - **Trigger differential ranking.** Ranking ignores ACL; the filter is a post-retrieval drop.
 
-These limits are the explicit scope of v1. Tighter per-collection policies and per-tool authorization are tracked as **E4** in [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md). The roadmap places E4 after D7 (key rotation), since granular authorization without rotation is of limited value. #Unverified
+These limits are the explicit scope of v1. Tighter per-collection policies and per-tool authorization are tracked as **E4** in [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md). The roadmap placed E4 after D7 (key rotation) since granular authorization without rotation is of limited value — D7 has now shipped, so E4 is the next logical step.
 
 ## Operational guidance
 
@@ -143,4 +143,4 @@ If both calls return the chunk, the most likely cause is a parse warning on the 
 - [`01_threat_model.md`](./01_threat_model.md) — boundary the ACL operates inside.
 - [`../Architecture/150_security_and_privacy_architecture.md`](../Architecture/150_security_and_privacy_architecture.md) — broader privacy architecture.
 - [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) — item **E4** (per-collection access-control policies).
-- [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) — `SEC-1` (rotation prerequisite for stronger authz). #Unverified
+- [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) — `SEC-1` (rotation prerequisite for stronger authz) — **resolved by D7**.

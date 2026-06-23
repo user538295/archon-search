@@ -131,7 +131,9 @@ The API key is **not** stored in the TOML. The key manager (`archon_search/key_m
 2. **`ARCHON_SEARCH_KEY_FILE`** if set, otherwise `get_data_dir() / ".search.env"` (`~/.archon-search/.search.env` by default, or `$ARCHON_SEARCH_DATA_DIR/.search.env` when `ARCHON_SEARCH_DATA_DIR` is set — the Docker image sets this to `/data` so the key file lands on the mounted volume at `/data/.search.env`). The loader scans the file line by line and uses the first line starting with `ARCHON_SEARCH_API_KEY=` (trailing whitespace stripped); additional lines are ignored. If the file's permissions are not exactly `600`, the loader forces them to `600` (this can both tighten *and* loosen the mode — e.g. `400` would be widened to `600`).
 3. **Auto-generation**. On first start with no env var and no file, a 64-char hex token (`secrets.token_hex(32)`) is generated, written atomically with mode `600`, and used.
 
-To rotate, delete the key file (`~/.archon-search/.search.env` or wherever `get_key_file()` resolves to under `$ARCHON_SEARCH_DATA_DIR`) and restart the server. To use a static key (Docker, CI), set `ARCHON_SEARCH_API_KEY` and skip the file entirely.
+**D7 live rotation (no restart)**: `archon-search key rotate` (or `POST /keys/rotate`) generates a new default key, writes it to `.search.env` atomically, and revokes the old key in `keys.json`. Returns `409` when `ARCHON_SEARCH_API_KEY` env var is set. Use `--grace <duration>` for a grace window.
+
+**Legacy rotation (requires restart)**: delete the key file (`~/.archon-search/.search.env` or wherever `get_key_file()` resolves to under `$ARCHON_SEARCH_DATA_DIR`) and restart the server — a fresh key is generated. To use a static key (Docker, CI), set `ARCHON_SEARCH_API_KEY` and skip the file entirely.
 
 ## Environment variables
 

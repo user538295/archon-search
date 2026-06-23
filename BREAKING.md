@@ -8,6 +8,28 @@
 
 ## Changelog
 
+### [next release] — D7: new `/keys` REST endpoints and `key` CLI commands (additive)
+
+**Surface**: four new REST endpoints under `/keys`; four new MCP tools; new `key` CLI command group.
+
+**New REST endpoints** (all require `Bearer` token):
+- `POST /keys` → `201 KeyCreateResponse` — issues a new managed API key; token present once.
+- `GET /keys` → `200 KeyListResponse` — lists managed keys; active-only by default.
+- `DELETE /keys/{id}` → `200 KeyRevokeResponse` — revokes a managed key; idempotent.
+- `POST /keys/rotate` → `200 KeyRotateResponse` — generates a new default key; token present once; returns `409` when `ARCHON_SEARCH_API_KEY` env var is set.
+
+**New MCP tools**: `create_key`, `list_keys`, `revoke_key`, `rotate_key`. MCP tool count: 13 → 17.
+
+**New CLI commands**: `archon-search key create`, `key list`, `key revoke <id>`, `key rotate`.
+
+**New config section**: `[auth]` with `rotate_grace_seconds = 0`.
+
+All changes are **additive** — existing single-key deployments require zero config changes. The `ARCHON_SEARCH_API_KEY` env var and TOML `[namespaces]` tokens continue to work unchanged. No existing REST endpoints, MCP tools, or CLI commands are modified.
+
+**Migration**: none required for existing deployments. Add the four new `/keys` paths to client schemas if strict validation is in use.
+
+---
+
 ### [next release] — D6: `CheckStatus` gains `PENDING` and `WARN`; `GET /ready` gains `checks.models`; `GET /status` gains `model_validation`
 
 **Surface**: `GET /ready` and `GET /status` REST responses; `CheckStatus` enum.
