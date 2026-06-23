@@ -192,6 +192,11 @@
 - Action: In any CLI command that must print a sensitive token, send ALL contextual metadata to `err=True` and print ONLY the raw token to stdout. Verify with `result.stdout`/`result.stderr` split.
 - Confidence: high
 
+**2026-06-23 — D7 FE-3: CliRunner.invoke(env={...}) sets os.environ during isolation — triggers server-side env var guards**
+- Observation: `CliRunner.invoke(env={"ARCHON_SEARCH_API_KEY": token})` uses Click's `isolation()` context, which temporarily sets `os.environ["ARCHON_SEARCH_API_KEY"]` for the duration of the invoke call. When the CLI-under-test calls a `TestClient` that is running in the same process, the server-side route handler (`os.environ.get(ENV_VAR)`) sees the env var and returns 409. Fix: pass the API key via `--api-key` flag (CLI option) instead of via the env dict in integration tests where the server checks that same env var.
+- Action: In any CLI integration test that calls a server endpoint that checks `os.environ.get(X)`, never pass X via CliRunner's `env={}`. Use an explicit CLI flag (`--api-key`, `--api-url`, etc.) instead to avoid CliRunner's isolation contaminating the server's env check.
+- Confidence: high
+
 ## What Has Failed
 
 **2026-06-15 — Mocking `asyncio.wait_for` to simulate timeout**

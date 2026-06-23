@@ -1,4 +1,4 @@
-"""``archon-search key`` CLI group (D7 FE-1, FE-2).
+"""``archon-search key`` CLI group (D7 FE-1, FE-2, FE-3).
 
 Provides:
 
@@ -10,12 +10,20 @@ Provides:
   when hidden revoked keys exist.
 * ``archon-search key revoke <ID>``
   Revoke a managed API key immediately.
+* ``archon-search key rotate [--grace DURATION]``
+  Rotate the default API key.  Generates a new key, writes it to ``.search.env``,
+  and revokes (or grace-expires) the old key.  The new raw token is printed to
+  stdout exactly once; a warning banner is printed to stderr.
 
 Duration strings accepted by ``--expires``:
   ``30d``, ``12h``, ``3600s`` (relative to now, UTC) or an ISO-8601 datetime
   with a timezone offset (e.g. ``2025-12-31T23:59:59Z`` or
   ``2025-12-31T23:59:59+05:30``).  Naive datetimes (no timezone) are rejected
   with a clear error message.
+
+Duration strings accepted by ``--grace``:
+  ``30d``, ``12h``, ``3600s`` (converted to an integer number of seconds).
+  The ``POST /keys/rotate`` API accepts grace as an integer ``grace_seconds``.
 """
 from __future__ import annotations
 
@@ -355,3 +363,129 @@ def revoke_subcommand(key_id: str, api_url: str, api_key: str | None) -> None:
         raise SystemExit(1)
 
     click.echo(f"Key {key_id} revoked.")
+
+
+# ---------------------------------------------------------------------------
+# rotate subcommand
+# ---------------------------------------------------------------------------
+
+
+def _parse_grace(value: str) -> int:
+    """Parse a grace duration string to an integer number of seconds.
+
+    Accepted formats:
+    - ``<N>d`` — N days (N * 86400 seconds)
+    - ``<N>h`` — N hours (N * 3600 seconds)
+    - ``<N>s`` — N seconds
+
+    Raises click.BadParameter for unrecognised strings.
+    """
+    m = _DURATION_RE.match(value)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2).lower()
+        if unit == "d":
+            return n * 86400
+        if unit == "h":
+            return n * 3600
+        if unit == "s":
+            return n
+    raise click.BadParameter(
+        f"{value!r} is not a valid grace duration. "
+        "Use a relative duration like '30d', '12h', or '3600s'."
+    )
+
+
+@key_cmd.command("rotate")
+@click.option(
+    "--grace",
+    "grace_str",
+    default=None,
+    help=(
+        "Grace period before the old key expires ('30d', '12h', '3600s'). "
+        "Omit for immediate revocation of the old key."
+    ),
+)
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def rotate_subcommand(
+    grace_str: str | None,
+    api_url: str,
+    api_key: str | None,
+) -> None:
+    """Rotate the default API key.
+
+    Generates a new managed API key, writes the new raw token to .search.env,
+    and revokes (or grace-expires) the old default key.
+
+    The new raw bearer token is printed to stdout exactly once.
+    Store it securely — the server does not retain the plaintext.
+    """
+    try:
+        key = _resolve_api_key(api_key)
+    except Exception as exc:
+        click.echo(f"Error resolving API key: {exc}", err=True)
+        raise SystemExit(1) from exc
+
+    body: dict[str, object] = {}
+    if grace_str is not None:
+        try:
+            grace_seconds = _parse_grace(grace_str)
+        except click.BadParameter as exc:
+            click.echo(f"Error: {exc}", err=True)
+            raise SystemExit(1) from exc
+        body["grace_seconds"] = grace_seconds
+
+    headers = {"Authorization": f"Bearer {key}"}
+    url = f"{api_url.rstrip('/')}/keys/rotate"
+
+    try:
+        with httpx.Client() as client:
+            resp = client.post(url, headers=headers, json=body)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1) from exc
+
+    if resp.status_code != 200:
+        click.echo(
+            f"Error: server returned {resp.status_code}: {resp.text}", err=True
+        )
+        raise SystemExit(1)
+
+    try:
+        data = resp.json()
+    except ValueError:
+        click.echo("Error: server returned invalid JSON", err=True)
+        raise SystemExit(1)
+
+    new_token: str = data.get("token", "")
+    new_key_id: str = data.get("new_key_id", "")
+    old_key_id: str | None = data.get("old_key_id")
+    old_key_status: str | None = data.get("old_key_status")
+    old_key_expires_at: str | None = data.get("old_key_expires_at")
+
+    # S22: warning banner on stderr first, then metadata on stderr, token on stdout only.
+    click.echo(
+        "WARNING: Store this token safely — it will not be shown again.",
+        err=True,
+    )
+    click.echo("Key rotated:", err=True)
+    click.echo(f"  new_key_id: {new_key_id}", err=True)
+    if old_key_id:
+        click.echo(f"  old_key_id: {old_key_id}", err=True)
+    if old_key_status:
+        click.echo(f"  old_key_status: {old_key_status}", err=True)
+    if old_key_expires_at:
+        click.echo(f"  old_key_expires_at: {old_key_expires_at}", err=True)
+
+    # Raw token to stdout only (S22).
+    click.echo(new_token)

@@ -563,7 +563,7 @@ flowchart LR
         - #integration_test — `test_mcp_revoke_key_then_401` — `revoke_key` tool call; subsequent Bearer request → 401
         - #integration_test — `test_mcp_rotate_key_returns_new_token` — `rotate_key` MCP tool call returns new token; old key rejected on subsequent request (S6)
 
-- [ ] **FE-3** — Add `key rotate [--grace <duration>]` subcommand to `cli/key_cmd.py`; grace duration parsed to seconds integer #frontend-role
+- [x] **FE-3** — Add `key rotate [--grace <duration>]` subcommand to `cli/key_cmd.py`; grace duration parsed to seconds integer #frontend-role
     - Presentation · 1.5h
     - needs BE-8 · completes S6, S15
     - Tests
