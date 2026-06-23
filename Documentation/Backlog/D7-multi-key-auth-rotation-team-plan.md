@@ -572,7 +572,7 @@ flowchart LR
         - #unit_test — `test_cli_key_rotate_prints_new_token_stdout` — new token on stdout, banner on stderr
         - #integration_test — `test_cli_key_rotate_integration` — rotate via CLI against `TestClient`; old token rejected
 
-- [ ] **T-3** — E2e: rotate default key + grace window; TOML token coexists with managed key; corrupted `keys.json` degrades gracefully; regression: token absent from `keys.json` #tester-role
+- [x] **T-3** — E2e: rotate default key + grace window; TOML token coexists with managed key; corrupted `keys.json` degrades gracefully; regression: token absent from `keys.json` #tester-role
     - — · 2.5h
     - needs FE-3, BE-9 · completes S6, S7, S8, S15, S17, S20
     - Tests

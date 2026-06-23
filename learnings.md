@@ -197,6 +197,16 @@
 - Action: In any CLI integration test that calls a server endpoint that checks `os.environ.get(X)`, never pass X via CliRunner's `env={}`. Use an explicit CLI flag (`--api-key`, `--api-url`, etc.) instead to avoid CliRunner's isolation contaminating the server's env check.
 - Confidence: high
 
+**2026-06-23 — D7 T-3: born-expired proxy is the wrong proof for post-grace rotation rejection**
+- Observation: `test_e2e_rotate_grace_window` initially used a "born-expired" key created via `POST /keys` as a proxy to prove "old token fails after grace window." This is wrong: the born-expired key is a namespace-scoped managed key that enters `active_keys()` filtering only. The rotated old default key has a different middleware path — after rotation, `app.state.api_key` is updated to the new token, so the old token never matches the legacy fallback. The correct proof is: patch `archon_search.key_manager.datetime` to advance past `expires_dt`, then assert the actual `managed_token` returns 401. The `km_mod` patch is the load-bearing one; patching `middleware_auth.datetime` is dead code in this scenario.
+- Action: For any test that must prove a rotated key fails after its grace window, patch `archon_search.key_manager.datetime` (not middleware_auth) and assert the actual rotated token returns 401. Never use a different key as a proxy. The middleware's legacy-fallback expiry guard is only entered when the submitted token matches `current_api_key`, which is not the case for the old token after a successful rotation.
+- Confidence: high
+
+**2026-06-23 — D7 T-3: `caplog` captures TestClient background-thread logs correctly**
+- Observation: `TestClient` runs the ASGI lifespan (including `KeyStore.load()` which emits the corruption ERROR) in a background thread. `caplog.at_level(logging.ERROR, logger="archon_search.key_manager")` correctly captures those logs because Python logging handlers are process-global. The `caplog.at_level` context must wrap the entire `TestClient(app) as client:` block, not just the post-startup assertions.
+- Action: For any e2e test that must assert logs emitted during ASGI lifespan startup, wrap the `TestClient(app) as client:` context with `caplog.at_level(...)`. The lifespan runs during `TestClient.__enter__()`, so the context must start before the `with TestClient(app)` line.
+- Confidence: high
+
 ## What Has Failed
 
 **2026-06-15 — Mocking `asyncio.wait_for` to simulate timeout**
