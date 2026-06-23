@@ -278,6 +278,8 @@ class KeyStore:
         """
         if grace_seconds < 0:
             raise ValueError(f"grace_seconds must be >= 0, got {grace_seconds!r}")
+        if not current_token or not current_token.strip():
+            raise ValueError("current_token must not be empty")
 
         current_hash = hashlib.sha256(current_token.encode()).hexdigest()
 
@@ -326,7 +328,9 @@ class KeyStore:
         return {
             "new_key_id": new_key_id,
             "new_token": new_raw_token,
-            "old_record": old_record,
+            # model_copy() returns a snapshot — prevents post-write mutation
+            # by the caller from diverging from the on-disk state.
+            "old_record": old_record.model_copy() if old_record is not None else None,
         }
 
     # ------------------------------------------------------------------

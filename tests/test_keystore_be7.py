@@ -142,6 +142,14 @@ class TestRotateDefaultKey:
         new = new_records[0]
         assert new.status == "active"
         assert new.token_hash == _token_hash(new_token)
+        # Security invariant: raw token must never appear in keys.json on disk.
+        assert new_token not in (tmp_path / "keys.json").read_text()
+
+    def test_rotate_empty_token_raises(self, tmp_path: Path) -> None:
+        """Empty current_token raises ValueError — not a silent no-match."""
+        store = _make_store(tmp_path)
+        with pytest.raises(ValueError, match="current_token must not be empty"):
+            asyncio.run(store.rotate_default_key(current_token="", grace_seconds=0))
 
     def test_rotate_does_not_write_search_env(self, tmp_path: Path) -> None:
         """rotate_default_key() does NOT write .search.env — that is the route handler's job.
