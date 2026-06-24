@@ -374,7 +374,7 @@ flowchart LR
         - #unit_test — `test_mcp_config_missing_section_uses_defaults` — missing `[mcp]` section yields all defaults
         - #unit_test — `test_mcp_config_enabled_false` — `enabled = false` in TOML sets `config.mcp.enabled = False`
 
-- [ ] **BE-2** — Mount MCP app in `create_app()` lifespan + enable gate #backend-role
+- [x] **BE-2** — Mount MCP app in `create_app()` lifespan + enable gate #backend-role
     - Interface Adapters · 3.0h
     - needs K-1, BE-1 · completes S1, S10, C2 (partial)
     - Tests

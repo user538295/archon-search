@@ -10,12 +10,13 @@ import pytest
 
 pytestmark = pytest.mark.xdist_group("mcp")
 
-# Resolve fastmcp: prefer the real mcp.server.fastmcp, fall back to a
-# minimal stub. Avoid clobbering an existing entry — test_mcp_auth.py
-# relies on the real implementation being installed.
+# Resolve fastmcp: prefer the real ``fastmcp`` package (which exposes
+# ``FastMCP.http_app`` and ``Context``), fall back to a minimal stub. Avoid
+# clobbering an existing entry — test_mcp_auth.py relies on the real
+# implementation being installed.
 if "fastmcp" not in sys.modules:
     try:
-        import mcp.server.fastmcp as _real_fastmcp  # type: ignore[import-not-found]
+        import fastmcp as _real_fastmcp  # type: ignore[import-not-found]
         sys.modules["fastmcp"] = _real_fastmcp  # type: ignore[assignment]
     except ImportError:
         _fastmcp = types.ModuleType("fastmcp")

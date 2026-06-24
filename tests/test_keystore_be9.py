@@ -20,7 +20,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("mcp")
+# Own xdist group ("mcp_stub"): this module installs a module-scoped global
+# FastMCP stub via sys.modules mutation. Isolating it in a separate worker keeps
+# that stub from leaking into real-FastMCP HTTP tests in the "mcp" group.
+pytestmark = pytest.mark.xdist_group("mcp_stub")
 
 # ---------------------------------------------------------------------------
 # FastMCP stub — must support tool() decorator so create_app() can register
@@ -47,11 +50,14 @@ class _StubFastMCP:
 _MCP_MODULE = "archon_search.server.mcp"
 _FASTMCP_MODULE = "fastmcp"
 
-# Save the real FastMCP class (if available) before we stub it.
+# Save the real FastMCP class (if available) before we stub it. The Starlette
+# HTTP layer needs the real fastmcp package (3.4.x) whose FastMCP exposes
+# http_app(); the low-level mcp.server.fastmcp only has the removed
+# streamable_http_app(), so it cannot be used here.
 try:
-    import mcp.server.fastmcp as _mcp_server_fastmcp  # type: ignore[import]
-    _real_fastmcp_class = _mcp_server_fastmcp.FastMCP
-    _real_fastmcp_context = getattr(_mcp_server_fastmcp, "Context", None)
+    import fastmcp as _real_fastmcp_pkg  # type: ignore[import]
+    _real_fastmcp_class = _real_fastmcp_pkg.FastMCP
+    _real_fastmcp_context = getattr(_real_fastmcp_pkg, "Context", None)
 except (ImportError, AttributeError):
     _real_fastmcp_class = None
     _real_fastmcp_context = None

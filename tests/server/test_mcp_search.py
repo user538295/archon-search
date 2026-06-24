@@ -25,7 +25,7 @@ pytestmark = pytest.mark.xdist_group("mcp")
 # Resolve fastmcp the same way test_mcp_search_with_context.py does.
 if "fastmcp" not in sys.modules:
     try:
-        import mcp.server.fastmcp as _real_fastmcp  # type: ignore[import-not-found]
+        import fastmcp as _real_fastmcp  # type: ignore[import-not-found]
         sys.modules["fastmcp"] = _real_fastmcp  # type: ignore[assignment]
     except ImportError:
         _fastmcp = types.ModuleType("fastmcp")
@@ -300,7 +300,7 @@ async def test_mcp_search_tool_input_schema_is_superset_of_search_filters() -> N
     real_app = mcp_module.create_app(pipeline, "default", writer=None)
 
     tools_list = await real_app.list_tools()
-    schema_by_name = {t.name: t.inputSchema for t in tools_list}
+    schema_by_name = {t.name: t.to_mcp_tool().inputSchema for t in tools_list}
 
     filter_fields = set(SearchFilters.model_fields.keys())
 
@@ -491,7 +491,7 @@ async def test_search_tool_language_param_described() -> None:
 
     real_app = mcp_module.create_app(pipeline, "default", writer=None)
     tools_list = await real_app.list_tools()
-    schema_by_name = {t.name: t.inputSchema for t in tools_list}
+    schema_by_name = {t.name: t.to_mcp_tool().inputSchema for t in tools_list}
 
     assert "search" in schema_by_name
     lang_prop = schema_by_name["search"].get("properties", {}).get("language", {})
@@ -513,7 +513,7 @@ async def test_search_with_context_tool_language_param_described() -> None:
 
     real_app = mcp_module.create_app(pipeline, "default", writer=None)
     tools_list = await real_app.list_tools()
-    schema_by_name = {t.name: t.inputSchema for t in tools_list}
+    schema_by_name = {t.name: t.to_mcp_tool().inputSchema for t in tools_list}
 
     assert "search_with_context" in schema_by_name
     lang_prop = schema_by_name["search_with_context"].get("properties", {}).get("language", {})

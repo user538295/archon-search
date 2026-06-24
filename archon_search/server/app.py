@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, AsyncGenerator
@@ -312,18 +312,54 @@ def create_app(
         else:
             app.state.telemetry_writer = None
 
-        yield
+        # Startup: mount the MCP HTTP app at /mcp on the existing FastAPI app
+        # (D9 / BE-2). Done here — inside the lifespan, after all REST objects are
+        # ready — so create_mcp_http_app() receives fully-constructed dependencies.
+        # FastMCP's StreamableHTTPSessionManager task group only starts when the
+        # sub-app's own lifespan is entered, so the mount is wrapped in an explicit
+        # lifespan delegation (mcp_starlette.router.lifespan_context). The mount
+        # itself happens AFTER that context has entered, so a failed startup never
+        # leaves a zombie /mcp route (Starlette has no app.unmount()). See ADR 09.
+        try:
+            async with AsyncExitStack() as _mcp_stack:
+                if config.mcp.enabled:
+                    try:
+                        from archon_search.server.mcp import create_mcp_http_app  # noqa: PLC0415
+                        mcp_starlette = create_mcp_http_app(
+                            pipeline=app.state.pipeline,
+                            default_collection=(
+                                config.collections[0] if config.collections else "default"
+                            ),
+                            writer=app.state.telemetry_writer,
+                            config=config,
+                            embedder_cache=app.state.embedder_cache,
+                            job_store=app.state.job_store,
+                            hyde_generator=app.state.hyde_generator,
+                            rag_fusion_generator=app.state.rag_fusion_generator,
+                            key_store=app.state.key_store,
+                        )
+                        await _mcp_stack.enter_async_context(
+                            mcp_starlette.router.lifespan_context(app)
+                        )
+                        app.mount("/mcp", mcp_starlette)
+                        logger.info("MCP HTTP endpoint mounted at /mcp")
+                    except Exception:  # noqa: BLE001 — MCP must never block REST startup
+                        logger.warning(
+                            "MCP server failed to start; continuing without MCP", exc_info=True
+                        )
 
-        # Shutdown: disconnect search store
-        await app.state.search_store.disconnect()
+                yield
+        finally:
+            # Shutdown: disconnect search store
+            await app.state.search_store.disconnect()
 
-        # Shutdown: drain writer before cancelling background tasks
-        if app.state.telemetry_writer is not None:
-            await app.state.telemetry_writer.drain_and_stop()
-        tasks = list(app.state._background_tasks)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+            # Shutdown: drain writer before cancelling background tasks
+            if app.state.telemetry_writer is not None:
+                await app.state.telemetry_writer.drain_and_stop()
+            tasks = list(app.state._background_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     # Instantiate the key store pointing to keys.json under the data directory.
     # Each app (HTTP and MCP) creates its own KeyStore instance; cross-process

@@ -12,6 +12,14 @@
 #   ARCHON_SEARCH_KEY_FILE, or supply the key directly via the
 #   ARCHON_SEARCH_API_KEY environment variable (takes precedence over the file).
 
+[mcp]
+# Mount the MCP endpoint at /mcp on the same port as REST (default: true).
+# When true, FastMCP's streamable-HTTP transport is bound inside the existing
+# FastAPI app — no second port or process is required.
+# Set to false to prevent the /mcp mount from being created; GET /status will
+# return the mcp field as null.
+# enabled = true
+
 [auth]
 # Grace period for key rotation (seconds). When > 0, the old default key gets
 # expires_at = now + rotate_grace_seconds after a successful `key rotate` or

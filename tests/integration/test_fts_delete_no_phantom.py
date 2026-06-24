@@ -42,7 +42,11 @@ pytestmark = pytest.mark.integration
 
 if "fastmcp" not in sys.modules:
     try:
-        import mcp.server.fastmcp as _real_fastmcp_pkg  # type: ignore[import]
+        # Prefer the real ``fastmcp`` package (3.4.x) whose FastMCP exposes
+        # ``http_app()``. The low-level ``mcp.server.fastmcp`` class only has the
+        # removed ``streamable_http_app()`` and would poison sys.modules for any
+        # sibling test that builds a real MCP HTTP app via ``http_app(path='/')``.
+        import fastmcp as _real_fastmcp_pkg  # type: ignore[import]
 
         sys.modules["fastmcp"] = _real_fastmcp_pkg  # type: ignore[assignment]
     except ImportError:

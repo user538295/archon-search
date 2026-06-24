@@ -1,7 +1,6 @@
 """Tests for APIKeyMiddleware on the FastMCP HTTP transport ."""
 from __future__ import annotations
 
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,11 +12,11 @@ pytestmark = pytest.mark.xdist_group("mcp")
 
 VALID_KEY = "ab" * 32  # 64-char hex
 
-# Ensure fastmcp resolves to the real mcp.server.fastmcp so mcp.py can be imported
-# and so we get a real Starlette HTTP app back (not a stub).
-if "fastmcp" not in sys.modules:
-    import mcp.server.fastmcp as _real_fastmcp
-    sys.modules["fastmcp"] = _real_fastmcp  # type: ignore[assignment]
+# create_mcp_http_app() builds the endpoint at the sub-app root ("/") via
+# FastMCP 3.4.x http_app(path="/") — so the JSON-RPC endpoint of the standalone
+# (non-mounted) app is "/", not "/mcp". Auth-rejection tests still target "/mcp":
+# APIKeyMiddleware fires before routing, so any non-exempt path returns 401.
+# (fastmcp is a declared dependency; no sys.modules aliasing of a stub needed.)
 
 
 # ---------------------------------------------------------------------------
@@ -58,9 +57,9 @@ def test_mcp_http_rejects_unauthenticated_connection() -> None:
 
 
 def test_mcp_http_accepts_valid_token() -> None:
-    """HTTP request to /mcp with valid token proceeds (not 401)."""
+    """HTTP request to the MCP endpoint with valid token proceeds (not 401)."""
     client = _make_starlette_client()
-    response = client.post("/mcp", headers={"Authorization": f"Bearer {VALID_KEY}"}, json={})
+    response = client.post("/", headers={"Authorization": f"Bearer {VALID_KEY}"}, json={})
     # Not 401 — middleware passed; MCP may return other status for malformed payload
     assert response.status_code != 401
 
@@ -113,7 +112,7 @@ def test_mcp_request_id_on_valid_message() -> None:
         )
     with TestClient(starlette_app, raise_server_exceptions=False) as client:
         resp = client.post(
-            "/mcp",
+            "/",
             json=_MCP_INIT,
             headers={**_MCP_HEADERS, "Authorization": f"Bearer {VALID_KEY}"},
         )
@@ -138,7 +137,7 @@ def test_request_id_present_when_timings_disabled() -> None:
 
     with TestClient(starlette_app, raise_server_exceptions=False) as client:
         resp = client.post(
-            "/mcp",
+            "/",
             json=_MCP_INIT,
             headers={**_MCP_HEADERS, "Authorization": f"Bearer {VALID_KEY}"},
         )

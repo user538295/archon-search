@@ -174,7 +174,6 @@ def test_create_mcp_http_app_accepts_managed_key(tmp_path, monkeypatch):
     accepted by the MCP auth middleware. This verifies the BE-3 wiring in mcp.py.
     """
     import asyncio
-    import sys
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from archon_search.key_manager import KeyStore
@@ -182,10 +181,9 @@ def test_create_mcp_http_app_accepts_managed_key(tmp_path, monkeypatch):
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
 
-    # Ensure fastmcp is available in sys.modules (matches test_mcp_auth.py pattern)
-    if "fastmcp" not in sys.modules:
-        import mcp.server.fastmcp as _real_fastmcp
-        sys.modules["fastmcp"] = _real_fastmcp  # type: ignore[assignment]
+    # fastmcp is a declared dependency; the real package supplies http_app().
+    # Auth-rejection assertions below post to /mcp: APIKeyMiddleware fires before
+    # routing, so a valid token yields a non-401 status regardless of the route.
 
     # Create a KeyStore and populate it with a managed key
     key_store = KeyStore(get_data_dir() / "keys.json")

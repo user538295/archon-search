@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("mcp")
+# Own xdist group ("mcp_stub"): this module installs a module-scoped global
+# FastMCP stub via sys.modules mutation. Isolating it in a separate worker keeps
+# that stub from leaking into real-FastMCP HTTP tests in the "mcp" group.
+pytestmark = pytest.mark.xdist_group("mcp_stub")
 
 
 # ---------------------------------------------------------------------------
@@ -36,10 +39,13 @@ _FASTMCP_MODULE = "fastmcp"
 
 # Always load the real fastmcp classes directly from source, regardless of
 # what's in sys.modules at collection time. This survives any collection order.
+# Use the real ``fastmcp`` package (3.4.x) whose FastMCP exposes http_app() — the
+# low-level mcp.server.fastmcp class lacks it and would break create_mcp_http_app()
+# for any sibling test that builds a real HTTP app after this module restores.
 try:
-    import mcp.server.fastmcp as _mcp_server_fastmcp  # type: ignore[import]
-    _real_fastmcp_class = _mcp_server_fastmcp.FastMCP
-    _real_fastmcp_context = getattr(_mcp_server_fastmcp, "Context", None)
+    import fastmcp as _real_fastmcp_pkg  # type: ignore[import]
+    _real_fastmcp_class = _real_fastmcp_pkg.FastMCP
+    _real_fastmcp_context = getattr(_real_fastmcp_pkg, "Context", None)
 except (ImportError, AttributeError):
     _real_fastmcp_class = None
     _real_fastmcp_context = None

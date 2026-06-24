@@ -34,6 +34,7 @@ def make_real_app(
     *,
     backup_enabled: bool = False,
     maintenance_enabled: bool = False,
+    mcp_enabled: bool = False,
     namespaces: dict[str, str] | None = None,
 ) -> Iterator[tuple[TestClient, Any, str]]:
     """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
@@ -58,6 +59,9 @@ def make_real_app(
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "db")
     cfg.backup.interval_hours = 0  # disabled by default; trigger loop self-exits immediately
+    # MCP is mounted only when explicitly requested; default off keeps unrelated
+    # integration tests fast and avoids the FastMCP session-manager startup cost.
+    cfg.mcp.enabled = mcp_enabled
 
     if backup_enabled:
         cfg.backup.interval_hours = 1

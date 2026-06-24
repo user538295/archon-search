@@ -1535,7 +1535,10 @@ def create_mcp_http_app(
     from archon_search.server.middleware_context import RequestContextMiddleware
 
     fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store)
-    starlette_app: Starlette = fastmcp_app.streamable_http_app()
+    # FastMCP 3.4.x renamed ``streamable_http_app()`` to ``http_app()``; ``path='/'``
+    # exposes the JSON-RPC endpoint at the sub-app root so it is reachable at the
+    # ``/mcp`` mount point without an extra suffix (see ADR 09, K-1 spike).
+    starlette_app: Starlette = fastmcp_app.http_app(path="/")
     api_key, _ = load_or_generate_key()
     starlette_app.add_middleware(
         APIKeyMiddleware,
