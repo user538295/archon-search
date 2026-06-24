@@ -1,16 +1,16 @@
 **Purpose**: Document how clients integrate with `archon-search` synchronously (REST, MCP) and how internal asynchronous flows (watcher, jobs) hang together.
 **Audience**: Engineers integrating clients; engineers debugging long-running ingest/reindex flows.
 **Status**: Draft
-**Last reviewed**: 2026-05-20 (review-corrected)
-**Next review**: 2026-08-20
+**Last reviewed**: 2026-06-24 (review-corrected)
+**Next review**: 2026-09-24
 
 # Services and Integration Architecture
 
-`archon-search` exposes two synchronous transports — FastAPI HTTP and FastMCP HTTP — and runs two asynchronous internal integrations — the watchdog filesystem observer and the persistent job store. Both transports use the same `APIKeyMiddleware` class (each app factory adds its own instance); both async flows feed back into the same `SearchPipeline`. In the production run path (`run_server`), only the FastAPI app is started under uvicorn; `create_mcp_http_app` exists as a separate Starlette wrapper that is currently exercised only by tests. Layering and module roles are in [110_component_catalog_and_layer_breakdown.md](110_component_catalog_and_layer_breakdown.md); the topology is in [100_system_architecture_overview.md](100_system_architecture_overview.md).
+`archon-search` exposes two synchronous transports — FastAPI HTTP and FastMCP HTTP — and runs two asynchronous internal integrations — the watchdog filesystem observer and the persistent job store. Both transports use the same `APIKeyMiddleware` class (each app factory adds its own instance); both async flows feed back into the same `SearchPipeline`. In the production run path (`run_server`), the FastAPI app is started under uvicorn **and** mounts the MCP Starlette wrapper at `/mcp` on the same port (D9) — a single uvicorn process, single port (8765 default), shared event loop. Layering and module roles are in [110_component_catalog_and_layer_breakdown.md](110_component_catalog_and_layer_breakdown.md); the topology is in [100_system_architecture_overview.md](100_system_architecture_overview.md).
 
 ## Principles
 
-1. **One middleware class, two transports.** REST and MCP each instantiate `APIKeyMiddleware` (`server/middleware_auth.py`). `_EXEMPT_PATHS` is `{"/health", "/docs", "/openapi.json", "/redoc"}`; per `server/app.py` comments, only `/health` is a real schema exemption — the other three are defensive listings (FastAPI never includes them in the OpenAPI schema). Note that the FastAPI instance is wired with `namespaces=config.namespaces`, while the MCP wrapper passes `namespaces={}`, so MCP cannot resolve per-namespace keys — only the default key works for MCP.
+1. **One middleware class, two transports.** REST and MCP each instantiate `APIKeyMiddleware` (`server/middleware_auth.py`). `_EXEMPT_PATHS` is `{"/health", "/docs", "/openapi.json", "/redoc"}`; per `server/app.py` comments, only `/health` is a real schema exemption — the other three are defensive listings (FastAPI never includes them in the OpenAPI schema). As of D9 both factories are wired with `namespaces=config.namespaces`, so per-namespace TOML keys authenticate identically over REST and MCP.
 2. **Sync edges write to the same state as async edges.** A watcher-triggered reindex and a `POST /collections/{name}/reindex` end up calling the same pipeline code paths.
 3. **OpenAPI is the contract.** `GET /openapi.json` is authoritative for REST; breaking changes are recorded in `BREAKING.md`. See [600_api_reference_or_public_interface.md](600_api_reference_or_public_interface.md).
 4. **Long-running work is jobified.** Anything that can exceed an HTTP timeout (ingest, add-collection, reindex) returns `202 Accepted` with a `job_id` instead of blocking.
@@ -61,9 +61,13 @@ Telemetry for the fan-out path uses `TelemetryEntry.from_search_multi_result` (`
 
 ### MCP endpoint
 
-`server/mcp.py` builds a FastMCP app. `create_mcp_http_app` wraps it in a Starlette app at `/mcp` and adds its **own** `APIKeyMiddleware` instance (`namespaces={}`). This wrapper is not mounted onto the FastAPI app by `run_server` — in the running server, only the FastAPI control plane is bound under uvicorn. `create_mcp_http_app` is currently called only from tests (`tests/server/test_mcp_auth.py`). MCP tools are pipeline-shaped, not REST-shaped — they wrap `SearchPipeline` directly. The MCP factory accepts a `TelemetryWriter | None`; there is no production code path that wires a shared writer into MCP today, so the "same `TelemetryWriter`" claim only holds if a caller explicitly passes one. #Unverified
+`server/mcp.py` builds a FastMCP app. `create_mcp_http_app` wraps it in a Starlette app and adds its **own** `APIKeyMiddleware` instance. As of D9 this wrapper **is** mounted onto the FastAPI app inside `create_app()`'s async lifespan: `app.mount("/mcp", create_mcp_http_app(...))`, after entering `mcp_starlette.router.lifespan_context(app)`. It runs in the same uvicorn process on the same port (8765 default) and shares the event loop — it is **not** a separate process. The mount is gated on `config.mcp.enabled` (default `true`); when `false`, no `/mcp` is mounted and the `mcp` field on `GET /status` / `GET /health` is `null`. The mount is best-effort: a failure to enter the lifespan context or mount logs a WARNING and never blocks the REST control plane from starting.
 
-Tools registered in `server/mcp.py` (verified against source):
+The factory now receives, from the lifespan, the full `config` and internally passes `config.namespaces` to its `APIKeyMiddleware` (D9 asymmetry fix #1 — previously the middleware was constructed with a hardcoded `{}`, so TOML namespace tokens were invisible to MCP auth; now they authenticate). `namespaces` is **not** a parameter of `create_mcp_http_app` — it is extracted from `config` inside the factory. The factory also receives the lifespan-constructed `writer` (telemetry — so MCP writes telemetry identically to REST) and `key_store` (D9 asymmetry fix #3 — so the key-management tools register). MCP tools are pipeline-shaped, not REST-shaped — they wrap `SearchPipeline` directly.
+
+**Namespace propagation (D9 asymmetry fix #2).** Each tool closure resolves the caller namespace at request time via `_get_request_namespace()`, which calls FastMCP's `get_http_request()` and reads `request.state.namespace` (set by the shared `APIKeyMiddleware`). Previously every tool except `update_collection` hardcoded `DEFAULT_NAMESPACE`; now all tools are namespace-correct. See [ADR-09](../ADRs/09_mcp_http_mount_and_namespace_propagation.md).
+
+Tools registered in `server/mcp.py` (17 total; verified against source):
 
 | Tool | Pipeline method | Notes |
 |---|---|---|
@@ -80,8 +84,11 @@ Tools registered in `server/mcp.py` (verified against source):
 | `update_collection` | `SearchStore.update_collection_meta` (direct) | **C1** — 11th tool. Accepts `collection_name: str` and `embedding_model: str`; implements the per-collection model state machine (same logic as `PATCH /collections/{name}`). Returns the updated `CollectionMeta` dict or `{error, code}`. |
 | `export_collection` | `JobStore.create_export` (direct) | **D1/D2** — 12th tool. Non-blocking; creates a QUEUED export job. Returns `job_to_dict(job)` or `{error, code}`. |
 | `import_collection` | `JobStore.create_import` (direct) | **D1/D2** — 13th tool. Non-blocking; pre-validates archive and creates a QUEUED import job. Returns `job_to_dict(job)` or `{error, code}`. |
+| `create_key` | `KeyStore.create` (direct) | **D7** — registers only when `key_store` is present. Mirrors REST `POST /keys`. Returns the raw token once, then the `KeyRecord` metadata. |
+| `list_keys` | `KeyStore.list_keys` (direct) | **D7** — registers only when `key_store` is present. Mirrors REST `GET /keys`. Never returns raw tokens or hashes. |
+| `revoke_key` | `KeyStore.revoke` (direct) | **D7** — registers only when `key_store` is present. Mirrors REST `DELETE /keys/{id}`. |
+| `rotate_key` | `KeyStore.rotate_default_key` (direct) | **D7** — registers only when `key_store` is present. Mirrors REST `POST /keys/rotate`. See the operator note in `160_operational_readiness_monitoring_and_reliability.md`: rotation does not hot-reload on MCP because the mounted sub-app's `app.state.api_key` is never updated (only the parent app's is), so the old bootstrap default key keeps authenticating MCP via the legacy fallback until process restart. |
 
-> **Discrepancy with CLAUDE.md:** the project description names MCP tools such as `search_status`, `search_start`, `search_stop`, `search_ingest`, `search_collection_{list,add,remove,info,reindex}`. The current `server/mcp.py` does not register those names. The list above is what the running server actually exposes. See source: `archon_search/server/mcp.py`.
 
 ### Shared authentication
 
@@ -91,7 +98,7 @@ Tools registered in `server/mcp.py` (verified against source):
 - Falls back to the single default key from `key_manager.load_or_generate_key()`.
 - Validates the resolved namespace and attaches it to `request.state.namespace`.
 
-Both app factories add this middleware to their respective apps, but they are **separate instances**: the FastAPI factory passes `namespaces=config.namespaces` (full multi-tenant resolution); the MCP wrapper passes `namespaces={}` (default-key only). In production (`run_server`), only the FastAPI app is started. The threat model and key-rotation story are in [150_security_and_privacy_architecture.md](150_security_and_privacy_architecture.md).
+Both app factories add this middleware to their respective apps. They remain **separate instances**, but as of D9 both are constructed with `namespaces=config.namespaces` (full multi-tenant resolution) — per-namespace keys now authenticate over MCP just as they do over REST. In production (`run_server`), the FastAPI app is started under uvicorn and the MCP wrapper is mounted at `/mcp` inside its lifespan (when `config.mcp.enabled`). One operator caveat applies to live key rotation: see the `rotate_key` runbook note in [160_operational_readiness_monitoring_and_reliability.md](160_operational_readiness_monitoring_and_reliability.md). The threat model and key-rotation story are in [150_security_and_privacy_architecture.md](150_security_and_privacy_architecture.md).
 
 ## Asynchronous integrations
 

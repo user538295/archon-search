@@ -40,10 +40,10 @@ The key itself is bootstrapped by `key_manager.py` (auto-generated at `~/.archon
 
 `server/mcp.py` exposes an MCP endpoint that uses the same `APIKeyMiddleware` and wraps the same internal services as the REST routes. The two surfaces overlap but do not mirror each other:
 
-- **MCP tools** (ten total, from `server/mcp.py`): `search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document`.
+- **MCP tools** (17 total, from `server/mcp.py`; the 4 key-management tools register only when a `key_store` is present): `search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document`, `update_collection`, `export_collection`, `import_collection`, `create_key`, `list_keys`, `revoke_key`, `rotate_key`.
 - **REST routes** (from `routes_*.py`): `GET /health`, `GET /status`, `GET /indexing-state`, collection ops on `/{name}` (`GET`/`POST`/`DELETE`) plus `POST /{name}/reindex`, `POST /ingest`, `GET /jobs/{job_id}`, `DELETE /jobs/{job_id}`, `POST /search`, `POST /route`, `POST /explain`, `GET /telemetry/stats`, `GET /telemetry/entries`.
 
-MCP-only (no REST counterpart): `search_with_context`, `ingest_file`, `ingest_directory` (REST exposes only the async job-based `POST /ingest`, not these synchronous per-path tools), `list_documents`, `delete_document`. REST-only (no MCP counterpart): `/route`, `/jobs/*`, `/status`, `/indexing-state`, `/telemetry/*`. Mirrored pair: the `explain` tool ↔ `POST /explain` (same `ExplainResponse` shape).
+MCP-only (no REST counterpart): `search_with_context`, `ingest_file`, `ingest_directory` (REST exposes only the async job-based `POST /ingest`, not these synchronous per-path tools), `list_documents`, `delete_document`. REST-only (no MCP counterpart): `/route`, `/jobs/*`, `/status`, `/indexing-state`, `/telemetry/*`. Mirrored pairs: `explain` ↔ `POST /explain` (same `ExplainResponse` shape); `update_collection` ↔ `PATCH /collections/{name}`; `export_collection` ↔ `POST /collections/{name}/export`; `import_collection` ↔ `POST /collections/{name}/import`; `create_key`/`list_keys`/`revoke_key`/`rotate_key` ↔ `POST /keys` / `GET /keys` / `DELETE /keys/{id}` / `POST /keys/rotate`.
 
 When adding capability, prefer this order:
 

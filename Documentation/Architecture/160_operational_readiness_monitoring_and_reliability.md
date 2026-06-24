@@ -1,8 +1,8 @@
 **Purpose**: Describe the operational surface of `archon-search` — what an operator can observe, how the service is installed and lifecycled, and the runbooks for the failure modes that actually occur.
 **Audience**: Operators running `archon-search` on a workstation or single server, and maintainers extending its observability surface.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
-**Next review**: 2026-08-20
+**Last reviewed**: 2026-06-24
+**Next review**: 2026-09-24
 
 # Operational Readiness, Monitoring, and Reliability
 
@@ -57,6 +57,8 @@ flowchart LR
 **Gating vs. informational**: `/ready` is the correct gate for "can I send a query yet?" checks (e.g. installer warm-up polls, load-balancer health checks). `/status` is informational — it requires auth and returns per-collection progress, watcher state, and the full `readiness` sub-object including embedder/reranker warm status and job queue depth. Use `/ready` for automated gating; use `/status` for operator inspection.
 
 **`watcher.running` flag**: the `readiness.watcher.running` field on `/status` reflects the live state of the watchdog observer. The legacy top-level `watching` field on each `StatusCollectionEntry` item is per-collection (whether that collection's path is being watched) and remains separate. Do not conflate the two — `readiness.watcher.running = false` means the watcher process is not running at all; `collections[].watching = false` means that specific collection is not under active file-watch (e.g. it was registered without a path).
+
+**MCP endpoint (D9)**: the MCP control plane is served at `/mcp` on the **existing REST port** (8765 default) — there is no separate MCP port or process. It is mounted inside the FastAPI lifespan when `config.mcp.enabled` is `true` (the default). Both `GET /status` and `GET /health` expose an `mcp` object with `mcp.enabled` (bool) and `mcp.bindAddress` (the `host:port/mcp` URL the MCP endpoint is reachable on, e.g. `127.0.0.1:8765/mcp`); the field is `null` when `config.mcp.enabled = false` or the mount failed to start. Because the mount is best-effort, a mount failure leaves REST fully functional and is logged at WARNING — check `~/.archon-search/logs/archon-search.log` if `/mcp` is unreachable while REST answers.
 
 ### Correlation IDs and `X-Request-ID`
 
@@ -211,6 +213,8 @@ This triggers a full re-ingest (re-parse, re-embed, `rebuild_fts_index`). The FT
 The key is auto-generated on first start at `~/.archon-search/.search.env` with mode `0600` (`key_manager.py`). Options for rotation:
 
 - **Live rotation (D7 — no restart required)**: `archon-search key rotate` (or `POST /keys/rotate`) generates a new default key, writes it atomically to `.search.env`, and revokes the old key in `keys.json`. The old key is rejected on the next request (or grace-expires if `[auth].rotate_grace_seconds > 0`). Returns `409` when `ARCHON_SEARCH_API_KEY` env var is set — unset it first.
+
+  **MCP hot-reload limitation (D9)**: live rotation fully cuts over the REST control plane immediately, but **not** the MCP sub-app. `APIKeyMiddleware` does re-read the legacy default key dynamically — it reads `request.app.state.api_key` on every request and only falls back to its construction-time `self._api_key` when state carries no `api_key`. The catch is that `request.app` on `/mcp` is the **mounted Starlette sub-app**, whose `app.state.api_key` is never set; `POST /keys/rotate` updates only the **parent** FastAPI app's `app.state.api_key` (and `.search.env`). So MCP requests always hit the fallback and keep using the construction-time default key. Additionally, when the old default key was the auto-generated bootstrap key (never present in `keys.json`), `rotate_default_key` writes no revocation record, so the rotation-revocation guard cannot catch it on MCP either. Net effect: after `POST /keys/rotate`, the new rotated key works on MCP immediately (it resolves via `KeyStore.active_keys()`, which re-reads `keys.json` on every call), but the **old** bootstrap default key keeps authenticating MCP via the legacy fallback until the process restarts. To fully revoke the old key on MCP, **restart `archon-search` after `key rotate`**. REST is unaffected — the old key is cut over on REST because the parent app's `app.state.api_key` is updated in place. (A future fix would set `api_key` on the mounted sub-app's state, or have the MCP middleware consult the parent app state / `KeyStore` directly.)
 - **Overwrite the file**: edit `~/.archon-search/.search.env` (preserve `0600`) and restart the service.
 - **Override at runtime**: set `ARCHON_SEARCH_API_KEY=<new-key>` in the environment; this takes precedence over the file and over managed keys.
 - **Relocate the file**: set `ARCHON_SEARCH_KEY_FILE=<path>` and restart. The new path is read with the same `0600` expectation.

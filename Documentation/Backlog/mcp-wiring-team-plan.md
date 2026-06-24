@@ -4,7 +4,7 @@ feature: MCP HTTP Server Wiring
 brief: mcp-wiring-brief.md
 purpose: Bind the fully-implemented MCP HTTP endpoint so Claude Code and any FastMCP client can connect to archon-search using the same bearer token as REST.
 audience: Developer or operator adding archon-search as an MCP server in Claude Code or any FastMCP-compatible HTTP client.
-status: draft
+status: done
 roles: [frontend, backend, tester]
 architecture: clean
 ---
@@ -64,14 +64,14 @@ On server start, archon-search mounts the MCP app at `/mcp` on the REST port (87
 
 ## Acceptance criteria
 
-- [ ] Starting archon-search with default config: an MCP client connecting to `http://localhost:8765/mcp` with a valid bearer token receives a list of 17 tools.
-- [ ] Each of the 17 tools responds with a non-empty, schema-valid response when called with valid input.
-- [ ] `ingest_file` via MCP stores a document; a subsequent `search` via MCP returns that document.
-- [ ] A managed bearer token scoped to namespace A: MCP tool calls return only namespace A's data, not namespace B's.
-- [ ] MCP tool calls with telemetry enabled produce entries in the telemetry JSONL log.
-- [ ] Setting `mcp.enabled = false` prevents the `/mcp` mount from being created; `GET /status` returns the `mcp` field as `null`.
-- [ ] TestClient lifespan exit shuts down both REST and MCP cleanly (no errors, no resource leaks).
-- [ ] `GET /status` response includes `mcp.enabled` and `mcp.bindAddress` when `mcp.enabled = true`.
+- [x] Starting archon-search with default config: an MCP client connecting to `http://localhost:8765/mcp` with a valid bearer token receives a list of 17 tools. *(fact-checked: `test_mcp_tool_list_returns_17_tools`)*
+- [x] Each of the 17 tools responds with a non-empty, schema-valid response when called with valid input. *(fact-checked: 17 `test_mcp_smoke_*` e2e tests)*
+- [x] `ingest_file` via MCP stores a document; a subsequent `search` via MCP returns that document. *(fact-checked: `test_mcp_ingest_then_search_round_trip`)*
+- [x] A managed bearer token scoped to namespace A: MCP tool calls return only namespace A's data, not namespace B's. *(fact-checked: `test_mcp_namespace_data_isolation`, bidirectional)*
+- [x] MCP tool calls with telemetry enabled produce entries in the telemetry JSONL log. *(fact-checked: `test_mcp_telemetry_entry_in_log`)*
+- [x] Setting `mcp.enabled = false` prevents the `/mcp` mount from being created; `GET /status` returns the `mcp` field as `null`. *(fact-checked: `test_mcp_enabled_false_gate`)*
+- [x] TestClient lifespan exit shuts down both REST and MCP cleanly (no errors, no resource leaks). *(fact-checked: `test_lifecycle_shutdown`)*
+- [x] `GET /status` response includes `mcp.enabled` and `mcp.bindAddress` when `mcp.enabled = true`. *(fact-checked: `test_status_mcp_field_present`)*
 
 ---
 
@@ -206,14 +206,14 @@ N/A — no browser UI exists in this project. The Presentation layer (FastAPI ro
 - Presentation (REST): BE-8 (GET /status), BE-9 (GET /health), BE-11 (status/health integration tests)
 
 **Done when**
-- [ ] MCP endpoint binds and is reachable — S1
-- [ ] 17 tools listed with valid bearer — S2
-- [ ] Namespace propagation correct for all 17 tool closures — S8, S12
-- [ ] Telemetry and key_store wired — S9, S14
-- [ ] `GET /status` / `GET /health` include McpStatusDetail — S7
-- [ ] `mcp.enabled = false` gate works — S10
-- [ ] Lifecycle integration test (SIGTERM) passes — S6
-- [ ] All integration tests green in CI
+- [x] MCP endpoint binds and is reachable — S1
+- [x] 17 tools listed with valid bearer — S2
+- [x] Namespace propagation correct for all 17 tool closures — S8, S12
+- [x] Telemetry and key_store wired — S9, S14
+- [x] `GET /status` / `GET /health` include McpStatusDetail — S7
+- [x] `mcp.enabled = false` gate works — S10
+- [x] Lifecycle integration test (SIGTERM) passes — S6
+- [x] All integration tests green in CI
 
 ---
 
@@ -253,17 +253,18 @@ N/A — no browser UI exists in this project. The Presentation layer (FastAPI ro
 
 Docs the feature touches — the close-out task works through this list.
 
-- [ ] `Documentation/Backlog/mcp-wiring-brief.md` — no changes needed (source brief)
-- [ ] `Documentation/Backlog/mcp-wiring-team-plan.md` — this file (update status: draft → done at close-out)
-- [ ] `CLAUDE.md` — update MCP tools count / wiring description in "Server" section; update `config.py` entry for new `McpConfig` + `AuthConfig`; update CLI section for `serve` command MCP-bind behavior
-- [ ] `archon-search.toml.example` — add `[mcp]` section with `enabled` default and comment
-- [ ] `Documentation/Architecture/100_system_architecture_overview.md` — update to show MCP mount at `/mcp` on port 8765 in C4 diagram
-- [ ] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — add `McpConfig` to Interface Adapters; update `create_mcp_http_app` wiring note
-- [ ] `Documentation/Architecture/120_services_and_integration_architecture.md` — add MCP HTTP endpoint as a service; document lifecycle relationship to REST
-- [ ] `Documentation/Architecture/160_operational_readiness_monitoring_and_reliability.md` — operator runbook: `rotate_key` hot-reload limitation; MCP available at `/mcp` on existing REST port
-- [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — update `GET /status` schema (McpStatusDetail); update `GET /health` (mcp field); update `[mcp]` config section; update MCP tools list note (17 tools, wiring now active)
-- [ ] ADR new entry — `Documentation/ADRs/` — document mount approach (K-1 spike result) and namespace propagation mechanism
-- [ ] `tests/contract/openapi_snapshot.json` — regenerate with `uv run --python 3.12` after BE-8 lands
+- [x] `Documentation/Backlog/mcp-wiring-brief.md` — no changes needed (source brief)
+- [x] `Documentation/Backlog/mcp-wiring-team-plan.md` — this file (status flipped draft → done at close-out)
+- [x] `CLAUDE.md` — updated MCP wiring description in "Server" section; `config.py` entry for new `McpConfig`; CLI `serve` MCP-bind behavior
+- [x] `archon-search.toml.example` — `[mcp]` section with `enabled` default and comment (landed in BE-10)
+- [x] `Documentation/Architecture/100_system_architecture_overview.md` — MCP mount at `/mcp` on port 8765 (Runtime Topology + auth boundary)
+- [x] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — added `McpConfig`; updated `create_mcp_http_app`, `routes_status`, `routes_health`, `schemas` wiring notes
+- [x] `Documentation/Architecture/120_services_and_integration_architecture.md` — corrected MCP-endpoint + shared-auth sections (now mounted; namespaces/writer/key_store wired; 17-tool table)
+- [x] `Documentation/Architecture/160_operational_readiness_monitoring_and_reliability.md` — operator runbook: `rotate_key` hot-reload limitation (corrected mechanism); MCP at `/mcp` on existing REST port
+- [x] `Documentation/Architecture/600_api_reference_or_public_interface.md` — `GET /status`/`GET /health` McpStatusDetail; `[mcp]` config section; 17-tool note; corrected per-request namespace claims
+- [x] `Documentation/Architecture/520_api_design_and_contracts.md` — corrected MCP tool count (ten → 17) and mirrored-pair list (stale; surfaced in review)
+- [x] ADR entry — `Documentation/ADRs/09_mcp_http_mount_and_namespace_propagation.md` — mount approach (K-1 spike result) and namespace propagation mechanism (authored at K-1)
+- [x] OpenAPI snapshot — regenerated with `uv run --python 3.12`: `tests/server/openapi_snapshot.json` (the active CI guard; updated in BE-9) and `tests/contract/openapi_snapshot.json` (per this checklist; note: no test references the contract copy — it is unguarded)
 
 ---
 
@@ -516,7 +517,7 @@ flowchart LR
 
 ### Phase 4 · Close-out
 
-- [ ] **T-5** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-5** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs BE-3, BE-7, BE-10, BE-11, T-1, T-2, T-3, T-4 · completes (acceptance gate)
     - Tests
