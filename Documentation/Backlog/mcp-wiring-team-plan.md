@@ -472,7 +472,7 @@ flowchart LR
     - Tests
         - #e2e_test — `test_mcp_namespace_data_isolation` — ingest doc-A under ns-a AND doc-B under ns-b (two documents in two namespaces); with the ns-a token, `search` finds doc-A and does NOT find doc-B; with the ns-b token, `search` finds doc-B and does NOT find doc-A. Proves bidirectional data isolation — not a vacuous pass against an empty namespace, and not just auth rejection
 
-- [ ] **T-4** — Telemetry wiring e2e: MCP tool call → entry in telemetry log #tester-role
+- [x] **T-4** — Telemetry wiring e2e: MCP tool call → entry in telemetry log #tester-role
     - — · 1.0h
     - needs BE-7 · completes S9 (e2e)
     - Tests
