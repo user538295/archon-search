@@ -41,7 +41,7 @@ The machine-readable contract is `GET /openapi.json`. Tables below trace every e
 
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
-| GET | `/health` | Liveness probe; unauthenticated. | — | `HealthResponse` (`schemas.py`) — `{status, version}` |
+| GET | `/health` | Liveness probe; unauthenticated. | — | `HealthResponse` (`schemas.py`) — `{status, version, mcp}`. `mcp` is an `McpStatusDetail` (`enabled`, `bindAddress`) when `mcp.enabled = true`, or `null` when MCP is disabled (D9). |
 
 ### `routes_state.py`
 

@@ -1067,6 +1067,16 @@
       },
       "HealthResponse": {
         "properties": {
+          "mcp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/McpStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
             "title": "Status",
             "type": "string"

@@ -81,6 +81,8 @@ class ReadinessDetail(BaseModel):
 class HealthResponse(BaseModel):
     status: str  # "running"
     version: str
+    # D9 BE-9 — MCP status field (additive, nullable); null when mcp.enabled = false
+    mcp: McpStatusDetail | None = None
 
 
 class StatusCollectionEntry(BaseModel):

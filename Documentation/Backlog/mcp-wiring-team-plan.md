@@ -490,7 +490,7 @@ flowchart LR
         - #unit_test — `test_status_mcp_null_when_disabled` — `mcp.enabled=False` → response `mcp` field is `null`
         - #unit_test — `test_mcp_status_detail_schema` — `McpStatusDetail(enabled=True, bindAddress=f"{config.host}:{config.port}/mcp")` serializes to correct JSON shape
 
-- [ ] **BE-9** — Add `mcp` field to `GET /health` response #backend-role
+- [x] **BE-9** — Add `mcp` field to `GET /health` response #backend-role
     - Presentation · 0.5h
     - needs BE-2 · completes S7 (full — both endpoints)
     - Target: REST `GET /health` in `routes_health.py`. Note: `mcp.py:1498-1500` has a separate `/health` endpoint on the MCP sub-app itself (accessible at `/mcp/health`) that returns `{status: ok}` — do NOT modify that; it's the MCP sub-app's own health check.
