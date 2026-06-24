@@ -482,7 +482,7 @@ flowchart LR
 
 ### Phase 3 · Slice 3 · Operator sees MCP status in /status
 
-- [ ] **BE-8** — Add `McpStatusDetail` schema + populate `mcp` field in `GET /status` response #backend-role
+- [x] **BE-8** — Add `McpStatusDetail` schema + populate `mcp` field in `GET /status` response #backend-role
     - Presentation · 1.0h
     - needs BE-2 · completes S7 (partial), C3
     - Tests

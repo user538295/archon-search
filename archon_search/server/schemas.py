@@ -8,7 +8,14 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import AwareDatetime, BaseModel, Field, field_validator
+from pydantic import (
+    AliasChoices,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+)
 
 
 class CheckStatus(str, Enum):
@@ -154,6 +161,33 @@ class ModelValidationStatus(BaseModel):
     validated_at: datetime | None = None
 
 
+class McpStatusDetail(BaseModel):
+    """MCP server status sub-object for GET /status (D9 C3).
+
+    ``bind_address`` is ``None`` when MCP is enabled but the mount has not
+    succeeded (not yet bound), per the C3 contract; non-null only after a
+    successful ``app.mount("/mcp", ...)`` in the lifespan.
+    ``enabled`` is always ``True`` when this object is present; the parent ``mcp``
+    field being ``null`` is the signal that MCP is disabled.
+
+    The JSON field is ``bindAddress`` (camelCase) per the C3 contract
+    (``api-contracts/archon-mcp-status.openapi.yaml``); the Python attribute is
+    ``bind_address`` to match the snake_case convention used elsewhere.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    enabled: bool
+    # Required-and-nullable per the C3 contract: ``bindAddress`` is always present
+    # in the response (the route always passes a value) but is ``null`` until the
+    # mount succeeds. No ``default`` so the generated schema lists it under
+    # ``required`` — matching ``archon-mcp-status.openapi.yaml``.
+    bind_address: str | None = Field(
+        serialization_alias="bindAddress",
+        validation_alias=AliasChoices("bindAddress", "bind_address"),
+    )
+
+
 class StatusResponse(BaseModel):
     running: bool
     pid: int
@@ -168,6 +202,8 @@ class StatusResponse(BaseModel):
     maintenance: MaintenanceStatusDetail | None = None
     # D6 BE-2 — model validation health field (additive, nullable)
     model_validation: ModelValidationStatus | None = None
+    # D9 BE-8 — MCP status field (additive, nullable)
+    mcp: McpStatusDetail | None = None
 
 
 class IndexingStateCollectionEntry(BaseModel):

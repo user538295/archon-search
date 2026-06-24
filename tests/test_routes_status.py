@@ -875,3 +875,112 @@ def test_status_model_validation_failure_with_empty_warnings(tmp_db: Path) -> No
     assert mv["reranker_ok"] is False
     assert mv["provider_warnings"] == []
     assert datetime.fromisoformat(mv["validated_at"]) == validated_at
+
+
+# ---------------------------------------------------------------------------
+# D9 BE-8 — McpStatusDetail in GET /status (C3)
+# ---------------------------------------------------------------------------
+
+
+def _make_client_with_mcp_config(
+    tmp_db: Path,
+    *,
+    mcp_enabled: bool = True,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    bound: bool = True,
+) -> TestClient:
+    """Build a TestClient with a specific MCP enabled/disabled configuration.
+
+    bound controls app.state.mcp_bound — set to True to simulate a
+    successful MCP mount (the route returns a non-null bindAddress), or
+    False to simulate a failed mount (bindAddress is None).
+    Mirrors the pattern used by _make_client_with_model_validation.
+    """
+    from archon_search.config import McpConfig
+
+    config = SearchConfig()
+    config.db_path = str(tmp_db)
+    config.host = host
+    config.port = port
+    config.mcp = McpConfig(enabled=mcp_enabled)
+    job_store = JobStore(path=tmp_db / "jobs.json")
+    app = create_app(config, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
+    app.state.search_store = mock_store
+    app.state.mcp_bound = bound
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+
+def test_status_includes_mcp_detail_when_enabled(tmp_db: Path) -> None:
+    """GET /status includes a non-null ``mcp`` sub-object with ``enabled=True`` and
+    a non-null ``bindAddress`` when ``mcp.enabled = true`` and the mount succeeded (D9 C3)."""
+    c = _make_client_with_mcp_config(tmp_db, mcp_enabled=True, host="127.0.0.1", port=8765, bound=True)
+    response = c.get("/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "mcp" in data
+    mcp = data["mcp"]
+    assert mcp is not None
+    assert mcp["enabled"] is True
+    assert mcp["bindAddress"] == "127.0.0.1:8765/mcp"
+
+
+def test_status_mcp_null_when_disabled(tmp_db: Path) -> None:
+    """GET /status returns ``mcp: null`` when ``mcp.enabled = false`` (D9 C3)."""
+    c = _make_client_with_mcp_config(tmp_db, mcp_enabled=False)
+    response = c.get("/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "mcp" in data
+    assert data["mcp"] is None
+
+
+def test_mcp_status_detail_schema(tmp_db: Path) -> None:
+    """``McpStatusDetail`` serializes to the expected JSON shape (D9 C3)."""
+    from archon_search.server.schemas import McpStatusDetail
+
+    # Construct via camelCase alias (original path)
+    detail = McpStatusDetail(enabled=True, bindAddress="127.0.0.1:8765/mcp")
+    serialized = detail.model_dump(mode="json")
+    assert serialized["enabled"] is True
+    assert serialized["bindAddress"] == "127.0.0.1:8765/mcp"
+
+    # Construct via the Python attribute name (the keyword the route uses)
+    detail2 = McpStatusDetail(enabled=True, bind_address="127.0.0.1:8765/mcp")
+    serialized2 = detail2.model_dump(mode="json")
+    assert serialized2["bindAddress"] == "127.0.0.1:8765/mcp"
+    assert "bind_address" not in serialized2  # snake_case must not leak into JSON
+
+
+def test_status_mcp_bind_address_uses_serve_host(tmp_db: Path) -> None:
+    """``bindAddress`` uses the configured host (0.0.0.0 in serve mode) and port."""
+    c = _make_client_with_mcp_config(tmp_db, mcp_enabled=True, host="0.0.0.0", port=9999, bound=True)
+    response = c.get("/status")
+    assert response.status_code == 200
+    data = response.json()
+    mcp = data["mcp"]
+    assert mcp is not None
+    assert mcp["bindAddress"] == "0.0.0.0:9999/mcp"
+
+
+def test_status_mcp_bind_address_null_when_not_bound(tmp_db: Path) -> None:
+    """``bindAddress`` is ``None`` when MCP is enabled but the mount failed (not yet bound) (D9 C3)."""
+    c = _make_client_with_mcp_config(tmp_db, mcp_enabled=True, host="127.0.0.1", port=8765, bound=False)
+    response = c.get("/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "mcp" in data
+    mcp = data["mcp"]
+    assert mcp is not None
+    assert mcp["enabled"] is True
+    assert mcp["bindAddress"] is None

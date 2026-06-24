@@ -320,6 +320,9 @@ def create_app(
         # lifespan delegation (mcp_starlette.router.lifespan_context). The mount
         # itself happens AFTER that context has entered, so a failed startup never
         # leaves a zombie /mcp route (Starlette has no app.unmount()). See ADR 09.
+        # Always present on app.state so _build_mcp_status can read it
+        # unconditionally (mirrors backup_loop / maintenance_loop / model_validation).
+        app.state.mcp_bound = False
         try:
             async with AsyncExitStack() as _mcp_stack:
                 if config.mcp.enabled:
@@ -343,6 +346,7 @@ def create_app(
                         )
                         app.mount("/mcp", mcp_starlette)
                         logger.info("MCP HTTP endpoint mounted at /mcp")
+                        app.state.mcp_bound = True
                     except Exception:  # noqa: BLE001 — MCP must never block REST startup
                         logger.warning(
                             "MCP server failed to start; continuing without MCP", exc_info=True

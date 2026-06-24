@@ -2,7 +2,37 @@
 
 ## What Has Worked
 
-**2026-06-24 — D9 BE-7: namespace gate in MCP search tools breaks tests that set get_collection_meta to return None**
+**2026-06-24 — D9 BE-8: camelCase JSON field via Pydantic alias; required-and-nullable matters**
+- Observation: C3 contract mandates `bindAddress` (camelCase) — the FIRST camelCase JSON field in `schemas.py` (all others snake_case). Achieved with `model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)` + `Field(serialization_alias="bindAddress", validation_alias=AliasChoices("bindAddress","bind_address"))`. `serialize_by_alias=True` (Pydantic 2.11+) makes bare `model_dump()` emit the alias; FastAPI response serialization already uses `by_alias=True`. A nested model's `serialize_by_alias` config IS respected when the parent (StatusResponse, which lacks it) is serialized. Critical nuance: the C3 contract listed `bindAddress` in BOTH `required` AND `nullable: true` — independent dimensions. Using `Field(default=None, ...)` makes the OpenAPI schema mark it OPTIONAL (drops it from `required`), diverging from the contract. To get required-and-nullable, declare `bind_address: str | None = Field(...)` with NO `default` — required (must be passed) but accepts None. The route always passes a value, so this is safe.
+- Action: For a required-and-nullable field matching a contract, use `str | None = Field(...)` WITHOUT `default=None`. Adding `default=None` silently makes it optional in the generated OpenAPI. For camelCase JSON keys, the three-part alias machinery (populate_by_name + serialize_by_alias + serialization_alias/validation_alias) is the correct pattern; keep the Python attribute snake_case.
+- Confidence: high
+
+**2026-06-24 — D9 BE-8: status sub-objects must reflect ACTUAL state, not config intent**
+- Observation: `_build_mcp_status` initially returned the configured `host:port/mcp` whenever `config.mcp.enabled`, even though `app.py` swallows MCP mount failures (`try/except ... "continuing without MCP"`). This made `/status` report MCP as bound when the mount had actually failed — a false-positive monitoring surface. Fix: add `app.state.mcp_bound` (set False before the mount try-block, True only after a successful `app.mount`), and derive `bindAddress = f"{host}:{port}/mcp" if bound else None`. The C3 contract's `nullable: true` bindAddress with "null when ... not yet bound" exists precisely to express this state. Init `app.state.mcp_bound = False` BEFORE the `if config.mcp.enabled:` block (unconditional), mirroring `backup_loop`/`maintenance_loop`/`model_validation` siblings — not inside the conditional.
+- Action: When a /status sub-object reports a subsystem that can fail to start, derive its "available/bound" field from a real `app.state` flag set at the success point, never from config intent alone. Initialize the flag unconditionally at the top of the lifespan (like sibling status objects), and read it in the route with `getattr(request.app.state, "flag", False)`.
+- Confidence: high
+
+**2026-06-24 — D9 T-4: tester e2e telemetry test — iterative review added meaningful assertion depth**
+- Observation: T-4 passed immediately on first run (expected for tester close-out tasks). The iterative review cycle across 2 cycles added: (1) `result_count >= 1` + `result_doc_ids` non-empty + specific `sha256(doc_file.resolve())` doc_id assertion — prevents empty-result success from passing silently; (2) `len(search_entries) == 1` — catches double-logging regressions; (3) `filter_flags` shape check (all booleans, all False) — proves the privacy-safe invariant for the no-filter case; (4) JSON-RPC transport error guard (`"error" not in result`); (5) content substring check in MCP response. The doc_id approach (`sha256(resolved_path)` matching `pipeline.py:287`) is the canonical way to assert "the correct document was retrieved, not just any document."
+- Action: For tester e2e tests that assert on telemetry entries, always include: (a) `status="ok"` to pin success path, (b) `result_count >= 1` + specific `doc_id` in `result_doc_ids` to prove correct-document retrieval, (c) `len(search_entries) == N` to catch double-logging, (d) `filter_flags` all-False for no-filter calls. Never rely on `isError` alone — it guards against crashes, not empty-result success.
+- Confidence: high
+
+**2026-06-24 — D9 T-3: namespace validation regex rejects underscores at start/end of sentinel strings**
+- Observation: Using `"__wrong-sentinel__"` as a namespace sentinel in `_assert_namespace_stored` caused `_validate_namespace()` in `constants.py` to raise `ValueError` (regex `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$` requires alphanumeric first character). This broke the test at runtime, not at write time — the docstring had the wrong sentinel while the code used a valid one.
+- Action: Any namespace string used in tests (even as a sentinel) must pass the namespace regex. Always use valid namespace-format strings like `"wrong-sentinel-xyz"`. Verify docstrings and code match — a docstring with an invalid sentinel is a maintenance trap for future developers.
+- Confidence: high
+
+**2026-06-24 — D9 T-3: tester e2e tasks for already-implemented backend work pass immediately; review cycle strengthened the test**
+- Observation: T-3 passed green on first run (expected per D7 T-2 learning). The iterative-review cycle across 4 cycles improved the test significantly: (1) negative proofs now require `code == "not_found"` specifically, not just any error; (2) `_assert_namespace_stored` proves exclusivity against both the other real namespace AND a sentinel; (3) duplicated 55-line negative-proof blocks extracted to `_assert_cross_namespace_blocked` helper; (4) duplicated positive-proof blocks extracted to `_assert_own_namespace_accessible` helper; (5) `asyncio.run()` calls in `_assert_namespace_stored` consolidated into one coroutine.
+- Action: For tester-role e2e tasks, the iterative-review cycle is where most value is added — expect the test to pass immediately, but invest in the review to catch vacuous-pass paths, crash-masking, and code duplication. The DA + Brooks-Lint combination consistently finds Moderate issues that individually seem minor but compound.
+- Confidence: high
+
+**2026-06-24 — D9 T-3: namespace gate isolation is metadata-gate-level, not data-level — accept and document**
+- Observation: The DA agents correctly identified that namespace isolation in archon-search is enforced at the metadata layer (`get_collection_meta(col, namespace=ns)` returning `None` = not found) — not at the LanceDB chunk-data level (chunks have `acl=None` which passes all ACL checks). The T-3 test proves "metadata-gate enforcement via MCP search tool" not "chunk-level data isolation." This is the design: the metadata gate is the sole enforcement point.
+- Action: When writing namespace isolation tests, document in the test docstring that isolation is metadata-gate-level. Accept the DA finding as a documentation clarification, not a code change. Do not attempt to add chunk-level namespace filtering unless the security model explicitly requires defense-in-depth at the data layer.
+- Confidence: high
+
+**2026-06-24 — D9 T-3: namespace gate in MCP search tools breaks tests that set get_collection_meta to return None**
 - Observation: Adding a namespace gate (`await pipeline.get_collection_meta(col, namespace=ns)`) to `mcp.py` broke ~38 existing unit tests that used `pipeline = MagicMock()` with `get_collection_meta = AsyncMock(return_value=None)`. The helpers `_make_search_pipeline_with_result` and `_make_swc_pipeline_with_result` in `tests/test_mcp.py` returned `None` from `get_collection_meta` because it was previously only used for embedding model lookup, not for access gating. After the namespace gate, `None` means "not found" and the tool returns `McpErrorResponse`.
 - Action: Whenever a namespace gate (`get_collection_meta` returning `None` = denied) is added to an MCP tool, audit ALL existing tests for that tool. Any helper that sets `get_collection_meta = AsyncMock(return_value=None)` for non-access-check purposes must be changed to `return_value=MagicMock()`. Only tests explicitly testing "collection not in namespace → error" should use `return_value=None`.
 - Confidence: high
@@ -40,6 +70,11 @@
 **2026-06-24 — D9 BE-3: adding a `notifications/initialized` status assertion to MCP handshake helpers is non-trivial because FastMCP accepts a range**
 - Observation: The `notifications/initialized` JSON-RPC notification is a fire-and-forget (no `id`), so the server may return 200, 202, or 204 depending on FastMCP version and transport configuration. Asserting equality to a single code is fragile; asserting `in (200, 202, 204)` is the right pattern for MCP notification responses.
 - Action: In MCP test helpers that perform the `notifications/initialized` step, always assert `resp.status_code in (200, 202, 204)` rather than `== 202` or ignoring the response entirely.
+- Confidence: high
+
+**2026-06-24 — test fix: `get_collection_meta` requires explicit namespace arg in `_assert_namespace_stored`**
+- Observation: `store.get_collection_meta(col)` uses `DEFAULT_NAMESPACE` when no namespace arg is passed. A post-injection assertion helper that calls it without the namespace returns `None` even when the meta was correctly stored under a non-default namespace — producing a false "failed silently" failure.
+- Action: Always pass the expected namespace explicitly: `store.get_collection_meta(col, expected_namespace)`. Never use the default when verifying namespace-scoped data.
 - Confidence: high
 
 **2026-06-24 — D9 BE-6: MCP search telemetry test must ingest a real collection before calling search**
@@ -305,6 +340,21 @@
 **2026-06-23 — D7 T-3: `caplog` captures TestClient background-thread logs correctly**
 - Observation: `TestClient` runs the ASGI lifespan (including `KeyStore.load()` which emits the corruption ERROR) in a background thread. `caplog.at_level(logging.ERROR, logger="archon_search.key_manager")` correctly captures those logs because Python logging handlers are process-global. The `caplog.at_level` context must wrap the entire `TestClient(app) as client:` block, not just the post-startup assertions.
 - Action: For any e2e test that must assert logs emitted during ASGI lifespan startup, wrap the `TestClient(app) as client:` context with `caplog.at_level(...)`. The lifespan runs during `TestClient.__enter__()`, so the context must start before the `with TestClient(app)` line.
+- Confidence: high
+
+**2026-06-24 — D9 T-2: MCP ingest_file/ingest_directory are synchronous — no polling needed**
+- Observation: The plan spec said "poll until DONE" for the `ingest_file` MCP tool. Both `ingest_file` and `ingest_directory` are synchronous blocking tools that return `IngestResultSchema` / `list[IngestResultSchema]` directly in the HTTP response. No background job is enqueued. The "poll until DONE" wording was carry-over from the REST `/ingest` endpoint which does enqueue jobs.
+- Action: For MCP tools that call `pipeline.ingest_file`/`pipeline.ingest_directory` directly, assert `status='ok'` in the tool response — no polling loop needed. If the tool ever changes to enqueue a job, it returns `job_id` instead of `status`, which breaks these assertions clearly.
+- Confidence: high
+
+**2026-06-24 — D9 T-2: SSE parser should return last `data:` line, not first**
+- Observation: The T-1 pattern returned the first `data:` SSE line. For round-trip tests asserting on content (not just shape), this is fragile — progress events before the final result would cause silent wrong-payload failures. Safer pattern: collect all `data:` lines and return the last one.
+- Action: In MCP tests asserting on response content (not just shape-validity), use `data_lines[-1]` (last SSE event). T-1 still uses the first-line pattern — note the divergence for future cleanup.
+- Confidence: high
+
+**2026-06-24 — D9 T-2: tester-role e2e tasks for completed backend work start green immediately**
+- Observation: T-2 passed immediately on first run. This is correct — the red phase only applies when tests are written before the implementation. For tester close-out tasks, immediate green means the implementation is correct.
+- Action: For tester-role close-out e2e tasks, expect immediate green. Still run to confirm — a failure indicates an implementation bug, not a TDD failure.
 - Confidence: high
 
 ## What Has Failed
@@ -749,4 +799,29 @@
 **2026-06-24 — D9 BE-2: AsyncExitStack-wrapped lifespan must put REST shutdown in try/finally**
 - Observation: The MCP mount lives inside `async with AsyncExitStack() as _mcp_stack:` wrapping the `yield` in `create_app()`'s lifespan. The original draft placed the REST shutdown block (search_store.disconnect, telemetry drain, background-task cancel) AFTER/OUTSIDE that `async with`. If the MCP lifespan teardown (`StreamableHTTPSessionManager` task-group shutdown) raised during `__aexit__`, REST cleanup would never run — leaking the store connection, telemetry writer, and background tasks. iterative-review (devils-advocate + brooks) flagged this as Critical.
 - Action: When a sub-app lifespan is delegated via `AsyncExitStack`/`router.lifespan_context()` and wraps the `yield`, always wrap `async with <stack>: ... yield` in a `try:` and move the parent app's own shutdown cleanup into a `finally:` so it runs regardless of sub-app teardown failure. The "X must never block startup" requirement implies "X teardown must never block shutdown cleanup" too.
+- Confidence: high
+
+**2026-06-24 — D9 T-1: MCP envelope-level `isError` is NOT the right check for graceful tool errors**
+- Observation: FastMCP only sets `isError=True` at the JSON-RPC envelope level for unhandled exceptions (via `_make_error_result()`). Graceful `McpErrorResponse` returns flow through `convert_result → ToolResult(is_error=False) → CallToolResult(isError=False)` — `isError` is `False` even when the tool returned `{"error": "not_found", "code": "not_found"}`. A check like `assert not rpc_result.get("isError")` correctly gates on crashes without rejecting graceful errors.
+- Action: In MCP smoke tests, check `isError` at the envelope level (which guards against unhandled exceptions/attribute errors), then separately check the text content for crash strings (`AttributeError`, `NoneType`). Do not confuse `isError=True` (always a crash) with `{"error": ..., "code": ...}` in the text content (which is a graceful error, normal for not_found/conflict).
+- Confidence: high
+
+**2026-06-24 — D9 T-1: `McpErrorResponse` TypedDict has only `error` and `code` fields — error field may be None**
+- Observation: `McpErrorResponse` (in `mcp.py`) has two fields: `error: str | None` and `code: str`. Checking `"AttributeError" not in parsed.get("error", "")` raises `TypeError: argument of type 'NoneType' is not iterable` when `error=None` (which is valid per the type). The correct check is `str(parsed.get("error") or "")` to coerce None to empty string before the `in` test.
+- Action: Any assertion that does a substring check on a field that can be None must use `str(value or "")` before the `in` operator, never `value` directly or `value or ""` when the result must be `str`.
+- Confidence: high
+
+**2026-06-24 — D9 T-1: `job_to_dict()` returns `job_id` (not `id`) as the job identifier field**
+- Observation: `job_to_dict()` in `jobs/model.py` returns `{"job_id": ..., ...}` — not `{"id": ..., ...}`. MCP tools that enqueue jobs and return the job dict (e.g. `ingest_file`, `ingest_directory`) surface this field as `job_id`. Tests that look for `"id"` in the parsed response will silently pass (Python `in` on a dict checks keys, but `"id" in {"job_id": ...}` is False) or fail if asserted.
+- Action: When asserting on job response fields from MCP ingest tools, always assert `"job_id" in parsed`, never `"id" in parsed`. Verify by reading `jobs/model.py:job_to_dict()` directly, not by guessing from REST conventions.
+- Confidence: high
+
+**2026-06-24 — D9 T-1: `list_keys` MCP tool returns `{"keys": [...], "hidden_revoked_count": N}`, not a bare list**
+- Observation: `list_keys` does not return a JSON array at the top level — it returns `{"keys": [...], "hidden_revoked_count": int}`. Asserting `isinstance(parsed, list)` fails. The smoke test must check `"keys" in parsed` and `isinstance(parsed["keys"], list)`.
+- Action: When writing smoke tests for list-style MCP tools, always inspect the actual tool return type in `mcp.py` rather than assuming a bare list. Structured response wrappers (with pagination or hidden-count metadata) are common.
+- Confidence: high
+
+**2026-06-24 — D9 T-1: setup calls in destructive smoke tests must use `_assert_tool_response_valid` for clear failure attribution**
+- Observation: Raw envelope extraction (`result["result"]["content"][0]["text"]`) in setup steps of destructive tests (delete_document, revoke_key) bypassed `_assert_tool_response_valid`. If the setup step failed, the test would fail with an opaque `KeyError` or `IndexError`, not a descriptive assertion message. The fix: route all MCP calls (including setup steps) through `_assert_tool_response_valid` so failure attribution is always clear.
+- Action: In MCP smoke tests, route every `_mcp_call_tool()` result through `_assert_tool_response_valid()` — including setup/teardown calls, not just the primary assertion. This ensures failures at any step produce descriptive messages.
 - Confidence: high

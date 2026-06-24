@@ -18,6 +18,7 @@ from archon_search.server.schemas import (
     CollectionHealthEntry,
     ErrorDetail,
     MaintenanceStatusDetail,
+    McpStatusDetail,
     ModelValidationStatus,
     StatusCollectionEntry,
     StatusResponse,
@@ -111,6 +112,7 @@ async def status(request: Request) -> StatusResponse:
     backup_detail = _build_backup_status(request, config, ns, sorted(ns_names))
     maintenance_detail = _build_maintenance_status(request, config, ns)
     model_validation = _build_model_validation_status(request)
+    mcp_detail = _build_mcp_status(request, config)
     return StatusResponse(
         running=True,
         pid=pid,
@@ -122,7 +124,17 @@ async def status(request: Request) -> StatusResponse:
         store_schema_version=STORE_SCHEMA_VERSION,
         collections_schema_behind=collections_schema_behind,
         model_validation=model_validation,
+        mcp=mcp_detail,
     )
+
+
+def _build_mcp_status(request: Request, config: SearchConfig) -> McpStatusDetail | None:
+    """Return the MCP status sub-object when ``mcp.enabled = true``, or ``None`` otherwise (D9 C3)."""
+    if not config.mcp.enabled:
+        return None
+    bound = getattr(request.app.state, "mcp_bound", False)
+    bind_address = f"{config.host}:{config.port}/mcp" if bound else None
+    return McpStatusDetail(enabled=True, bind_address=bind_address)
 
 
 def _build_model_validation_status(request: Request) -> ModelValidationStatus | None:

@@ -1845,6 +1845,32 @@
         "title": "MaintenanceTriggerResponse",
         "type": "object"
       },
+      "McpStatusDetail": {
+        "description": "MCP server status sub-object for GET /status (D9 C3).\n\n``bind_address`` is ``None`` when MCP is enabled but the mount has not\nsucceeded (not yet bound), per the C3 contract; non-null only after a\nsuccessful ``app.mount(\"/mcp\", ...)`` in the lifespan.\n``enabled`` is always ``True`` when this object is present; the parent ``mcp``\nfield being ``null`` is the signal that MCP is disabled.\n\nThe JSON field is ``bindAddress`` (camelCase) per the C3 contract\n(``api-contracts/archon-mcp-status.openapi.yaml``); the Python attribute is\n``bind_address`` to match the snake_case convention used elsewhere.",
+        "properties": {
+          "bindAddress": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bindaddress"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "bindAddress"
+        ],
+        "title": "McpStatusDetail",
+        "type": "object"
+      },
       "MigrateInPlaceResponse": {
         "description": "Response body for POST /collections/{name}/migrate (in-place synchronous path).",
         "properties": {
@@ -2751,6 +2777,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/MaintenanceStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mcp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/McpStatusDetail"
               },
               {
                 "type": "null"
