@@ -466,7 +466,7 @@ flowchart LR
         - #e2e_test — `test_mcp_ingest_then_search_round_trip` — ingest file via MCP `ingest_file`; poll until DONE; call `search` with matching query; assert document in results
         - #e2e_test — `test_mcp_ingest_directory_then_search` — ingest directory via MCP; poll; search; assert at least one result
 
-- [ ] **T-3** — Namespace data-isolation e2e: valid cross-namespace token cannot see wrong namespace's data #tester-role
+- [x] **T-3** — Namespace data-isolation e2e: valid cross-namespace token cannot see wrong namespace's data #tester-role
     - — · 2.0h
     - needs BE-7 · completes S8 (e2e proof)
     - Tests
