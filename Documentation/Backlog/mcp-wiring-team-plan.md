@@ -504,7 +504,7 @@ flowchart LR
     - needs K-1 · completes (operational documentation)
     - Tests
 
-- [ ] **BE-11** — Slice 3 integration tests: status/health MCP fields #backend-role
+- [x] **BE-11** — Slice 3 integration tests: status/health MCP fields #backend-role
     - Presentation · 1.0h
     - needs BE-8, BE-9 · completes S7
     - Tests
