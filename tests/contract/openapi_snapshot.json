@@ -1,0 +1,4561 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "archon-search",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/collections/": {
+      "get": {
+        "summary": "List Collections",
+        "description": "List all known collections with basic metadata.",
+        "operationId": "list_collections_collections__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CollectionSummary"
+                  },
+                  "type": "array",
+                  "title": "Response List Collections Collections  Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Add Collection",
+        "description": "Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob.",
+        "operationId": "add_collection_collections__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddCollectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ingest path failed safety validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Store busy \u2014 reindex in progress"
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}": {
+      "delete": {
+        "summary": "Remove Collection",
+        "description": "Remove a collection: delete config entry and drop LanceDB data.",
+        "operationId": "remove_collection_collections__name__delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Get Collection Info",
+        "description": "Return CollectionDetail for a single collection. 404 if not found.",
+        "operationId": "get_collection_info_collections__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Patch Collection",
+        "description": "Update the embedding model for a collection. Triggers reindex if needed.",
+        "operationId": "patch_collection_collections__name__patch",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchCollectionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/collections/{name}/reindex": {
+      "post": {
+        "summary": "Reindex Collection",
+        "description": "Start a reindex job for an existing collection. 404 if not found.",
+        "operationId": "reindex_collection_collections__name__reindex_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/migrations/pending": {
+      "get": {
+        "summary": "Get Migrations Pending",
+        "description": "Return the list of pending migrations for a collection.\n\nReturns 404 if the collection is not found in the caller's namespace.\nReturns an empty ``pending`` list when the collection schema is current.",
+        "operationId": "get_migrations_pending_collections__name__migrations_pending_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationPendingResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/migrate": {
+      "post": {
+        "summary": "Migrate Collection",
+        "description": "Apply pending migrations or report pending list (dry-run).\n\n**dry_run=true:** returns the same ``MigrationPendingResponse`` body as\n``GET /migrations/pending`` without applying anything.\n\n**In-place-only migrations:** applies synchronously, returns 200 with\n``{migrations_applied: [...]}``.  No ``MigrationJob`` is created.\n\n**Rewrite migrations:** requires ``backup_confirmed: true``; creates a\n``MigrationJob``, transitions it immediately to RUNNING, and returns 202\nwith ``{job_id, status: \"RUNNING\"}``.  The job is transitioned before the\ntask is spawned so the scheduler never sees it in QUEUED state.\n\n**export_rebuild migrations:** always returns 422 \u2014 D3 does not execute\nexport_rebuild; operators must re-ingest manually.\n\nReturns 404 if the collection is not found in the caller's namespace.\nReturns 409 if a ReindexJob is active for the same collection.\nReturns 422 if rewrite/export_rebuild migrations are pending without\n``backup_confirmed: true``, or if export_rebuild migrations are present.",
+        "operationId": "migrate_collection_collections__name__migrate_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MigrateInPlaceResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MigrationPendingResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/JobResponse"
+                    }
+                  ],
+                  "title": "Response Migrate Collection Collections  Name  Migrate Post"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/collections/{name}/export": {
+      "post": {
+        "summary": "Export Collection",
+        "description": "Enqueue an export job for the named collection.\n\nReturns 202 with a JobResponse (status=QUEUED). The job is dispatched by\nthe scheduler when a slot is available.",
+        "operationId": "export_collection_collections__name__export_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path unsafe or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{name}/import": {
+      "post": {
+        "summary": "Import Collection",
+        "description": "Enqueue an import job for the named collection.\n\nReturns 202 with a JobResponse (status=QUEUED). The job is dispatched by\nthe scheduler when a slot is available.",
+        "operationId": "import_collection_collections__name__import_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path unsafe or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Collection already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Archive invalid or schema/model mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Ready",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingest": {
+      "post": {
+        "summary": "Ingest",
+        "operationId": "ingest_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Ingest path failed safety validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Store busy \u2014 reindex in progress"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs": {
+      "get": {
+        "summary": "List Jobs",
+        "operationId": "list_jobs_jobs_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "title": "Source"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{job_id}": {
+      "get": {
+        "summary": "Get Job",
+        "operationId": "get_job_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Job",
+        "operationId": "delete_job_jobs__job_id__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{job_id}/resume": {
+      "post": {
+        "summary": "Resume Job",
+        "description": "Transition a FAILED export, import, or migration job back to QUEUED so the scheduler can retry it.",
+        "operationId": "resume_job_jobs__job_id__resume_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "summary": "Status",
+        "description": "Return rich operator-facing status including service info and per-collection progress.",
+        "operationId": "status_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/indexing-state": {
+      "get": {
+        "summary": "Indexing State",
+        "description": "Return raw indexing state filtered to the caller's namespace. Returns {} when no state file exists.",
+        "operationId": "indexing_state_indexing_state_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexingStateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/route": {
+      "post": {
+        "summary": "Route",
+        "description": "Route a query to the appropriate search collections.\n\nReturns the pre_context block to inject before route_task(), along with\nthe resolved pinned and routable collection names and a flag indicating\nwhether the decomposer will be invoked.",
+        "operationId": "route_route_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search": {
+      "post": {
+        "summary": "Search",
+        "operationId": "search_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/explain": {
+      "post": {
+        "summary": "Explain Endpoint",
+        "description": "Return the per-stage retrieval/reranking trace for a query, plus the\nrouting decision when no collection is pinned.\n\n503 is reserved for meta-lookup / router failures (mirrors A3's /search\ntaxonomy); pipeline-stage failures (store / reranker) surface as 500 with a\nstage-specific detail. The query is never echoed in the response or telemetry.",
+        "operationId": "explain_endpoint_explain_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplainResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/telemetry/stats": {
+      "get": {
+        "summary": "Get Telemetry Stats",
+        "operationId": "get_telemetry_stats_telemetry_stats_get",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/StatsResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DisabledResponse"
+                    }
+                  ],
+                  "title": "Response Get Telemetry Stats Telemetry Stats Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/telemetry/entries": {
+      "get": {
+        "summary": "Get Telemetry Entries",
+        "operationId": "get_telemetry_entries_telemetry_entries_get",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Collection"
+            }
+          },
+          {
+            "name": "endpoint",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EndpointKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Endpoint"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Status"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "error_kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ErrorKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error Kind"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/EntriesResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DisabledResponse"
+                    }
+                  ],
+                  "title": "Response Get Telemetry Entries Telemetry Entries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/backup/trigger": {
+      "post": {
+        "summary": "Trigger Backup",
+        "description": "Enqueue backup export jobs for every eligible collection in the caller's namespace.",
+        "operationId": "trigger_backup_backup_trigger_post",
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupTriggerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/maintenance/trigger": {
+      "post": {
+        "tags": [
+          "maintenance"
+        ],
+        "summary": "Trigger Maintenance",
+        "description": "Set the maintenance trigger event; the loop fires a pass asynchronously.\n\nIf the trigger event is already set (a trigger is pending or a pass is\nrunning), the request is acknowledged but the pass is not duplicated.\n``\"already_triggered\"`` is used (not ``\"already_running\"``) because\n``_trigger_event.is_set()`` means \"pending or running\", not \"definitely\nrunning\".",
+        "operationId": "trigger_maintenance_maintenance_trigger_post",
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceTriggerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/keys": {
+      "post": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "Create Key",
+        "description": "Issue a new managed API key.\n\nThe raw bearer token is returned exactly once in the response ``token``\nfield. It is never stored on disk \u2014 only its SHA-256 hash is persisted.",
+        "operationId": "create_key_keys_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyCreateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "List Keys",
+        "description": "List API keys.\n\nBy default (``status=active``) only active keys are returned; revoked keys\nare counted in ``hidden_revoked_count`` as a hint to the operator.\n\nTOML synthetic keys (``id=null``) are always included in the active view\nbecause they are always active \u2014 they can only be removed by editing\n``archon-search.toml`` and restarting the server.\n\nQuery parameters:\n\n- ``status`` \u2014 ``active`` (default), ``revoked``, or ``all``.\n- ``namespace`` \u2014 optional namespace filter applied after the status filter.",
+        "operationId": "list_keys_keys_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "active",
+                "revoked",
+                "all"
+              ],
+              "type": "string",
+              "default": "active",
+              "title": "Status"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Namespace"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/keys/{key_id}": {
+      "delete": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "Revoke Key",
+        "description": "Revoke a managed API key.\n\nIdempotent: calling this on an already-revoked key returns 200 (desired\nstate already achieved).\n\nReturns 404 for unknown IDs.  TOML synthetic keys (``id=null``) cannot be\ntargeted by this endpoint \u2014 the literal string ``\"null\"`` returns 404 with\na hint to edit ``archon-search.toml`` instead.",
+        "operationId": "revoke_key_keys__key_id__delete",
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRevokeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AddCollectionRequest": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "embedding_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "title": "AddCollectionRequest"
+      },
+      "BackupStatusDetail": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "interval_hours": {
+            "type": "integer",
+            "title": "Interval Hours"
+          },
+          "last_tick_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tick At"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "collections_excluded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Collections Excluded",
+            "default": []
+          },
+          "collection_status": {
+            "items": {
+              "$ref": "#/components/schemas/CollectionBackupStatus"
+            },
+            "type": "array",
+            "title": "Collection Status",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "interval_hours"
+        ],
+        "title": "BackupStatusDetail",
+        "description": "Scheduled-backup state for the caller's namespace (D2 Task 4.2)."
+      },
+      "BackupTriggerResponse": {
+        "properties": {
+          "queued": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Queued"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/SkippedItem"
+            },
+            "type": "array",
+            "title": "Skipped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queued",
+          "skipped"
+        ],
+        "title": "BackupTriggerResponse",
+        "description": "Response body for POST /backup/trigger (D2 Task 4.1)."
+      },
+      "CheckStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "fail",
+          "pending",
+          "warn"
+        ],
+        "title": "CheckStatus",
+        "description": "Check result for readiness probes.\n\n``PENDING`` and ``WARN`` (D6 C2) are additive values used by the model\nvalidation check: ``PENDING`` while background validation has not yet\ncompleted, ``WARN`` when a model loaded via provider fallback (e.g. CPU\ninstead of GPU). See contract C2 in\n``Documentation/Backlog/D6-provider-validation-team-plan.md``."
+      },
+      "CollectionBackupStatus": {
+        "properties": {
+          "collection": {
+            "type": "string",
+            "title": "Collection"
+          },
+          "last_backup_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Backup At"
+          },
+          "archive_count": {
+            "type": "integer",
+            "title": "Archive Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "collection"
+        ],
+        "title": "CollectionBackupStatus",
+        "description": "Per-collection backup state surfaced under StatusResponse.backup (D2 Task 4.2)."
+      },
+      "CollectionDetail": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "doc_count": {
+            "type": "integer",
+            "title": "Doc Count",
+            "default": 0
+          },
+          "chunk_count": {
+            "type": "integer",
+            "title": "Chunk Count",
+            "default": 0
+          },
+          "namespace": {
+            "type": "string",
+            "title": "Namespace"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "active_embedding_model": {
+            "type": "string",
+            "title": "Active Embedding Model"
+          },
+          "needs_reindex": {
+            "type": "boolean",
+            "title": "Needs Reindex",
+            "default": false
+          },
+          "pending_embedding_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Embedding Model"
+          },
+          "reindex_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reindex Job Id"
+          },
+          "centroid_present": {
+            "type": "boolean",
+            "title": "Centroid Present",
+            "default": false
+          },
+          "last_indexed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Indexed"
+          },
+          "acl_protected_count": {
+            "type": "integer",
+            "title": "Acl Protected Count",
+            "default": 0
+          },
+          "acl_open_count": {
+            "type": "integer",
+            "title": "Acl Open Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "namespace",
+          "status",
+          "active_embedding_model"
+        ],
+        "title": "CollectionDetail"
+      },
+      "CollectionHealthEntry": {
+        "properties": {
+          "collection": {
+            "type": "string",
+            "title": "Collection"
+          },
+          "fts_optimized_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fts Optimized At"
+          },
+          "orphans_removed_last_run": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Orphans Removed Last Run",
+            "default": 0
+          },
+          "last_retry_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Retry At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "mutations_since_recompute": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Mutations Since Recompute",
+            "default": 0
+          },
+          "centroid_recompute_threshold": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Centroid Recompute Threshold",
+            "default": 0
+          },
+          "meta_chunk_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Meta Chunk Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "collection"
+        ],
+        "title": "CollectionHealthEntry",
+        "description": "Per-collection health snapshot written after each maintenance pass (D5 C1)."
+      },
+      "CollectionStats": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "ok": {
+            "type": "integer",
+            "title": "Ok"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "ok"
+        ],
+        "title": "CollectionStats"
+      },
+      "CollectionSummary": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "doc_count": {
+            "type": "integer",
+            "title": "Doc Count",
+            "default": 0
+          },
+          "chunk_count": {
+            "type": "integer",
+            "title": "Chunk Count",
+            "default": 0
+          },
+          "namespace": {
+            "type": "string",
+            "title": "Namespace"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "active_embedding_model": {
+            "type": "string",
+            "title": "Active Embedding Model",
+            "default": ""
+          },
+          "needs_reindex": {
+            "type": "boolean",
+            "title": "Needs Reindex",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "namespace",
+          "status"
+        ],
+        "title": "CollectionSummary"
+      },
+      "DeleteResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "deleted"
+        ],
+        "title": "DeleteResponse"
+      },
+      "DisabledResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "DisabledResponse"
+      },
+      "EndpointKind": {
+        "type": "string",
+        "enum": [
+          "search",
+          "search_with_context",
+          "search_multi",
+          "route",
+          "explain"
+        ],
+        "title": "EndpointKind"
+      },
+      "EndpointStats": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "ok": {
+            "type": "integer",
+            "title": "Ok"
+          },
+          "error": {
+            "type": "integer",
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "ok",
+          "error"
+        ],
+        "title": "EndpointStats"
+      },
+      "EntriesResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version",
+            "default": 1
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "entries": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Entries"
+          },
+          "next_offset": {
+            "type": "integer",
+            "title": "Next Offset"
+          },
+          "total_in_window": {
+            "type": "integer",
+            "title": "Total In Window"
+          },
+          "skipped_lines": {
+            "type": "integer",
+            "title": "Skipped Lines",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "entries",
+          "next_offset",
+          "total_in_window"
+        ],
+        "title": "EntriesResponse"
+      },
+      "ErrorBreakdown": {
+        "properties": {
+          "empty_query": {
+            "type": "integer",
+            "title": "Empty Query",
+            "default": 0
+          },
+          "slot_out_of_range": {
+            "type": "integer",
+            "title": "Slot Out Of Range",
+            "default": 0
+          },
+          "timeout": {
+            "type": "integer",
+            "title": "Timeout",
+            "default": 0
+          },
+          "internal_error": {
+            "type": "integer",
+            "title": "Internal Error",
+            "default": 0
+          },
+          "validation_error": {
+            "type": "integer",
+            "title": "Validation Error",
+            "default": 0
+          },
+          "other": {
+            "type": "integer",
+            "title": "Other",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "ErrorBreakdown"
+      },
+      "ErrorDetail": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorDetail"
+      },
+      "ErrorKind": {
+        "type": "string",
+        "enum": [
+          "empty_query",
+          "slot_out_of_range",
+          "timeout",
+          "internal_error",
+          "validation_error",
+          "other"
+        ],
+        "title": "ErrorKind"
+      },
+      "ExcludedCollectionSchema": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "reason"
+        ],
+        "title": "ExcludedCollectionSchema"
+      },
+      "ExplainNearMiss": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "chunk_id": {
+            "type": "string",
+            "title": "Chunk Id"
+          },
+          "source_path": {
+            "type": "string",
+            "title": "Source Path"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/ExplainScoreBreakdown"
+          },
+          "file_type": {
+            "type": "string",
+            "title": "File Type",
+            "default": ""
+          },
+          "indexed_at": {
+            "type": "string",
+            "title": "Indexed At",
+            "default": ""
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At",
+            "default": ""
+          },
+          "ingested_by": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "http",
+              "watcher",
+              "reindex"
+            ],
+            "title": "Ingested By",
+            "default": "cli"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": ""
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Metadata"
+          },
+          "acl": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acl"
+          },
+          "collection": {
+            "type": "string",
+            "title": "Collection",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "doc_id",
+          "chunk_id",
+          "source_path",
+          "score",
+          "breakdown"
+        ],
+        "title": "ExplainNearMiss"
+      },
+      "ExplainRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "collection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection"
+          },
+          "collections": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collections"
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "default": 5
+          },
+          "rerank": {
+            "type": "boolean",
+            "title": "Rerank",
+            "default": true
+          },
+          "hyde": {
+            "type": "boolean",
+            "title": "Hyde",
+            "default": false
+          },
+          "rag_fusion": {
+            "type": "boolean",
+            "title": "Rag Fusion",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "ExplainRequest"
+      },
+      "ExplainResponse": {
+        "properties": {
+          "rerank": {
+            "type": "boolean",
+            "title": "Rerank"
+          },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingExplain"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "collection": {
+            "type": "string",
+            "title": "Collection",
+            "default": ""
+          },
+          "acl_filtered": {
+            "type": "boolean",
+            "title": "Acl Filtered"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ExplainResult"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "near_misses": {
+            "items": {
+              "$ref": "#/components/schemas/ExplainNearMiss"
+            },
+            "type": "array",
+            "title": "Near Misses"
+          },
+          "excluded_collections": {
+            "items": {
+              "$ref": "#/components/schemas/ExcludedCollectionSchema"
+            },
+            "type": "array",
+            "title": "Excluded Collections"
+          },
+          "embedding_model": {
+            "type": "string",
+            "title": "Embedding Model",
+            "default": ""
+          },
+          "hyde_applied": {
+            "type": "boolean",
+            "title": "Hyde Applied",
+            "default": false
+          },
+          "stage_timings_ms": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Timings Ms"
+          },
+          "rag_fusion_applied": {
+            "type": "boolean",
+            "title": "Rag Fusion Applied",
+            "default": false
+          },
+          "rag_fusion_queries_used": {
+            "type": "integer",
+            "title": "Rag Fusion Queries Used",
+            "default": 0
+          },
+          "rag_fusion_attempted": {
+            "type": "boolean",
+            "title": "Rag Fusion Attempted",
+            "default": false
+          },
+          "rag_fusion_failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rag Fusion Failure Reason"
+          },
+          "rag_fusion_sub_queries": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RagFusionSubQueryResult"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rag Fusion Sub Queries"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "rerank",
+          "routing",
+          "acl_filtered",
+          "results",
+          "near_misses"
+        ],
+        "title": "ExplainResponse"
+      },
+      "ExplainResult": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "chunk_id": {
+            "type": "string",
+            "title": "Chunk Id"
+          },
+          "source_path": {
+            "type": "string",
+            "title": "Source Path"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/ExplainScoreBreakdown"
+          },
+          "file_type": {
+            "type": "string",
+            "title": "File Type",
+            "default": ""
+          },
+          "indexed_at": {
+            "type": "string",
+            "title": "Indexed At",
+            "default": ""
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At",
+            "default": ""
+          },
+          "ingested_by": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "http",
+              "watcher",
+              "reindex"
+            ],
+            "title": "Ingested By",
+            "default": "cli"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": ""
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Metadata"
+          },
+          "acl": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acl"
+          },
+          "collection": {
+            "type": "string",
+            "title": "Collection",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "doc_id",
+          "chunk_id",
+          "source_path",
+          "text",
+          "score",
+          "breakdown"
+        ],
+        "title": "ExplainResult"
+      },
+      "ExplainScoreBreakdown": {
+        "properties": {
+          "vector_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Rank"
+          },
+          "vector_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Score"
+          },
+          "vector_score_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Score Kind"
+          },
+          "fts_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fts Rank"
+          },
+          "fts_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fts Score"
+          },
+          "fts_score_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fts Score Kind"
+          },
+          "rrf_score": {
+            "type": "number",
+            "title": "Rrf Score"
+          },
+          "reranker_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker Score"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "vector_rank",
+          "vector_score",
+          "vector_score_kind",
+          "fts_rank",
+          "fts_score",
+          "fts_score_kind",
+          "rrf_score",
+          "reranker_score"
+        ],
+        "title": "ExplainScoreBreakdown"
+      },
+      "ExportRequest": {
+        "properties": {
+          "output_path": {
+            "type": "string",
+            "title": "Output Path",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "ExportRequest"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "version"
+        ],
+        "title": "HealthResponse"
+      },
+      "ImportRequest": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "force_overwrite": {
+            "type": "boolean",
+            "title": "Force Overwrite",
+            "default": false
+          },
+          "ignore_schema_version": {
+            "type": "boolean",
+            "title": "Ignore Schema Version",
+            "default": false
+          },
+          "on_error": {
+            "type": "string",
+            "title": "On Error",
+            "default": "fail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "title": "ImportRequest"
+      },
+      "IndexingStateCollectionEntry": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "processed_files": {
+            "type": "integer",
+            "title": "Processed Files",
+            "default": 0
+          },
+          "total_files": {
+            "type": "integer",
+            "title": "Total Files",
+            "default": 0
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "error_count": {
+            "type": "integer",
+            "title": "Error Count",
+            "default": 0
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "IndexingStateCollectionEntry"
+      },
+      "IndexingStateResponse": {
+        "properties": {
+          "collections": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/IndexingStateCollectionEntry"
+            },
+            "type": "object",
+            "title": "Collections"
+          },
+          "last_updated": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Updated"
+          },
+          "trigger": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger"
+          }
+        },
+        "type": "object",
+        "required": [
+          "collections"
+        ],
+        "title": "IndexingStateResponse"
+      },
+      "IngestRequest": {
+        "properties": {
+          "collection": {
+            "type": "string",
+            "title": "Collection"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "documents": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Documents"
+          },
+          "ingested_by": {
+            "type": "string",
+            "title": "Ingested By",
+            "default": "http"
+          }
+        },
+        "type": "object",
+        "required": [
+          "collection"
+        ],
+        "title": "IngestRequest"
+      },
+      "JobCounts": {
+        "properties": {
+          "pending": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pending"
+          },
+          "running": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Running"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pending",
+          "running"
+        ],
+        "title": "JobCounts",
+        "description": "Job queue depth snapshot.\n\n``running`` counts jobs in RUNNING status only; CANCELLING jobs are\nexcluded \u2014 a cancelling job is in the process of stopping and does not\nrepresent available capacity."
+      },
+      "JobListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JobResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor",
+          "total"
+        ],
+        "title": "JobListResponse"
+      },
+      "JobResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "namespace": {
+            "type": "string",
+            "title": "Namespace"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "user"
+          },
+          "source_path": {
+            "type": "string",
+            "title": "Source Path",
+            "default": ""
+          },
+          "collection": {
+            "type": "string",
+            "title": "Collection",
+            "default": ""
+          },
+          "retry_count": {
+            "type": "integer",
+            "title": "Retry Count",
+            "default": 0
+          },
+          "output_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Path"
+          },
+          "archive_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Path"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "migrations_applied": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Migrations Applied"
+          },
+          "backup_confirmed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backup Confirmed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "created_at",
+          "updated_at",
+          "namespace"
+        ],
+        "title": "JobResponse"
+      },
+      "KeyCreateRequest": {
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "title": "Namespace"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "namespace"
+        ],
+        "title": "KeyCreateRequest",
+        "description": "Request body for POST /keys (D7 BE-4)."
+      },
+      "KeyCreateResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "namespace": {
+            "type": "string",
+            "title": "Namespace"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revoked"
+            ],
+            "title": "Status",
+            "default": "active"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "token",
+          "namespace",
+          "created_at"
+        ],
+        "title": "KeyCreateResponse",
+        "description": "Response body for POST /keys (D7 BE-4).\n\nThe ``token`` field is present only in the create response \u2014 it is printed\nonce and never recoverable from the server thereafter.  ``status`` is always\n``'active'`` at creation time (for consistency with ``KeyResponse`` which\ncarries the live status value).\n\nSee contract C3 in ``Documentation/Backlog/D7-multi-key-auth-rotation-team-plan.md``."
+      },
+      "KeyListResponse": {
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/KeyResponse"
+            },
+            "type": "array",
+            "title": "Keys"
+          },
+          "hidden_revoked_count": {
+            "type": "integer",
+            "title": "Hidden Revoked Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "keys"
+        ],
+        "title": "KeyListResponse",
+        "description": "Response body for GET /keys (D7 BE-6).\n\n``hidden_revoked_count`` is the count of revoked keys excluded when the\n``status`` filter is ``'active'`` (default).  Always 0 when the filter is\n``'revoked'`` or ``'all'``."
+      },
+      "KeyResponse": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "namespace": {
+            "type": "string",
+            "title": "Namespace"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revoked"
+            ],
+            "title": "Status",
+            "default": "active"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "namespace",
+          "created_at"
+        ],
+        "title": "KeyResponse",
+        "description": "A single key record in list/revoke responses \u2014 no token field (D7 BE-6).\n\n``id`` is ``str | None`` to accommodate TOML synthetic keys (which have\n``id=None`` since they are not managed entries).  TOML synthetic keys\ncannot be targeted by ``DELETE /keys/{id}``."
+      },
+      "KeyRevokeResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revoked"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "KeyRevokeResponse",
+        "description": "Response body for DELETE /keys/{id} (D7 BE-6)."
+      },
+      "LatencyPercentiles": {
+        "properties": {
+          "p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95"
+          }
+        },
+        "type": "object",
+        "required": [
+          "p50",
+          "p95"
+        ],
+        "title": "LatencyPercentiles"
+      },
+      "MaintenanceStatusDetail": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "interval_hours": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Interval Hours",
+            "default": 0
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "collection_health": {
+            "items": {
+              "$ref": "#/components/schemas/CollectionHealthEntry"
+            },
+            "type": "array",
+            "title": "Collection Health",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "MaintenanceStatusDetail",
+        "description": "Maintenance loop state for the caller's namespace (D5 C1)."
+      },
+      "MaintenanceTriggerResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "triggered",
+              "already_triggered"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "MaintenanceTriggerResponse",
+        "description": "Response body for POST /maintenance/trigger (D5 C2)."
+      },
+      "MigrateInPlaceResponse": {
+        "properties": {
+          "migrations_applied": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Migrations Applied"
+          }
+        },
+        "type": "object",
+        "required": [
+          "migrations_applied"
+        ],
+        "title": "MigrateInPlaceResponse",
+        "description": "Response body for POST /collections/{name}/migrate (in-place synchronous path)."
+      },
+      "MigrateRequest": {
+        "properties": {
+          "backup_confirmed": {
+            "type": "boolean",
+            "title": "Backup Confirmed",
+            "default": false
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "MigrateRequest",
+        "description": "Request body for POST /collections/{name}/migrate."
+      },
+      "MigrationPendingResponse": {
+        "properties": {
+          "collection": {
+            "type": "string",
+            "title": "Collection"
+          },
+          "pending": {
+            "items": {
+              "$ref": "#/components/schemas/MigrationSpecSchema"
+            },
+            "type": "array",
+            "title": "Pending"
+          },
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "collection",
+          "pending",
+          "schema_version"
+        ],
+        "title": "MigrationPendingResponse",
+        "description": "Response body for GET /collections/{name}/migrations/pending."
+      },
+      "MigrationSpecSchema": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "introduced_at": {
+            "type": "integer",
+            "title": "Introduced At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "description",
+          "introduced_at"
+        ],
+        "title": "MigrationSpecSchema",
+        "description": "Serialized representation of a MigrationSpec for REST responses."
+      },
+      "ModelValidationStatus": {
+        "properties": {
+          "embedder_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedder Ok"
+          },
+          "reranker_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker Ok"
+          },
+          "provider_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Provider Warnings"
+          },
+          "validated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validated At"
+          }
+        },
+        "type": "object",
+        "title": "ModelValidationStatus",
+        "description": "API-facing mirror of ModelValidationResult, nested under GET /status (D6 C1).\n\nA null (``None``) boolean field means the corresponding probe has not run /\ncompleted. ``validated_at`` is ``None`` while validation is pending and a UTC\ntimestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1)."
+      },
+      "PatchCollectionBody": {
+        "properties": {
+          "embedding_model": {
+            "type": "string",
+            "title": "Embedding Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "embedding_model"
+        ],
+        "title": "PatchCollectionBody"
+      },
+      "RagFusionSubQueryResult": {
+        "properties": {
+          "variant_index": {
+            "type": "integer",
+            "title": "Variant Index"
+          },
+          "result_count": {
+            "type": "integer",
+            "title": "Result Count"
+          },
+          "top_doc_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Top Doc Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "variant_index",
+          "result_count",
+          "top_doc_ids"
+        ],
+        "title": "RagFusionSubQueryResult"
+      },
+      "ReadinessChecks": {
+        "properties": {
+          "storage": {
+            "$ref": "#/components/schemas/CheckStatus"
+          },
+          "models": {
+            "$ref": "#/components/schemas/CheckStatus",
+            "default": "pending"
+          }
+        },
+        "type": "object",
+        "required": [
+          "storage"
+        ],
+        "title": "ReadinessChecks"
+      },
+      "ReadinessDetail": {
+        "properties": {
+          "storage_connected": {
+            "type": "boolean",
+            "title": "Storage Connected"
+          },
+          "embedder_warm": {
+            "type": "boolean",
+            "title": "Embedder Warm"
+          },
+          "reranker_warm": {
+            "type": "boolean",
+            "title": "Reranker Warm"
+          },
+          "jobs": {
+            "$ref": "#/components/schemas/JobCounts"
+          },
+          "collections_indexing": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Collections Indexing"
+          },
+          "collections_failed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Collections Failed"
+          },
+          "watcher": {
+            "$ref": "#/components/schemas/WatcherReport"
+          }
+        },
+        "type": "object",
+        "required": [
+          "storage_connected",
+          "embedder_warm",
+          "reranker_warm",
+          "jobs",
+          "collections_indexing",
+          "collections_failed",
+          "watcher"
+        ],
+        "title": "ReadinessDetail",
+        "description": "Rich readiness sub-object for authenticated GET /status."
+      },
+      "ReadinessResponse": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "checks": {
+            "$ref": "#/components/schemas/ReadinessChecks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready",
+          "checks"
+        ],
+        "title": "ReadinessResponse",
+        "description": "Terse, unauthenticated response body for GET /ready."
+      },
+      "RouteRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "slots": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slots"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "RouteRequest"
+      },
+      "RouteResponse": {
+        "properties": {
+          "pre_context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pre Context"
+          },
+          "pinned_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pinned Names"
+          },
+          "routable_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Routable Names"
+          },
+          "decomposer_invoked": {
+            "type": "boolean",
+            "title": "Decomposer Invoked"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pre_context",
+          "pinned_names",
+          "routable_names",
+          "decomposer_invoked"
+        ],
+        "title": "RouteResponse"
+      },
+      "RoutingCandidate": {
+        "properties": {
+          "collection": {
+            "type": "string",
+            "title": "Collection"
+          },
+          "centroid_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Centroid Score"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "collection",
+          "centroid_score"
+        ],
+        "title": "RoutingCandidate"
+      },
+      "RoutingExplain": {
+        "properties": {
+          "invoked": {
+            "type": "boolean",
+            "title": "Invoked"
+          },
+          "chosen_collection": {
+            "type": "string",
+            "title": "Chosen Collection"
+          },
+          "confidence_threshold": {
+            "type": "number",
+            "title": "Confidence Threshold"
+          },
+          "chosen_below_threshold": {
+            "type": "boolean",
+            "title": "Chosen Below Threshold"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/RoutingCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "invoked",
+          "chosen_collection",
+          "confidence_threshold",
+          "chosen_below_threshold",
+          "candidates"
+        ],
+        "title": "RoutingExplain"
+      },
+      "SearchFilters": {
+        "properties": {
+          "file_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Type"
+          },
+          "source_path_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path Prefix"
+          },
+          "source_path_glob": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path Glob"
+          },
+          "indexed_after": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indexed After"
+          },
+          "indexed_before": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indexed Before"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language",
+            "description": "ISO 639-1 / ISO 639-3 language code to filter by (single-collection queries only; 'unknown' is a valid value)."
+          },
+          "include_metadata": {
+            "type": "boolean",
+            "title": "Include Metadata",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SearchFilters",
+        "description": "Filter dimensions applied to a hybrid search query."
+      },
+      "SearchRequest": {
+        "properties": {
+          "collection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection"
+          },
+          "collections": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collections"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "default": 5
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchFilters"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hyde": {
+            "type": "boolean",
+            "title": "Hyde",
+            "default": false
+          },
+          "rag_fusion": {
+            "type": "boolean",
+            "title": "Rag Fusion",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "SearchRequest"
+      },
+      "SearchResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResultSchema"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "acl_filtered": {
+            "type": "boolean",
+            "title": "Acl Filtered"
+          },
+          "excluded_collections": {
+            "items": {
+              "$ref": "#/components/schemas/ExcludedCollectionSchema"
+            },
+            "type": "array",
+            "title": "Excluded Collections"
+          },
+          "embedding_model": {
+            "type": "string",
+            "title": "Embedding Model",
+            "default": ""
+          },
+          "hyde_applied": {
+            "type": "boolean",
+            "title": "Hyde Applied",
+            "default": false
+          },
+          "rag_fusion_applied": {
+            "type": "boolean",
+            "title": "Rag Fusion Applied",
+            "default": false
+          },
+          "rag_fusion_queries_used": {
+            "type": "integer",
+            "title": "Rag Fusion Queries Used",
+            "default": 0
+          },
+          "rag_fusion_attempted": {
+            "type": "boolean",
+            "title": "Rag Fusion Attempted",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "results",
+          "acl_filtered"
+        ],
+        "title": "SearchResponse"
+      },
+      "SearchResultSchema": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "chunk_id": {
+            "type": "string",
+            "title": "Chunk Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "source_path": {
+            "type": "string",
+            "title": "Source Path"
+          },
+          "file_type": {
+            "type": "string",
+            "title": "File Type",
+            "default": ""
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": ""
+          },
+          "indexed_at": {
+            "type": "string",
+            "title": "Indexed At",
+            "default": ""
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At",
+            "default": ""
+          },
+          "ingested_by": {
+            "type": "string",
+            "title": "Ingested By",
+            "default": "cli"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Metadata"
+          },
+          "acl": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acl"
+          },
+          "collection": {
+            "type": "string",
+            "title": "Collection",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "doc_id",
+          "chunk_id",
+          "text",
+          "score",
+          "source_path"
+        ],
+        "title": "SearchResultSchema"
+      },
+      "SkippedItem": {
+        "properties": {
+          "collection": {
+            "type": "string",
+            "title": "Collection"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "collection",
+          "reason"
+        ],
+        "title": "SkippedItem",
+        "description": "One entry in BackupTriggerResponse.skipped \u2014 collection + machine-readable reason."
+      },
+      "StatsResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version",
+            "default": 1
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until"
+          },
+          "total_queries": {
+            "type": "integer",
+            "title": "Total Queries",
+            "default": 0
+          },
+          "success_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Rate"
+          },
+          "skipped_lines": {
+            "type": "integer",
+            "title": "Skipped Lines",
+            "default": 0
+          },
+          "latency_ms": {
+            "$ref": "#/components/schemas/LatencyPercentiles"
+          },
+          "by_endpoint": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EndpointStats"
+            },
+            "type": "object",
+            "title": "By Endpoint"
+          },
+          "by_collection": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CollectionStats"
+            },
+            "type": "object",
+            "title": "By Collection"
+          },
+          "error_breakdown": {
+            "$ref": "#/components/schemas/ErrorBreakdown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "StatsResponse"
+      },
+      "Status": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "validation_error",
+          "timeout",
+          "internal_error"
+        ],
+        "title": "Status"
+      },
+      "StatusCollectionEntry": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "doc_count": {
+            "type": "integer",
+            "title": "Doc Count",
+            "default": 0
+          },
+          "chunk_count": {
+            "type": "integer",
+            "title": "Chunk Count",
+            "default": 0
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "watching": {
+            "type": "boolean",
+            "title": "Watching"
+          },
+          "eta_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta Seconds"
+          },
+          "processed_files": {
+            "type": "integer",
+            "title": "Processed Files",
+            "default": 0
+          },
+          "total_files": {
+            "type": "integer",
+            "title": "Total Files",
+            "default": 0
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "error_count": {
+            "type": "integer",
+            "title": "Error Count",
+            "default": 0
+          },
+          "needs_reindex": {
+            "type": "boolean",
+            "title": "Needs Reindex",
+            "default": false
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "status",
+          "watching"
+        ],
+        "title": "StatusCollectionEntry"
+      },
+      "StatusResponse": {
+        "properties": {
+          "running": {
+            "type": "boolean",
+            "title": "Running"
+          },
+          "pid": {
+            "type": "integer",
+            "title": "Pid"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "collections": {
+            "items": {
+              "$ref": "#/components/schemas/StatusCollectionEntry"
+            },
+            "type": "array",
+            "title": "Collections"
+          },
+          "readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadinessDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "backup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "store_schema_version": {
+            "type": "integer",
+            "title": "Store Schema Version",
+            "default": 0
+          },
+          "collections_schema_behind": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Collections Schema Behind",
+            "default": 0
+          },
+          "maintenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaintenanceStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model_validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelValidationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "running",
+          "pid",
+          "version",
+          "collections"
+        ],
+        "title": "StatusResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "WatcherReport": {
+        "properties": {
+          "running": {
+            "type": "boolean",
+            "title": "Running"
+          },
+          "watching": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Watching",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "running"
+        ],
+        "title": "WatcherReport"
+      }
+    }
+  }
+}

@@ -49,8 +49,9 @@ Operators running archon-search on shared infrastructure (VMs, containers, CI en
 - **Salt stored on disk, not in TOML**: Puts the secret outside config files that operators are more likely to share, grep, or commit. Follows the same pattern as `key_manager.py`.
 - **Default off**: Changing the log format of existing deployments silently is a breaking operational change. Operators who enabled telemetry and built dashboards around existing `doc_id` values would see metric discontinuity. Opt-in preserves their experience.
 - **Callable injected into factory, not a module-global**: Keeps the factory methods pure and testable; avoids a singleton that makes unit tests order-dependent.
-- **Truncate to 32 hex characters**: 128 bits is sufficient to avoid collisions at any realistic collection scale and keeps the JSONL field compact. Full 64-char HMAC output is unnecessary.
-- **No schema version bump in JSONL entries**: The hashed values are still 32-hex strings; consumers cannot distinguish hashed from unhashed without external knowledge. A `doc_ids_hashed: bool` metadata field in the daily log filename or a header line is deferred (see Open Questions).
+- **Keep full 64-char HMAC output**: Preserves the existing field length, avoiding silent breakage in any consumer that validates a 64-char `doc_id`. 128-bit truncation is off the table until a grep of `reader.py`, `routes_telemetry.py`, and tests confirms no fixed-length check exists.
+- **Include `doc_ids_hashed: bool` in every JSONL entry**: Added as an optional field (default `False`); set to `true` when `hash_doc_ids = true`. This lets consumers distinguish log segments written before and after the flag is toggled — prevents silent metric mixing. `DOCUMENTED_SCHEMA_FIELDS` in `entry.py` and `schemas_telemetry.py` must be updated accordingly.
+- **Surface `hash_doc_ids_enabled` in `GET /status`**: One boolean under `telemetry.hash_doc_ids_enabled`; mirrors the pattern of other config-derived flags already in the status response. Avoids requiring operators to open the config file to verify the active state.
 
 ## Edge Cases & Constraints
 
@@ -66,9 +67,7 @@ Operators running archon-search on shared infrastructure (VMs, containers, CI en
 
 ## Open Questions
 
-- **Should the JSONL entry include a `doc_ids_hashed: bool` field?** If yes, consumers (dashboards, `reader.py`) can distinguish log segments written before and after the flag was toggled, preventing metric mixing. If no, the schema stays flat and consumers must correlate by date. The existing `DOCUMENTED_SCHEMA_FIELDS` frozenset in `entry.py` already supports additive fields — this is a low-cost addition. Recommend: add `doc_ids_hashed: bool` as a new optional field (default `False`) and include it in every entry when `hash_doc_ids = true`.
-- **Should `archon-search status` surface whether `hash_doc_ids` is active?** The status endpoint already reports several config-derived flags. Adding `telemetry.hash_doc_ids_enabled: bool` makes it observable without inspecting the config file. Recommend: yes, one field, minimal surface.
-- **Truncation length: 32 hex (128-bit) vs. 64 hex (256-bit)?** 128-bit is more than sufficient for any local collection but changes the visual length of `result_doc_ids` from the current 64-char SHA-256 hex. If existing consumers regex-validate on 64-char length, truncation is a silent breaking change. Recommend: confirm no existing consumer (reader.py, routes_telemetry.py, tests) validates a fixed 64-char length before truncating; if they do, keep 64-char output (full HMAC) for zero schema friction.
+_Resolved — see Key Decisions._
 
 ## Future Iterations
 
@@ -79,4 +78,4 @@ Operators running archon-search on shared infrastructure (VMs, containers, CI en
 
 ## Recommendation
 
-Build this now. The threat model is real: telemetry enables path-leak correlation to any reader with LanceDB access, and "don't enable telemetry on sensitive hosts" is not a workable operator stance once telemetry becomes more useful. The implementation is narrow — one config field, one salt file, one pure transform function injected into two factory methods. The hardest part is getting the salt lifecycle right (generate-on-first-use, fail-safe on unreadable). Resolve the `doc_ids_hashed` field question before planning starts, because it affects whether `entry.py`, `schemas_telemetry.py`, and `reader.py` need changes beyond the two factory methods.
+Build this now. The threat model is real: telemetry enables path-leak correlation to any reader with LanceDB access, and "don't enable telemetry on sensitive hosts" is not a workable operator stance once telemetry becomes more useful. The implementation is narrow — one config field, one salt file, one pure transform function injected into two factory methods. The hardest part is getting the salt lifecycle right (generate-on-first-use, fail-safe on unreadable). All open questions are resolved; planning can start.

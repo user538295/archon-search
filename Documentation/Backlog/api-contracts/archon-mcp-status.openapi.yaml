@@ -1,0 +1,44 @@
+openapi: 3.0.0
+info:
+  title: Archon Search Status — MCP Extension
+  version: 0.0.0
+tags: []
+paths:
+  /status:
+    get:
+      operationId: StatusEndpoint_read
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpStatusResponse'
+components:
+  schemas:
+    McpStatusDetail:
+      type: object
+      required:
+        - enabled
+        - bindAddress
+      properties:
+        enabled:
+          type: boolean
+        bindAddress:
+          type: string
+          nullable: true
+          description: null when disabled or not yet bound
+      description: MCP server bind state when enabled
+    McpStatusResponse:
+      type: object
+      required:
+        - mcp
+      properties:
+        mcp:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/McpStatusDetail'
+          nullable: true
+          description: null when mcp.enabled = false
+      description: The fragment of StatusResponse this feature adds

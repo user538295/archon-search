@@ -392,7 +392,7 @@ flowchart LR
 
 ### Phase 1 · View pending migrations *(walking skeleton — thinnest end-to-end path; carries the data/model foundation)*
 
-- [x] **BE-1** — Add `MigrationJob`, `MigrationSpec`, `MigrationKind` to `types.py`; validate TypeSpec contract files #backend-role
+- [ ] **BE-1** — Add `MigrationJob`, `MigrationSpec`, `MigrationKind` to `types.py`; validate TypeSpec contract files #backend-role
     - Entities · 2.0h
     - needs K1 · completes C1
     - Tests
