@@ -397,7 +397,7 @@ flowchart LR
 
 ### Phase 2 · Slice 2 · MCP tools return correct namespace data
 
-- [ ] **BE-4** — Asymmetry fix #1: pass `config.namespaces` to `create_mcp_http_app()` (`mcp.py:1543`) #backend-role
+- [x] **BE-4** — Asymmetry fix #1: pass `config.namespaces` to `create_mcp_http_app()` (`mcp.py:1543`) #backend-role
     - Interface Adapters · 1.0h
     - needs BE-2 · completes S12, C2 (partial)
     - Tests

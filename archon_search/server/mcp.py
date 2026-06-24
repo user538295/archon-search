@@ -1529,8 +1529,8 @@ def create_mcp_http_app(
     by the HTTP app's lifespan (``create_app``).  The MCP app does not call
     ``load_synthetic_records()`` itself — it relies on the HTTP app having run
     first to populate ``keys.json``.  TOML tokens are also accepted via the
-    legacy ``namespaces={}`` path which the MCP caller should populate from
-    ``config.namespaces`` when TOML namespace support is needed.
+    ``namespaces=config.namespaces`` path (defense-in-depth fallback when the
+    ``key_store`` path is absent or unavailable).
     """
     from archon_search.server.middleware_context import RequestContextMiddleware
 
@@ -1543,7 +1543,7 @@ def create_mcp_http_app(
     starlette_app.add_middleware(
         APIKeyMiddleware,
         api_key=api_key,
-        namespaces={},
+        namespaces=config.namespaces if config is not None else {},
         key_store=key_store,
     )
     starlette_app.add_middleware(RequestContextMiddleware, header_name=request_id_header)
