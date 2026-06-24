@@ -188,6 +188,10 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "auth": {
             "rotate_grace_seconds": 0,
         },
+        # [mcp]
+        "mcp": {
+            "enabled": True,
+        },
     }
 
     # Keyset guard — fails when a new top-level field is added to SearchConfig

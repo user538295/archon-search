@@ -365,7 +365,7 @@ flowchart LR
 
 ### Phase 1 · Slice 1 · MCP client connects and lists 17 tools *(walking skeleton)*
 
-- [ ] **BE-1** — Add `McpConfig` dataclass, `[mcp]` TOML section #backend-role
+- [x] **BE-1** — Add `McpConfig` dataclass, `[mcp]` TOML section #backend-role
     - Entities + Frameworks & Drivers · 1.0h
     - needs K-1 · completes C1
     - Tests

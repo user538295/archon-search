@@ -2,6 +2,31 @@
 
 ## What Has Worked
 
+**2026-06-24 — D9 BE-1: adding a top-level SearchConfig dataclass field requires three coupled updates plus an allowlist line-number bump**
+- Observation: Adding `McpConfig` + `SearchConfig.mcp` touched four files in a fixed pattern: (1) `config.py` dataclass + field + `_apply_toml` parse block (mirror the `[auth]` block exactly: `doc.get("mcp", {})` → fresh `McpConfig()` → `if "enabled" in cfg: _coerce_bool(...)` → assign); (2) `test_config_defaults.py::test_all_defaults_snapshot` — the keyset guard (`set(expected.keys()) == {f.name for f in dataclasses.fields(SearchConfig)}`) FAILS if you forget the snapshot entry; (3) `tests/path_home_allowlist.txt` — the `config.py:NNN` line number for the `Path.home()` reference shifts when you add lines above it (here 186→193); the SHA stays the same because the line content is unchanged. The toml.example `[mcp]` section is a SEPARATE task (BE-10) — keep it out of the BE-1 commit even if it is already in the working tree.
+- Action: When adding a `SearchConfig` field, update config.py + the defaults snapshot + the path allowlist line number in the same commit. Per-`_coerce_bool` "wrong type raises" tests are NOT expected (only 2 of 14 sibling call sites have one); rely on `_coerce_bool`'s own contract.
+- Confidence: high
+
+**2026-06-24 — D9 K-1: FastMCP API changed between versions; spike undeclared deps before writing ADRs**
+- Observation: The existing `mcp.py` imported `fastmcp` and called `streamable_http_app()`, which does not exist in FastMCP 3.4.2 (`http_app()` replaces it). `fastmcp` was also absent from `pyproject.toml`. ADR spikes must check that all imports are declared and that the API being described actually exists in the installed version.
+- Action: Before writing any ADR that references a third-party package API, (1) verify the package is in `pyproject.toml`, (2) verify the exact method/class names by importing and running them, not by reading prior code that may have been written against an older version.
+- Confidence: high
+
+**2026-06-24 — D9 K-1: FastMCP lifespan delegation requires explicit `router.lifespan_context`**
+- Observation: Mounting a FastMCP Starlette app via `app.mount('/mcp', mcp_starlette)` without delegating its lifespan causes every MCP request to fail with `RuntimeError: Task group is not initialized`. The `StreamableHTTPSessionManager` task group only starts when `mcp_starlette.router.lifespan_context(app)` is entered. The fix is `async with mcp_starlette.router.lifespan_context(app): yield` inside the parent lifespan.
+- Action: When mounting any Starlette sub-app that has its own lifespan under FastAPI, always explicitly delegate via `sub_app.router.lifespan_context(parent_app)`. Never assume `app.mount()` propagates lifespan automatically.
+- Confidence: high
+
+**2026-06-24 — D9 K-1: `app.mount()` must happen INSIDE the lifespan context to avoid zombie routes**
+- Observation: If `app.mount('/mcp', mcp_starlette)` is called before `async with mcp_starlette.router.lifespan_context(app):` enters and the `__aenter__` raises, the route is registered but the session manager never started. Every `/mcp` request returns 500. Starlette has no `app.unmount()` API.
+- Action: Always call `app.mount()` for a sub-app that needs lifespan delegation INSIDE the `async with` block, after the lifespan context has successfully entered.
+- Confidence: high
+
+**2026-06-24 — D9 K-1: `_current_http_request` ContextVar is per-request (not per-session) in Streamable HTTP**
+- Observation: FastMCP's Streamable HTTP transport sends each JSON-RPC call (initialize, tools/list, tools/call) as a separate HTTP POST. `RequestContextMiddleware` sets `_current_http_request` on every HTTP request — it is NOT frozen at session initialization. Namespace stability across a session comes from the MCP protocol requirement that clients reuse the same bearer token throughout a session, not from ContextVar behavior.
+- Action: Never document `_current_http_request` as "session-frozen." Tool closures should call `_get_request_namespace()` on each invocation, not cache the result. Per-request ContextVar behavior is actually better — it means namespaces are resolved correctly even if the pattern were used in other contexts.
+- Confidence: high
+
 **2026-06-23 — D7 BE-8: safe write order for dual-file atomic rotation**
 - Observation: Generating the new token in the route handler and writing `.search.env` FIRST (before calling `rotate_default_key()` to mutate `keys.json`) requires passing a pre-generated token as an optional param to the Use Cases layer. This is a pragmatic layering shortcut — the Interface Adapter layer owns token generation to enable the crash-safe write order. The key_manager method gets an optional `new_token` param with empty-string validation.
 - Action: For any multi-file atomic operation where write order matters for crash safety (file A must succeed before file B is mutated), generate the content in the Interface Adapter layer, write file A first, then pass the content to the Use Cases layer for file B. Document the partial-state recovery path clearly in comments.

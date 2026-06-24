@@ -86,6 +86,11 @@ class AuthConfig:
 
 
 @dataclass
+class McpConfig:
+    enabled: bool = True
+
+
+@dataclass
 class SearchConfig:
     # [server]
     host: str = "127.0.0.1"
@@ -148,6 +153,8 @@ class SearchConfig:
     maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
     # [auth]
     auth: AuthConfig = field(default_factory=AuthConfig)
+    # [mcp]
+    mcp: McpConfig = field(default_factory=McpConfig)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -592,6 +599,12 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             raise ConfigError(f"[auth].rotate_grace_seconds must be >= 0, got {grace}")
         auth.rotate_grace_seconds = grace
     config.auth = auth
+
+    mcp_cfg = doc.get("mcp", {})
+    mcp = McpConfig()
+    if "enabled" in mcp_cfg:
+        mcp.enabled = _coerce_bool(mcp_cfg["enabled"], "[mcp].enabled")
+    config.mcp = mcp
 
 
 def _post_process_maintenance(config: SearchConfig) -> None:

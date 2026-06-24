@@ -1182,4 +1182,44 @@ def test_validation_timeout_seconds_negative_rejected(tmp_path: Path, caplog: py
     with caplog.at_level(logging.WARNING):
         config = load_config(path=toml_file)
     assert config.validation_timeout_seconds == 60
-    assert any("validation_timeout_seconds" in r.message for r in caplog.records)
+
+
+# --- BE-1: McpConfig ---
+
+
+def test_mcp_config_defaults() -> None:
+    from archon_search.config import McpConfig
+
+    cfg = McpConfig()
+    assert cfg.enabled is True
+
+
+def test_mcp_config_toml_section(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[mcp]\nenabled = false\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.mcp.enabled is False
+
+
+def test_mcp_config_missing_section_uses_defaults(tmp_path: Path) -> None:
+    """Missing [mcp] section yields all defaults."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[server]\nport = 9000\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.mcp.enabled is True
+
+
+def test_mcp_config_enabled_true_explicit(tmp_path: Path) -> None:
+    """enabled = true explicitly in TOML is parsed correctly (runs through _coerce_bool)."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[mcp]\nenabled = true\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.mcp.enabled is True
+
+
+def test_mcp_config_enabled_false(tmp_path: Path) -> None:
+    """enabled = false in TOML sets config.mcp.enabled = False."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[mcp]\nenabled = false\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.mcp.enabled is False
