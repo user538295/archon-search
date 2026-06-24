@@ -436,7 +436,7 @@ flowchart LR
         - #integration_test — `test_telemetry_wired_mcp_call_logs_entry` — full stack; MCP `search` → JSONL entry present
         - #integration_test — `test_telemetry_none_writer_no_crash` — `writer=None`; all 17 tools callable; no AttributeError
 
-- [ ] **T-1** — 17 MCP tool smoke e2e tests (one per tool; shape-valid response) #tester-role
+- [x] **T-1** — 17 MCP tool smoke e2e tests (one per tool; shape-valid response) #tester-role
     - — · 4.0h
     - needs BE-3, BE-7 · completes S3
     - Note: `test_mcp_smoke_delete_document` and `test_mcp_smoke_revoke_key` are destructive. T-1 must use a throwaway namespace or per-test teardown to ensure destructive smokes do not corrupt documents or keys used by T-2, T-3, T-4. Recommended: a dedicated `mcp-smoke-test-{uuid}` namespace per T-1 run, cleaned up in teardown.
