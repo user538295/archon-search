@@ -459,7 +459,7 @@ flowchart LR
         - #e2e_test — `test_mcp_smoke_revoke_key` — calls `revoke_key`, response non-empty
         - #e2e_test — `test_mcp_smoke_rotate_key` — calls `rotate_key`, response non-empty
 
-- [ ] **T-2** — Round-trip e2e: ingest file via MCP then search via MCP returns that document #tester-role
+- [x] **T-2** — Round-trip e2e: ingest file via MCP then search via MCP returns that document #tester-role
     - — · 1.5h
     - needs BE-7 · completes S4, S5
     - Tests
