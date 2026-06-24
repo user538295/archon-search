@@ -349,7 +349,7 @@ flowchart LR
 
 ### Phase 0 · Kickoff
 
-- [ ] **K-1** — Write ADR: spike FastMCP mount under FastAPI (lifespan delegation + middleware inheritance); spike namespace propagation mechanism; prove both with working code. **No other task may start until K-1 is done.** #backend-role
+- [x] **K-1** — Write ADR: spike FastMCP mount under FastAPI (lifespan delegation + middleware inheritance); spike namespace propagation mechanism; prove both with working code. **No other task may start until K-1 is done.** #backend-role
     - — · 8.0h
     - completes Q1 (confirmation), Q2 (proof), Q3 (n/a — resolved by mount), Q4 (n/a — answered)
     - Required proofs (all four must be demonstrated with working code in the ADR):
