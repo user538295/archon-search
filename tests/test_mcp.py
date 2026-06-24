@@ -286,13 +286,21 @@ def test_mcp_delete_document_maps_store_busy_to_store_busy_code() -> None:
 
 
 def test_mcp_delete_document_forwards_namespace() -> None:
-    """delete_document MCP handler forwards namespace parameter to pipeline.delete_document."""
+    """delete_document MCP handler uses the authenticated namespace.
+
+    BE-5: namespace now comes from _get_request_namespace() (authenticated namespace).
+    The explicit namespace parameter is validated against the authenticated one.
+    When they match, deletion proceeds with the authenticated namespace.
+    """
     import asyncio
+    from unittest.mock import patch
 
     pipeline = _make_pipeline_mock_with_delete(delete_return=1)
     tool_fn = _get_delete_tool_fn(pipeline)
 
-    asyncio.run(tool_fn(doc_id="b" * 64, collection="col1", namespace="tenant1"))
+    # Patch authenticated namespace to match the caller-supplied value
+    with patch("archon_search.server.mcp._get_request_namespace", return_value="tenant1"):
+        asyncio.run(tool_fn(doc_id="b" * 64, collection="col1", namespace="tenant1"))
 
     pipeline.delete_document.assert_awaited_once()
     _args, _kwargs = pipeline.delete_document.call_args

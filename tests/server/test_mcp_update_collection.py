@@ -270,9 +270,11 @@ async def test_update_collection_namespace_isolation() -> None:
 
     app = _make_mcp_app(pipeline, config=config, job_store=job_store)
     ctx = _make_ctx(namespace="tenant-A")
-    result = await app.tools["update_collection"](
-        collection_name="col", embedding_model="model-X", ctx=ctx
-    )
+    # BE-5: namespace now comes from _get_request_namespace(), not ctx.meta.
+    with patch("archon_search.server.mcp._get_request_namespace", return_value="tenant-A"):
+        result = await app.tools["update_collection"](
+            collection_name="col", embedding_model="model-X", ctx=ctx
+        )
 
     assert "error" in result
     # The store should have been called with the caller's namespace

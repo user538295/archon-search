@@ -404,7 +404,7 @@ flowchart LR
         - #unit_test — `test_mcp_middleware_receives_namespaces` — `create_mcp_http_app(namespaces={"tok": "ns-a"})` → middleware constructed with that dict, not `{}`
         - #integration_test — `test_toml_namespace_token_accepted_by_mcp` — TOML namespace token Bearer → 200 from MCP endpoint (not 401)
 
-- [ ] **BE-5** — Asymmetry fix #2: thread authenticated namespace into all 17 tool closures (mechanism per K-1 ADR) #backend-role
+- [x] **BE-5** — Asymmetry fix #2: thread authenticated namespace into all 17 tool closures (mechanism per K-1 ADR) #backend-role
     - Interface Adapters + Presentation · TBD pending K-1 (current 4.0h is a pre-K-1 placeholder; actual depends on mechanism complexity)
     - needs K-1, BE-2 · completes S8, C4
     - Scope: all 17 tool closures AND the `_resolve_embedder(pipeline, collection, embedder_cache)` helper at `mcp.py:161` (called by search, search_with_context, explain, ingest_file, ingest_directory — all of which need namespace to resolve the correct embedder)

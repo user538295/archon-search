@@ -133,6 +133,36 @@ def _path_unsafe_message(reason: str) -> str:
 
 
 
+def _get_request_namespace() -> str:
+    """Return the namespace resolved by APIKeyMiddleware for the current MCP request.
+
+    FastMCP's RequestContextMiddleware stores the current Starlette Request in the
+    HTTP context. APIKeyMiddleware writes request.state.namespace before calling next.
+    This helper reads that value so every tool closure can use the authenticated
+    namespace instead of hardcoding DEFAULT_NAMESPACE.
+
+    Falls back to DEFAULT_NAMESPACE when called outside an HTTP request context
+    (e.g. direct invocation in tests or CLI mode).
+
+    Per K-1 ADR: _current_http_request is set fresh on every HTTP POST (not frozen
+    at session-initialize time), so this must be called on each tool invocation, not
+    cached at app-creation time.
+
+    Uses fastmcp.server.dependencies.get_http_request() (public API) which handles
+    the MCP SDK request_ctx, FastMCP's HTTP context, and Docket worker snapshots.
+    The import is lazy to avoid breaking test stubs that replace the fastmcp package
+    with a plain module.
+    """
+    # ponytail: lazy import with fallback — test stubs replace fastmcp with a plain
+    # module; ImportError or RuntimeError (no active request) → fall back to DEFAULT_NAMESPACE.
+    try:
+        from fastmcp.server.dependencies import get_http_request  # noqa: PLC0415
+        req = get_http_request()
+    except (ImportError, RuntimeError):
+        return DEFAULT_NAMESPACE
+    return getattr(req.state, "namespace", DEFAULT_NAMESPACE)
+
+
 async def _resolve_embedder_by_model(
     pipeline: Any,
     embedder_cache: Any,
@@ -149,16 +179,20 @@ async def _resolve_embedder(
     embedder_cache: Any,
     collection: str,
     config: Any,
+    namespace: str = DEFAULT_NAMESPACE,
 ) -> Any:
     """Resolve the Embedder for *collection* by looking up its active_embedding_model.
 
     Falls back to pipeline._global_embedder when no cache is configured or when
     the resolved model name is empty (no config and no meta record).
+
+    ``namespace`` is passed to ``pipeline.get_collection_meta()`` so the lookup
+    is scoped to the authenticated namespace (asymmetry fix #2, BE-5).
     """
     if embedder_cache is None:
         return pipeline._global_embedder
     active_model: str = config.embedding_model if config is not None else ""
-    meta = await pipeline.get_collection_meta(collection)
+    meta = await pipeline.get_collection_meta(collection, namespace=namespace)
     if meta is not None:
         active_model = meta.active_embedding_model or active_model
     if not active_model:
@@ -213,6 +247,7 @@ def create_app(
         rag_fusion: bool = False,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search."""
+        ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
 
@@ -264,7 +299,7 @@ def create_app(
                 )
             try:
                 result_obj = await pipeline.search_many(
-                    query, deduped, query_vector=hyde_vector,
+                    query, deduped, namespace=ns, query_vector=hyde_vector,
                     rag_fusion=rag_fusion,
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_rf_config,
@@ -333,12 +368,12 @@ def create_app(
             except ValidationError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
             _col = collection or default_collection
-            _search_embedder = await _resolve_embedder(pipeline, embedder_cache, _col, config)
+            _search_embedder = await _resolve_embedder(pipeline, embedder_cache, _col, config, namespace=ns)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 result_obj = await pipeline.search(
-                    query, _col, embedder=_search_embedder, filters=filters, query_vector=hyde_vector,
+                    query, _col, ns, embedder=_search_embedder, filters=filters, query_vector=hyde_vector,
                     rag_fusion=rag_fusion,
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_rf_config,
@@ -429,6 +464,7 @@ def create_app(
         Returns ``{"results": [...], "hyde_applied": bool, "rag_fusion_applied": bool,
         "rag_fusion_queries_used": int, "rag_fusion_attempted": bool}``.
         """
+        _swc_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
 
@@ -465,12 +501,12 @@ def create_app(
             except ValidationError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
             _swc_col = collection or default_collection
-            _swc_embedder = await _resolve_embedder(pipeline, embedder_cache, _swc_col, config)
+            _swc_embedder = await _resolve_embedder(pipeline, embedder_cache, _swc_col, config, namespace=_swc_ns)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 swc_result = await pipeline.search_with_context(
-                    query, _swc_col, context_window, embedder=_swc_embedder, filters=filters,
+                    query, _swc_col, context_window, namespace=_swc_ns, embedder=_swc_embedder, filters=filters,
                     query_vector=swc_hyde_vector,
                     rag_fusion=rag_fusion,
                     rag_fusion_generator=rag_fusion_generator,
@@ -564,8 +600,9 @@ def create_app(
         rag_fusion: bool = False,
     ) -> dict[str, Any]:
         """Return the per-stage retrieval/reranking trace for a query, plus the
-        routing decision when no collection is pinned. Operates in the default
-        namespace only. The query is never echoed in the response or telemetry."""
+        routing decision when no collection is pinned. Operates in the caller's
+        authenticated namespace. The query is never echoed in the response or telemetry."""
+        _explain_ns = _get_request_namespace()
         start = monotonic()
 
         # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
@@ -617,7 +654,7 @@ def create_app(
                 )
             try:
                 result = await pipeline.explain(
-                    query, collections=deduped, top_k=top_k, rerank=rerank, namespace=DEFAULT_NAMESPACE,
+                    query, collections=deduped, top_k=top_k, rerank=rerank, namespace=_explain_ns,
                     query_vector=explain_hyde_vector,
                     rag_fusion=rag_fusion,
                     rag_fusion_generator=rag_fusion_generator,
@@ -665,7 +702,7 @@ def create_app(
             # never reflected back.
             return McpErrorResponse(error="invalid explain request", code="validation_error")
 
-        ns = DEFAULT_NAMESPACE
+        ns = _explain_ns
         routing: RoutingExplain | None = None
         query_vector: list[float] | None = explain_hyde_vector
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
@@ -815,6 +852,7 @@ def create_app(
         collection: str | None = None,
     ) -> dict[str, Any]:
         """Ingest a single file into the RAG store."""
+        _ingest_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         try:
             validated = validate_ingest_path(path)
@@ -822,12 +860,13 @@ def create_app(
             return McpErrorResponse(error=_path_unsafe_message(e.reason), code="path_unsafe")
         try:
             _ingest_col = collection or default_collection
-            _ingest_embedder = await _resolve_embedder(pipeline, embedder_cache, _ingest_col, config)
+            _ingest_embedder = await _resolve_embedder(pipeline, embedder_cache, _ingest_col, config, namespace=_ingest_ns)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 result = await pipeline.ingest_file(
                     validated, _ingest_col, embedder=_ingest_embedder, ingested_by="http",
+                    namespace=_ingest_ns,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -860,6 +899,7 @@ def create_app(
         ctx: Context | None = None,
     ) -> list[dict[str, Any]]:
         """Ingest all files in a directory into the RAG store."""
+        _dir_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         try:
             validated = validate_ingest_path(path)
@@ -867,7 +907,7 @@ def create_app(
             return McpErrorResponse(error=_path_unsafe_message(e.reason), code="path_unsafe")
         try:
             _dir_col = collection or default_collection
-            _dir_embedder = await _resolve_embedder(pipeline, embedder_cache, _dir_col, config)
+            _dir_embedder = await _resolve_embedder(pipeline, embedder_cache, _dir_col, config, namespace=_dir_ns)
 
             async def progress_cb(done: int, total: int) -> None:
                 if ctx is not None:
@@ -883,6 +923,7 @@ def create_app(
                     progress_cb=progress_cb,
                     embedder=_dir_embedder,
                     ingested_by="http",
+                    namespace=_dir_ns,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -911,7 +952,7 @@ def create_app(
     async def list_collections() -> list[dict[str, Any]]:
         """List all document collections with doc/chunk counts (internal fields omitted)."""
         try:
-            results = await pipeline.get_all_collections_meta()
+            results = await pipeline.get_all_collections_meta(_get_request_namespace())
             try:
                 return [CollectionListItemSchema.from_result(r).model_dump(mode="json") for r in results]
             except ValidationError as exc:
@@ -931,7 +972,7 @@ def create_app(
         ``include_description_embedding=True`` to retain the field.
         """
         try:
-            results = await pipeline.get_all_collections_meta()
+            results = await pipeline.get_all_collections_meta(_get_request_namespace())
             try:
                 return [
                     CollectionMetaMcpSchema.from_result(
@@ -949,7 +990,7 @@ def create_app(
     async def get_collection_meta(name: str) -> dict[str, Any]:
         """Return public CollectionMeta for one named collection (internal fields omitted)."""
         try:
-            meta = await pipeline.get_collection_meta(name)
+            meta = await pipeline.get_collection_meta(name, namespace=_get_request_namespace())
             if meta is None:
                 return McpErrorResponse(error=f"Collection {name!r} not found", code="not_found")
             try:
@@ -969,7 +1010,7 @@ def create_app(
         """List documents in a collection."""
         try:
             results = await pipeline.list_documents(
-                collection or default_collection, limit
+                collection or default_collection, limit, namespace=_get_request_namespace()
             )
             try:
                 return [DocumentInfoSchema.from_result(r).model_dump(mode="json") for r in results]
@@ -986,11 +1027,16 @@ def create_app(
         namespace: str | None = None,
     ) -> dict[str, Any]:
         """Delete all chunks for a document from the store."""
-        from archon_search.constants import DEFAULT_NAMESPACE  # noqa: PLC0415
+        _ns = _get_request_namespace()
+        if namespace is not None and namespace != _ns:
+            return McpErrorResponse(
+                error=f"namespace mismatch: caller authenticated as {_ns!r} but requested {namespace!r}",
+                code="forbidden",
+            )
         try:
             count = await pipeline.delete_document(
                 doc_id, collection or default_collection,
-                namespace=namespace or DEFAULT_NAMESPACE,
+                namespace=_ns,
             )
             try:
                 schema = DeleteDocumentSchema(deleted=count)
@@ -1019,7 +1065,7 @@ def create_app(
         - Active reindex job in progress → error dict (conflict, 409-equivalent).
         """
         try:
-            ns: str = ctx.meta.get("namespace", DEFAULT_NAMESPACE)
+            ns: str = _get_request_namespace()
             store = pipeline.store
 
             # 404 if collection not in config
@@ -1119,6 +1165,7 @@ def create_app(
         if job_store is None:
             return McpErrorResponse(error="job store not configured", code="internal_error")
 
+        _export_ns = _get_request_namespace()
         exports_dir = get_data_dir() / "exports"
         raw_output = output_path if output_path else str(exports_dir)
 
@@ -1129,7 +1176,7 @@ def create_app(
                 error=_path_unsafe_message(exc.reason), code="path_unsafe"
             )
 
-        meta = await pipeline.store.get_collection_meta(collection, DEFAULT_NAMESPACE)
+        meta = await pipeline.store.get_collection_meta(collection, _export_ns)
         if meta is None:
             return McpErrorResponse(
                 error=f"Collection {collection!r} not found", code="not_found"
@@ -1147,7 +1194,7 @@ def create_app(
             collection=collection,
             output_path=str(archive_path),
             tmp_path=str(tmp_path_val),
-            namespace=DEFAULT_NAMESPACE,
+            namespace=_export_ns,
         )
         return job_to_dict(job)
 
@@ -1167,6 +1214,8 @@ def create_app(
         """
         if job_store is None:
             return McpErrorResponse(error="job store not configured", code="internal_error")
+
+        _import_ns = _get_request_namespace()
 
         if on_error not in {"fail", "skip"}:
             return McpErrorResponse(
@@ -1219,7 +1268,7 @@ def create_app(
                 code="embedding_model_mismatch",
             )
 
-        existing_meta = await pipeline.store.get_collection_meta(collection, DEFAULT_NAMESPACE)
+        existing_meta = await pipeline.store.get_collection_meta(collection, _import_ns)
         if existing_meta is not None and not force_overwrite:
             return McpErrorResponse(
                 error=f"collection {collection!r} already exists; use force_overwrite=True to overwrite",
@@ -1243,7 +1292,7 @@ def create_app(
             force_overwrite=force_overwrite,
             ignore_schema_version=ignore_schema_version,
             on_error=on_error,
-            namespace=DEFAULT_NAMESPACE,
+            namespace=_import_ns,
         )
         return job_to_dict(job)
 
