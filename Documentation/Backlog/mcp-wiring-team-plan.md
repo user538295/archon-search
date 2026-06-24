@@ -384,7 +384,7 @@ flowchart LR
         - #integration_test — `test_mcp_disabled_no_mount` — `mcp.enabled=False` → `/mcp` returns 404
         - #integration_test — `test_mcp_mounted_rejects_unauthenticated` — POST to `/mcp` on the mounted FastAPI app (via TestClient) without a bearer token → assert 401 response; verifies that `APIKeyMiddleware` on the MCP sub-app fires correctly after mount
 
-- [ ] **BE-3** — Slice 1 integration tests: tool count, lifecycle, enable gate #backend-role
+- [x] **BE-3** — Slice 1 integration tests: tool count, lifecycle, enable gate #backend-role
     - Interface Adapters · 2.0h
     - needs BE-2 · completes S1, S2, S6, S10, S14
     - Tests
