@@ -2,6 +2,16 @@
 
 ## What Has Worked
 
+**2026-06-24 — D9 BE-7: namespace gate in MCP search tools breaks tests that set get_collection_meta to return None**
+- Observation: Adding a namespace gate (`await pipeline.get_collection_meta(col, namespace=ns)`) to `mcp.py` broke ~38 existing unit tests that used `pipeline = MagicMock()` with `get_collection_meta = AsyncMock(return_value=None)`. The helpers `_make_search_pipeline_with_result` and `_make_swc_pipeline_with_result` in `tests/test_mcp.py` returned `None` from `get_collection_meta` because it was previously only used for embedding model lookup, not for access gating. After the namespace gate, `None` means "not found" and the tool returns `McpErrorResponse`.
+- Action: Whenever a namespace gate (`get_collection_meta` returning `None` = denied) is added to an MCP tool, audit ALL existing tests for that tool. Any helper that sets `get_collection_meta = AsyncMock(return_value=None)` for non-access-check purposes must be changed to `return_value=MagicMock()`. Only tests explicitly testing "collection not in namespace → error" should use `return_value=None`.
+- Confidence: high
+
+**2026-06-24 — D9 BE-7: integration test namespace isolation requires data injection via store layer, not REST API**
+- Observation: BE-7 integration tests need to inject documents into a specific namespace without going through the full ingest pipeline. Using `ChunkRecord` + `CollectionMeta` directly with `asyncio.run(store.upsert_chunks(...))` and `asyncio.run(pipeline.update_collection_meta(...))` bypasses REST auth and embedding model validation entirely, allowing precise test data setup.
+- Action: For namespace-scoped integration tests, inject test data via `pipeline.store` directly using `asyncio.run()`. Set `CollectionMeta.namespace` to the desired namespace value, then upsert chunks with matching `collection`. This is the only reliable way to create namespace-isolated test data without a live server.
+- Confidence: high
+
 **2026-06-24 — D9 BE-4: FastMCP returns `StarletteWithLifespan`, not `Starlette`; use `user_middleware` not `middleware`**
 - Observation: `create_mcp_http_app()` returns a `fastmcp.server.http.StarletteWithLifespan` object. This class does NOT expose a `.middleware` attribute (unlike standard `Starlette`). The `add_middleware` spy approach works fine for white-box tests. For post-construction inspection (asserting what was wired in), use `app.user_middleware` — which holds a list of `starlette.middleware.Middleware` namedtuples with `.cls` and `.kwargs` attributes, accessible before `build_middleware_stack()` is called.
 - Action: When inspecting middleware registered on a FastMCP-created Starlette app, iterate `app.user_middleware` (not `app.middleware`). Each item has `.cls` (the middleware class) and `.kwargs` (the construction kwargs). This is valid on `StarletteWithLifespan` as observed in FastMCP 3.4.x.

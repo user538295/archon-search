@@ -320,6 +320,9 @@ async def test_mcp_search_rag_fusion_dependency_absent_returns_error() -> None:
     embedder = MagicMock()
     embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
     pipeline._global_embedder = embedder
+    # Namespace gate calls await pipeline.get_collection_meta(); must return a truthy value
+    # so the gate passes and the test can exercise the RAGFusionDependencyError path.
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(
         side_effect=RAGFusionDependencyError(
             "Install archon-search[rag-fusion] to use RAG Fusion"

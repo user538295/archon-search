@@ -180,6 +180,7 @@ async def _resolve_embedder(
     collection: str,
     config: Any,
     namespace: str = DEFAULT_NAMESPACE,
+    meta: Any = None,  # pre-fetched CollectionMeta; skips the get_collection_meta call
 ) -> Any:
     """Resolve the Embedder for *collection* by looking up its active_embedding_model.
 
@@ -188,11 +189,15 @@ async def _resolve_embedder(
 
     ``namespace`` is passed to ``pipeline.get_collection_meta()`` so the lookup
     is scoped to the authenticated namespace (asymmetry fix #2, BE-5).
+
+    ``meta`` may be passed when the caller has already fetched the CollectionMeta,
+    avoiding a redundant round-trip to the store.
     """
     if embedder_cache is None:
         return pipeline._global_embedder
     active_model: str = config.embedding_model if config is not None else ""
-    meta = await pipeline.get_collection_meta(collection, namespace=namespace)
+    if meta is None:
+        meta = await pipeline.get_collection_meta(collection, namespace=namespace)
     if meta is not None:
         active_model = meta.active_embedding_model or active_model
     if not active_model:
@@ -368,7 +373,13 @@ def create_app(
             except ValidationError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
             _col = collection or default_collection
-            _search_embedder = await _resolve_embedder(pipeline, embedder_cache, _col, config, namespace=ns)
+            # Namespace gate: collection must exist in the caller's namespace.
+            # Mirrors the REST search route's get_collection_meta check (routes_search.py)
+            # which returns 404 when the collection is owned by a different namespace.
+            _col_meta = await pipeline.get_collection_meta(_col, namespace=ns)
+            if _col_meta is None:
+                return McpErrorResponse(error=f"collection {_col!r} not found", code="not_found")
+            _search_embedder = await _resolve_embedder(pipeline, embedder_cache, _col, config, namespace=ns, meta=_col_meta)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
@@ -501,7 +512,11 @@ def create_app(
             except ValidationError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
             _swc_col = collection or default_collection
-            _swc_embedder = await _resolve_embedder(pipeline, embedder_cache, _swc_col, config, namespace=_swc_ns)
+            # Namespace gate: collection must exist in the caller's namespace.
+            _swc_meta = await pipeline.get_collection_meta(_swc_col, namespace=_swc_ns)
+            if _swc_meta is None:
+                return McpErrorResponse(error=f"collection {_swc_col!r} not found", code="not_found")
+            _swc_embedder = await _resolve_embedder(pipeline, embedder_cache, _swc_col, config, namespace=_swc_ns, meta=_swc_meta)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()

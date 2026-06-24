@@ -427,7 +427,7 @@ flowchart LR
         - #integration_test — `test_mcp_telemetry_entry_written` — real TelemetryWriter; call MCP `search` tool; assert JSONL log contains one entry with expected fields
         - #integration_test — `test_mcp_telemetry_disabled_no_entry` — `writer=None`; call MCP `search`; no JSONL entry written
 
-- [ ] **BE-7** — Slice 2 integration tests: namespace propagation, telemetry, key_store, writer=None #backend-role
+- [x] **BE-7** — Slice 2 integration tests: namespace propagation, telemetry, key_store, writer=None #backend-role
     - Interface Adapters · 2.0h
     - needs BE-4, BE-5, BE-6 · completes S8, S9, S12, S13, S14
     - Tests

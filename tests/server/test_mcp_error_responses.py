@@ -69,6 +69,7 @@ def _make_app(pipeline: MagicMock) -> _FakeApp:
 async def test_search_error_returns_structured_error() -> None:
     """When pipeline.search() raises, tool returns dict with error and code keys."""
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(side_effect=RuntimeError("boom"))
     app = _make_app(pipeline)
     result = await app.tools["search"](query="q", collection=None)
@@ -82,6 +83,7 @@ async def test_search_error_returns_structured_error() -> None:
 async def test_search_with_context_error_returns_structured_error() -> None:
     """When pipeline.search_with_context() raises, tool returns structured error dict."""
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search_with_context = AsyncMock(side_effect=RuntimeError("swc boom"))
     app = _make_app(pipeline)
     result = await app.tools["search_with_context"](query="q", collection=None)

@@ -118,6 +118,7 @@ async def test_search_tool_uses_resolved_namespace() -> None:
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(return_value=_make_search_result())
     pipeline._global_embedder = MagicMock()
 
@@ -148,6 +149,7 @@ async def test_search_with_context_tool_uses_resolved_namespace() -> None:
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     swc_result = SearchWithContextResult(results=[], pipeline_result=_make_search_result())
     pipeline.search_with_context = AsyncMock(return_value=swc_result)
     pipeline._global_embedder = MagicMock()
@@ -705,6 +707,58 @@ async def test_resolve_embedder_uses_resolved_namespace() -> None:
     )
     assert ns_passed == "ns-emb", (
         f"_resolve_embedder must pass namespace='ns-emb' to get_collection_meta, got {call_args}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# test_resolve_embedder_skips_meta_fetch_when_meta_provided
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_embedder_skips_meta_fetch_when_meta_provided() -> None:
+    """_resolve_embedder does NOT call pipeline.get_collection_meta when meta= is provided.
+
+    The BE-7 namespace gate pre-fetches CollectionMeta before calling _resolve_embedder
+    to avoid a redundant get_collection_meta call. This test verifies that when meta=
+    is passed with a truthy value, the internal pipeline.get_collection_meta call is
+    NOT made.
+
+    Regression guard: if the `meta` shortcut is removed, pipeline.get_collection_meta
+    would be called and the assertion would fail.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import archon_search.server.mcp as mcp_module
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.embedder_cache import EmbedderCache
+
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock()  # must NOT be called
+    pipeline._global_embedder = MagicMock()
+
+    embedder_cache = MagicMock(spec=EmbedderCache)
+    embedder_cache.get_or_load = AsyncMock(return_value=MagicMock())
+
+    from archon_search.config import SearchConfig
+    cfg = SearchConfig()
+
+    pre_fetched_meta = CollectionMeta(
+        name="my-collection",
+        active_embedding_model="BAAI/bge-small-en-v1.5",
+        doc_count=1,
+        chunk_count=1,
+        namespace="ns-a",
+    )
+
+    # Call with meta= provided — pipeline.get_collection_meta must NOT be called
+    await mcp_module._resolve_embedder(
+        pipeline, embedder_cache, "my-collection", cfg, namespace="ns-a", meta=pre_fetched_meta
+    )
+
+    pipeline.get_collection_meta.assert_not_called(), (
+        "When meta= is provided to _resolve_embedder, it must NOT call "
+        "pipeline.get_collection_meta again (double-fetch eliminated by BE-7 fix)."
     )
 
 

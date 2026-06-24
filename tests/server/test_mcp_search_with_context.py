@@ -91,6 +91,7 @@ def _result(idx: int, language: str = "") -> SearchResult:
 async def _call_search_with_context(results_list, include_metadata: bool = False):
     from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(
         results=results_list,
         pipeline_result=SearchPipelineResult(results=[], acl_filtered=False),

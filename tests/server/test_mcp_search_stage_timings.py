@@ -66,6 +66,7 @@ def _make_app(pipeline: MagicMock, timings_enabled: bool = True) -> _FakeApp:
 def _make_search_pipeline() -> MagicMock:
     """Pipeline whose search() records embed stage (like the real pipeline would)."""
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
 
     async def _search(*args: Any, **kwargs: Any) -> SearchPipelineResult:
         with record_stage("embed"):
@@ -79,6 +80,7 @@ def _make_search_pipeline() -> MagicMock:
 def _make_search_with_context_pipeline() -> MagicMock:
     """Pipeline whose search_with_context() records embed + context stages."""
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
 
     async def _search_with_context(*args: Any, **kwargs: Any):
         from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult

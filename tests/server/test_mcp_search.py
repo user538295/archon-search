@@ -76,6 +76,7 @@ def _make_result(metadata: dict[str, str] | None = None, language: str = "") -> 
 
 async def _call_mcp_search(pipeline_result: SearchPipelineResult, include_metadata: bool | None = None) -> dict[str, Any]:
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(return_value=pipeline_result)
 
     with __import__("unittest.mock", fromlist=["patch"]).patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
@@ -146,6 +147,7 @@ async def test_mcp_search_forwards_filters_to_pipeline() -> None:
     result = _make_result(metadata={"k": "v"})
     pipeline_result = SearchPipelineResult(results=[result], acl_filtered=False)
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(return_value=pipeline_result)
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
@@ -182,6 +184,7 @@ async def test_mcp_search_with_context_forwards_filters_to_pipeline() -> None:
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
     pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 

@@ -802,7 +802,7 @@ def _make_search_pipeline_with_result(result=None, acl_filtered=False, excluded=
     pipeline = MagicMock()
     pipeline._global_embedder = MagicMock()
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
-    pipeline.get_collection_meta = AsyncMock(return_value=None)
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(
         return_value=SearchPipelineResult(
             results=[result],
@@ -986,7 +986,7 @@ def _make_swc_pipeline_with_result(result=None, hyde_applied=False, with_context
     pipeline = MagicMock()
     pipeline._global_embedder = MagicMock()
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
-    pipeline.get_collection_meta = AsyncMock(return_value=None)
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search_with_context = AsyncMock(return_value=swc_result)
     return pipeline
 

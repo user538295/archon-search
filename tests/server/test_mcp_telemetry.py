@@ -68,6 +68,7 @@ def _make_pipeline(
     raises: Exception | None = None,
 ) -> MagicMock:
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     if raises is not None:
         pipeline.search = AsyncMock(side_effect=raises)
     else:
@@ -194,6 +195,7 @@ def _make_swc_pipeline(
 ) -> MagicMock:
     """Build a stub pipeline with a search_with_context method."""
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     if raises is not None:
         pipeline.search_with_context = AsyncMock(side_effect=raises)
     else:
@@ -320,6 +322,7 @@ async def test_mcp_search_returns_results_and_acl_filtered() -> None:
 async def test_mcp_search_acl_filtered_propagated() -> None:
     """When pipeline returns acl_filtered=True, MCP response has acl_filtered: true."""
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(
         return_value=SearchPipelineResult(results=[], acl_filtered=True)
     )

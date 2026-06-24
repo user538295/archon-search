@@ -75,6 +75,7 @@ async def test_mcp_search_tool_includes_new_keys() -> None:
         acl=["team-a"],
     )
     pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(
         return_value=SearchPipelineResult(results=[sr], acl_filtered=False)
     )
