@@ -16,9 +16,9 @@
 # Mount the MCP endpoint at /mcp on the same port as REST (default: true).
 # When true, FastMCP's streamable-HTTP transport is bound inside the existing
 # FastAPI app — no second port or process is required.
-# Set to false to prevent the /mcp mount from being created; GET /status will
-# return the mcp field as null.
-# enabled = true
+# Set to false to prevent the /mcp mount from being created; GET /status and
+# GET /health will return the mcp field as null.
+enabled = true
 
 [auth]
 # Grace period for key rotation (seconds). When > 0, the old default key gets

@@ -499,7 +499,7 @@ flowchart LR
         - #unit_test — `test_health_includes_mcp_bind_when_enabled` — `GET /health` → response has `mcp.bindAddress` non-null when enabled
         - #unit_test — `test_health_omits_mcp_when_disabled` — `GET /health` → `mcp` is `null` when disabled
 
-- [ ] **BE-10** — Add `[mcp]` section to `archon-search.toml.example` #backend-role
+- [x] **BE-10** — Add `[mcp]` section to `archon-search.toml.example` #backend-role
     - Frameworks & Drivers · 0.25h
     - needs K-1 · completes (operational documentation)
     - Tests
