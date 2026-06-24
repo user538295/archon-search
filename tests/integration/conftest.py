@@ -35,6 +35,7 @@ def make_real_app(
     backup_enabled: bool = False,
     maintenance_enabled: bool = False,
     mcp_enabled: bool = False,
+    telemetry_enabled: bool = False,
     namespaces: dict[str, str] | None = None,
 ) -> Iterator[tuple[TestClient, Any, str]]:
     """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
@@ -42,6 +43,9 @@ def make_real_app(
     Uses ``monkeypatch.setenv`` for env vars so they auto-revert after each test.
     Pass ``backup_enabled=True`` only in Task 2.2 backup tests.
     Pass ``maintenance_enabled=True`` to enable the MaintenanceLoop with interval_hours=1.
+    Pass ``telemetry_enabled=True`` to enable the TelemetryWriter (writes JSONL to
+    ``tmp_path/search-logs/``).  The log_dir is always set to ``tmp_path/search-logs``
+    so any accidental write in a disabled-telemetry test is caught in the temp dir.
     Pass ``namespaces={'key_hex': 'ns-name', ...}`` for multi-namespace tests.
     The TestClient lifespan (startup + shutdown) is managed by the context block.
     """
@@ -62,6 +66,9 @@ def make_real_app(
     # MCP is mounted only when explicitly requested; default off keeps unrelated
     # integration tests fast and avoids the FastMCP session-manager startup cost.
     cfg.mcp.enabled = mcp_enabled
+    # Always point telemetry log_dir to tmp_path so any accidental write is caught
+    # in the test's temp dir, not the developer's home directory.
+    cfg.telemetry.log_dir = str(tmp_path / "search-logs")
 
     if backup_enabled:
         cfg.backup.interval_hours = 1
@@ -69,6 +76,8 @@ def make_real_app(
 
     if maintenance_enabled:
         cfg.maintenance.interval_hours = 1  # enabled; manual trigger still fires immediately
+
+    cfg.telemetry.enabled = telemetry_enabled
 
     if namespaces is not None:
         cfg.namespaces = namespaces

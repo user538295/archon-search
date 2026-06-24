@@ -32,6 +32,16 @@
 - Action: In MCP test helpers that perform the `notifications/initialized` step, always assert `resp.status_code in (200, 202, 204)` rather than `== 202` or ignoring the response entirely.
 - Confidence: high
 
+**2026-06-24 — D9 BE-6: MCP search telemetry test must ingest a real collection before calling search**
+- Observation: `_call_mcp_search(client, ..., collection="test-col")` hits an error path (collection not found) when the store is empty, writing an error-path telemetry entry (status="internal_error"). The test was asserting `endpoint=="search"` which passes for error entries, masking that the success-path guard at `mcp.py:393` was never exercised. Ingest a real document via `ingest_file_via_path` before the MCP call; then assert `status == "ok"` to pin the success code path.
+- Action: Any MCP search telemetry test that checks `status == "ok"` must first create the target collection using `ingest_file_via_path`. Never assert only `endpoint` — always add `status == "ok"` to prove the success path, not just any path.
+- Confidence: high
+
+**2026-06-24 — D9 BE-6: `make_real_app` must set `cfg.telemetry.log_dir` to `tmp_path/search-logs` unconditionally**
+- Observation: `SearchConfig()` defaults `telemetry.log_dir` to `~/.archon-search/search-logs`. Tests that created a `tmp_path / "search-logs"` directory manually and checked it were checking a path the app never writes to — the assertion was vacuously true regardless of whether the writer fired or not.
+- Action: Set `cfg.telemetry.log_dir = str(tmp_path / "search-logs")` in `make_real_app` unconditionally (before the `telemetry_enabled` branch). Then always check `Path(_cfg.telemetry.log_dir)` in tests — never construct a parallel path by hand. Add `telemetry_enabled: bool = False` parameter that sets `cfg.telemetry.enabled = True` so tests don't need to duplicate the full `create_app` boilerplate.
+- Confidence: high
+
 **2026-06-24 — D9 BE-1: adding a top-level SearchConfig dataclass field requires three coupled updates plus an allowlist line-number bump**
 - Observation: Adding `McpConfig` + `SearchConfig.mcp` touched four files in a fixed pattern: (1) `config.py` dataclass + field + `_apply_toml` parse block (mirror the `[auth]` block exactly: `doc.get("mcp", {})` → fresh `McpConfig()` → `if "enabled" in cfg: _coerce_bool(...)` → assign); (2) `test_config_defaults.py::test_all_defaults_snapshot` — the keyset guard (`set(expected.keys()) == {f.name for f in dataclasses.fields(SearchConfig)}`) FAILS if you forget the snapshot entry; (3) `tests/path_home_allowlist.txt` — the `config.py:NNN` line number for the `Path.home()` reference shifts when you add lines above it (here 186→193); the SHA stays the same because the line content is unchanged. The toml.example `[mcp]` section is a SEPARATE task (BE-10) — keep it out of the BE-1 commit even if it is already in the working tree.
 - Action: When adding a `SearchConfig` field, update config.py + the defaults snapshot + the path allowlist line number in the same commit. Per-`_coerce_bool` "wrong type raises" tests are NOT expected (only 2 of 14 sibling call sites have one); rely on `_coerce_bool`'s own contract.
@@ -80,6 +90,26 @@
 **2026-06-23 — D7 T-2: iterative review found two meaningful improvements to e2e assertion strength**
 - Observation: The initial 3-test file had: (1) S4 verified only via auth-rejection (indirect), not via GET /keys read-back; (2) status=all view asserted key presence but not `status=="revoked"` field; (3) no `WWW-Authenticate: Bearer` header check on 401 responses. All three were legitimate Moderate findings caught by DA review. The fixes added one-line to one-paragraph additions that materially strengthen coverage without changing test structure.
 - Action: For any e2e test that verifies a revocation, always add a GET read-back assertion (not just auth rejection) to directly prove on-disk persistence. Always check `WWW-Authenticate: Bearer` on 401 responses in e2e middleware tests.
+- Confidence: high
+
+**2026-06-24 — D9 BE-5: `ContextVar.get` is a read-only C slot — patch the module-level helper, not the ContextVar**
+- Observation: `patch.object(mcp_module._current_http_request, "get", ...)` raises `AttributeError: '_contextvars.ContextVar' object attribute 'get' is read-only`. ContextVar methods are implemented in C and cannot be patched via `unittest.mock`. The fix is to patch the Python-level helper function that wraps the ContextVar call: `patch("archon_search.server.mcp._get_request_namespace", return_value=ns)`.
+- Action: Never attempt to patch a `ContextVar`'s `.get()` or `.set()` methods. Always patch the Python-level wrapper function (`_get_request_namespace`) that encapsulates the ContextVar read. This is both correct and more resilient to ContextVar implementation changes.
+- Confidence: high
+
+**2026-06-24 — D9 BE-5: use `fastmcp.server.dependencies.get_http_request()` (public API) instead of private `_current_http_request` ContextVar**
+- Observation: `fastmcp.server.http._current_http_request` is a private symbol. FastMCP 3.4+ ships `fastmcp.server.dependencies.get_http_request()` as a public API that wraps `_current_http_request` plus also handles `request_ctx` (MCP SDK path) and Docket worker snapshots. The public API raises `RuntimeError` when no HTTP context is active, which can be caught cleanly for fallback.
+- Action: When reading the current HTTP request inside a FastMCP tool or helper, always use `from fastmcp.server.dependencies import get_http_request` with `try: req = get_http_request() except (ImportError, RuntimeError): return DEFAULT_NAMESPACE`. Never import `_current_http_request` directly from `fastmcp.server.http`.
+- Confidence: high
+
+**2026-06-24 — D9 BE-5: fastmcp stub contamination in xdist_group("mcp") — lazy import with fallback is the correct fix for mcp.py**
+- Observation: Some test files stub `fastmcp` as a plain `types.ModuleType("fastmcp")` without a `server.http` submodule. A top-level `from fastmcp.server.http import ...` in `mcp.py` causes `ModuleNotFoundError` in those files' workers. Moving the import inside the function with `try/except ImportError` prevents the module-level import failure and lets test stubs work correctly without changing the test infrastructure.
+- Action: Any import of `fastmcp` submodules (e.g. `fastmcp.server.dependencies`) in `mcp.py` that is not guarded by the existing `if "fastmcp" not in sys.modules` pattern should be lazy (inside the function body) with `try/except ImportError`. This is the surgical fix that does not require updating every stub-installing test file.
+- Confidence: high
+
+**2026-06-24 — D9 BE-5: `delete_document` explicit namespace parameter is a cross-tenant bypass — security finding**
+- Observation: The `delete_document` MCP tool accepted an optional `namespace: str | None` caller-controlled parameter and used `namespace or _get_request_namespace()`. This allowed any authenticated caller to pass a foreign namespace and operate on another tenant's documents. The fix: validate that caller-supplied `namespace` matches `_get_request_namespace()`; mismatch returns `code="forbidden"` before any pipeline call.
+- Action: Any MCP tool that has a caller-controllable `namespace` parameter AND also does namespace-scoped pipeline operations must validate the supplied namespace against the authenticated namespace (`_get_request_namespace()`). The authenticated namespace is always authoritative; caller-supplied namespaces are a compatibility hint only, not a capability escalation.
 - Confidence: high
 
 **2026-06-23 — D7 FE-2: `pytest.mark.integration` as a bare expression vs decorator — dead code trap**

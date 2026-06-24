@@ -419,7 +419,7 @@ flowchart LR
         - #unit_test — `test_resolve_embedder_uses_resolved_namespace` — mock pipeline; `_resolve_embedder` called with ns-A context → `pipeline.get_collection_meta` called with `namespace="ns-a"`
         - #integration_test — `test_mcp_namespace_propagation_cross_ns_tool_call` — managed key scoped to ns-a; call `list_documents`; assert response references only ns-a collections
 
-- [ ] **BE-6** — Asymmetry fix #3: wire telemetry writer + key_store from lifespan to `create_mcp_http_app()` #backend-role
+- [x] **BE-6** — Asymmetry fix #3: wire telemetry writer + key_store from lifespan to `create_mcp_http_app()` #backend-role
     - Interface Adapters · 1.0h
     - needs BE-2 · completes S9, S13, S14 (confirmed), C2 (completed)
     - Tests
