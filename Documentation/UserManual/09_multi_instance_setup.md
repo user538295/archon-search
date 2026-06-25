@@ -134,31 +134,21 @@ archon-search stop && archon-search start
 
 ### Step 1 — Create `.env`
 
-Copy `.env.example` to `.env` next to `docker-compose.yml`, then make two edits:
+Copy `.env.example` to `.env` next to `docker-compose.yml`, then edit the image tag:
 
 ```bash
 cp .env.example .env
 ```
 
-1. **Set the image path** — uncomment the `ARCHON_SEARCH_IMAGE` line and replace the local-build default with the registry path and a pinned version tag:
+**Set the image tag** — the `.env.example` ships with `ARCHON_SEARCH_IMAGE` already uncommented. Replace the `TAG` placeholder with an actual release tag (e.g. `25.6.1`):
 
-   ```dotenv
-   ARCHON_SEARCH_IMAGE=ghcr.io/user538295/archon-search:25.6.0
-   ```
+```dotenv
+ARCHON_SEARCH_IMAGE=ghcr.io/user538295/archon-search:TAG
+```
 
-   > **Note:** The comment in `.env.example` on the `ARCHON_SEARCH_IMAGE` line says "use a locally-built image instead" — the same variable serves both purposes (local builds AND registry images). Ignore the comment direction and set any valid image reference.
+Replace `TAG` with the version you want to pin (e.g. `25.6.1`). Pinning prevents `docker compose pull` from silently upgrading your test environment. If you leave `TAG` literally, the pull will fail — the literal string `TAG` is not a valid image tag.
 
-   Replace `25.6.0` with the version you want to pin. Pinning prevents `docker compose pull` from silently upgrading your test environment. Without this line set, Compose uses `ghcr.io/your-org/archon-search:latest` — a placeholder that will fail to pull.
-
-2. **Comment out the API key line** — the `.env.example` ships with `ARCHON_SEARCH_API_KEY=your-key-here` uncommented. Comment it out:
-
-   ```dotenv
-   # ARCHON_SEARCH_API_KEY=your-key-here
-   ```
-
-   Do NOT set a real key here when running multiple instances.
-
-> **Do NOT set `ARCHON_SEARCH_API_KEY` in `.env` when running multiple instances.** The `docker-compose.yml` passes `${ARCHON_SEARCH_API_KEY:-}` to every service via environment substitution, so a non-empty value in `.env` (or your shell environment) overrides auto-generation for all services simultaneously — defeating per-instance key isolation silently. Leave the key line absent or commented out and let each container auto-generate its own key from its own named volume.
+> **`ARCHON_SEARCH_API_KEY` is already commented out in `.env.example`** — do not uncomment it. The `docker-compose.yml` passes `${ARCHON_SEARCH_API_KEY:-}` to every service via environment substitution, so a non-empty value in `.env` (or your shell environment) overrides auto-generation for all services simultaneously, defeating per-instance key isolation silently. Leave the key line commented out and let each container auto-generate its own key from its own named volume.
 
 ### Step 2 — Start dev-UAT
 

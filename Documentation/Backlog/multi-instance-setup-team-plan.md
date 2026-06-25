@@ -307,7 +307,7 @@ flowchart LR
         - #e2e_test — `test_archon_dev_starts_and_responds` — `docker compose up archon-dev archon-test -d` (with `ARCHON_SEARCH_IMAGE` set; no `ARCHON_SEARCH_API_KEY` in env or `.env`); poll `/ready` on ports 18765 and 18766; after both healthy, retrieve dev-UAT key via `docker compose exec archon-dev cat /data/.search.env | grep -o '[^=]*$'` and test-instance key via `docker compose exec archon-test cat /data/.search.env | grep -o '[^=]*$'`; ingest a document to dev-UAT (port 18765), search archon-test (port 18766) for it, assert zero results (data isolation); confirm `archon-dev-data` and `archon-test-data` are separate volumes
         - #e2e_test — `test_cross_auth_fails` — use auto-generated keys retrieved via `docker compose exec` after container startup; assert dev-UAT key returns 401 on port 18766 and archon-test key returns 401 on port 18765 (both directions)
         - #e2e_test — `test_mcp_endpoint_reachable` — after dev-UAT starts, assert that `GET 127.0.0.1:18765/mcp` returns HTTP 401 (not 404) — a 401 proves the MCP sub-app is mounted and its auth middleware is active; a 404 would indicate the mount never happened (`mcp.enabled = false` or mount failure).
-- [ ] **T-2** — Manual: follow `09_multi_instance_setup.md` top-to-bottom on macOS or Linux; verify both `/health` endpoints respond, data dirs differ, port conflict and no-volume warnings are clear #tester-role
+- [x] **T-2** — Manual: follow `09_multi_instance_setup.md` top-to-bottom on macOS or Linux; verify both `/health` endpoints respond, data dirs differ, port conflict and no-volume warnings are clear #tester-role
     - — · 2.0h
     - needs BE-1, BE-2 · completes S1, S2, S4, S7, S8, S9, S11
     - Tests
