@@ -241,20 +241,26 @@ def compose_stack() -> object:
         )
         yield
     finally:
-        # ``down -v`` removes containers AND named volumes so the next run starts
-        # clean (no stale keys or index data from a previous run).
+        # Stop and remove only the test containers, then remove only their volumes.
+        # WARNING: --volumes removes ALL declared named volumes in docker-compose.yml,
+        # including archon-prod-data — run only when no prod Docker data volume should
+        # be preserved. We use explicit volume removal instead to avoid that hazard.
         subprocess.run(
-            [
-                "docker",
-                "compose",
-                "down",
-                "--volumes",
-                "--remove-orphans",
-                "archon-dev",
-                "archon-test",
-            ],
+            ["docker", "compose", "stop", "archon-dev", "archon-test"],
             check=False,
             timeout=60,
+            cwd=REPO_ROOT,
+        )
+        subprocess.run(
+            ["docker", "compose", "rm", "-f", "archon-dev", "archon-test"],
+            check=False,
+            timeout=60,
+            cwd=REPO_ROOT,
+        )
+        subprocess.run(
+            ["docker", "volume", "rm", "archon-dev-data", "archon-test-data"],
+            check=False,
+            timeout=30,
             cwd=REPO_ROOT,
         )
 
@@ -372,6 +378,25 @@ def test_archon_dev_starts_and_responds(compose_stack: object) -> None:  # noqa:
         f"Data isolation failure: collection '{collection}' registered on archon-dev "
         f"is visible on archon-test. Collections on test: {collections_on_test}"
     )
+
+    # Step 5b — search-based data isolation: POST /search on archon-test for the
+    # ingested content must return 404 (collection absent) or zero results.
+    search_status, search_body = _http_post_json(
+        f"http://localhost:{TEST_HOST_PORT}/search",
+        {"query": "isolation test document", "collection": collection},
+        bearer=test_key,
+    )
+    assert search_status in (404, 200), (
+        f"POST /search on archon-test returned unexpected status {search_status}: "
+        f"{search_body.decode()}"
+    )
+    if search_status == 200:
+        result_count = json.loads(search_body).get("result_count", 0)
+        assert result_count == 0, (
+            f"Data isolation failure: search on archon-test for content ingested to "
+            f"archon-dev returned {result_count} result(s). Expected 0 (collection "
+            f"'{collection}' must not be visible on the test instance)."
+        )
 
     # Step 6 — confirm volumes are distinct via docker compose config.
     result = subprocess.run(

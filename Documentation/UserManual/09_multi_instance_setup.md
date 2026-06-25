@@ -511,13 +511,15 @@ docker compose down archon-dev
 archon-search stop
 ```
 
-`docker compose down archon-dev` tears down the container but leaves `archon-dev-data` intact. The key and index persist for the next `docker compose up archon-dev`.
+`docker compose down archon-dev` tears down the container but leaves `archon-dev-data` intact (requires Docker Compose V2.24.0+ to scope teardown to a single service; on older versions use `docker compose stop archon-dev && docker compose rm -f archon-dev` instead). The key and index persist for the next `docker compose up archon-dev`.
 
 To remove the volume (destroys all dev-UAT data):
 
 ```bash
 docker compose down archon-dev -v
 ```
+
+> **Note:** `docker compose down -v` requires Docker Compose V2.24.0+ to scope to a single service. On older versions use `docker compose stop archon-dev && docker compose rm -f archon-dev && docker volume rm archon-dev-data` instead.
 
 ---
 

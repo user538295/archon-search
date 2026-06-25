@@ -2,6 +2,31 @@
 
 ## What Has Worked
 
+**2026-06-26 — MIS T-4: project close-out**
+- Observation: Moving completed brief+plan files from `Documentation/Backlog/` to `Documentation/Completed/` is a universal project convention — every completed feature does this, but it is easy to forget during close-out tasks that are otherwise focused on code or test cleanup.
+- Action: Make `mv Documentation/Backlog/<feature>-*.md Documentation/Completed/` an explicit checklist item in every T-4/close-out task; do not consider a feature closed until the files are moved.
+- Confidence: high
+
+**2026-06-26 — MIS T-4: `docker compose down --volumes` removes ALL declared named volumes, not just those for named services**
+- Observation: `docker compose down --volumes archon-dev archon-test` removes ALL top-level declared volumes in `docker-compose.yml`, including `archon-prod-data` (which is declared even if `archon-prod` is not running). Using `--volumes` in a test teardown fixture silently destroys prod data volumes.
+- Action: In test fixture teardown that targets a subset of services, use `docker compose stop <services>` + `docker compose rm -f <services>` + `docker volume rm <specific-volume-names>` instead of `down --volumes`. Never use `--volumes` unless the intent is to destroy ALL declared volumes.
+- Confidence: high
+
+**2026-06-26 — MIS T-4: Data isolation assertion should use a search query returning zero results, not just collection-list absence**
+- Observation: The spec for the data isolation test says to "search archon-test for it, assert zero results." The initial implementation only checked collection-list absence. A stronger assertion is a POST /search that proves both metadata AND data are isolated — collection-list absence only tests metadata.
+- Action: For data isolation e2e tests, always include a search-based assertion (POST /search returning 404 or result_count == 0) in addition to or instead of a collection-list check. The search path exercises a different code path and matches the spec more precisely.
+- Confidence: high
+
+**2026-06-26 — MIS T-4: Integration test coverage for cross-links and doc-index prevents silent regression**
+- Observation: Cross-links (e.g., `09_multi_instance_setup` referenced from `03_running_the_server.md` and `08_running_with_docker.md`) and doc-index entries can be silently removed during future edits with no CI signal. Adding assertions to `test_compose_lint.py` catches these regressions immediately.
+- Action: For every new user-manual file, add three tests to `test_compose_lint.py`: (1) doc-index contains the filename, (2) related cross-link files contain the filename. These are simple substring assertions that pay off across the entire project lifetime.
+- Confidence: high
+
+**2026-06-26 — MIS T-4: Action items buried in descriptive edge-case notes go stale and untracked**
+- Observation: The D8 brief's "Salt co-location — scope of protection" bullet ends with "Document this explicitly in `150_security_and_privacy_architecture.md`" — an imperative embedded inside a descriptive note. Brooks-Lint C1-B-2 flagged this as a Suggestion: a reader cannot tell whether the action was done or remains open without reading the architecture doc.
+- Action: Never end a design-decision note with an unresolved imperative. Either verify the referenced doc was updated and strike the instruction, or promote it to an explicit open item or tracked follow-up task.
+- Confidence: high
+
 **2026-06-26 — MIS BE-4: Docker image baked-in env vars make compose env declarations cosmetic — always verify against the Dockerfile**
 - Observation: Part 7 (fastembed model cache section) had Step 1 (uncomment `FASTEMBED_CACHE_PATH` in compose) presented as functionally required. But `08_running_with_docker.md` confirmed the image already bakes in `FASTEMBED_CACHE_PATH=/data/fastembed-cache`. Step 1 is purely cosmetic — the real required steps are volume mount + volume declaration (Steps 2+3). Two independent DA reviewers and Brooks-Lint all caught this as Major.
 - Action: Before writing a compose "uncomment step" for an env var, check whether the image already sets that value. If the Dockerfile or the env var table in a sibling doc shows "baked into image", add a note that the step is for clarity only. Never present it as required unless it sets a non-default value.

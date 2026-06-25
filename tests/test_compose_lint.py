@@ -378,3 +378,37 @@ def test_env_example_no_active_api_key(env_example_text: str) -> None:
         "line with a non-empty value — setting this env var defeats per-instance "
         "key isolation when multiple Docker services share the same .env file"
     )
+
+
+# ---------------------------------------------------------------------------
+# MIS cross-links and doc-index (spec: 09_multi_instance_setup.md is indexed
+# and cross-linked from the running-server and docker guides)
+# ---------------------------------------------------------------------------
+
+
+def test_doc_index_contains_multi_instance_setup() -> None:
+    index_file = REPO_ROOT / "Documentation/Architecture/990_documentation_index_and_contribution_guide.md"
+    content = index_file.read_text()
+    assert "09_multi_instance_setup" in content, (
+        "990_documentation_index_and_contribution_guide.md must reference "
+        "09_multi_instance_setup so the new user manual file is discoverable "
+        "via the documentation index"
+    )
+
+
+def test_running_server_doc_cross_links_multi_instance_setup() -> None:
+    doc_file = REPO_ROOT / "Documentation/UserManual/03_running_the_server.md"
+    content = doc_file.read_text()
+    assert "09_multi_instance_setup" in content, (
+        "03_running_the_server.md must cross-link to 09_multi_instance_setup "
+        "so operators running the server can discover the multi-instance guide"
+    )
+
+
+def test_docker_guide_cross_links_multi_instance_setup() -> None:
+    doc_file = REPO_ROOT / "Documentation/UserManual/08_running_with_docker.md"
+    content = doc_file.read_text()
+    assert "09_multi_instance_setup" in content, (
+        "08_running_with_docker.md must cross-link to 09_multi_instance_setup "
+        "so operators following the Docker guide can discover the multi-instance setup"
+    )
