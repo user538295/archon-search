@@ -15,7 +15,7 @@ For the architectural commitment, see ADR [`../ADRs/05_opt_in_local_telemetry_no
 1. **Privacy is structural, not procedural.** The schema has no field for the query, and no factory accepts one.
 2. **Local-only.** No transport ships in v1; nothing leaves the host.
 3. **Off by default.** A fresh install produces no telemetry until the operator opts in.
-4. **Path-derived identifiers are an accepted leak.** Documented and tracked, not silently waived.
+4. **Path-derived identifiers are mitigated by HMAC hashing.** Operators sharing logs can enable `hash_doc_ids = true`; see below.
 
 ## Default posture
 
@@ -25,6 +25,7 @@ For the architectural commitment, see ADR [`../ADRs/05_opt_in_local_telemetry_no
 | `[telemetry].retention_days` | `30` | `archon_search/config.py` `TelemetryConfig.retention_days = 30` |
 | `[telemetry].export_enabled` | `false` (always — coerced from `true` with a warning) | `archon_search/config.py:213–215` |
 | `[telemetry].log_dir` | `~/.archon-search/search-logs` | `archon_search/config.py` `TelemetryConfig.log_dir` |
+| `[telemetry].hash_doc_ids` | `false` | `archon_search/config.py` `TelemetryConfig.hash_doc_ids = False` |
 
 When `enabled = false`, the `TelemetryWriter` is never started and `app.state.telemetry_writer` is `None` (`archon_search/server/app.py:104–105`).
 
@@ -35,15 +36,15 @@ Note: `retention_days` is validated at config load — values `< 1` raise `Confi
 The Pydantic model in `archon_search/telemetry/entry.py` enforces the privacy contract by construction:
 
 - `TelemetryEntry.model_config = ConfigDict(extra="forbid", frozen=True)` — extra fields cannot be added at runtime, and instances are immutable.
-- The documented field set (`DOCUMENTED_SCHEMA_FIELDS` at `entry.py:39–54`) is exactly: `query_id`, `timestamp`, `endpoint`, `latency_ms`, `status`, `collection`, `result_count`, `result_doc_ids`, `truncated`, `collections`, `decomposer_invoked`, `error_kind`. **There is no `query` field.**
-- The three factory classmethods are keyword-only and none accepts a `query` parameter:
-  - `from_search_tool_result(*, endpoint, collection, result_doc_ids, latency_ms)`
+- The documented field set (`DOCUMENTED_SCHEMA_FIELDS` at `entry.py:39–54`) is exactly: `query_id`, `timestamp`, `endpoint`, `latency_ms`, `status`, `collection`, `result_count`, `result_doc_ids`, `truncated`, `collections`, `decomposer_invoked`, `error_kind`, `doc_ids_hashed`. **There is no `query` field.**
+- The factory classmethods are keyword-only and none accepts a `query` parameter:
+  - `from_search_tool_result(*, endpoint, collection, result_doc_ids, latency_ms, doc_id_hasher=None)`
   - `from_route_response(*, collections, decomposer_invoked, latency_ms)`
   - `from_error(*, endpoint, status, error_kind, latency_ms)`
 
 Adding raw query logging therefore requires editing the model itself — a deliberate, reviewable code change. This invariant is also called out in the project `CLAUDE.md` ("Structural invariant: factory methods in `entry.py` do not accept a `query` parameter").
 
-The current weakness is that the invariant is enforced by convention at the factory level, not by a dedicated unit test. Tracked as `SEC-3` in [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md). #Unverified
+The invariant is enforced structurally at the factory level AND by a dedicated test (`tests/telemetry/test_entry_factories.py::test_factory_signatures_reject_raw_query_argument`) that introspects every factory and forbids `{'query', 'query_text', 'body', 'request'}` kwargs. Tracked as `SEC-3` in [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md).
 
 ## What goes into telemetry vs. what does not
 
@@ -58,20 +59,35 @@ The current weakness is that the invariant is enforced by convention at the fact
 | `result_count`, `result_doc_ids`, `truncated` | Embedding vectors |
 | `decomposer_invoked` (route) | Per-result scores |
 | `error_kind` from a closed enum | Anything from `request.state.namespace` — namespace is not in the schema |
+| `doc_ids_hashed` (bool flag) | Raw query text in any form |
 
 The error path uses a closed `ErrorKind` enum (`empty_query`, `slot_out_of_range`, `timeout`, `internal_error`, `validation_error`, `other`); free-form messages cannot enter telemetry.
 
-## doc_id path-leak risk — accepted
+## doc_id path-leak risk — mitigated by HMAC hashing mode (D8)
 
 `doc_id` values are derived from source file paths. The risk:
 
 - `result_doc_ids` is logged in every successful search telemetry entry.
-- The `source_path` column in the LanceDB chunk table stores the path in clear (`archon_search/store.py::_schema`). #Unverified
+- The `source_path` column in the LanceDB chunk table stores the path in clear (`archon_search/store.py::_schema`).
 - Anyone with read access to `~/.archon-search/search/` can correlate `result_doc_ids` from `~/.archon-search/search-logs/<date>.jsonl` back to filesystem paths. On a single-user host that is the operator by definition; on a shared host with a relaxed home directory, it is anyone with the right Unix permissions.
 
-This is documented as accepted risk in ADR-05 and tracked as `SEC-2` in [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md). A hashed-`doc_id` mode is planned as roadmap item **D8** in [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md); ADR-05 is the design anchor. #Unverified
+**Mitigation — HMAC hashing mode (D8, implemented 2026-06-25).** Set `[telemetry] hash_doc_ids = true` in `archon-search.toml` to apply a second-stage HMAC-SHA256 transform to every `result_doc_ids` value before it is written to JSONL. This severs the mapping from log values to LanceDB source paths.
 
-Mitigation today: do not enable telemetry on a host where filesystem path names themselves carry sensitive context (e.g., paths named after client engagements or projects).
+### How it works
+
+- `archon_search/telemetry/hasher.py` provides `hash_doc_id(salt, doc_id) -> str` (deterministic, 64-char lowercase hex HMAC-SHA256).
+- On first startup with `hash_doc_ids = true`, a 32-byte salt is generated atomically and stored at `get_data_dir()/.telemetry-salt` with mode `0600`. On subsequent startups the salt is reloaded; values are stable across restarts.
+- If the salt file is unreadable at startup, an ERROR is logged and hashing falls back to disabled for the session — the server never crashes.
+- Every `TelemetryEntry` carries `doc_ids_hashed: bool = False`. The field is `True` only for entries where the hasher was active, so log consumers can detect boundary transitions when the flag is toggled.
+- `GET /status` exposes `telemetry.hash_doc_ids_enabled: bool` — `true` only when both the config flag is on **and** a valid salt was loaded at startup.
+
+### Threat-model scope (salt co-location)
+
+The salt at `get_data_dir()/.telemetry-salt` sits alongside LanceDB, which stores raw `source_path` in plaintext. HMAC hashing protects telemetry logs **shared or exported separately** from the data directory (the stated threat model). It does **not** protect against an attacker with read access to the whole `~/.archon-search/` directory — they hold both the salt and the plaintext paths. Operators who need protection against a full-directory compromise require filesystem-level encryption or separate storage for the salt, which is out of scope for v1.
+
+See `SEC-2` (now closed) in [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) and the Amendment section in ADR-05.
+
+**Fallback mitigation:** if HMAC hashing cannot be enabled, do not enable telemetry on a host where filesystem path names themselves carry sensitive context (e.g., paths named after client engagements or projects).
 
 ## Storage and retention
 
@@ -127,8 +143,7 @@ grep -E '"query"[[:space:]]*:' ~/.archon-search/search-logs/*.jsonl
 ## Related documents
 
 - [`01_threat_model.md`](./01_threat_model.md) — telemetry as an asset.
-- [`../ADRs/05_opt_in_local_telemetry_no_raw_query.md`](../ADRs/05_opt_in_local_telemetry_no_raw_query.md) — original decision.
+- [`../ADRs/05_opt_in_local_telemetry_no_raw_query.md`](../ADRs/05_opt_in_local_telemetry_no_raw_query.md) — original decision + D8 Amendment (HMAC hashing mode).
 - [`../Architecture/150_security_and_privacy_architecture.md`](../Architecture/150_security_and_privacy_architecture.md) — broader privacy architecture.
-- [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) — `SEC-2`, `SEC-3`, `TEL-1`.
-- [`../Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) — item **D8** (hashed `doc_id`).
+- [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) — ~~`SEC-2`~~ (resolved by D8), `SEC-3`, `TEL-1`.
 - [`../UserManual/06_telemetry.md`](../UserManual/06_telemetry.md) — operator-facing how-to.

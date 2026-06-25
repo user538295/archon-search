@@ -141,6 +141,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | `archon_search/telemetry/writer.py` | Background JSONL writer; one line per call into `~/.archon-search/search-logs/` via a persistent per-date fd with rotate-only fsync (not per-line fsync; see [130 durability contract](130_data_architecture_and_persistence.md#telemetry-durability-rotate-only-fsync)). | `TelemetryWriter` |
 | `archon_search/telemetry/reader.py` | Reads logs for `/telemetry/stats` and `/telemetry/entries`. | `TelemetryReader` |
 | `archon_search/telemetry/pruner.py` | Enforces `retention_days` on the log directory. | `Pruner` |
+| `archon_search/telemetry/hasher.py` | **D8** — HMAC-SHA256 doc_id hasher. `hash_doc_id(salt, doc_id) -> str` produces a deterministic 64-char lowercase hex digest; `load_or_create_salt(enabled) -> bytes \| None` reads/creates `get_data_dir()/.telemetry-salt` (mode 0600). Spans Entities (pure function) + Frameworks & Drivers (file I/O), like `key_manager.py`. | `hash_doc_id`, `load_or_create_salt` |
 
 ## Jobs
 

@@ -22,6 +22,7 @@ Edit `~/.archon-search/archon-search.toml`:
 enabled = true
 retention_days = 30
 log_dir = "~/.archon-search/search-logs"
+hash_doc_ids = false         # set true to HMAC-SHA256 hash result_doc_ids before logging
 # export_enabled = false   # see note below — true is silently coerced to false
 ```
 
@@ -54,6 +55,7 @@ Every entry contains:
 | `result_count`, `result_doc_ids` | For retrieval endpoints. |
 | `truncated` | `true` when `result_doc_ids` were dropped to fit the per-entry size cap (`MAX_ENTRY_BYTES = 8192`); otherwise absent / `null`. See `writer.py`. |
 | `decomposer_invoked` | For `route`. |
+| `doc_ids_hashed` | `true` when HMAC-SHA256 hashing was active for this entry (i.e., `hash_doc_ids = true` and the salt was successfully loaded); `false` otherwise. |
 | `error_kind` | One of `empty_query \| slot_out_of_range \| timeout \| internal_error \| validation_error \| other` on errors. |
 
 ## What is never logged
@@ -69,7 +71,7 @@ Every entry contains:
 - The directory layout of indexed corpora.
 - The filenames of matching documents.
 
-This is documented as an accepted risk for v1. A hashed-doc-id mode is on the roadmap. #Unverified — the roadmap entry has not been cross-checked against `Documentation/roadmap.md` / `Documentation/Backlog/` in this revision. If this is unacceptable for your environment, leave telemetry disabled.
+To mitigate this, set `hash_doc_ids = true` in the `[telemetry]` config section. When enabled, every `doc_id` is replaced by its HMAC-SHA256 hex digest (64 chars, lowercase) before the JSONL line is written. The salt is generated once at `~/.archon-search/.telemetry-salt` (mode 0600) and reused across restarts; if the salt file is unreadable, hashing is skipped (ERROR logged) — the fallback is plaintext, not a crash. Note that the salt lives alongside LanceDB which stores raw `source_path` in plaintext: HMAC hashing protects telemetry logs **shared or exported separately** from the data directory but does not protect against an attacker with read access to the whole `~/.archon-search/` directory. If this is unacceptable for your environment, leave telemetry disabled.
 
 ## Read-back API
 

@@ -141,6 +141,7 @@ Query telemetry is **opt-in and disabled by default** (`enabled = false`). When 
 enabled = true
 retention_days = 30          # files older than this are deleted at startup and every 24h
 log_dir = "~/.archon-search/search-logs"
+hash_doc_ids = false         # set true to HMAC-SHA256 result_doc_ids before writing to JSONL
 ```
 
 ### What is logged
@@ -153,7 +154,7 @@ Each entry is a JSON object containing: `query_id` (random UUID), `timestamp` (U
 
 ### Path-derived `doc_id` risk
 
-`result_doc_ids` are derived from the source file path on disk (e.g. `/Users/<name>/Documents/<project>/<file>.md`). When telemetry is enabled, these paths appear in the log files — **doc_ids may reveal filesystem paths**, including username and directory structure. Operators accept this when they opt in. A hashed-doc-id mode is planned for a future release.
+`result_doc_ids` are derived from the source file path on disk (e.g. `/Users/<name>/Documents/<project>/<file>.md`). When telemetry is enabled, these paths appear in the log files — **doc_ids may reveal filesystem paths**, including username and directory structure. To mitigate this, set `hash_doc_ids = true` in the `[telemetry]` section of `archon-search.toml`: this applies HMAC-SHA256 hashing to every `doc_id` before it is written, making the log files opaque to anyone who does not also have access to the salt file at `~/.archon-search/.telemetry-salt`.
 
 ### `export_enabled` is not available
 

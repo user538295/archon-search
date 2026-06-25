@@ -4,7 +4,7 @@ feature: Hashed doc_id Mode for Telemetry (SEC-2)
 brief: D8-hashed-doc-id-telemetry-brief.md
 purpose: Operators can enable HMAC hashing of telemetry doc_ids so log files are opaque to anyone without the server-side salt.
 audience: Backend developer (all implementation); CLI developer (status command); tester (e2e + close-out).
-status: planned
+status: completed
 roles: [frontend, backend, tester]
 architecture: clean
 ---
@@ -263,17 +263,17 @@ Note: the `.tsp` file models the hasher as `docIdHasherPresent: boolean` (TypeSp
 Docs the feature touches — the close-out task works through this list.
 
 - [x] `Documentation/Backlog/D8-hashed-doc-id-telemetry-brief.md` — corrected: removed the stale "32 hex" truncation in Core Flow (→ full 64-char), removed `from_search_multi_result` from the hashed-factory scope, clarified the `result_doc_ids = None` edge case, and added the salt-co-location threat caveat + wrong-size-salt fallback
-- [ ] `Documentation/Backlog/D8-hashed-doc-id-telemetry-team-plan.md` — this file
-- [ ] `Documentation/Backlog/d8-telemetry-hasher.tsp` — this file (contract artefact)
-- [ ] `Documentation/Backlog/d8-telemetry-entry.tsp` — this file (contract artefact)
-- [ ] `Documentation/Backlog/d8-telemetry-status.tsp` — this file (contract artefact)
-- [ ] `archon_search/CLAUDE.md` / `CLAUDE.md` — update telemetry section to describe `hash_doc_ids`, salt file, `doc_ids_hashed` field
-- [ ] `Documentation/Architecture/150_security_and_privacy_architecture.md` — remove "accepted risk" caveat for path-leak via `doc_id`; document the HMAC-hashing mode
-- [ ] `Documentation/Architecture/530_technical_debt_refactoring_roadmap.md` — close SEC-2
-- [ ] `Documentation/ADRs/ADR-05` (or equivalent telemetry ADR) — append "Amendment" section recording that hashed-doc-id mode is implemented (ADRs are append-only)
-- [ ] `archon-search.toml.example` — add `hash_doc_ids = false` with explanatory comment
-- [ ] `tests/server/openapi_snapshot.json` — regenerate with `uv run --python 3.12` after BE-5 adds `telemetry` field to StatusResponse (this is the snapshot `tests/server/test_openapi_snapshot.py` actually checks; a stale `tests/contract/openapi_snapshot.json` exists but is not the one under test)
-- [ ] `Documentation/SecurityGuide/04_telemetry_privacy.md` — update to document the HMAC hashing mode, salt lifecycle, and the salt co-location threat model scope
+- [x] `Documentation/Backlog/D8-hashed-doc-id-telemetry-team-plan.md` — this file
+- [x] `Documentation/Backlog/d8-telemetry-hasher.tsp` — this file (contract artefact)
+- [x] `Documentation/Backlog/d8-telemetry-entry.tsp` — this file (contract artefact)
+- [x] `Documentation/Backlog/d8-telemetry-status.tsp` — this file (contract artefact)
+- [x] `archon_search/CLAUDE.md` / `CLAUDE.md` — update telemetry section to describe `hash_doc_ids`, salt file, `doc_ids_hashed` field
+- [x] `Documentation/Architecture/150_security_and_privacy_architecture.md` — remove "accepted risk" caveat for path-leak via `doc_id`; document the HMAC-hashing mode
+- [x] `Documentation/Architecture/530_technical_debt_refactoring_roadmap.md` — close SEC-2
+- [x] `Documentation/ADRs/ADR-05` (or equivalent telemetry ADR) — append "Amendment" section recording that hashed-doc-id mode is implemented (ADRs are append-only)
+- [x] `archon-search.toml.example` — add `hash_doc_ids = false` with explanatory comment (already present from BE-4)
+- [x] `tests/server/openapi_snapshot.json` — regenerate with `uv run --python 3.12` (already current — test passes)
+- [x] `Documentation/SecurityGuide/04_telemetry_privacy.md` — update to document the HMAC hashing mode, salt lifecycle, and the salt co-location threat model scope
 
 ---
 
@@ -461,7 +461,7 @@ flowchart LR
 
 ### Phase 3 · Close-out
 
-- [ ] **T-4** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-4** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs T-1, T-2, T-3 · completes (acceptance gate)
     - Tests

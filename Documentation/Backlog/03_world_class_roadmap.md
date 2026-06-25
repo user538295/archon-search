@@ -113,7 +113,8 @@ Goal: support real operational workflows — backup, migration, key rotation, ma
 - [ ] **D5. Maintenance jobs and policies (item 26)** — stale-collection detection, compaction/vacuum where the backend needs it, orphan cleanup, failed-ingest retry, periodic integrity checks.
 - [ ] **D6. Install-time / background provider validation (item 23)** — validate reranker provider config at install or warm-up while preserving the lazy-load startup contract.
 - [x] **D7. Hardening: multi-key auth with rotation (`SEC-1`)** — build on the existing `namespaces` map; key file format with expiry and revocation.
-- [ ] **D8. Hardening: hashed `doc_id` mode for telemetry (`SEC-2`)** — opt-in; ADR-05 is the design anchor.
+- [x] **D8. Hardening: hashed `doc_id` mode for telemetry (`SEC-2`)** — `[telemetry] hash_doc_ids = true` applies HMAC-SHA256 to `result_doc_ids`; salt at `get_data_dir()/.telemetry-salt` (mode 0600); `doc_ids_hashed` field in every entry; `GET /status` exposes `telemetry.hash_doc_ids_enabled`. See `archon_search/telemetry/hasher.py` and ADR-05 Amendment. [[brief](../Backlog/D8-hashed-doc-id-telemetry-brief.md), [plan](../Backlog/D8-hashed-doc-id-telemetry-team-plan.md)]
+- [x] **D9. MCP HTTP server wiring** — mount the fully-implemented FastMCP HTTP app at `/mcp` on the existing REST port (8765) inside `create_app()`'s lifespan; single uvicorn, shared `APIKeyMiddleware`, gated by `[mcp].enabled` (default `true`). 17 tools register (13 always + 4 key-management when `key_store` present); the authenticated namespace propagates per-request into every tool closure (`_get_request_namespace()`); telemetry writer + `key_store` are wired from the lifespan; `GET /status` and `GET /health` gain an `mcp: McpStatusDetail | null` field. Mount/namespace mechanism anchored by [ADR-09](../ADRs/09_mcp_http_mount_and_namespace_propagation.md). [[brief](../Completed/mcp-wiring-brief.md), [plan](../Completed/mcp-wiring-team-plan.md)]
 
 ## Phase E — Surface and integrations
 
@@ -200,6 +201,7 @@ quadrantChart
     "D6 Provider validation": [0.25, 0.45]
     "D7 Key rotation": [0.55, 0.6]
     "D8 Hashed doc_id": [0.4, 0.5]
+    "D9 MCP HTTP wiring": [0.35, 0.7]
     "E1 Streaming results": [0.45, 0.45]
     "E2 Python SDK": [0.4, 0.5]
     "E3 TypeScript SDK": [0.5, 0.5]
@@ -273,23 +275,24 @@ If only one ordering is used for planning, use this — each phase is a coherent
 34. ⬜ D5. Maintenance jobs and policies (item 26).
 35. ⬜ D6. Install-time / background provider validation (item 23).
 36. ✅ D7. Multi-key auth with rotation (`SEC-1`).
-37. ⬜ D8. Hashed `doc_id` for telemetry (`SEC-2`).
+37. ✅ D8. Hashed `doc_id` for telemetry (`SEC-2`) — `hash_doc_ids = true` in `[telemetry]`; HMAC-SHA256; salt at `.telemetry-salt`; `doc_ids_hashed` field; `GET /status` exposes `telemetry.hash_doc_ids_enabled`.
+38. ✅ D9. MCP HTTP server wiring — `/mcp` mounted on the REST port; 17 tools, namespace propagation, telemetry/key_store wiring, `mcp` field on `/status` + `/health`.
 
 **Phase E — Surface and integrations**
-38. ⬜ E1. Streaming search results (item 27).
-39. ⬜ E2. Python SDK.
-40. ⬜ E3. TypeScript SDK.
-41. ⬜ E4. Per-collection access-control policies (item 30).
-42. ⬜ E5. Connector and federation architecture (item 15).
-43. ⬜ E6. Admin / debug UI (item 29). *A4 prerequisite met; not yet built.*
+39. ⬜ E1. Streaming search results (item 27).
+40. ⬜ E2. Python SDK.
+41. ⬜ E3. TypeScript SDK.
+42. ⬜ E4. Per-collection access-control policies (item 30).
+43. ⬜ E5. Connector and federation architecture (item 15).
+44. ⬜ E6. Admin / debug UI (item 29). *A4 prerequisite met; not yet built.*
 
 **Phase F — Advanced positioning**
-44. ⬜ F1. Salience and temporal weighting (item 31).
-45. ⬜ F2. Semantic memory tiers (item 32).
-46. ⬜ F3. GraphRAG (item 33).
-47. ⬜ F4. Richer multimodal retrieval (item 34).
-48. ⬜ F5. Reassess horizontal scaling (item 35).
-49. ⬜ F6. Reassess pluggable storage backends (item 36).
+45. ⬜ F1. Salience and temporal weighting (item 31).
+46. ⬜ F2. Semantic memory tiers (item 32).
+47. ⬜ F3. GraphRAG (item 33).
+48. ⬜ F4. Richer multimodal retrieval (item 34).
+49. ⬜ F5. Reassess horizontal scaling (item 35).
+50. ⬜ F6. Reassess pluggable storage backends (item 36).
 
 ## Recommendation
 
@@ -300,14 +303,14 @@ If the goal is **a full-featured world-class search system that is also safe to 
 3. ✅ **Phase B** — observability + production-model eval lane first; then the server-side multi-collection refactor and stronger routing. Without B1/B6 the later ranking work has no story.
 4. ✅ **Phase C** — the ranking-leap features (per-collection model, multilingual, enrichment, HyDE, RAG Fusion) plus C0/C0b install + release polish and C6/C7 hardening. All gated by the eval harness or BREAKING.md.
 5. ✅ **Active backlog (post-Phase C)** — C8 wizard, C9 container support, C13 test perf, C16 real-model benchmark, C17 install-lock isolation are all complete. Phase D is now open.
-6. ⬜ **Phase D** — finish the job contract, export/import, key rotation; the system becomes operable end-to-end.
+6. ⬜ **Phase D** — finish the job contract, export/import, key rotation; the system becomes operable end-to-end. (D1, D2, D7, D8, and D9 — MCP HTTP wiring — have shipped; D3–D6 remain.)
 7. ⬜ **Phase E and F** — surface (SDKs, UI, connectors) and differentiators (salience, GraphRAG, multimodal, scale). Only after A–D close.
 
 The biggest mistakes this ordering protects against (Phases A–C have shipped; these warnings stand as a record of the why):
 
 - Shipping HyDE / RAG Fusion (C4/C5) before observability (B1) and the production-model eval lane (B6) — you will not know whether they helped. *(B1 + B6 shipped before C4 + C5, as ordered.)*
 - Building filters (A2) without a metadata schema (A1) — they will be re-built within one release. *(A1 shipped before A2.)*
-- Letting hardening (A3–A7, B5, C6, C7, D7, D8) accumulate behind features — the production incident curve is exponential. *(D7 shipped; D8 still open — Phase D priority.)*
+- Letting hardening (A3–A7, B5, C6, C7, D7, D8) accumulate behind features — the production incident curve is exponential. *(D7 and D8 both shipped.)*
 
 ## Related documents
 

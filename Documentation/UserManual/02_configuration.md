@@ -100,6 +100,7 @@ Opt-in only. See [`06_telemetry.md`](./06_telemetry.md) for the full surface.
 | `retention_days` | int (>=1) | `30` | Files older than this are pruned at startup and every 24h. |
 | `log_dir` | string | `~/.archon-search/search-logs` | Must be non-empty. |
 | `export_enabled` | bool | `false` | Reserved. **Setting to `true` is silently coerced to `false` with a warning log** (see `archon_search/config.py:209-217`). `archon-search.toml.example` documents this same behaviour. No external transmission occurs in v1. |
+| `hash_doc_ids` | bool | `false` | Apply HMAC-SHA256 to `result_doc_ids` before JSONL write; severs mapping to filesystem paths in exported logs. See [`06_telemetry.md`](./06_telemetry.md) for details. |
 
 ### `[namespaces]`
 

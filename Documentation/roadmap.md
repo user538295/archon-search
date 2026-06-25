@@ -53,11 +53,13 @@ Done (visible in the current repo):
 - **Wizard UX improvements (C14):** `--dry-run` flag, `--next-steps` suppression, improved summary formatting, structured error output for install failures, and consistent exit-code contract. Implemented in `archon_search/install.py`, `archon_search/cli/install_cmd.py`.
 - **Wizard configurability expansion (C15):** `--host`, `--port`, `--server-key`, `--enable-hyde`, `--enable-rag-fusion`, and six other Tier-1 Click options; `_apply_wizard_features_to_toml()` write logic; prints full API key with source in wizard success output. Implemented in `archon_search/install.py`, `archon_search/cli/install_cmd.py`.
 - **Real-model search latency benchmark (C16):** `live_benchmark` pytest marker with dedicated CI step; `BenchmarkThresholds` dataclass + `load_benchmark_thresholds()`; steady-state p95 (100-iter) and cold-load p90 (N=10) tests using real fastembed BAAI/bge-small-en-v1.5 + Xenova/ms-marco-MiniLM-L-6-v2; model-cache restore + prefetch step in `archon-search-pr.yml`. Implemented in `archon_search/eval/runner.py`, `tests/eval/live_benchmark/`.
+- ✓ **D9 shipped**: the FastMCP HTTP app is now mounted at `/mcp` on the existing REST port (8765) inside `create_app()`'s lifespan — single uvicorn, shared auth, no second port. Gated by `[mcp].enabled` (default `true`). All 17 MCP tools register (13 always + 4 key-management when `key_store` present), authenticated namespace propagates per-request into every tool closure (`_get_request_namespace()`), and telemetry + `key_store` are wired from the lifespan. `GET /status` and `GET /health` gain an `mcp: McpStatusDetail \| null` field (`enabled`, `bindAddress`). Implemented in `archon_search/server/app.py`, `server/mcp.py`, `server/routes_status.py`, `server/routes_health.py`, `server/schemas.py`, `config.py` (`McpConfig`). See `Documentation/Completed/mcp-wiring-brief.md` and `Documentation/Completed/mcp-wiring-team-plan.md`; design in `Documentation/ADRs/09_mcp_http_mount_and_namespace_propagation.md`.
 
 ## Priority 0 — Product Boundary (largely landed; remaining hardening)
 
 Most of the original product-separation backlog is shipped. Remaining items:
 
+- ✓ **D9 shipped**: MCP HTTP endpoint mounted at `/mcp` on the REST port (8765), sharing REST auth; 17 tools, per-request namespace propagation, telemetry/`key_store` wiring, and an `mcp` field on `GET /status` and `GET /health`. The MCP transport is now reachable on the shipped server, not just in tests. See `Documentation/Completed/mcp-wiring-brief.md` and `Documentation/Completed/mcp-wiring-team-plan.md`.
 - Continue hardening the canonical service contract and job model so REST and MCP stay layered over the same internal pipeline as new endpoints land.
 - Keep `BREAKING.md` ahead of any contract-surface change.
 
@@ -120,7 +122,7 @@ These remain on the long-horizon list and must not displace earlier priorities:
 
 These are documented elsewhere and noted here so they are not lost:
 
-- **Hashed-doc-id mode for telemetry.** Today `result_doc_ids` are derived from filesystem paths and may leak username / directory structure when telemetry is enabled. Operators accept this when they opt in; a hashed mode is planned. See README "Path-derived `doc_id` risk".
+- ~~**Hashed-doc-id mode for telemetry.**~~ **✓ D8 shipped**: `[telemetry] hash_doc_ids = true` applies HMAC-SHA256 to `result_doc_ids` before JSONL write. Salt stored at `get_data_dir()/.telemetry-salt` (mode 0600). `doc_ids_hashed: bool` field in every entry. `GET /status` exposes `telemetry.hash_doc_ids_enabled`. See `archon_search/telemetry/hasher.py` and ADR-05 Amendment.
 - **External telemetry transmission.** Reserved for a future release; `[telemetry].export_enabled = true` is currently coerced to `false` with a warning at config load (`archon_search/config.py`). See `Architecture/000_introduction_and_guiding_principles.md` "Explicit Non-Goals".
 - ~~**State-file durability under power loss.** A6 closed the in-process consistency race on `.indexing_state.json` (`CON-3`), but the atomic-rename write is not yet `fsync`-backed, so a power loss between rename and disk flush can still corrupt or lose the latest write. Closing this durability gap is the next step (A7 / fsync).~~ **✓ A7 shipped**: `_durable_io.atomic_write()` follows the POSIX fsyncgate recipe (file + parent directory fsync); CI enforces 100% coverage of `_durable_io.py`. See Status Snapshot above.
 

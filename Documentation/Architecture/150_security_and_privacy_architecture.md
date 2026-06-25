@@ -164,14 +164,21 @@ This is reinforced by `CLAUDE.md`'s "Structural invariant" note and is the priva
 
 **C3b** introduces the internal marker string `<!-- archon-search:pagebreak:v1 -->` to identify page boundaries during PDF/image ingest. If a PDF's text body contains this exact literal string, it will be misinterpreted as a page break and the surrounding content will carry incorrect `_page_start` metadata. The marker is namespaced (`archon-search:`) and versioned (`:v1`) to make accidental collisions highly improbable in practice. This risk is accepted: the marker never leaves the ingest pipeline (it is excised before chunking, never stored in `ChunkRecord.text`, never returned by the API, and never indexed by FTS), so the blast radius of a collision is limited to a metadata field on the affected chunk.
 
-### `doc_id` leakage risk — accepted
+### `doc_id` leakage risk — mitigated by HMAC hashing mode (D8)
 
 `doc_id` is `sha256(resolved_source_path)`. The hash is one-way, but `result_doc_ids` is logged in telemetry. The hash itself doesn't reveal the path; however:
 
 - `source_path` is stored *in clear* in the LanceDB chunk table (`store.py::_schema` field `source_path`).
 - Anyone with read access to `~/.archon-search/search/` can join `result_doc_ids` (from telemetry) back to a source path. On a single-user host that is by definition the operator.
 
-This is documented as accepted risk: telemetry is local-only and the operator already has filesystem access. Note: archon-search does **not** explicitly set mode `0700` on `~/.archon-search/`; the directory is created via `os.makedirs(..., exist_ok=True)` (`key_manager.py:83`), so its mode is governed by the process umask. Only the key file itself is enforced to mode `0600`. The effective protection of the parent directory depends on the user's home-directory permissions, which vary by platform. #Unverified
+**D8 mitigation — HMAC hashing mode.** Operators who share or export telemetry logs separately from the data directory can set `[telemetry] hash_doc_ids = true`. This applies a second-stage HMAC-SHA256 transform to every `result_doc_ids` value before it is written to JSONL, severing the mapping from log values to LanceDB source paths. All JSONL entries include a `doc_ids_hashed: bool` field so log consumers can distinguish pre- and post-hashing segments.
+
+- **Salt lifecycle.** A 32-byte salt is generated and written to `get_data_dir() / ".telemetry-salt"` (mode 0600) on first start with `hash_doc_ids = true`. On subsequent starts the salt is reloaded, keeping hashed values stable across restarts. If the salt file is unreadable at startup, an ERROR is logged and hashing falls back to disabled for that session — the server never crashes.
+- **`hash_doc_ids_enabled` in `GET /status`.** The `telemetry` sub-object reports `hash_doc_ids_enabled: true` only when both the config flag is on **and** a valid salt was loaded at startup (so the S5 fallback is observable).
+
+**Threat-model scope (salt co-location).** The salt at `get_data_dir() / ".telemetry-salt"` sits alongside LanceDB, which stores the raw `source_path` in plaintext. HMAC hashing protects telemetry logs **shared or exported separately** from the data directory (the stated threat). It does **not** protect against an attacker with read access to the whole `~/.archon-search/` directory — they hold both the salt and the plaintext paths. This scope is stated in [`Documentation/SecurityGuide/04_telemetry_privacy.md`](../SecurityGuide/04_telemetry_privacy.md) and in the D8 plan.
+
+Note: archon-search does **not** explicitly set mode `0700` on `~/.archon-search/`; the directory is created via `os.makedirs(..., exist_ok=True)` (`key_manager.py:83`), so its mode is governed by the process umask. Only the key file and salt file are enforced to mode `0600`. The effective protection of the parent directory depends on the user's home-directory permissions, which vary by platform.
 
 ### HyDE external LLM transmission (C4) — explicit opt-in exception
 

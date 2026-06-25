@@ -53,7 +53,7 @@ The machine-readable contract is `GET /openapi.json`. Tables below trace every e
 
 | Method | Path | Purpose | Request schema | Response schema |
 | --- | --- | --- | --- | --- |
-| GET | `/status` | Operator-facing service status: PID, version, per-collection progress, ETA (namespace-filtered). **D2** — Response carries `backup: BackupStatusDetail \| null` summarising scheduled-backup state. **D3** — Response gains `store_schema_version: int` (current `STORE_SCHEMA_VERSION` constant) and `collections_schema_behind: int` (count of collections with `schema_version < STORE_SCHEMA_VERSION`). **D5** — Response gains `maintenance: MaintenanceStatusDetail \| null` (see `routes_maintenance.py` section for field details). **D6** — Response gains `model_validation: ModelValidationStatus \| null` (see `routes_ready.py` section). **D9** — Response gains `mcp: McpStatusDetail \| null` (see below). | — | `StatusResponse` (`schemas.py`) |
+| GET | `/status` | Operator-facing service status: PID, version, per-collection progress, ETA (namespace-filtered). **D2** — Response carries `backup: BackupStatusDetail \| null` summarising scheduled-backup state. **D3** — Response gains `store_schema_version: int` (current `STORE_SCHEMA_VERSION` constant) and `collections_schema_behind: int` (count of collections with `schema_version < STORE_SCHEMA_VERSION`). **D5** — Response gains `maintenance: MaintenanceStatusDetail \| null` (see `routes_maintenance.py` section for field details). **D6** — Response gains `model_validation: ModelValidationStatus \| null` (see `routes_ready.py` section). **D8** — Response gains `telemetry: TelemetryStatusDetail \| null` (see below). **D9** — Response gains `mcp: McpStatusDetail \| null` (see below). | — | `StatusResponse` (`schemas.py`) |
 
 The `model_validation` field added to `GET /status` (D6):
 
@@ -65,6 +65,17 @@ The `model_validation` field added to `GET /status` (D6):
 | `reranker_ok` | `bool \| null` | `true` if the reranker probe passed (or `reranker_model = ""`, disabled); `false` if it failed; `null` if not yet run. |
 | `provider_warnings` | `list[str]` | Human-readable warnings (missing ONNX provider, probe failure, `"validation timed out after {N}s"`). Empty list when clean. |
 | `validated_at` | `str (ISO 8601) \| null` | UTC timestamp when validation finished; `null` while pending. |
+
+The `telemetry` field added to `GET /status` (D8):
+
+`StatusResponse` gains `telemetry: TelemetryStatusDetail | null`. `null` when `[telemetry].enabled = false`. When telemetry is enabled, the field is a `TelemetryStatusDetail` object:
+
+| Field | JSON key | Type | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | `enabled` | `bool` | Always `true` when the object is present; `telemetry = null` is the signal that telemetry is disabled. |
+| `hash_doc_ids_enabled` | `hash_doc_ids_enabled` | `bool` | `true` only when both `[telemetry].hash_doc_ids = true` in config **and** the salt was successfully loaded from `get_data_dir()/.telemetry-salt`. `false` when the config flag is on but the salt file was unreadable (fallback path; an ERROR is logged). |
+
+Implemented in `archon_search/server/routes_status.py` (`_build_telemetry_status`) and `archon_search/server/schemas.py` (`TelemetryStatusDetail`).
 
 The `mcp` field added to `GET /status` and `GET /health` (D9):
 

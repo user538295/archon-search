@@ -153,7 +153,7 @@ These are explicitly out of scope for v1 hardening; recording them so operators 
 - **No native rate limiting.** The reverse proxy must provide it.
 - **No CORS config knob.** Hardcoded wildcard in `app.py:122`; reverse-proxy override only.
 - ~~**No key expiry / revocation list.** `SEC-1`, roadmap item D7.~~ **Resolved by D7** — `archon-search key create/revoke/rotate`, `POST /keys`, `DELETE /keys/{id}`, `POST /keys/rotate`.
-- **Path-derived `doc_id` in telemetry.** `SEC-2`, roadmap item D8.
+- ~~**Path-derived `doc_id` in telemetry.** `SEC-2`, roadmap item D8.~~ **Resolved by D8** — enable `[telemetry] hash_doc_ids = true` in `archon-search.toml` to HMAC-SHA256 hash `result_doc_ids` before logging. Recommended for any deployment where telemetry logs may be shared or forwarded off-host.
 
 ## Related documents
 
