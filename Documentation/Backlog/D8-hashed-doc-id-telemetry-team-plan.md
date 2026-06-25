@@ -375,7 +375,7 @@ flowchart LR
         - [x] #unit_test — `test_load_or_create_salt_wrong_size_treated_as_corrupt` — existing file with != 32 bytes (0/16/1000) → ERROR logged, returns None (no weak HMAC from a short key) (F8)
         - [x] #integration_test — `test_app_state_set_on_startup_with_hashing_enabled` — lifespan sets `app.state.salt_bytes` (bytes) for status reporting and `app.state.doc_id_hasher` (Callable) for route/MCP injection when flag=True
 
-- [ ] **BE-3** — Add `doc_ids_hashed: bool = False` to `TelemetryEntry`; update `DOCUMENTED_SCHEMA_FIELDS`; add `doc_id_hasher` param to `from_search_tool_result` #backend-role
+- [x] **BE-3** — Add `doc_ids_hashed: bool = False` to `TelemetryEntry`; update `DOCUMENTED_SCHEMA_FIELDS`; add `doc_id_hasher` param to `from_search_tool_result` #backend-role
     - Entities · 2.0h
     - needs BE-1, BE-2 · completes C2
     - Tests

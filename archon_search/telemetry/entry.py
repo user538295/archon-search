@@ -8,6 +8,7 @@ keyword-only safe arguments.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated, Literal
@@ -82,6 +83,7 @@ class ErrorKind(StrEnum):
     validation_error = "validation_error"
     other = "other"
 
+
 DOCUMENTED_SCHEMA_FIELDS: frozenset[str] = frozenset(
     {
         "query_id",
@@ -102,6 +104,7 @@ DOCUMENTED_SCHEMA_FIELDS: frozenset[str] = frozenset(
         "correlation_id",
         "rag_fusion_applied",
         "rag_fusion_queries_used",
+        "doc_ids_hashed",
     }
 )
 
@@ -134,6 +137,8 @@ class TelemetryEntry(BaseModel):
     rag_fusion_applied: bool | None = None
     rag_fusion_queries_used: int | None = None
 
+    doc_ids_hashed: StrictBool = False
+
     @staticmethod
     def _new_query_id() -> str:
         return uuid.uuid4().hex
@@ -154,12 +159,19 @@ class TelemetryEntry(BaseModel):
         correlation_id: str | None = None,
         rag_fusion_applied: bool | None = None,
         rag_fusion_queries_used: int | None = None,
+        doc_id_hasher: Callable[[str], str] | None = None,
     ) -> TelemetryEntry:
         if endpoint not in ("search", "search_with_context"):
             raise ValueError(
                 f"from_search_tool_result endpoint must be 'search' or "
                 f"'search_with_context', got {endpoint!r}"
             )
+        if doc_id_hasher is not None:
+            stored_ids = [doc_id_hasher(doc_id) for doc_id in result_doc_ids]
+            doc_ids_hashed = True
+        else:
+            stored_ids = result_doc_ids
+            doc_ids_hashed = False
         return cls(
             query_id=cls._new_query_id(),
             timestamp=cls._now_iso(),
@@ -168,11 +180,12 @@ class TelemetryEntry(BaseModel):
             status="ok",
             collection=collection,
             result_count=len(result_doc_ids),
-            result_doc_ids=result_doc_ids,
+            result_doc_ids=stored_ids,
             filter_flags=filter_flags if filter_flags is not None else FilterFlags(),
             correlation_id=correlation_id,
             rag_fusion_applied=rag_fusion_applied,
             rag_fusion_queries_used=rag_fusion_queries_used,
+            doc_ids_hashed=doc_ids_hashed,
         )
 
     @classmethod
