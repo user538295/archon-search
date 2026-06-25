@@ -196,8 +196,8 @@ Note: the `.tsp` file models the hasher as `docIdHasherPresent: boolean` (TypeSp
 - Presentation: FE-1 — Enhance `archon-search status` CLI to display hash_doc_ids_enabled
 
 **Done when**
-- [ ] `archon-search status` shows `hash_doc_ids_enabled` from the live server — S12
-- [ ] When server is unreachable, status shows service state only (graceful degradation) — S12
+- [x] `archon-search status` shows `hash_doc_ids_enabled` from the live server — S12
+- [x] When server is unreachable, status shows service state only (graceful degradation) — S12
 
 ---
 
@@ -429,16 +429,16 @@ flowchart LR
         - [x] #integration_test — `test_get_status_telemetry_s5_hash_configured_but_salt_missing` — S5 fallback: hash_doc_ids=True but salt=None → hash_doc_ids_enabled=False
         - [x] #integration_test — `test_openapi_snapshot_reflects_telemetry_field` — GET /openapi.json includes telemetry in StatusResponse schema
 
-- [ ] **FE-1** — Add a NEW `GET /status` HTTP code path (with bearer-token auth) to `archon_search/cli/status.py` to display `hash_doc_ids_enabled` — today the command only reports OS service state and makes no HTTP call #frontend-role
+- [x] **FE-1** — Add a NEW `GET /status` HTTP code path (with bearer-token auth) to `archon_search/cli/status.py` to display `hash_doc_ids_enabled` — today the command only reports OS service state and makes no HTTP call #frontend-role
     - Presentation · 3.0h
     - needs BE-5 · completes S12
     - Tests
-        - #unit_test — `test_status_cli_shows_hash_doc_ids_enabled_true` — mocked authenticated GET /status response with hash_doc_ids_enabled=True → output contains flag (S12)
-        - #unit_test — `test_status_cli_shows_hash_doc_ids_enabled_false` — flag=False displayed correctly
-        - #unit_test — `test_status_cli_sends_bearer_token` — the resolved API key (option → `ARCHON_SEARCH_API_KEY` → key file) is sent as `Authorization: Bearer <token>` on the GET /status call
-        - #unit_test — `test_status_cli_handles_401_unauthorized` — server returns 401 → clear auth-failure message, no crash (distinct from unreachable)
-        - #unit_test — `test_status_cli_graceful_when_server_unreachable` — connection error → service state shown, no crash, telemetry section omitted
-        - #integration_test — `test_status_cli_integration_with_real_server` — real server running, status output contains hash_doc_ids_enabled (S12)
+        - [x] #unit_test — `test_status_cli_shows_hash_doc_ids_enabled_true` — mocked authenticated GET /status response with hash_doc_ids_enabled=True → output contains flag (S12)
+        - [x] #unit_test — `test_status_cli_shows_hash_doc_ids_enabled_false` — flag=False displayed correctly
+        - [x] #unit_test — `test_status_cli_sends_bearer_token` — the resolved API key (option → `ARCHON_SEARCH_API_KEY` → key file) is sent as `Authorization: Bearer <token>` on the GET /status call
+        - [x] #unit_test — `test_status_cli_handles_401_unauthorized` — server returns 401 → clear auth-failure message, no crash (distinct from unreachable)
+        - [x] #unit_test — `test_status_cli_graceful_when_server_unreachable` — connection error → service state shown, no crash, telemetry section omitted
+        - [x] #integration_test — `test_status_cli_integration_with_real_server` — real server running, status output contains hash_doc_ids_enabled (S12)
 
 - [ ] **T-2** — e2e: status observability — S10, S11, S12 #tester-role
     - — · 2.0h
