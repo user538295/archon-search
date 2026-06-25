@@ -320,7 +320,7 @@ flowchart LR
     - Tests
         - #integration_test — `verify_prod_key_readable` — confirm `grep -o '[^=]*$' ~/.archon-search/.search.env` yields the bare prod API key (the file stores `ARCHON_SEARCH_API_KEY=<token>`, so strip the prefix) and `curl -H "Authorization: Bearer $key" 127.0.0.1:8765/status` returns HTTP 200
         - #integration_test — `verify_dev_key_readable` — confirm `docker compose exec archon-dev cat /data/.search.env | grep -o '[^=]*$'` yields the bare dev-UAT key and `curl -H "Authorization: Bearer $key" 127.0.0.1:18765/status` returns HTTP 200
-- [ ] **T-3** — Manual: follow API key + client config sections; retrieve both keys, verify cross-auth fails (prod key → 401 on 18765; dev key → 401 on 8765), configure HTTP client for each port #tester-role
+- [x] **T-3** — Manual: follow API key + client config sections; retrieve both keys, verify cross-auth fails (prod key → 401 on 18765; dev key → 401 on 8765), configure HTTP client for each port #tester-role
     - — · 1.5h
     - needs BE-3 · completes S5, S6
     - Tests

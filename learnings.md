@@ -405,6 +405,21 @@
 **2026-06-22 — D7 T-1: e2e namespace isolation proof pattern for managed-key auth**
 - Observation: `request.state.namespace` is not directly accessible from outside the HTTP boundary in e2e tests. The correct proof technique is a two-step isolation check: (1) managed token + search → 200 with non-empty results (collection accessible); (2) default key + same search → 404 (collection invisible to different namespace). Step 1 alone is vacuous (200 doesn't prove correct namespace). Step 2 alone doesn't prove the managed key's namespace is correct. Together they form a sound proof. The assertion message for step 1 should explicitly reference step 2 as the complementary isolation proof.
 - Action: For any e2e test that must prove namespace resolution, combine a "managed key sees data" assertion with a "different-namespace key cannot see the same data" assertion. Never claim either assertion alone proves namespace resolution.
+
+**2026-06-25 — MIS BE-3: DA review reliably finds Critical doc errors that are hard to self-detect**
+- Observation: Two independently Critical errors survived the first-pass write and were caught only by DA review: (1) `~/.claude/settings.json` does not have a `mcpServers` key — the correct registration mechanism is `claude mcp add --transport http`; (2) Python MCP SDK import `streamablehttp_client` is wrong — it was renamed to `streamable_http_client` and returns a 2-tuple not 3-tuple. Both were verified against the actual files/codebase before fixing. Neither would have been caught by a manual self-review of the doc alone.
+- Action: For any doc that includes client SDK examples or CLI commands involving third-party tools (Claude Code MCP registration, Python SDK patterns), always run iterative-review before committing — these are high-hallucination-risk areas where the LLM writes plausible-but-wrong code. Verify import paths and CLI flag names against the actual installed package before accepting DA findings as fixes.
+- Confidence: high
+
+**2026-06-25 — MIS BE-3: `.mcp.json` at repo root needs explicit .gitignore warning**
+- Observation: DA review (C2-A-2) correctly flagged that suggesting `.mcp.json` at the repo root without a `.gitignore` warning leads operators to commit local infrastructure topology (localhost addresses and bearer tokens) to version control. The doc was presenting it as a neutral alternative to `claude mcp add`, which it is not — it's infrastructure config, not project config.
+- Action: Whenever suggesting `.mcp.json` as an MCP client config mechanism in documentation, always add the `.gitignore` caveat: "This file is per-developer infrastructure config; add it to `.gitignore` rather than committing it, since it binds to local instance addresses and keys."
+- Confidence: high
+
+**2026-06-25 — MIS BE-3: `claude mcp list` output format is static config, not a live connection probe**
+- Observation: DA test coverage review (C2-T-2) correctly identified that `claude mcp list` shows registered servers, not a live connection status with "✔ Connected." Fabricating a specific terminal output with checkmarks creates false confidence — users will think their setup is broken when the real output looks different, or think it's working when the server is actually down.
+- Action: When documenting CLI verification steps, never fabricate terminal output that implies dynamic state (connection status, counts, checksums). Write neutral verification prose: "Both servers should appear in the list." Only show exact output when it is deterministic and verified.
+- Confidence: high
 - Confidence: high
 
 **2026-06-22 — D7 BE-3: `KeyRecord.id: str | None` widens for synthetic TOML records; `_logged_expired_ids` guard**

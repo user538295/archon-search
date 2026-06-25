@@ -283,7 +283,7 @@ source ~/.archon-search/.search.env
 echo $ARCHON_SEARCH_API_KEY
 ```
 
-> **Security note:** `source` exports the key into your shell environment for the session — it will appear in `env` output and child processes. For scripting where exposure matters, prefer the `grep` form (ephemeral subshell assignment) or `ARCHON_SEARCH_API_KEY=$(grep -o '[^=]*$' ~/.archon-search/.search.env)`.
+> **Security note:** `source` sets a shell variable, not an environment variable — the key will NOT appear in `env` output or be inherited by child processes (the file has no `export` keyword). To export it to child processes, run `export ARCHON_SEARCH_API_KEY` after sourcing. For scripting, use `ARCHON_SEARCH_API_KEY=$(grep -o '[^=]*$' ~/.archon-search/.search.env)` — this also sets a shell variable but avoids the mismatch between what `source` implies and what it delivers.
 
 > **Note:** `archon-search key list` also shows active keys, but it requires the server to be running and calls `GET /keys`. For initial setup or scripting, the `grep` form above is simpler.
 
@@ -292,12 +292,14 @@ echo $ARCHON_SEARCH_API_KEY
 ### Retrieve the dev-UAT key
 
 ```bash
-docker compose exec archon-dev cat /data/.search.env | grep -o '[^=]*$'
+docker compose exec -T archon-dev cat /data/.search.env | grep -o '[^=]*$' | tr -d '\r'
 ```
 
 > **Precondition:** this command assumes `ARCHON_SEARCH_API_KEY` is not set in the container environment. If it was explicitly set (e.g., via `.env`), no `/data/.search.env` file is written — the key IS the env var value.
 
 ### Verify cross-auth fails
+
+> **Precondition:** `ARCHON_SEARCH_API_KEY` must NOT be set in your host shell environment before running this test. If it is set, `docker-compose.yml` passes it to all services via `${ARCHON_SEARCH_API_KEY:-}` interpolation, making both instances use the same key — and the test returns `200` instead of `401`. Check with `echo ${ARCHON_SEARCH_API_KEY:-not set}` and `unset ARCHON_SEARCH_API_KEY` if needed.
 
 ```bash
 PROD_KEY=$(grep -o '[^=]*$' ~/.archon-search/.search.env)
@@ -314,6 +316,23 @@ curl -s -o /dev/null -w "%{http_code}" \
   -H "Authorization: Bearer $DEV_KEY" \
   http://127.0.0.1:8765/status
 # Expected: 401
+```
+
+### Verify own-port auth succeeds
+
+> **Note:** `$PROD_KEY` and `$DEV_KEY` must be set from the cross-auth block above. Run that block first, or re-assign them here before continuing.
+
+```bash
+# Own-key positive check — each key must succeed on its own port
+curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer $PROD_KEY" \
+  http://127.0.0.1:8765/status
+# Expected: 200
+
+curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer $DEV_KEY" \
+  http://127.0.0.1:18765/status
+# Expected: 200
 ```
 
 > **Without a persistent volume**, the dev-UAT key regenerates on every container restart. Bare `docker run -p 18765:8765 ...` without a `-v` mount will break all issued tokens on restart. Always use `docker compose up archon-dev` which handles volume management automatically via `archon-dev-data`.
