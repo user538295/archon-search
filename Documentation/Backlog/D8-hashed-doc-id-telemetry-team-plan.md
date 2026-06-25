@@ -448,14 +448,14 @@ flowchart LR
         - [x] #e2e_test — `test_e2e_get_status_hash_doc_ids_enabled_false` — hashing off → false (S11)
         - [x] #e2e_test — `test_e2e_cli_status_displays_hash_doc_ids_flag` — run archon-search status CLI against real server, verify output contains hash_doc_ids_enabled (S12)
 
-- [ ] **T-3** — e2e: salt lifecycle edge cases and data-dir override — S3, S4, S5, S15 #tester-role
+- [x] **T-3** — e2e: salt lifecycle edge cases and data-dir override — S3, S4, S5, S15 #tester-role
     - — · 3.0h
     - needs BE-2, BE-4 · completes S3, S4, S5, S15
     - Tests
-        - #e2e_test — `test_e2e_salt_file_created_on_first_start_with_mode_600` — real tmp data dir, hashing on, server start → .telemetry-salt exists with mode 600 (S3)
-        - #e2e_test — `test_e2e_salt_reused_across_server_restarts` — explicit steps: (1) start server, (2) search and record the hashed doc_id from JSONL, (3) stop server, (4) restart with the same data dir, (5) search the same doc, (6) assert the JSONL hashed doc_id is byte-identical to step 2. Not merely "salt file still exists". (S4)
-        - #e2e_test — `test_e2e_unreadable_salt_server_falls_back_and_does_not_crash` — make the salt file unreadable before server start → server starts, hashing disabled, raw doc_ids in JSONL (S5). **`chmod 000` is bypassed by root** (CI containers) — guard with `@pytest.mark.skipif(os.getuid() == 0, ...)`, or inject the failure another way, so the fallback is genuinely exercised rather than silently passing.
-        - #e2e_test — `test_e2e_custom_data_dir_salt_in_correct_location` — ARCHON_SEARCH_DATA_DIR=/tmp/custom, hashing on → salt at /tmp/custom/.telemetry-salt (S15)
+        - [x] #e2e_test — `test_e2e_salt_file_created_on_first_start_with_mode_600` — real tmp data dir, hashing on, server start → .telemetry-salt exists with mode 600 (S3)
+        - [x] #e2e_test — `test_e2e_salt_reused_across_server_restarts` — explicit steps: (1) start server, (2) search and record the hashed doc_id from JSONL, (3) stop server, (4) restart with the same data dir, (5) search the same doc, (6) assert the JSONL hashed doc_id is byte-identical to step 2. Not merely "salt file still exists". (S4)
+        - [x] #e2e_test — `test_e2e_unreadable_salt_server_falls_back_and_does_not_crash` — make the salt file unreadable before server start → server starts, hashing disabled, raw doc_ids in JSONL (S5). **`chmod 000` is bypassed by root** (CI containers) — guard with `@pytest.mark.skipif(os.getuid() == 0, ...)`, or inject the failure another way, so the fallback is genuinely exercised rather than silently passing.
+        - [x] #e2e_test — `test_e2e_custom_data_dir_salt_in_correct_location` — ARCHON_SEARCH_DATA_DIR=/tmp/custom, hashing on → salt at /tmp/custom/.telemetry-salt (S15)
 
 ---
 
