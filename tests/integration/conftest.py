@@ -36,6 +36,7 @@ def make_real_app(
     maintenance_enabled: bool = False,
     mcp_enabled: bool = False,
     telemetry_enabled: bool = False,
+    hash_doc_ids_enabled: bool = False,
     namespaces: dict[str, str] | None = None,
 ) -> Iterator[tuple[TestClient, Any, str]]:
     """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
@@ -46,6 +47,8 @@ def make_real_app(
     Pass ``telemetry_enabled=True`` to enable the TelemetryWriter (writes JSONL to
     ``tmp_path/search-logs/``).  The log_dir is always set to ``tmp_path/search-logs``
     so any accidental write in a disabled-telemetry test is caught in the temp dir.
+    Pass ``hash_doc_ids_enabled=True`` to enable HMAC hashing of result_doc_ids in telemetry
+    (D8 / BE-4). Requires ``telemetry_enabled=True`` to produce JSONL output.
     Pass ``namespaces={'key_hex': 'ns-name', ...}`` for multi-namespace tests.
     The TestClient lifespan (startup + shutdown) is managed by the context block.
     """
@@ -78,6 +81,8 @@ def make_real_app(
         cfg.maintenance.interval_hours = 1  # enabled; manual trigger still fires immediately
 
     cfg.telemetry.enabled = telemetry_enabled
+    if hash_doc_ids_enabled:
+        cfg.telemetry.hash_doc_ids = True
 
     if namespaces is not None:
         cfg.namespaces = namespaces

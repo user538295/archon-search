@@ -388,7 +388,7 @@ flowchart LR
         - #unit_test — `test_doc_ids_hashed_field_defaults_false_in_model` — TelemetryEntry default
         - #integration_test — `test_telemetry_entry_jsonl_round_trip_with_doc_ids_hashed` — entry with doc_ids_hashed=True serialises and deserialises correctly via writer + reader
 
-- [ ] **BE-4** — Wire hasher into the `from_search_tool_result` call in the `/search` route handler (`routes_search.py`, currently line 268) and into the MCP `search` + `search_with_context` tools (`mcp.py`, currently lines 407 and 546); add toml.example entry #backend-role
+- [x] **BE-4** — Wire hasher into the `from_search_tool_result` call in the `/search` route handler (`routes_search.py`, currently line 268) and into the MCP `search` + `search_with_context` tools (`mcp.py`, currently lines 407 and 546); add toml.example entry #backend-role
     - Interface Adapters · 2.0h
     - needs BE-3 · completes S2, S8, S9
     - Scope notes

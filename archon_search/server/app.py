@@ -360,6 +360,7 @@ def create_app(
                             hyde_generator=app.state.hyde_generator,
                             rag_fusion_generator=app.state.rag_fusion_generator,
                             key_store=app.state.key_store,
+                            doc_id_hasher=app.state.doc_id_hasher,
                         )
                         await _mcp_stack.enter_async_context(
                             mcp_starlette.router.lifespan_context(app)

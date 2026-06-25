@@ -2,6 +2,36 @@
 
 ## What Has Worked
 
+**2026-06-25 — D8 BE-4: `if result_doc_ids:` guard is a vacuous-pass trap in MCP hashing tests**
+- Observation: MCP search tests that guard format/exclusion assertions with `if result_doc_ids:` pass silently when search returns zero results. The `doc_ids_hashed=True` outer assertion still runs, but it's insufficient on its own — a wiring regression that breaks MCP doc_id hashing would not be caught. DA/Brooks consistently flagged this as Moderate. Fix: replace `if result_doc_ids:` with `assert result_doc_ids` so a zero-results scenario fails loudly.
+- Action: For any integration test that asserts "hashing was applied", always require non-empty `result_doc_ids` unconditionally. The `if guard` pattern is acceptable for defensive logging-style tests but never for core correctness assertions.
+- Confidence: high
+
+**2026-06-25 — D8 BE-4: Wire new closure param through the full chain: `app.py` → `create_mcp_http_app()` → `create_app()` → tool closure**
+- Observation: Adding `doc_id_hasher` to MCP required touches in 3 files (routes_search.py, mcp.py, app.py). The forwarding chain is: `app.state.doc_id_hasher` (set in lifespan) → `create_mcp_http_app(doc_id_hasher=...)` (outer wrapper) → `create_app(doc_id_hasher=...)` (inner FastMCP factory) → captured by the tool closures. Missing any link in this chain silently falls back to `None` (no hashing). The pattern mirrors how `writer` is threaded.
+- Action: When adding a new lifespan-injected callable to MCP tools, always thread it through the full chain: `app.state` → `create_mcp_http_app` parameter → `create_app` parameter → closure capture. Unit tests catch a missing link only if you instrument the closure; integration tests (writing JSONL and checking the field) are the strongest proof.
+- Confidence: high
+
+**2026-06-25 — D8 BE-4: `hash_doc_ids_enabled` added to `make_real_app` — the right place for new TelemetryConfig options**
+- Observation: `make_real_app` in `tests/integration/conftest.py` is the canonical integration-test factory. A local `_make_hashing_app` helper that duplicates it for a single config flag was flagged Moderate by DA+Brooks. The correct fix is to add the parameter to `make_real_app` with a `False` default — mirrors the existing `telemetry_enabled`, `mcp_enabled`, `backup_enabled` pattern. No existing tests are affected because the default is `False`.
+- Action: Any new `TelemetryConfig` or `SearchConfig` option needed for integration tests should be added as a keyword param to `make_real_app` in `tests/integration/conftest.py`, not as a local duplicate helper.
+- Confidence: high
+
+**2026-06-25 — D8 BE-2: `patch.object(Path, "read_bytes", ...)` is broad — patch at module level instead**
+- Observation: Using `patch.object(Path, "read_bytes", side_effect=PermissionError(...))` patches ALL Path instances process-wide. For testing a specific fallback in `hasher.py`, it's more surgical to `patch("archon_search.telemetry.hasher.Path")` and configure only that mock instance's `exists` and `read_bytes`. The DA review (Cycle 2) flagged the broad patch as Moderate.
+- Action: When patching I/O failures in a specific module's Path usage, always patch at the module reference (`patch("module.Path")`) rather than the class globally (`patch.object(Path, "read_bytes")`). Reduces test interference risk.
+- Confidence: high
+
+**2026-06-25 — D8 BE-2: `hmac.new(...).hexdigest()` vs `hmac.digest(...).hex()` — always prefer the one-shot C API**
+- Observation: `hmac.new(salt, msg, hashlib.sha256).hexdigest()` constructs an HMAC object, allocates state in Python, then extracts. `hmac.digest(salt, msg, "sha256").hex()` is the one-shot C-level implementation (Python 3.7+, guaranteed on 3.12). Both produce identical 64-char hex output. The older `hmac.new` form triggered a Brooks-Lint Moderate finding; switching to `hmac.digest` also removes the `hashlib` import.
+- Action: For HMAC-SHA256 in new code, always use `hmac.digest(key, msg, "sha256").hex()`. Remove `import hashlib` when `hmac.digest` is the only call site.
+- Confidence: high
+
+**2026-06-25 — D8 BE-2: `functools.partial` over closure factory for single-argument adaptation**
+- Observation: Initial implementation used `_make_hasher(salt)` closure factory returning `_hasher(doc_id)`. This required a `# noqa: ANN202` suppression for missing return type and added 4 lines. `functools.partial(hash_doc_id, salt)` is equivalent, fully typed, and eliminates the `noqa`. DA and Brooks both flagged the factory as Moderate.
+- Action: For adapting a 2-argument pure function to a 1-argument callable by binding a constant first argument, use `functools.partial`. Never write a closure factory for this pattern in new code.
+- Confidence: high
+
 **2026-06-24 — D9 T-5: doc close-out review caught false claims in docs OUTSIDE the plan's checklist (520, 600) — the no-false-docs principle overrides the checklist**
 - Observation: The plan's documentation checklist enumerated 100/110/120/160/600 + CLAUDE.md + toml.example + ADR + snapshot. But the factual-accuracy DA reviewer found pre-D9 FALSE statements in docs NOT on the checklist: `520_api_design_and_contracts.md` said "MCP tools (ten total)" and `600` said `explain` "Operates in the default namespace only" / export+import "Uses DEFAULT_NAMESPACE" — all contradicted by the now-shipped D9 code (17 tools; all tools use `_get_request_namespace()`). These had to be fixed because they are now-false claims about the closed-out feature, even though 520 was never listed. Brooks-Lint independently caught that the rotate_key MCP-staleness MECHANISM described in 120/160 (and copied verbatim from the plan's own "Known limitations" line 91) was wrong: `middleware_auth.py:78-79` DOES re-read `app.state.api_key`; the real cause is the mounted sub-app's `app.state` never carries `api_key` (only the parent FastAPI app's does, set at `app.py:413` and updated by `routes_keys.py:286`). The plan's own limitation text was imprecise — do not copy plan prose into docs without verifying against source.
 - Action: For a doc close-out task, run the factual-accuracy reviewer against the WHOLE doc set's MCP/feature claims, not just the checklist files — a sibling doc (520, 990, UserManual) often carries a stale count or namespace claim. When the plan's "Known limitations" describes a mechanism, verify it against source before propagating it into Architecture docs; plan prose can be wrong.
@@ -395,6 +425,11 @@
 **2026-06-24 — D9 T-2: tester-role e2e tasks for completed backend work start green immediately**
 - Observation: T-2 passed immediately on first run. This is correct — the red phase only applies when tests are written before the implementation. For tester close-out tasks, immediate green means the implementation is correct.
 - Action: For tester-role close-out e2e tasks, expect immediate green. Still run to confirm — a failure indicates an implementation bug, not a TDD failure.
+- Confidence: high
+
+**2026-06-25 — D8 BE-1: config-only task — iterative review correctly dismissed deferred doc items**
+- Observation: Multiple DA and Brooks-Lint agents flagged `archon-search.toml.example` and CLAUDE.md as missing (Major/Moderate). These are explicitly listed in the plan's "Documentation update" section as T-4 (close-out) deliverables — NOT BE-1 deliverables. The plan's own documentation list, not the brief's general "every code change requires docs" principle, determines scope for individual tasks inside a multi-task plan. The one actionable finding was C1-I-3: no test for `[telemetry]` section present but `hash_doc_ids` key absent — a real gap that the review correctly surfaced.
+- Action: When iterative-review agents cite missing docs/example files for a task inside a multi-task plan, check the plan's "Documentation update" section first. If the item is listed there under a later close-out task, dismiss it as out-of-scope for the current task. Only the one substantive gap (key-absent-from-section test) needed fixing.
 - Confidence: high
 
 ## What Has Failed
@@ -874,4 +909,29 @@
 **2026-06-24 — D9 docs: doc 600 guiding principles carried stale MCP-auth claims**
 - Observation: `600_api_reference_or_public_interface.md` guiding principles #2 and #5 asserted (pre-D9) that the MCP transport uses an empty `namespaces={}` dict and that MCP tools "do not apply namespace gating" (marked `#Unverified`). D9 falsified both: `create_mcp_http_app` now passes `namespaces=config.namespaces` (mcp.py ~L1610), and tool closures resolve `request.state.namespace` per-request, passing `namespace=` into every pipeline call. The `mcp` field doc already existed on the `/health` row but the `/status` section and the `[mcp]` config section were missing.
 - Action: When a feature changes auth/namespace wiring, audit doc 600's "Guiding principles" block specifically — its numbered claims are easy to miss because they sit above the per-route tables and often carry `#Unverified` tags that should be resolved (not left) once the code is shipped. Verify the namespaces wiring by reading the `add_middleware(APIKeyMiddleware, ...)` call in mcp.py, not REST conventions.
+- Confidence: high
+
+**2026-06-24 — D9 roadmap: recording a shipped feature across the three roadmap files**
+- Observation: D9/mcp-wiring existed in NO roadmap (not even as a planned item) before this task — it was a Backlog brief+plan that shipped and moved to Completed/. The three roadmaps have distinct conventions: `roadmap.md` (in Documentation/) uses `✓ **<ID> shipped**: ...` Status-Snapshot bullets with `Completed/...` links; `Backlog/03_world_class_roadmap.md` uses `- [x] **D#. ...** — ... [[brief](../Completed/...), [plan](../Completed/...)]` checkboxes PLUS a redundant numbered single-list view PLUS a mermaid effort/impact matrix — all three must be updated; `Architecture/530_..._roadmap.md` is a debt register, NOT a shipped-feature log, so D9 belongs only as context on the existing MCP-surface debt entry (API-3), not as a new row.
+- Action: When marking a feature shipped in 03_world_class_roadmap.md, update ALL THREE views (checkbox list, numbered single-list, mermaid matrix). The numbered single-list is sequential across the whole doc — inserting an item in Phase D forces renumbering every Phase E/F line below it. Relative-link depth differs per file: Documentation/ files use `Completed/...`, Documentation/Backlog/ and Documentation/Architecture/ files use `../Completed/...`. Always `test -f` each resolved path.
+- Confidence: high
+
+**2026-06-24 — D9 roadmap: moved files leave stale Backlog/ links in cross-referencing docs**
+- Observation: When brief/plan/.tsp/api-contracts moved Backlog/ → Completed/, the only live stale navigational link was in `ADRs/09_..._propagation.md` References section (`Documentation/Backlog/mcp-wiring-team-plan.md`). The two `Backlog/mcp-wiring-*` strings inside `Completed/mcp-wiring-team-plan.md` itself are its own "Documentation update" checklist entries (historical record of edits made when the files lived in Backlog/) — NOT cross-links; leave them intact. Distinguish a navigational link (fix it) from a historical checklist/audit-trail reference (leave it).
+- Action: After a Backlog→Completed move, `grep -rn "Backlog/<basename>"` the whole Documentation/ tree, then for each hit decide: live cross-reference (fix to Completed/) vs. the moved file's own historical self-reference (leave). Pre-existing unrelated staleness found nearby (e.g. DOC-1 in 530 still says "13 tool names" when it's 17) is out of scope — flag, don't fix.
+- Confidence: high
+
+**2026-06-24 — Iterative review of D8 plan: plans drift from source on line numbers, file paths, and "already does" claims**
+- Observation: The D8 team plan carried three classes of factual error that all four reviewers (3 DA + Brooks-Lint) independently flagged: (1) hardcoded call-site line numbers (`mcp.py:361,495`) that had drifted post-D9 to 407/546; (2) a false premise that `cli/status.py` "already calls GET /status like maintenance status does" — it only calls `_get_service().status()` (OS service state), no HTTP; (3) a doc-checklist path `tests/contract/openapi_snapshot.json` when the live snapshot test (`tests/server/test_openapi_snapshot.py`) actually regenerates `tests/server/openapi_snapshot.json` (both files exist on disk; only the server/ one is under test). The brief also self-contradicted (32 vs 64 hex; listed `from_search_multi_result` as populating `result_doc_ids` when it does not).
+- Action: When reviewing a plan, verify EVERY concrete code reference against source before trusting it: line numbers (grep the symbol, don't trust the number), file paths (`find`/grep for which path a test actually uses when duplicates exist), and "X already does Y" claims (read X). Anchor plan references by symbol + endpoint, never bare line numbers — they rot the instant any earlier edit lands. Brief↔plan contradictions are common when a brief predates a resolved decision; reconcile or mark superseded.
+- Confidence: high
+
+**2026-06-25 — D8 K1: `app.state` is NOT shared with mounted Starlette sub-apps — always pass dependencies as explicit parameters**
+- Observation: The D8 C1 contract initially said MCP adapters would "construct a closure `lambda id_: hash_doc_id(app.state.salt_bytes, id_)` per request." Two independent DA reviewers and one architecture review caught that MCP tool closures in `mcp.py` do NOT access `app.state` — they capture parameters passed to `create_mcp_http_app()`. The MCP Starlette sub-app has its own state namespace (confirmed by existing learnings entry for D9 BE-7). The correct pattern: build the closure ONCE in the lifespan, store it on `app.state.doc_id_hasher` for REST routes (which do read parent `app.state`), and pass it as an explicit parameter `create_mcp_http_app(doc_id_hasher=...)` for MCP. This mirrors the existing `writer` + `key_store` dependency injection pattern precisely.
+- Action: For any new server-side state (flag, closure, loaded value) that both REST routes AND MCP tools need: (1) build/load it in the lifespan; (2) store on `app.state.<name>` for REST route handlers; (3) pass as an explicit keyword param to `create_mcp_http_app(...)` for MCP. Never expect `request.app.state` inside MCP tool closures to reference the parent FastAPI app's state.
+- Confidence: high
+
+**2026-06-24 — Iterative review fix-propagation: editing one mention of a path/layer leaves stale duplicates elsewhere**
+- Observation: After fixing the OpenAPI snapshot path in the doc-checklist, the SAME wrong path survived in the T-4 close-out duties block 190 lines away (Cycle-2 Major). After reassigning a module's CA layer in the approach prose + mermaid + layer-map table, the "Tasks by layer" summary and the per-task header still carried the old "Use Cases" label (Cycle-2 Moderate). Merging a layer line also accidentally created a duplicate "Frameworks & Drivers:" bullet that had to be re-merged.
+- Action: After any plan edit that changes a path, a layer label, a file name, or an estimate, grep the WHOLE document for every other occurrence of the old value — these docs repeat the same fact in 3-5 places (prose, diagram, table, task header, task-by-layer summary, close-out duties). A single Edit is almost never sufficient. Re-read the immediate neighbourhood after a list-merge to catch duplicate bullets.
 - Confidence: high

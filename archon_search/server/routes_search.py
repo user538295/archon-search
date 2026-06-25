@@ -274,6 +274,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                             correlation_id=_correlation_id.get(),
                             rag_fusion_applied=result.rag_fusion_applied,
                             rag_fusion_queries_used=result.rag_fusion_queries_used,
+                            doc_id_hasher=getattr(request.app.state, "doc_id_hasher", None),
                         )
                     )
                 except Exception:

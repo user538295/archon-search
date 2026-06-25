@@ -7,6 +7,7 @@ import time
 from contextlib import ExitStack
 from pathlib import Path
 from time import monotonic
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, Any, TypedDict
 
 from fastmcp import Context, FastMCP
@@ -215,6 +216,7 @@ def create_app(
     hyde_generator: "HyDEGenerator | None" = None,
     rag_fusion_generator: "RAGFusionGenerator | None" = None,
     key_store: "KeyStore | None" = None,
+    doc_id_hasher: Callable[[str], str] | None = None,
 ) -> FastMCP:
     """Create a FastMCP app with 13 RAG tools + up to 4 optional key-management tools.
 
@@ -413,6 +415,7 @@ def create_app(
                             correlation_id=_correlation_id.get(),
                             rag_fusion_applied=result_obj.rag_fusion_applied,
                             rag_fusion_queries_used=result_obj.rag_fusion_queries_used,
+                            doc_id_hasher=doc_id_hasher,
                         )
                     )
                 except Exception:
@@ -552,6 +555,7 @@ def create_app(
                             correlation_id=_correlation_id.get(),
                             rag_fusion_applied=_swc_pipeline_result.rag_fusion_applied,
                             rag_fusion_queries_used=_swc_pipeline_result.rag_fusion_queries_used,
+                            doc_id_hasher=doc_id_hasher,
                         )
                     )
                 except Exception:
@@ -1577,6 +1581,7 @@ def create_mcp_http_app(
     hyde_generator: "HyDEGenerator | None" = None,
     rag_fusion_generator: "RAGFusionGenerator | None" = None,
     key_store: "KeyStore | None" = None,
+    doc_id_hasher: Callable[[str], str] | None = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
@@ -1598,7 +1603,7 @@ def create_mcp_http_app(
     """
     from archon_search.server.middleware_context import RequestContextMiddleware
 
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store)
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store, doc_id_hasher=doc_id_hasher)
     # FastMCP 3.4.x renamed ``streamable_http_app()`` to ``http_app()``; ``path='/'``
     # exposes the JSON-RPC endpoint at the sub-app root so it is reachable at the
     # ``/mcp`` mount point without an extra suffix (see ADR 09, K-1 spike).
