@@ -137,6 +137,7 @@ def test_docker_marker_in_pyproject() -> None:
 
 
 @pytest.mark.docker
+@pytest.mark.xdist_group("docker")
 @pytest.mark.skipif(
     not _smoke_opted_in(),
     reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker smoke suite",
@@ -183,6 +184,7 @@ def test_cpu_image_starts_and_serves_ready(cpu_image: str) -> None:
 
 
 @pytest.mark.docker
+@pytest.mark.xdist_group("docker")
 @pytest.mark.skipif(
     not _smoke_opted_in(),
     reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker smoke suite",

@@ -2,6 +2,21 @@
 
 ## What Has Worked
 
+**2026-06-25 — MIS BE-2: `.env.example` "copy and run" contract — active placeholder lines must be safe or clearly marked**
+- Observation: Setting `ARCHON_SEARCH_IMAGE=ghcr.io/user538295/archon-search:TAG` as an active (uncommented) line causes `docker compose up` to fail with `manifest unknown` if copied verbatim to `.env`. The task spec said "uncommented example value" but didn't account for the copy-and-run failure mode. DA review (C1) caught this as Major. Fix: add a "REQUIRED before first use: replace TAG" comment immediately before the line, and describe what the placeholder represents. The file header "copy this file to `.env` and edit the values" implies active lines should either work or be unmistakably marked as requiring substitution.
+- Action: For any `.env.example` active line with a placeholder value, add a prominent "REQUIRED: replace X" comment immediately before it. Never rely on a comment buried in a multi-line block above — operators skim.
+- Confidence: high
+
+**2026-06-25 — MIS BE-2: "auto-generates on every fresh start" is factually wrong for persistent-volume containers**
+- Observation: `key_manager.load_or_generate_key()` checks env var → file → generate. With a persistent Docker volume the key file persists across container recreates, so auto-generation only happens on first start. Writing "auto-generates on every fresh start" misleads operators into thinking their key rotates on every `docker compose up`, causing over-provisioning of tokens. Verified at `key_manager.py:437-447`.
+- Action: For any documentation describing key/secret generation behavior in Docker containers, always verify against the actual load-then-generate logic. The correct phrasing is "auto-generates on first start; subsequent starts read the existing key from the data volume."
+- Confidence: high
+
+**2026-06-25 — MIS BE-2: Plan's manual integration tests belong in existing test files, not as one-off grep commands**
+- Observation: The plan listed `verify_env_example_registry` and `verify_env_example_no_active_api_key` as manual developer self-checks. `test_compose_lint.py` already had `.env.example` tests; adding the acceptance criteria there cost 30 lines and provides permanent CI coverage. DA/Brooks-Lint independently flagged the manual-only tests as Moderate.
+- Action: For any plan task with integration self-checks described as "grep X and confirm Y," check whether a test file already exists for the target file (here `test_compose_lint.py`). If so, add the checks there rather than leaving them as manual commands. The test file is the right long-term home.
+- Confidence: high
+
 **2026-06-25 — MIS BE-1: Doc-only tasks accumulate Critical issues when the doc assumes sibling tasks are already done**
 - Observation: BE-1 assumed BE-2 (.env.example update) was already complete — the draft said the registry path "ships with the real registry path as the default," but `.env.example` had a commented-out local-build line. A user copying the file would get a broken image placeholder. The C1 review caught this immediately. For any doc task that references a future state of another file, write for the CURRENT state and add explicit manual steps.
 - Action: Before writing doc instructions that reference another file's content (e.g., `.env.example`, `docker-compose.yml`), open the actual file and verify the current state. Write instructions for what exists now, not what a sibling task will produce.
@@ -190,6 +205,16 @@
 **2026-06-24 — D9 BE-7: integration test namespace isolation requires data injection via store layer, not REST API**
 - Observation: BE-7 integration tests need to inject documents into a specific namespace without going through the full ingest pipeline. Using `ChunkRecord` + `CollectionMeta` directly with `asyncio.run(store.upsert_chunks(...))` and `asyncio.run(pipeline.update_collection_meta(...))` bypasses REST auth and embedding model validation entirely, allowing precise test data setup.
 - Action: For namespace-scoped integration tests, inject test data via `pipeline.store` directly using `asyncio.run()`. Set `CollectionMeta.namespace` to the desired namespace value, then upsert chunks with matching `collection`. This is the only reliable way to create namespace-isolated test data without a live server.
+- Confidence: high
+
+**2026-06-25 — MIS T-1: `docker compose down --volumes [SERVICES]` scopes volume removal to the specified services only — empirically verified**
+- Observation: Multiple DA and Brooks-Lint agents claimed `docker compose down --volumes svc-a svc-b` removes ALL named volumes including unspecified ones. Verified empirically: Docker Compose v5.1.3 removes only volumes attached to the specified services' containers. Volumes for unspecified services survive. This contradicts several reviewer claims and should not be treated as a known-bad pattern.
+- Action: When reviewers cite `docker compose down --volumes [SERVICES]` as destroying unrelated volumes, run an empirical test before accepting the finding. The behavior is scoped by service, not project-wide when services are named.
+- Confidence: high
+
+**2026-06-25 — MIS T-1: Starlette lowercases all HTTP header names on the wire — always normalize to lowercase in stdlib urllib tests**
+- Observation: `middleware_auth.py` sets `headers={"WWW-Authenticate": "Bearer"}` in the response. Starlette's `responses.py` lowercases all header names before sending them on the wire (`raw_headers = [(k.lower().encode("latin-1"), ...]`). The `urllib.error.HTTPError.headers` dict therefore has `"www-authenticate"` (lowercase), not `"WWW-Authenticate"`. `headers.get("WWW-Authenticate")` on a plain `dict` (case-sensitive) returns `None`, making the assertion always fail.
+- Action: In any test using stdlib `urllib.request` that checks response headers: normalize to lowercase via `{k.lower(): v for k, v in ...}`. Assertions must use `"www-authenticate"` not `"WWW-Authenticate"`. Libraries like `httpx` and `requests` handle case-insensitive lookup automatically; `urllib` does not.
 - Confidence: high
 
 **2026-06-25 — MIS iterative-review: plan documents go stale fast — always re-verify key facts before treating a plan as implementation-ready**
