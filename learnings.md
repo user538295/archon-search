@@ -2,6 +2,21 @@
 
 ## What Has Worked
 
+**2026-06-26 — MIS BE-4: Docker image baked-in env vars make compose env declarations cosmetic — always verify against the Dockerfile**
+- Observation: Part 7 (fastembed model cache section) had Step 1 (uncomment `FASTEMBED_CACHE_PATH` in compose) presented as functionally required. But `08_running_with_docker.md` confirmed the image already bakes in `FASTEMBED_CACHE_PATH=/data/fastembed-cache`. Step 1 is purely cosmetic — the real required steps are volume mount + volume declaration (Steps 2+3). Two independent DA reviewers and Brooks-Lint all caught this as Major.
+- Action: Before writing a compose "uncomment step" for an env var, check whether the image already sets that value. If the Dockerfile or the env var table in a sibling doc shows "baked into image", add a note that the step is for clarity only. Never present it as required unless it sets a non-default value.
+- Confidence: high
+
+**2026-06-26 — MIS BE-4: "declared but not mounted" Docker Compose error claim is false — only "mounted but not declared" fails**
+- Observation: Part 7 initially stated docker compose "rejects the config if the volume is mounted but not declared, or declared but not mounted." The second clause is wrong — Docker Compose accepts a declared-but-unmounted volume without error. Two reviewers caught this as Moderate. The correct error condition is mounted-but-not-declared only.
+- Action: For any compose documentation that describes error behavior, verify the actual error condition. Docker Compose does not reject unused volume declarations.
+- Confidence: high
+
+**2026-06-26 — MIS BE-4: "all three steps required" vs "Step 1 optional" is a contradiction that reviewers immediately flag**
+- Observation: The section initially stated "All three steps must be done together" in the intro, then added a Step 1 note saying "The functionally required steps are Steps 2 and 3." These contradict each other and were flagged as Minor by Brooks-Lint. The fix: make the intro precise upfront — "Steps 2 and 3 are required; Step 1 is optional but recommended for clarity."
+- Action: When a section intro says "all X steps required" and a sub-note says "only Y steps are required", resolve at the intro level. Never let the intro and the sub-note tell different stories.
+- Confidence: high
+
 **2026-06-25 — MIS BE-2: `.env.example` "copy and run" contract — active placeholder lines must be safe or clearly marked**
 - Observation: Setting `ARCHON_SEARCH_IMAGE=ghcr.io/user538295/archon-search:TAG` as an active (uncommented) line causes `docker compose up` to fail with `manifest unknown` if copied verbatim to `.env`. The task spec said "uncommented example value" but didn't account for the copy-and-run failure mode. DA review (C1) caught this as Major. Fix: add a "REQUIRED before first use: replace TAG" comment immediately before the line, and describe what the placeholder represents. The file header "copy this file to `.env` and edit the values" implies active lines should either work or be unmistakably marked as requiring substitution.
 - Action: For any `.env.example` active line with a placeholder value, add a prominent "REQUIRED: replace X" comment immediately before it. Never rely on a comment buried in a multi-line block above — operators skim.

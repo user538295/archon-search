@@ -105,3 +105,4 @@ If you changed `[database].chunk_size` and left `[database].auto_reindex_on_chun
 - [`04_ingestion_and_collections.md`](./04_ingestion_and_collections.md) — populating the index.
 - [`05_searching.md`](./05_searching.md) — search and routing endpoints.
 - [`07_troubleshooting.md`](./07_troubleshooting.md) — common failure modes.
+- [`09_multi_instance_setup.md`](./09_multi_instance_setup.md) — running prod (native service) and dev-UAT (Docker) side by side on the same machine.

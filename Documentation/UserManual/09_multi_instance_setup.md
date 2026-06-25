@@ -44,7 +44,7 @@ Each instance has its own:
 | Host port | `8765` | `18765` |
 | MCP endpoint | `127.0.0.1:8765/mcp` | `127.0.0.1:18765/mcp` |
 
-> **Two isolation boundaries are NOT controlled by `ARCHON_SEARCH_DATA_DIR`:** the TOML config path (controlled by `ARCHON_SEARCH_CONFIG`) and the fastembed embedding model cache (controlled by `FASTEMBED_CACHE_PATH`, a fastembed-native env var). These have independent defaults for native and Docker deployments. For fastembed cache sharing across multiple Docker instances, see the [shared cache section in `08_running_with_docker.md`](08_running_with_docker.md#sharing-the-fastembed-model-cache).
+> **Two isolation boundaries are NOT controlled by `ARCHON_SEARCH_DATA_DIR`:** the TOML config path (controlled by `ARCHON_SEARCH_CONFIG`) and the fastembed embedding model cache (controlled by `FASTEMBED_CACHE_PATH`, a fastembed-native env var). These have independent defaults for native and Docker deployments. For fastembed cache sharing across multiple Docker instances, see [Part 7 below](#part-7--sharing-the-fastembed-model-cache-optional) or the [shared cache section in `08_running_with_docker.md`](08_running_with_docker.md#sharing-the-fastembed-model-cache).
 
 ---
 
@@ -518,6 +518,61 @@ To remove the volume (destroys all dev-UAT data):
 ```bash
 docker compose down archon-dev -v
 ```
+
+---
+
+## Part 7 — Sharing the fastembed model cache (optional)
+
+By default each Docker service downloads its own fastembed model weights into its own `/data/fastembed-cache` directory. On first start with a cold cache, this download is typically several hundred MB per service.
+
+> **Scope: Docker-only.** The shared `archon-model-cache` volume is shared only among Docker-based instances. The native prod service manages its own fastembed cache at the host default (`~/.cache/fastembed`) and does not share `archon-model-cache` with any Docker container. `FASTEMBED_CACHE_PATH` is a fastembed-native env var — it is independent of `ARCHON_SEARCH_DATA_DIR`.
+
+To share the cache across `archon-dev` and `archon-test` (or any combination of Docker services), follow the three-step uncomment procedure in `docker-compose.yml`. **Steps 2 and 3 are required** (mount + declaration must be added together); Step 1 is optional but recommended for clarity. `docker compose` rejects the config with "undefined volume" if the volume is mounted (Step 2) but not declared (Step 3):
+
+**Step 1 — Enable `FASTEMBED_CACHE_PATH` in each service's `environment:` block:**
+
+> **Note:** The Docker image already bakes in `FASTEMBED_CACHE_PATH=/data/fastembed-cache`. Uncommenting this line in compose does not change the path — it makes the intent visible in the compose file so the cache mount (Step 2) is clearly associated with the env var. The functionally required steps are Steps 2 and 3.
+
+```yaml
+# In archon-dev (and repeat for archon-test / archon-prod if needed):
+environment:
+  ARCHON_SEARCH_API_KEY: ${ARCHON_SEARCH_API_KEY:-}
+  ARCHON_SEARCH_DATA_DIR: /data
+  FASTEMBED_CACHE_PATH: /data/fastembed-cache   # uncomment this line
+```
+
+**Step 2 — Mount the shared volume in each service's `volumes:` block:**
+
+```yaml
+# In archon-dev (and repeat for each service):
+volumes:
+  - archon-dev-data:/data
+  - archon-model-cache:/data/fastembed-cache   # uncomment this line
+```
+
+**Step 3 — Declare the named volume at the bottom of the file:**
+
+```yaml
+volumes:
+  archon-dev-data:
+  archon-test-data:
+  archon-prod-data:
+  archon-model-cache:   # uncomment this line
+```
+
+After editing, bring up the services:
+
+```bash
+docker compose up archon-dev archon-test -d
+```
+
+The first service to start will populate `archon-model-cache`; the second will reuse the cached weights.
+
+> **Cold-cache startup:** if both services start simultaneously against an empty `archon-model-cache`, both containers will attempt to download model weights concurrently into the same volume. To avoid a race on first use, start one service first and wait for it to become healthy (`docker compose up archon-dev -d` → poll `/ready`) before starting the second.
+
+> **Single-writer constraint does not apply to the model cache.** Unlike LanceDB (`archon-dev-data`), the fastembed model cache is effectively read-only once the initial download is complete. Multiple containers reading from `archon-model-cache` concurrently after the first download is safe.
+
+For full details on the Docker persistence layout and the model cache, see [`08_running_with_docker.md#sharing-the-fastembed-model-cache`](08_running_with_docker.md#sharing-the-fastembed-model-cache).
 
 ---
 

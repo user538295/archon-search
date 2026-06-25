@@ -327,7 +327,7 @@ flowchart LR
         - #manual_test — Credential isolation — retrieve prod and dev-UAT keys; confirm prod key returns 401 on port 18765 and dev-UAT key returns 401 on port 8765; verify each key succeeds on its own port with the documented curl command
 
 ### Phase 3 · Share model weights and extend
-- [ ] **BE-4** — Write fastembed model cache section (three-step opt-in per the `docker-compose.yml` archon-dev model-cache block, repeated per service) — clarify the shared `archon-model-cache` is only shared among Docker-based instances; the native prod service uses its own fastembed cache path and does not share it — + going-further note for `archon-test` (port 18766) + update `990_documentation_index_and_contribution_guide.md` + add cross-links in `03_running_the_server.md` and `08_running_with_docker.md` #backend-role
+- [x] **BE-4** — Write fastembed model cache section (three-step opt-in per the `docker-compose.yml` archon-dev model-cache block, repeated per service) — clarify the shared `archon-model-cache` is only shared among Docker-based instances; the native prod service uses its own fastembed cache path and does not share it — + going-further note for `archon-test` (port 18766) + update `990_documentation_index_and_contribution_guide.md` + add cross-links in `03_running_the_server.md` and `08_running_with_docker.md` #backend-role
     - Presentation · 2.0h
     - needs BE-3 · completes S10, S11
     - Tests

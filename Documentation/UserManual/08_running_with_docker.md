@@ -144,5 +144,6 @@ The container speaks plaintext HTTP only. Put a reverse proxy (nginx, Caddy, Tra
 
 - [`03_running_the_server.md`](03_running_the_server.md) — the `serve` subcommand and the rest of the CLI lifecycle.
 - [`01_installation.md`](01_installation.md) — host-level install via the wizard, for non-container deployments.
+- [`09_multi_instance_setup.md`](09_multi_instance_setup.md) — running a native-service prod instance and a Docker dev-UAT instance side by side on the same machine.
 - [`OperatorGuide/01_deployment_topologies.md`](../OperatorGuide/01_deployment_topologies.md) — reverse-proxy patterns and topology comparison.
 - [`Architecture/160_operational_readiness_monitoring_and_reliability.md`](../Architecture/160_operational_readiness_monitoring_and_reliability.md) — health/ready surface, runbooks.

@@ -50,6 +50,7 @@ End-user / operator documentation. Audience is medior-technical operators runnin
 | [`UserManual/06_telemetry.md`](../UserManual/06_telemetry.md) | Opt-in local telemetry, no-raw-query invariant, read-back endpoints. |
 | [`UserManual/07_troubleshooting.md`](../UserManual/07_troubleshooting.md) | Common failure modes: auth, empty results, stuck reindex, install hangs. |
 | [`UserManual/08_running_with_docker.md`](../UserManual/08_running_with_docker.md) | C9 — Docker image (CPU + GPU), `docker run` / `docker compose`, env-var matrix, persistence layout. |
+| [`UserManual/09_multi_instance_setup.md`](../UserManual/09_multi_instance_setup.md) | MIS — Run a native-service prod instance and a Docker dev-UAT instance side by side; data isolation, API key isolation, MCP client config for both, optional shared fastembed model cache. |
 
 ## Migration Guide
 
