@@ -2,6 +2,86 @@
 
 ## What Has Worked
 
+**2026-06-25 — MIS BE-1: Doc-only tasks accumulate Critical issues when the doc assumes sibling tasks are already done**
+- Observation: BE-1 assumed BE-2 (.env.example update) was already complete — the draft said the registry path "ships with the real registry path as the default," but `.env.example` had a commented-out local-build line. A user copying the file would get a broken image placeholder. The C1 review caught this immediately. For any doc task that references a future state of another file, write for the CURRENT state and add explicit manual steps.
+- Action: Before writing doc instructions that reference another file's content (e.g., `.env.example`, `docker-compose.yml`), open the actual file and verify the current state. Write instructions for what exists now, not what a sibling task will produce.
+- Confidence: high
+
+**2026-06-25 — MIS BE-1: API field names in doc examples must be verified against actual serialization code**
+- Observation: The async job polling example used `"id"` (Critical) and `"COMPLETED"` (Critical) — neither exists in the actual API. The correct field is `"job_id"` (from `job_to_dict()` in `jobs/model.py`) and the terminal status is `"DONE"` (from `JobStatus.DONE` in `types.py`). These were caught in C3, costing a full extra review cycle.
+- Action: For any doc example that parses a JSON API response, always verify the field names and enum values by reading the actual serialization code (`job_to_dict`, `schemas.py`, enum definitions) before writing. Never infer field names from type hints alone — the serializer may rename fields.
+- Confidence: high
+
+**2026-06-25 — MIS BE-1: Isolation tables create an implicit "completeness contract" — missing rows are false negatives**
+- Observation: The initial isolation table listed Data directory, API key, LanceDB index, port, and MCP endpoint. Reviewers (C2-A-1/A-2) correctly flagged that `ARCHON_SEARCH_CONFIG` and `FASTEMBED_CACHE_PATH` are NOT derived from `DATA_DIR` — the table implied DATA_DIR controlled everything. When writing an isolation table for a multi-instance guide, the table MUST include all boundaries, especially exceptions that break the general pattern.
+- Action: For any "each instance has its own" table, grep the codebase for all env vars that affect paths (DATA_DIR, KEY_FILE, CONFIG, FASTEMBED_CACHE_PATH) and verify which ones are independent. The exceptions are the most important rows to include.
+- Confidence: high
+
+**2026-06-25 — D8 T-4: ADR append-only rule means restoring original body after an erroneous edit, not finding a creative middle ground**
+- Observation: When Cycle 1 edited the ADR-05 Decision body (line 37 rewritten to "mitigated by D8") and Cycle 1 also applied a strikethrough to the Negative consequences (line 58), the Cycle 2 fix was unambiguous: restore the original accepted text verbatim. The append-only rule ("supersede with a new ADR rather than editing accepted ones") means the original body is a frozen historical record — the Amendment section at the end provides all D8 context. No creative middle ground (partial strikethroughs, "see Amendment below" annotations) satisfies the rule; only a full restore does.
+- Action: When an ADR body has been incorrectly edited, restore it to the exact pre-edit text. If the Amendment provides the update, it stands alone — cross-referencing the Amendment from within the accepted body is itself an edit. Verify the restore by checking the file line count and tailing the end to confirm the Amendment is still appended.
+- Confidence: high
+
+**2026-06-25 — D8 T-4: Close-out doc scope expands beyond the plan checklist — grep for stale claims across user-facing docs**
+- Observation: The T-4 plan checklist named 11 specific files, but iterative review found gaps in README.md ("planned for a future release"), UserManual/06_telemetry.md (no mention of hash_doc_ids), UserManual/02_configuration.md (missing [telemetry] field), 110_component_catalog (missing hasher.py), and 600_api_reference (missing TelemetryStatusDetail). None of these were in the original checklist.
+- Action: For any feature close-out, run `grep -r "planned\|roadmap\|future release" Documentation README.md` against the feature's key terms to catch docs not in the plan checklist. The checklist is a starting point, not a complete inventory. Pay special attention to UserManual/ and README.md — they are the operator's first contact and are often missed in dev-authored checklists.
+- Confidence: high
+
+**2026-06-25 — D8 T-4: DA review hallucinations need source verification before spawning a fix agent**
+- Observation: DA1 C3 flagged "load_or_create_salt signature missing salt_path parameter" as Major, recommending adding a non-existent parameter to two docs. The actual function signature at `hasher.py:49` has only `hash_doc_ids_enabled: bool` — no `salt_path`. Acting on this finding would have introduced a false claim into security documentation.
+- Action: Before spawning a fix agent for any DA finding about a function signature or API surface, verify the claim against the actual source code with a targeted `grep -n "def <function>"`. A "Major" severity label does not mean the finding is correct. DA agents are good at finding gaps but can hallucinate specific technical details.
+- Confidence: high
+
+**2026-06-25 — D8 T-3: caplog is required for WARNING/ERROR assertions in e2e tests that exercise lifespan startup logging**
+- Observation: S3 and S5 plan specs explicitly require "WARNING is logged" and "ERROR is logged" from `load_or_create_salt`. The initial test implementation checked only file existence and JSONL flags, missing the log requirement entirely. `caplog.at_level(logging.WARNING, logger="archon_search.telemetry.hasher")` wrapping the `with make_real_app(...)` block captured lifespan startup logs correctly.
+- Action: For any e2e test whose spec says "X is logged", add `caplog` as a fixture parameter and wrap the server context with `caplog.at_level(level, logger=specific_logger)`. Always assert on `r.getMessage()` content, not just `r.levelno`.
+- Confidence: high
+
+**2026-06-25 — D8 T-3: `search_ok_all[-1]` vs `search_ok_all[before_count]` for isolating session-2 JSONL entries**
+- Observation: S4 test accumulates telemetry from both sessions in the same log dir. Using `before_count` (count of search/ok entries before session 2's search) and then `search_ok_all[-1]` was flagged by Brooks-Lint as incorrect when session 1 emits more than one entry — `[-1]` picks the last overall entry which may not be from session 2. The correct pattern is `search_ok_all[before_count]` (first entry at index `before_count` is the first one session 2 wrote).
+- Action: When two app sessions write to the same log dir, always use index-based slicing (`entries[before_count]` or `entries[before_count:]`) rather than `[-1]` to isolate entries from the later session.
+- Confidence: high
+
+**2026-06-25 — D8 T-3: `os.getuid()` is POSIX-only — use `getattr(os, "getuid", lambda: -1)()`**
+- Observation: `@pytest.mark.skipif(os.getuid() == 0, ...)` crashes at collection time on Windows with `AttributeError`. Brooks-Lint C1-B-1 caught this. The portable form is `getattr(os, "getuid", lambda: -1)() == 0`.
+- Action: Any pytest `skipif` that checks UID for root must use `getattr(os, "getuid", lambda: -1)() == 0`, not `os.getuid() == 0`, to avoid crashing test collection on non-POSIX platforms.
+- Confidence: high
+
+**2026-06-25 — D8 T-3: S5 JSONL fallback assertion requires cross-validating actual doc_id values, not just the boolean flag**
+- Observation: Asserting `doc_ids_hashed is False` alone passes vacuously if result_doc_ids is empty or if the flag/value are desynced. Strengthening required computing the raw SHA-256 doc_id (`hashlib.sha256(str(file.resolve()).encode()).hexdigest()`) and asserting it appears in `result_doc_ids`. This proves the fallback wrote real raw values, not just set the flag.
+- Action: For any S5-style fallback test, always cross-validate the boolean flag with the actual data values. The boolean is necessary but not sufficient.
+- Confidence: high
+
+**2026-06-25 — D8 FE-1: When adding HTTP to a CLI command, always add direct unit tests for the fetch helper, not just the Click command**
+- Observation: The initial test suite for FE-1 mocked `_fetch_server_status` entirely at the CLI level, leaving all 6 code paths in `_fetch_server_status` (key-resolve exception, httpx.HTTPError, 401, non-200/non-401, invalid JSON, valid 200) untested. DA and coverage reviewers flagged this as Major in cycle 1. Adding 7 direct unit tests for the helper was the right fix: it exercised the real URL construction, header building, and error branches without going through Click.
+- Action: For any CLI command that encapsulates an HTTP call in a helper function, always add direct unit tests for the helper in ADDITION to the Click-level tests. The Click-level tests verify rendering logic; the helper tests verify the HTTP contract (URL, headers, error handling). Both are required.
+- Confidence: high
+
+**2026-06-25 — D8 FE-1: Distinguish "401 Unauthorized" from "server unreachable" in CLI status commands**
+- Observation: `maintenance_cmd.py` silently maps 401 to `None` (treating it as unreachable). This is acceptable there because the command has an offline fallback (reads `.maintenance-state.json`). The `status` command has no offline fallback — a 401 would silently omit the telemetry section with no indication why. Returning `{"_auth_failed": True}` sentinel from `_fetch_server_status` let the caller emit a clear `[401 Unauthorized — check your API key]` message.
+- Action: For CLI commands with no offline fallback, distinguish 401 from network errors so the operator sees a clear auth-failure message rather than a silent omission. The `{"_auth_failed": True}` in-band sentinel is a simple mechanism for this pattern.
+- Confidence: high
+
+**2026-06-25 — D8 BE-5: Status sub-object tests should call the builder via HTTP, not construct the Pydantic model directly**
+- Observation: Tests named `test_telemetry_status_detail_hash_enabled_when_salt_loaded` initially constructed `TelemetryStatusDetail(enabled=True, hash_doc_ids_enabled=True)` directly and asserted the stored values — a tautology that tests Pydantic model construction, not the builder function `_build_telemetry_status()`. A bug in the builder would not be caught. DA and Brooks-Lint independently flagged this as Moderate.
+- Action: For any status sub-object test, always exercise the builder via the HTTP layer using `_make_client_with_*_config` + `GET /status`, not by constructing the schema model directly. Direct model construction is valid only for testing Pydantic validation constraints (e.g., field type coercion), never for testing routing logic.
+- Confidence: high
+
+**2026-06-25 — D8 BE-5: Always test the S5 fallback scenario (hash_doc_ids=True, salt_bytes=None) explicitly**
+- Observation: The S5 fallback (config says hash, but salt unreadable → `salt_bytes=None` → `hash_doc_ids_enabled=False`) is a distinct diagonal from "hashing disabled" (`hash_doc_ids=False`). Only one of the three scenarios (`hash_doc_ids=True, salt=None`) actually exercises the `and salt_bytes is not None` guard. The plan explicitly called out S5 but the initial test set missed the HTTP-level coverage for it.
+- Action: For any feature with a fallback path that is neither "fully on" nor "fully off" (config says X but runtime state prevents it), always add a dedicated test for that diagonal. It is the highest-value branch — a future refactor that drops the guard would pass all "fully on" and "fully off" tests.
+- Confidence: high
+
+**2026-06-25 — D8 T-1: Collection-not-found returns 404 before telemetry is written in routes_search.py**
+- Observation: The single-collection search path in `routes_search.py` checks `meta is None` at line ~215 and returns `JSONResponse(404)` before entering the `try/except` block that enqueues `TelemetryEntry.from_error(...)`. Any e2e test that tries to trigger an error telemetry entry via a nonexistent-collection search will see zero telemetry entries — a silently vacuous test. The `from_error` telemetry block only fires for `asyncio.TimeoutError` or generic `Exception` inside the pipeline call.
+- Action: For e2e tests that need a non-search telemetry entry (S6, S16), use the `/explain` endpoint instead. `from_explain_result` fires even on partial success and reliably writes an entry. Document this limitation in test docstrings referencing the specific route code path.
+- Confidence: high
+
+**2026-06-25 — D8 T-1: MCP SSE sessions require `notifications/initialized` after `initialize`**
+- Observation: FastMCP SSE sessions require a `notifications/initialized` notification after the `initialize` request before any tool calls. Without it, tool calls on the same session return an error. The pattern is: `POST /mcp` with `initialize` → extract `session_id` from SSE stream → `POST /mcp` with `notifications/initialized` (no response expected, status < 400 suffices) → `POST /mcp` with `tools/call`.
+- Action: Any test helper that opens an MCP SSE session must send `notifications/initialized` as the second step. Omitting it causes tool calls to fail silently or return errors that look like wiring bugs.
+- Confidence: high
+
 **2026-06-25 — D8 BE-4: `if result_doc_ids:` guard is a vacuous-pass trap in MCP hashing tests**
 - Observation: MCP search tests that guard format/exclusion assertions with `if result_doc_ids:` pass silently when search returns zero results. The `doc_ids_hashed=True` outer assertion still runs, but it's insufficient on its own — a wiring regression that breaks MCP doc_id hashing would not be caught. DA/Brooks consistently flagged this as Moderate. Fix: replace `if result_doc_ids:` with `assert result_doc_ids` so a zero-results scenario fails loudly.
 - Action: For any integration test that asserts "hashing was applied", always require non-empty `result_doc_ids` unconditionally. The `if guard` pattern is acceptable for defensive logging-style tests but never for core correctness assertions.
@@ -110,6 +190,16 @@
 **2026-06-24 — D9 BE-7: integration test namespace isolation requires data injection via store layer, not REST API**
 - Observation: BE-7 integration tests need to inject documents into a specific namespace without going through the full ingest pipeline. Using `ChunkRecord` + `CollectionMeta` directly with `asyncio.run(store.upsert_chunks(...))` and `asyncio.run(pipeline.update_collection_meta(...))` bypasses REST auth and embedding model validation entirely, allowing precise test data setup.
 - Action: For namespace-scoped integration tests, inject test data via `pipeline.store` directly using `asyncio.run()`. Set `CollectionMeta.namespace` to the desired namespace value, then upsert chunks with matching `collection`. This is the only reliable way to create namespace-isolated test data without a live server.
+- Confidence: high
+
+**2026-06-25 — MIS iterative-review: plan documents go stale fast — always re-verify key facts before treating a plan as implementation-ready**
+- Observation: The MIS plan was written before D9 shipped. Three independent reviewers all flagged the MCP "not yet mounted" claim (Q1 resolution) as Critical. The plan had `status: planned` and was about to be implemented, which would have resulted in a manual telling users a working feature doesn't exist.
+- Action: Before running /iterative-review on a plan, check git log for any feature merges since the plan was last updated. Cross-reference the plan's "Resolved open questions" against CLAUDE.md — CLAUDE.md is updated at each feature close-out and is the fastest way to detect stale plan claims.
+- Confidence: high
+
+**2026-06-25 — MIS iterative-review: docker-compose service name ≠ container name in tests**
+- Observation: C2-T-1 caught that `docker exec archon-dev` fails in automated tests because compose prefixes container names with the project directory (e.g., `archon-search-archon-dev-1`). The smoke test pattern uses `-e ARCHON_SEARCH_API_KEY=<known>` at `docker run` time to avoid needing to extract auto-generated keys. The correct compose-aware form is `docker compose exec archon-dev` (resolves via service name).
+- Action: In e2e test specs involving Docker Compose, always say "inject known keys via env (`-e ARCHON_SEARCH_API_KEY=<key>`) rather than extracting auto-generated keys from volumes." Never write `docker exec <service-name>` in a test spec — use `docker compose exec <service-name>` instead. Follow the `tests/test_docker_smoke.py` pattern as the canonical reference.
 - Confidence: high
 
 **2026-06-24 — D9 BE-4: FastMCP returns `StarletteWithLifespan`, not `Starlette`; use `user_middleware` not `middleware`**
@@ -931,7 +1021,22 @@
 - Action: For any new server-side state (flag, closure, loaded value) that both REST routes AND MCP tools need: (1) build/load it in the lifespan; (2) store on `app.state.<name>` for REST route handlers; (3) pass as an explicit keyword param to `create_mcp_http_app(...)` for MCP. Never expect `request.app.state` inside MCP tool closures to reference the parent FastAPI app's state.
 - Confidence: high
 
+**2026-06-25 — D8 T-2: e2e tests for status observability — place all assertions inside the `with make_real_app()` block**
+- Observation: The initial S10/S11 tests placed all assertions OUTSIDE the `with make_real_app(...)` context. `resp` is a buffered object so the assertions technically work, but it is structurally wrong — if an assertion fails, the cleanup exception is masked. DA reviewers flagged this as Critical. The correct pattern (confirmed by the schema_status_e2e tests) is to place all assertions inside the `with` block while the app is still alive.
+- Action: For any integration test using `make_real_app`, place all HTTP request calls AND their assertions inside the `with` block. Move only captured results (e.g. `result = runner.invoke(...)`) outside the block when the action must happen after app teardown — but in practice, CLI invocations via CliRunner can also run inside the block.
+- Confidence: high
+
+**2026-06-25 — D8 T-2: S12b (server unreachable) must be a separate test from S12a (server reachable)**
+- Observation: The plan text explicitly says "S12 covers both: (a) server reachable → output displays hash_doc_ids_enabled; (b) server unreachable → service state shown, telemetry section omitted." The initial implementation only covered S12a. DA reviewer C1-III-1 flagged S12b as missing. S12b needs no `make_real_app` — it only patches `_fetch_server_status` to return `None` and `_get_service` to return a mock `ServiceStatus`. Because S12b patches nothing that requires real infrastructure, remove unused `tmp_path` and `monkeypatch` fixture params from its signature (C2-I-1).
+- Action: When the plan lists sub-cases for a scenario (S12a/S12b), implement each as a separate test. Sub-case tests that only patch both service layers need no `make_real_app` and no pytest fixtures.
+- Confidence: high
+
 **2026-06-24 — Iterative review fix-propagation: editing one mention of a path/layer leaves stale duplicates elsewhere**
 - Observation: After fixing the OpenAPI snapshot path in the doc-checklist, the SAME wrong path survived in the T-4 close-out duties block 190 lines away (Cycle-2 Major). After reassigning a module's CA layer in the approach prose + mermaid + layer-map table, the "Tasks by layer" summary and the per-task header still carried the old "Use Cases" label (Cycle-2 Moderate). Merging a layer line also accidentally created a duplicate "Frameworks & Drivers:" bullet that had to be re-merged.
 - Action: After any plan edit that changes a path, a layer label, a file name, or an estimate, grep the WHOLE document for every other occurrence of the old value — these docs repeat the same fact in 3-5 places (prose, diagram, table, task header, task-by-layer summary, close-out duties). A single Edit is almost never sufficient. Re-read the immediate neighbourhood after a list-merge to catch duplicate bullets.
+- Confidence: high
+
+**2026-06-25 — MIS multi-instance plan fixes: stale "MCP not mounted" premise after D9 shipped**
+- Observation: The MIS team plan was written assuming `create_mcp_http_app` had no callers and `/mcp` was not mounted. D9 shipped between drafting and review — `app.py:368` now does `app.mount("/mcp", mcp_starlette)` inside the lifespan when `mcp.enabled=true` (default). The plan referenced a nonexistent `Documentation/UserManual/05_mcp_integration.md`; the actual MCP wiring doc is `Documentation/ADRs/09_mcp_http_mount_and_namespace_propagation.md`. Also: the plan cited bare line numbers (`config.py:92`, `paths.py:43–87`, `docker-compose.yml:14–16/18–20/31–39`, "line 41") that should be symbol references; claimed Docker Compose "fails silently" on port conflict (it logs to stderr + non-zero exit); and instructed `cat ~/.archon-search/.search.env` to get the key when the file is env-format `ARCHON_SEARCH_API_KEY=<token>` (needs `grep -o '[^=]*$'` to strip the prefix).
+- Action: When a doc-only plan describes runtime behaviour, verify each claim against current source — feature flags ship between draft and review (check `app.py` mounts, `config.py` defaults). Replace bare line-number citations with symbol names (`config.SearchConfig.port`, `paths.get_data_dir()`, `docker-compose.yml archon-dev ports`). Verify referenced doc filenames exist (`ls Documentation/UserManual/ Documentation/ADRs/`). The `.search.env` key file is env-format, not a bare token.
 - Confidence: high

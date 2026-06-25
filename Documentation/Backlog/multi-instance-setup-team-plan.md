@@ -285,7 +285,7 @@ flowchart LR
     - Tests
 
 ### Phase 1 · Run both instances side by side *(walking skeleton: thinnest end-to-end path — reader can start prod + dev-UAT and verify they are isolated)*
-- [ ] **BE-1** — Write `09_multi_instance_setup.md` sections: architecture overview, prerequisites, prod install (macOS + Linux), dev-UAT Docker startup, and isolation verification #backend-role
+- [x] **BE-1** — Write `09_multi_instance_setup.md` sections: architecture overview, prerequisites, prod install (macOS + Linux), dev-UAT Docker startup, and isolation verification #backend-role
     - Presentation · 6.0h
     - needs K1 · completes S1, S2, S3, S4, C1, C2
     - Tests
