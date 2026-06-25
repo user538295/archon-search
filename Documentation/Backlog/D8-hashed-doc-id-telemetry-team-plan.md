@@ -440,13 +440,13 @@ flowchart LR
         - [x] #unit_test — `test_status_cli_graceful_when_server_unreachable` — connection error → service state shown, no crash, telemetry section omitted
         - [x] #integration_test — `test_status_cli_integration_with_real_server` — real server running, status output contains hash_doc_ids_enabled (S12)
 
-- [ ] **T-2** — e2e: status observability — S10, S11, S12 #tester-role
+- [x] **T-2** — e2e: status observability — S10, S11, S12 #tester-role
     - — · 2.0h
     - needs BE-5, FE-1 · completes S10, S11, S12
     - Tests
-        - #e2e_test — `test_e2e_get_status_hash_doc_ids_enabled_true` — real server with hashing on, GET /status → telemetry.hash_doc_ids_enabled=true (S10)
-        - #e2e_test — `test_e2e_get_status_hash_doc_ids_enabled_false` — hashing off → false (S11)
-        - #e2e_test — `test_e2e_cli_status_displays_hash_doc_ids_flag` — run archon-search status CLI against real server, verify output contains hash_doc_ids_enabled (S12)
+        - [x] #e2e_test — `test_e2e_get_status_hash_doc_ids_enabled_true` — real server with hashing on, GET /status → telemetry.hash_doc_ids_enabled=true (S10)
+        - [x] #e2e_test — `test_e2e_get_status_hash_doc_ids_enabled_false` — hashing off → false (S11)
+        - [x] #e2e_test — `test_e2e_cli_status_displays_hash_doc_ids_flag` — run archon-search status CLI against real server, verify output contains hash_doc_ids_enabled (S12)
 
 - [ ] **T-3** — e2e: salt lifecycle edge cases and data-dir override — S3, S4, S5, S15 #tester-role
     - — · 3.0h
