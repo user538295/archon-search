@@ -351,14 +351,14 @@ flowchart LR
 
 ### Phase 1 · Search with hashed doc_ids *(walking skeleton: operator enables hashing, search writes HMAC doc_ids to JSONL)*
 
-- [ ] **BE-1** — Add `hash_doc_ids: bool = False` to `TelemetryConfig` and TOML parser #backend-role
+- [x] **BE-1** — Add `hash_doc_ids: bool = False` to `TelemetryConfig` and TOML parser #backend-role
     - Entities · 1.0h
     - needs K1 · completes C1 (partial)
     - Tests
-        - #unit_test — `test_hash_doc_ids_defaults_to_false` — TelemetryConfig() has hash_doc_ids=False
-        - #unit_test — `test_hash_doc_ids_parsed_from_toml_true` — `[telemetry] hash_doc_ids = true` sets the field
-        - #unit_test — `test_hash_doc_ids_parsed_from_toml_false` — explicit false parses correctly
-        - #integration_test — `test_telemetry_config_hash_doc_ids_in_load_config` — full `load_config()` round-trip with the field
+        - [x] #unit_test — `test_hash_doc_ids_defaults_to_false` — TelemetryConfig() has hash_doc_ids=False
+        - [x] #unit_test — `test_hash_doc_ids_parsed_from_toml_true` — `[telemetry] hash_doc_ids = true` sets the field
+        - [x] #unit_test — `test_hash_doc_ids_parsed_from_toml_false` — explicit false parses correctly
+        - [x] #integration_test — `test_telemetry_config_hash_doc_ids_in_load_config` — full `load_config()` round-trip with the field
 
 - [ ] **BE-2** — Implement `hash_doc_id()` and `load_or_create_salt()` in `archon_search/telemetry/hasher.py` (new file) + wire salt init into `app.py` lifespan #backend-role
     - Entities (`hash_doc_id`) + Frameworks & Drivers (`load_or_create_salt`, lifespan) — spans layers like `key_manager.py` · 3.0h

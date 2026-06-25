@@ -139,6 +139,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "retention_days": 30,
             "export_enabled": False,
             "log_dir": "~/.archon-search/search-logs",
+            "hash_doc_ids": False,
         },
         # [observability]
         "observability": {

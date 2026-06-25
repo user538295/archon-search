@@ -1223,3 +1223,53 @@ def test_mcp_config_enabled_false(tmp_path: Path) -> None:
     toml_file.write_text("[mcp]\nenabled = false\n", encoding="utf-8")
     config = load_config(path=toml_file)
     assert config.mcp.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# [telemetry] hash_doc_ids (D8 BE-1)
+# ---------------------------------------------------------------------------
+
+
+def test_hash_doc_ids_defaults_to_false(tmp_path: Path) -> None:
+    """TelemetryConfig() has hash_doc_ids=False by default."""
+    config = load_config(path=tmp_path / "nonexistent.toml")
+    assert config.telemetry.hash_doc_ids is False
+
+
+def test_hash_doc_ids_parsed_from_toml_true(tmp_path: Path) -> None:
+    """[telemetry] hash_doc_ids = true sets the field."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[telemetry]\nhash_doc_ids = true\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.telemetry.hash_doc_ids is True
+
+
+def test_hash_doc_ids_parsed_from_toml_false(tmp_path: Path) -> None:
+    """Explicit [telemetry] hash_doc_ids = false parses correctly."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[telemetry]\nhash_doc_ids = false\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.telemetry.hash_doc_ids is False
+
+
+def test_hash_doc_ids_absent_from_telemetry_section_stays_false(tmp_path: Path) -> None:
+    """[telemetry] section present with other keys but no hash_doc_ids → default False preserved."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[telemetry]\nenabled = true\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.telemetry.enabled is True
+    assert config.telemetry.hash_doc_ids is False
+
+
+@pytest.mark.integration
+def test_telemetry_config_hash_doc_ids_in_load_config(tmp_path: Path) -> None:
+    """Full load_config() round-trip: hash_doc_ids toggled via TOML and coexists with other telemetry fields."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        "[telemetry]\nenabled = true\nretention_days = 14\nhash_doc_ids = true\n",
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.telemetry.enabled is True
+    assert config.telemetry.retention_days == 14
+    assert config.telemetry.hash_doc_ids is True

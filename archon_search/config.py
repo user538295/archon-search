@@ -44,6 +44,7 @@ class TelemetryConfig:
     retention_days: int = 30
     export_enabled: bool = False
     log_dir: str = "~/.archon-search/search-logs"
+    hash_doc_ids: bool = False
 
 
 @dataclass
@@ -452,6 +453,8 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         if not log_dir:
             raise ConfigError("[telemetry].log_dir must be a non-empty string")
         telemetry.log_dir = log_dir
+    if "hash_doc_ids" in telemetry_cfg:
+        telemetry.hash_doc_ids = _coerce_bool(telemetry_cfg["hash_doc_ids"], "[telemetry].hash_doc_ids")
     config.telemetry = telemetry
 
     obs_cfg = doc.get("observability", {})
