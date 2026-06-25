@@ -295,6 +295,11 @@ num_queries = 2
 enabled = false
 retention_days = 30
 log_dir = "~/.archon-search/search-logs"
+# Hashed doc_id mode (D8): when true, result_doc_ids in JSONL telemetry entries are
+# replaced with HMAC-SHA256 values keyed by a 32-byte salt stored at
+# ~/.archon-search/.telemetry-salt (mode 600). Severs the mapping to raw
+# filesystem paths in exported/shared logs. Default: false (raw path-derived hashes).
+hash_doc_ids = false
 # export_enabled = false   # reserved for a future remote-export feature; in v1
                            # the config loader logs a warning and silently
                            # coerces this to false. No external transmission

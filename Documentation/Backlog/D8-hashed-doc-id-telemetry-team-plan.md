@@ -360,20 +360,20 @@ flowchart LR
         - [x] #unit_test — `test_hash_doc_ids_parsed_from_toml_false` — explicit false parses correctly
         - [x] #integration_test — `test_telemetry_config_hash_doc_ids_in_load_config` — full `load_config()` round-trip with the field
 
-- [ ] **BE-2** — Implement `hash_doc_id()` and `load_or_create_salt()` in `archon_search/telemetry/hasher.py` (new file) + wire salt init into `app.py` lifespan #backend-role
+- [x] **BE-2** — Implement `hash_doc_id()` and `load_or_create_salt()` in `archon_search/telemetry/hasher.py` (new file) + wire salt init into `app.py` lifespan #backend-role
     - Entities (`hash_doc_id`) + Frameworks & Drivers (`load_or_create_salt`, lifespan) — spans layers like `key_manager.py` · 3.0h
     - needs K1 · completes C1
     - Tests
-        - #unit_test — `test_hash_doc_id_returns_64_char_hex` — output is exactly 64 lowercase hex chars
-        - #unit_test — `test_hash_doc_id_differs_from_plain_sha256` — **(security)** for a known doc_id, `hash_doc_id(salt, doc_id) != hashlib.sha256(doc_id.encode()).hexdigest()` — proves the output is genuinely HMAC'd, not a silent no-op (both are 64 hex, so a format check alone would not catch a no-op) (S2)
-        - #unit_test — `test_hash_doc_id_deterministic` — same salt + input → same output (S13)
-        - #unit_test — `test_hash_doc_id_distinct_inputs` — different doc_ids → different outputs (S14)
-        - #unit_test — `test_load_or_create_salt_generates_file_atomically_mode_600` — creates file via `atomic_write_bytes` with mode 0o600, returns 32 bytes, WARNING logged (S3)
-        - #unit_test — `test_load_or_create_salt_reuses_existing` — existing file read without regenerating; returned bytes equal file contents (S4)
-        - #unit_test — `test_load_or_create_salt_returns_none_when_disabled` — flag=False → None, no file
-        - #unit_test — `test_load_or_create_salt_unreadable_logs_error_and_returns_none` — unreadable file → None + ERROR logged (S5). **Must not rely on `chmod 000`** (root bypasses POSIX bits in CI containers): either `@pytest.mark.skipif(os.getuid() == 0, ...)` or monkeypatch the read to raise `PermissionError`, so the fallback branch is deterministically exercised
-        - #unit_test — `test_load_or_create_salt_wrong_size_treated_as_corrupt` — existing file with != 32 bytes (0/16/1000) → ERROR logged, returns None (no weak HMAC from a short key) (F8)
-        - #integration_test — `test_app_state_set_on_startup_with_hashing_enabled` — lifespan sets `app.state.salt_bytes` (bytes) for status reporting and `app.state.doc_id_hasher` (Callable) for route/MCP injection when flag=True
+        - [x] #unit_test — `test_hash_doc_id_returns_64_char_hex` — output is exactly 64 lowercase hex chars
+        - [x] #unit_test — `test_hash_doc_id_differs_from_plain_sha256` — **(security)** for a known doc_id, `hash_doc_id(salt, doc_id) != hashlib.sha256(doc_id.encode()).hexdigest()` — proves the output is genuinely HMAC'd, not a silent no-op (both are 64 hex, so a format check alone would not catch a no-op) (S2)
+        - [x] #unit_test — `test_hash_doc_id_deterministic` — same salt + input → same output (S13)
+        - [x] #unit_test — `test_hash_doc_id_distinct_inputs` — different doc_ids → different outputs (S14)
+        - [x] #unit_test — `test_load_or_create_salt_generates_file_atomically_mode_600` — creates file via `atomic_write_bytes` with mode 0o600, returns 32 bytes, WARNING logged (S3)
+        - [x] #unit_test — `test_load_or_create_salt_reuses_existing` — existing file read without regenerating; returned bytes equal file contents (S4)
+        - [x] #unit_test — `test_load_or_create_salt_returns_none_when_disabled` — flag=False → None, no file
+        - [x] #unit_test — `test_load_or_create_salt_unreadable_logs_error_and_returns_none` — unreadable file → None + ERROR logged (S5). **Must not rely on `chmod 000`** (root bypasses POSIX bits in CI containers): either `@pytest.mark.skipif(os.getuid() == 0, ...)` or monkeypatch the read to raise `PermissionError`, so the fallback branch is deterministically exercised
+        - [x] #unit_test — `test_load_or_create_salt_wrong_size_treated_as_corrupt` — existing file with != 32 bytes (0/16/1000) → ERROR logged, returns None (no weak HMAC from a short key) (F8)
+        - [x] #integration_test — `test_app_state_set_on_startup_with_hashing_enabled` — lifespan sets `app.state.salt_bytes` (bytes) for status reporting and `app.state.doc_id_hasher` (Callable) for route/MCP injection when flag=True
 
 - [ ] **BE-3** — Add `doc_ids_hashed: bool = False` to `TelemetryEntry`; update `DOCUMENTED_SCHEMA_FIELDS`; add `doc_id_hasher` param to `from_search_tool_result` #backend-role
     - Entities · 2.0h

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import logging
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -55,6 +56,7 @@ from archon_search.server.routes_search import router as search_router
 from archon_search.server.routes_state import router as state_router
 from archon_search.server.routes_status import router as status_router
 from archon_search.server.routes_telemetry import router as telemetry_router
+from archon_search.telemetry.hasher import hash_doc_id, load_or_create_salt
 from archon_search.telemetry.pruner import Pruner
 from archon_search.telemetry.writer import TelemetryWriter
 
@@ -311,6 +313,24 @@ def create_app(
             app.state.telemetry_writer = writer
         else:
             app.state.telemetry_writer = None
+
+        # Startup: load or create the HMAC salt for telemetry doc_id hashing (D8 / BE-2).
+        # ``load_or_create_salt`` is synchronous (file I/O); run it in a thread so
+        # the event loop is not blocked. The result is stored on app.state in two forms:
+        # - ``app.state.salt_bytes``: raw bytes (or None), read by _build_telemetry_status (BE-5)
+        # - ``app.state.doc_id_hasher``: a Callable[[str], str] closure (or None),
+        #   injected into routes and the MCP sub-app at construction time (BE-4).
+        # Both are unconditional (mirrors backup_loop / model_validation pattern).
+        salt_path = get_data_dir() / ".telemetry-salt"
+        app.state.salt_bytes = None
+        app.state.doc_id_hasher = None
+        app.state.salt_bytes = await asyncio.to_thread(
+            load_or_create_salt,
+            config.telemetry.hash_doc_ids,
+            salt_path,
+        )
+        if app.state.salt_bytes is not None:
+            app.state.doc_id_hasher = functools.partial(hash_doc_id, app.state.salt_bytes)
 
         # Startup: mount the MCP HTTP app at /mcp on the existing FastAPI app
         # (D9 / BE-2). Done here — inside the lifespan, after all REST objects are
