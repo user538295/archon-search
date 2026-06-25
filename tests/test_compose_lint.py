@@ -347,3 +347,34 @@ def test_env_example_has_commented_local_image_override(env_example_text: str) -
         ".env.example must mention ARCHON_SEARCH_IMAGE so operators can "
         "override the image path (e.g. for a local build)"
     )
+
+
+def test_env_example_registry_path_uncommented(env_example_text: str) -> None:
+    # MIS BE-2: the real GHCR registry path must appear on an uncommented line
+    # so operators can see and pin the correct image without editing
+    # docker-compose.yml.  Lines starting with '#' are excluded.
+    uncommented_lines = [
+        line for line in env_example_text.splitlines() if not line.startswith("#")
+    ]
+    assert any(
+        "ghcr.io/user538295/archon-search" in line for line in uncommented_lines
+    ), (
+        ".env.example must contain an uncommented ARCHON_SEARCH_IMAGE line "
+        "pointing to ghcr.io/user538295/archon-search so operators can pin "
+        "a specific release tag"
+    )
+
+
+def test_env_example_no_active_api_key(env_example_text: str) -> None:
+    # MIS BE-2: copying .env.example to .env must NOT silently set a shared
+    # API key that defeats per-instance key isolation across Docker services.
+    # Any ARCHON_SEARCH_API_KEY= line must be commented out (after optional
+    # leading whitespace) or entirely absent.
+    import re
+
+    active_key_line = re.compile(r"^\s*ARCHON_SEARCH_API_KEY=.+", re.MULTILINE)
+    assert not active_key_line.search(env_example_text), (
+        ".env.example must not contain an uncommented ARCHON_SEARCH_API_KEY= "
+        "line with a non-empty value — setting this env var defeats per-instance "
+        "key isolation when multiple Docker services share the same .env file"
+    )
