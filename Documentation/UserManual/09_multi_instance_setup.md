@@ -40,7 +40,7 @@ Each instance has its own:
 | API key file | `~/.archon-search/.search.env` | `/data/.search.env` inside volume |
 | LanceDB index | `~/.archon-search/search/` | `/data/search/` inside volume |
 | Config TOML | `~/.archon-search/archon-search.toml` | `/data/archon-search.toml` (if `ARCHON_SEARCH_CONFIG` set); otherwise the in-container default |
-| Fastembed model cache | Host default (`~/.cache/fastembed`) | `/data/fastembed-cache` (baked into image) |
+| Fastembed model cache | Host default (`~/.cache/fastembed`) | Container default; mount `archon-model-cache:/data/fastembed-cache` to persist across restarts (see `08_running_with_docker.md`) |
 | Host port | `8765` | `18765` |
 | MCP endpoint | `127.0.0.1:8765/mcp` | `127.0.0.1:18765/mcp` |
 
@@ -283,6 +283,8 @@ source ~/.archon-search/.search.env
 echo $ARCHON_SEARCH_API_KEY
 ```
 
+> **Security note:** `source` exports the key into your shell environment for the session — it will appear in `env` output and child processes. For scripting where exposure matters, prefer the `grep` form (ephemeral subshell assignment) or `ARCHON_SEARCH_API_KEY=$(grep -o '[^=]*$' ~/.archon-search/.search.env)`.
+
 > **Note:** `archon-search key list` also shows active keys, but it requires the server to be running and calls `GET /keys`. For initial setup or scripting, the `grep` form above is simpler.
 
 **`ARCHON_SEARCH_KEY_FILE` override:** if you set this env var, it redirects the key file path independently of `ARCHON_SEARCH_DATA_DIR`. Do not set it in a multi-instance setup unless you explicitly want to share a key file between instances.
@@ -301,13 +303,13 @@ docker compose exec archon-dev cat /data/.search.env | grep -o '[^=]*$'
 PROD_KEY=$(grep -o '[^=]*$' ~/.archon-search/.search.env)
 DEV_KEY=$(docker compose exec -T archon-dev cat /data/.search.env | grep -o '[^=]*$' | tr -d '\r')
 
-# Prod key on dev-UAT port → should return 401
+# Prod key on dev-UAT port → should return 401 (000 = server not running)
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Authorization: Bearer $PROD_KEY" \
   http://127.0.0.1:18765/status
 # Expected: 401
 
-# Dev key on prod port → should return 401
+# Dev key on prod port → should return 401 (000 = server not running)
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Authorization: Bearer $DEV_KEY" \
   http://127.0.0.1:8765/status
@@ -315,6 +317,168 @@ curl -s -o /dev/null -w "%{http_code}" \
 ```
 
 > **Without a persistent volume**, the dev-UAT key regenerates on every container restart. Bare `docker run -p 18765:8765 ...` without a `-v` mount will break all issued tokens on restart. Always use `docker compose up archon-dev` which handles volume management automatically via `archon-dev-data`.
+
+---
+
+## Part 5 — HTTP client configuration
+
+With both keys retrieved, you can make authenticated requests to each instance. The examples below use `curl`; the same `Authorization: Bearer <token>` header applies to any HTTP client (httpx, requests, etc.).
+
+### Prod (port 8765)
+
+```bash
+PROD_KEY=$(grep -o '[^=]*$' ~/.archon-search/.search.env)
+
+# Check server status
+curl -s http://127.0.0.1:8765/status \
+  -H "Authorization: Bearer $PROD_KEY"
+
+# Search
+curl -s -X POST http://127.0.0.1:8765/search \
+  -H "Authorization: Bearer $PROD_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"docs","query":"how does the router work?"}'
+
+# Ingest a file (returns a job_id; poll /jobs/<job_id> for completion)
+curl -s -X POST http://127.0.0.1:8765/ingest \
+  -H "Authorization: Bearer $PROD_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"docs","path":"/path/to/file.md"}'
+```
+
+### Dev-UAT (port 18765)
+
+```bash
+DEV_KEY=$(docker compose exec -T archon-dev cat /data/.search.env | grep -o '[^=]*$' | tr -d '\r')
+
+# Check server status
+curl -s http://127.0.0.1:18765/status \
+  -H "Authorization: Bearer $DEV_KEY"
+
+# Search
+curl -s -X POST http://127.0.0.1:18765/search \
+  -H "Authorization: Bearer $DEV_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"docs","query":"how does the router work?"}'
+```
+
+`GET /health` and `GET /ready` are unauthenticated on both instances — no `Authorization` header needed.
+
+---
+
+## Part 6 — MCP client configuration
+
+Each instance exposes an MCP endpoint at `/mcp` on its respective port. The MCP endpoint is enabled by default (`mcp.enabled = true`). To disable it, add the following to the instance's `archon-search.toml` and restart:
+
+```toml
+[mcp]
+enabled = false
+```
+
+See [`Documentation/ADRs/09_mcp_http_mount_and_namespace_propagation.md`](../ADRs/09_mcp_http_mount_and_namespace_propagation.md) for the full MCP HTTP mount design.
+
+Verify both MCP endpoints are reachable (a 401 confirms auth is active on this path; a 404 means nothing is mounted there — either `mcp.enabled = false` in the instance's TOML config, or the mount failed during startup):
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8765/mcp
+# Expected: 401 (prod: auth middleware is active)
+
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:18765/mcp
+# Expected: 401 (dev-UAT: auth middleware is active)
+```
+
+### Claude Code
+
+Use `claude mcp add` to register each instance. The `--scope user` flag makes the server available in all your projects. Use `--scope local` (the default) to keep it private to you and active only in the current project. Use `--scope project` to write to `.mcp.json` for team-shared configuration.
+
+First, extract the keys:
+
+```bash
+# Extract prod key (strips the ARCHON_SEARCH_API_KEY= prefix from the env file)
+PROD_KEY=$(grep -o '[^=]*$' ~/.archon-search/.search.env)
+
+# Extract dev-UAT key from the container (tr strips Windows-style CRLF from Docker output)
+DEV_KEY=$(docker compose exec -T archon-dev cat /data/.search.env | grep -o '[^=]*$' | tr -d '\r')
+```
+
+Then register both MCP servers:
+
+```bash
+claude mcp add --scope user --transport http archon-prod http://127.0.0.1:8765/mcp \
+  --header "Authorization: Bearer $PROD_KEY"
+
+claude mcp add --scope user --transport http archon-dev http://127.0.0.1:18765/mcp \
+  --header "Authorization: Bearer $DEV_KEY"
+```
+
+Verify the servers are connected:
+
+```bash
+claude mcp list
+# Both servers should appear in the list.
+```
+
+Alternatively, add them to a project-level `.mcp.json` at the repository root — Claude Code reads this file automatically when you open the project. This file is per-developer infrastructure config; add it to `.gitignore` rather than committing it, since it binds to your local instance addresses and keys:
+
+```json
+{
+  "mcpServers": {
+    "archon-prod": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ARCHON_SEARCH_PROD_KEY}"
+      }
+    },
+    "archon-dev": {
+      "type": "http",
+      "url": "http://127.0.0.1:18765/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ARCHON_SEARCH_DEV_KEY}"
+      }
+    }
+  }
+}
+```
+
+Export the keys in the shell before opening the project so Claude Code can interpolate them:
+
+```bash
+export ARCHON_SEARCH_PROD_KEY=$(grep -o '[^=]*$' ~/.archon-search/.search.env)
+export ARCHON_SEARCH_DEV_KEY=$(docker compose exec -T archon-dev cat /data/.search.env | grep -o '[^=]*$' | tr -d '\r')
+```
+
+> **Choose distinct server names** (`archon-prod`, `archon-dev`) so you can tell them apart in tool-call prefixes. Claude Code exposes each server's tools under its configured name.
+
+### Other MCP clients (Python SDK)
+
+The endpoint uses the MCP Streamable HTTP transport. With the Python SDK:
+
+```python
+from mcp.client.streamable_http import streamable_http_client
+from mcp.client.session import ClientSession
+
+# Prod
+async with streamable_http_client(
+    "http://127.0.0.1:8765/mcp",
+    headers={"Authorization": f"Bearer {PROD_KEY}"},
+) as (read_stream, write_stream):
+    async with ClientSession(read_stream, write_stream) as session:
+        await session.initialize()
+        result = await session.call_tool("search", {
+            "query": "centroid pre-ranking",
+            "collection": "docs",
+        })
+
+# Dev-UAT — same pattern, different URL and key
+async with streamable_http_client(
+    "http://127.0.0.1:18765/mcp",
+    headers={"Authorization": f"Bearer {DEV_KEY}"},
+) as (read_stream, write_stream):
+    ...
+```
+
+For TypeScript, use `@modelcontextprotocol/sdk`'s `StreamableHTTPClientTransport` with the same URL and bearer header. See the [MCP TypeScript SDK documentation](https://modelcontextprotocol.io/docs/concepts/transports) for the full client example.
 
 ---
 

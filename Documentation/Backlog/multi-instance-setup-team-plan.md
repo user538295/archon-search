@@ -314,7 +314,7 @@ flowchart LR
         - #manual_test — Full prod+dev-UAT setup — follow manual from Prerequisites through Isolation Verification; report any step that fails, is ambiguous, or requires prior knowledge not stated in the manual; verify `GET 127.0.0.1:8765/mcp` and `GET 127.0.0.1:18765/mcp` do not return 404
 
 ### Phase 2 · Configure credentials and connect clients
-- [ ] **BE-3** — Write API key isolation section + HTTP client config section in `09_multi_instance_setup.md`; document MCP client configuration for both instances: prod at `127.0.0.1:8765/mcp`, dev-UAT at `127.0.0.1:18765/mcp`; note that `mcp.enabled = true` is the default and can be disabled via TOML `[mcp] enabled = false` (see the D9 MCP wiring in `Documentation/ADRs/09_mcp_http_mount_and_namespace_propagation.md`) #backend-role
+- [x] **BE-3** — Write API key isolation section + HTTP client config section in `09_multi_instance_setup.md`; document MCP client configuration for both instances: prod at `127.0.0.1:8765/mcp`, dev-UAT at `127.0.0.1:18765/mcp`; note that `mcp.enabled = true` is the default and can be disabled via TOML `[mcp] enabled = false` (see the D9 MCP wiring in `Documentation/ADRs/09_mcp_http_mount_and_namespace_propagation.md`) #backend-role
     - Presentation · 2.5h
     - needs BE-1 · completes S5, S6, C3
     - Tests
