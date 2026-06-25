@@ -400,7 +400,7 @@ flowchart LR
         - #integration_test — `test_mcp_search_with_context_hashing` — MCP search_with_context path (S9)
         - #integration_test — `test_concurrent_async_search_requests_all_entries_consistent` — N concurrent searches via the async test client (NOT ThreadPoolExecutor); assert exactly N JSONL entries, each is valid JSON, each `result_doc_ids` has the expected length, all `doc_ids_hashed=true` (S8)
 
-- [ ] **T-1** — e2e: core hashing behaviour — S1, S2, S6, S7, S8, S9, S13, S14, S16 #tester-role
+- [x] **T-1** — e2e: core hashing behaviour — S1, S2, S6, S7, S8, S9, S13, S14, S16 #tester-role
     - — · 4.0h
     - needs BE-4 · completes S1, S2, S6, S7, S8, S9, S13, S14, S16
     - Tests
