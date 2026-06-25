@@ -22,6 +22,7 @@ from archon_search.server.schemas import (
     ModelValidationStatus,
     StatusCollectionEntry,
     StatusResponse,
+    TelemetryStatusDetail,
 )
 from archon_search.store import STORE_SCHEMA_VERSION
 
@@ -112,6 +113,7 @@ async def status(request: Request) -> StatusResponse:
     backup_detail = _build_backup_status(request, config, ns, sorted(ns_names))
     maintenance_detail = _build_maintenance_status(request, config, ns)
     model_validation = _build_model_validation_status(request)
+    telemetry_detail = _build_telemetry_status(request, config)
     mcp_detail = _build_mcp_status(request, config)
     return StatusResponse(
         running=True,
@@ -124,8 +126,22 @@ async def status(request: Request) -> StatusResponse:
         store_schema_version=STORE_SCHEMA_VERSION,
         collections_schema_behind=collections_schema_behind,
         model_validation=model_validation,
+        telemetry=telemetry_detail,
         mcp=mcp_detail,
     )
+
+
+def _build_telemetry_status(request: Request, config: SearchConfig) -> TelemetryStatusDetail | None:
+    """Return the telemetry status sub-object when ``telemetry.enabled = true``, or ``None`` otherwise (D8 BE-5 / C3).
+
+    ``hash_doc_ids_enabled`` is ``True`` only when the config flag is on **and**
+    ``app.state.salt_bytes`` is non-null — guards the salt-unreadable fallback (S5).
+    """
+    if not config.telemetry.enabled:
+        return None
+    salt_bytes = getattr(request.app.state, "salt_bytes", None)
+    hash_doc_ids_enabled = config.telemetry.hash_doc_ids and salt_bytes is not None
+    return TelemetryStatusDetail(enabled=True, hash_doc_ids_enabled=hash_doc_ids_enabled)
 
 
 def _build_mcp_status(request: Request, config: SearchConfig) -> McpStatusDetail | None:

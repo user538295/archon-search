@@ -419,16 +419,15 @@ flowchart LR
 
 ### Phase 2 · Verify hashing state *(operator can confirm hashing is active from status)*
 
-- [ ] **BE-5** — Add `TelemetryStatusDetail` to `schemas.py`; add `_build_telemetry_status()` to `routes_status.py`; add `telemetry` field to `StatusResponse` #backend-role
+- [x] **BE-5** — Add `TelemetryStatusDetail` to `schemas.py`; add `_build_telemetry_status()` to `routes_status.py`; add `telemetry` field to `StatusResponse` #backend-role
     - Interface Adapters · 2.0h
     - needs BE-1, BE-2 · completes C3, S10, S11
     - Tests
-        - #unit_test — `test_telemetry_status_detail_hash_enabled_when_salt_loaded` — builds detail with hash_doc_ids_enabled=True when salt present
-        - #unit_test — `test_telemetry_status_detail_hash_disabled_when_no_salt` — salt=None → hash_doc_ids_enabled=False
-        - #unit_test — `test_telemetry_status_null_when_telemetry_disabled` — telemetry.enabled=False → None
-        - #integration_test — `test_get_status_telemetry_field_present_with_hashing_on` — real app, flag=True → response.telemetry.hash_doc_ids_enabled=True (S10)
-        - #integration_test — `test_get_status_telemetry_field_hash_disabled` — flag=False → hash_doc_ids_enabled=False (S11)
-        - #integration_test — `test_openapi_snapshot_reflects_telemetry_field` — GET /openapi.json includes telemetry in StatusResponse schema
+        - [x] #integration_test — `test_telemetry_status_detail_hash_enabled_when_salt_loaded` — HTTP-layer: flag=True + salt loaded → hash_doc_ids_enabled=True (S10)
+        - [x] #integration_test — `test_telemetry_status_detail_hash_disabled_when_no_salt` — HTTP-layer: flag=False + salt=None → hash_doc_ids_enabled=False (S11)
+        - [x] #integration_test — `test_telemetry_status_null_when_telemetry_disabled` — telemetry.enabled=False → telemetry: null
+        - [x] #integration_test — `test_get_status_telemetry_s5_hash_configured_but_salt_missing` — S5 fallback: hash_doc_ids=True but salt=None → hash_doc_ids_enabled=False
+        - [x] #integration_test — `test_openapi_snapshot_reflects_telemetry_field` — GET /openapi.json includes telemetry in StatusResponse schema
 
 - [ ] **FE-1** — Add a NEW `GET /status` HTTP code path (with bearer-token auth) to `archon_search/cli/status.py` to display `hash_doc_ids_enabled` — today the command only reports OS service state and makes no HTTP call #frontend-role
     - Presentation · 3.0h

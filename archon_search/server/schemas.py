@@ -163,6 +163,21 @@ class ModelValidationStatus(BaseModel):
     validated_at: datetime | None = None
 
 
+class TelemetryStatusDetail(BaseModel):
+    """Telemetry status sub-object for GET /status (D8 BE-5 / C3).
+
+    Present when ``telemetry.enabled = true``; the parent ``telemetry`` field
+    being ``null`` signals that telemetry is disabled.
+
+    ``hash_doc_ids_enabled`` is ``True`` only when both the config flag is on
+    **and** a valid salt was loaded at startup (guards the salt-unreadable
+    fallback case per S5).
+    """
+
+    enabled: bool
+    hash_doc_ids_enabled: bool
+
+
 class McpStatusDetail(BaseModel):
     """MCP server status sub-object for GET /status (D9 C3).
 
@@ -204,6 +219,8 @@ class StatusResponse(BaseModel):
     maintenance: MaintenanceStatusDetail | None = None
     # D6 BE-2 — model validation health field (additive, nullable)
     model_validation: ModelValidationStatus | None = None
+    # D8 BE-5 — telemetry status field (additive, nullable); null when telemetry disabled
+    telemetry: TelemetryStatusDetail | None = None
     # D9 BE-8 — MCP status field (additive, nullable)
     mcp: McpStatusDetail | None = None
 

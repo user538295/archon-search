@@ -2836,6 +2836,16 @@
             "title": "Store Schema Version",
             "type": "integer"
           },
+          "telemetry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TelemetryStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "version": {
             "title": "Version",
             "type": "string"
@@ -2848,6 +2858,25 @@
           "collections"
         ],
         "title": "StatusResponse",
+        "type": "object"
+      },
+      "TelemetryStatusDetail": {
+        "description": "Telemetry status sub-object for GET /status (D8 BE-5 / C3).\n\nPresent when ``telemetry.enabled = true``; the parent ``telemetry`` field\nbeing ``null`` signals that telemetry is disabled.\n\n``hash_doc_ids_enabled`` is ``True`` only when both the config flag is on\n**and** a valid salt was loaded at startup (guards the salt-unreadable\nfallback case per S5).",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "hash_doc_ids_enabled": {
+            "title": "Hash Doc Ids Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "hash_doc_ids_enabled"
+        ],
+        "title": "TelemetryStatusDetail",
         "type": "object"
       },
       "ValidationError": {

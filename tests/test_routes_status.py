@@ -984,3 +984,117 @@ def test_status_mcp_bind_address_null_when_not_bound(tmp_db: Path) -> None:
     assert mcp is not None
     assert mcp["enabled"] is True
     assert mcp["bindAddress"] is None
+
+
+# ---------------------------------------------------------------------------
+# D8 BE-5 — TelemetryStatusDetail in GET /status (C3)
+# ---------------------------------------------------------------------------
+
+
+def _make_client_with_telemetry_config(
+    tmp_db: Path,
+    *,
+    telemetry_enabled: bool,
+    hash_doc_ids: bool = False,
+    salt_bytes: bytes | None = None,
+) -> TestClient:
+    """Build a TestClient with specific telemetry configuration.
+
+    Mirrors the pattern used by _make_client_with_mcp_config (D9 BE-8):
+    build the app, set app.state.salt_bytes directly, no lifespan needed.
+    """
+    from archon_search.config import TelemetryConfig
+
+    config = SearchConfig()
+    config.db_path = str(tmp_db)
+    config.telemetry = TelemetryConfig(enabled=telemetry_enabled, hash_doc_ids=hash_doc_ids)
+    job_store = JobStore(path=tmp_db / "jobs.json")
+    app = create_app(config, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
+    app.state.search_store = mock_store
+    # Set salt_bytes on app.state directly (mirrors how lifespan sets it).
+    # The route reads this via getattr(request.app.state, "salt_bytes", None).
+    app.state.salt_bytes = salt_bytes
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+
+@pytest.mark.integration
+def test_telemetry_status_detail_hash_enabled_when_salt_loaded(tmp_db: Path) -> None:
+    """_build_telemetry_status returns hash_doc_ids_enabled=True via GET /status
+    when telemetry is enabled and salt_bytes is non-null (D8 C3, S10)."""
+    c = _make_client_with_telemetry_config(
+        tmp_db, telemetry_enabled=True, hash_doc_ids=True, salt_bytes=b"\x01" * 32
+    )
+    response = c.get("/status")
+    assert response.status_code == 200
+    tel = response.json()["telemetry"]
+    assert tel is not None
+    assert tel["enabled"] is True
+    assert tel["hash_doc_ids_enabled"] is True
+
+
+@pytest.mark.integration
+def test_telemetry_status_detail_hash_disabled_when_no_salt(tmp_db: Path) -> None:
+    """_build_telemetry_status returns hash_doc_ids_enabled=False via GET /status
+    when telemetry is enabled but hash_doc_ids=False (D8 C3, S11)."""
+    c = _make_client_with_telemetry_config(
+        tmp_db, telemetry_enabled=True, hash_doc_ids=False, salt_bytes=None
+    )
+    response = c.get("/status")
+    assert response.status_code == 200
+    tel = response.json()["telemetry"]
+    assert tel is not None
+    assert tel["enabled"] is True
+    assert tel["hash_doc_ids_enabled"] is False
+
+
+@pytest.mark.integration
+def test_telemetry_status_null_when_telemetry_disabled(tmp_db: Path) -> None:
+    """GET /status returns telemetry: null when telemetry.enabled=False (D8 C3, S11)."""
+    c = _make_client_with_telemetry_config(tmp_db, telemetry_enabled=False)
+    response = c.get("/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "telemetry" in data
+    assert data["telemetry"] is None
+
+
+@pytest.mark.integration
+def test_get_status_telemetry_s5_hash_configured_but_salt_missing(tmp_db: Path) -> None:
+    """GET /status returns hash_doc_ids_enabled=False when hash_doc_ids=True in config
+    but salt_bytes is None (S5: salt file unreadable fallback) (D8 C3, S5)."""
+    c = _make_client_with_telemetry_config(
+        tmp_db, telemetry_enabled=True, hash_doc_ids=True, salt_bytes=None
+    )
+    response = c.get("/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "telemetry" in data, "telemetry field missing from StatusResponse"
+    tel = data["telemetry"]
+    assert tel is not None
+    assert tel["enabled"] is True
+    assert tel["hash_doc_ids_enabled"] is False  # S5: config says hash, but salt unavailable
+
+
+def test_openapi_snapshot_reflects_telemetry_field(tmp_db: Path) -> None:
+    """GET /openapi.json includes the telemetry field in StatusResponse schema (D8 C3)."""
+    config = SearchConfig()
+    config.db_path = str(tmp_db)
+    job_store = JobStore(path=tmp_db / "jobs.json")
+    app = create_app(config, job_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    client = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+    spec = response.json()
+    status_schema = spec["components"]["schemas"]["StatusResponse"]
+    assert "telemetry" in status_schema["properties"]
