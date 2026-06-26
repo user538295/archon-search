@@ -420,6 +420,20 @@ def test_cwd_is_archon_search(tmp_path: Path) -> None:
     assert expected_cwd in content
 
 
+def test_linux_unit_template_contains_environment_file(tmp_path: Path) -> None:
+    """register() writes a unit file with EnvironmentFile=- directive for optional secrets loading."""
+    from archon_search.platform.linux import SystemdSearchService
+    svc = SystemdSearchService()
+    unit = tmp_path / "archon-search.service"
+    with (
+        patch.object(type(svc), "_unit_path", property(lambda self: unit)),
+        patch.object(svc, "_run", return_value=_ok()),
+    ):
+        svc.register()
+    content = unit.read_text()
+    assert "EnvironmentFile=-%h/.archon-search/.secrets.env" in content
+
+
 def test_config_path_is_archon_search(tmp_path: Path) -> None:
     """register() must reference ~/.archon-search/archon-search.toml as config."""
     from archon_search.platform.linux import SystemdSearchService

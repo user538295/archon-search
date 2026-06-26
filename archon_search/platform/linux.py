@@ -24,6 +24,7 @@ After=network.target
 ExecStart={python} -m archon_search.server
 WorkingDirectory={cwd}
 Environment=ARCHON_SEARCH_CONFIG={config_path}
+EnvironmentFile=-%h/.archon-search/.secrets.env
 Restart=always
 RestartSec=5
 Nice=10

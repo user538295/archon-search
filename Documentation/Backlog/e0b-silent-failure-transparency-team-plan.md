@@ -532,7 +532,7 @@ flowchart LR
 
 ### Phase 4 · Operators can diagnose and recover
 
-- [ ] **BE-11** — Linux `_UNIT_TEMPLATE` gains `EnvironmentFile=-%h/.archon-search/.secrets.env`; macOS `_PLIST_TEMPLATE` changes `ProgramArguments` to call a wrapper script (`~/.archon-search/run-server.sh`); `LaunchdSearchService.register()` writes the wrapper script (sources `.secrets.env` with guard, then exec Python) #backend-role
+- [x] **BE-11** — Linux `_UNIT_TEMPLATE` gains `EnvironmentFile=-%h/.archon-search/.secrets.env`; macOS `_PLIST_TEMPLATE` changes `ProgramArguments` to call a wrapper script (`~/.archon-search/run-server.sh`); `LaunchdSearchService.register()` writes the wrapper script (sources `.secrets.env` with guard, then exec Python) #backend-role
     - Interface Adapters · 2.5h
     - needs K1 · completes S9, S10
     - Tests

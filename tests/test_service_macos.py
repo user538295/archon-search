@@ -278,22 +278,25 @@ def test_register_writes_plist_with_label(tmp_path: Path) -> None:
 
 
 def test_register_writes_plist_with_python_executable(tmp_path: Path) -> None:
-    """register() includes sys.executable in ProgramArguments."""
+    """register() launches the server via a wrapper script that uses sys.executable."""
+    from pathlib import Path as _Path
     from archon_search.platform.macos import LaunchdSearchService
     svc = LaunchdSearchService()
-    plist = tmp_path / "com.archon.search.plist"
-    with patch.object(type(svc), "_plist_path", property(lambda self: plist)):
+    with patch.object(_Path, "home", return_value=tmp_path):
         svc.register()
-    assert sys.executable in plist.read_text()
+    # The wrapper script (not the plist) contains the Python executable path
+    wrapper = tmp_path / ".archon-search" / "run-server.sh"
+    assert sys.executable in wrapper.read_text()
 
 
 def test_register_plist_uses_taskpolicy(tmp_path: Path) -> None:
     """register() wraps server command with taskpolicy -b for background QoS."""
+    from pathlib import Path as _Path
     from archon_search.platform.macos import LaunchdSearchService
     svc = LaunchdSearchService()
-    plist = tmp_path / "com.archon.search.plist"
-    with patch.object(type(svc), "_plist_path", property(lambda self: plist)):
+    with patch.object(_Path, "home", return_value=tmp_path):
         svc.register()
+    plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
     content = plist.read_text()
     assert "/usr/sbin/taskpolicy" in content
     assert "<string>-b</string>" in content
@@ -351,6 +354,26 @@ def test_unregister_noop_when_not_loaded(tmp_path: Path) -> None:
         svc.unregister()
         mock_run.assert_not_called()
     assert not plist.exists()
+
+
+def test_unregister_removes_wrapper_script(tmp_path: Path) -> None:
+    """unregister() removes run-server.sh alongside the plist."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    with patch.object(Path, "home", return_value=tmp_path):
+        # Pre-create both files that register() would have written
+        plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
+        plist.parent.mkdir(parents=True, exist_ok=True)
+        plist.write_text("<plist/>")
+        wrapper = tmp_path / ".archon-search" / "run-server.sh"
+        wrapper.parent.mkdir(parents=True, exist_ok=True)
+        wrapper.write_text("#!/bin/sh\n")
+
+        with patch.object(svc, "_is_loaded", return_value=False):
+            svc.unregister()
+
+    assert not plist.exists(), "unregister() must remove the plist"
+    assert not wrapper.exists(), "unregister() must remove the wrapper script"
 
 
 def test_unregister_warns_and_deletes_plist_on_unload_failure(tmp_path: Path) -> None:
@@ -414,11 +437,11 @@ def test_cwd_is_archon_search(tmp_path: Path) -> None:
     """register() must use ~/.archon-search as WorkingDirectory."""
     from archon_search.platform.macos import LaunchdSearchService
     svc = LaunchdSearchService()
-    plist = tmp_path / "com.archon.search.plist"
-    with patch.object(type(svc), "_plist_path", property(lambda self: plist)):
+    with patch.object(Path, "home", return_value=tmp_path):
+        plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
         svc.register()
     content = plist.read_text()
-    expected_cwd = str(Path.home() / ".archon-search")
+    expected_cwd = str(tmp_path / ".archon-search")
     assert expected_cwd in content
 
 
@@ -426,11 +449,11 @@ def test_config_path_is_archon_search(tmp_path: Path) -> None:
     """register() must reference ~/.archon-search/archon-search.toml as config."""
     from archon_search.platform.macos import LaunchdSearchService
     svc = LaunchdSearchService()
-    plist = tmp_path / "com.archon.search.plist"
-    with patch.object(type(svc), "_plist_path", property(lambda self: plist)):
+    with patch.object(Path, "home", return_value=tmp_path):
+        plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
         svc.register()
     content = plist.read_text()
-    expected_config = str(Path.home() / ".archon-search" / "archon-search.toml")
+    expected_config = str(tmp_path / ".archon-search" / "archon-search.toml")
     assert expected_config in content
 
 
@@ -438,9 +461,75 @@ def test_log_path_is_archon_search(tmp_path: Path) -> None:
     """register() must route stdout/stderr logs to ~/.archon-search/logs/archon-search.log."""
     from archon_search.platform.macos import LaunchdSearchService
     svc = LaunchdSearchService()
-    plist = tmp_path / "com.archon.search.plist"
-    with patch.object(type(svc), "_plist_path", property(lambda self: plist)):
+    with patch.object(Path, "home", return_value=tmp_path):
+        plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
         svc.register()
     content = plist.read_text()
-    expected_log = str(Path.home() / ".archon-search" / "logs" / "archon-search.log")
+    expected_log = str(tmp_path / ".archon-search" / "logs" / "archon-search.log")
     assert expected_log in content
+
+
+# ── BE-11: wrapper script + EnvironmentFile ────────────────────────────────────
+
+def test_macos_plist_uses_wrapper_script(tmp_path: Path) -> None:
+    """register() writes a plist whose ProgramArguments points to run-server.sh, not python directly."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    with patch.object(Path, "home", return_value=tmp_path):
+        svc.register()
+    plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
+    content = plist.read_text()
+    assert "run-server.sh" in content
+    # The Python executable lives in the wrapper, not the plist directly
+    assert sys.executable not in content
+
+
+def test_macos_wrapper_script_content_guards_missing_file(tmp_path: Path) -> None:
+    """register() writes a wrapper script that guards against absent .secrets.env with [ -f ] && set -a."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    with patch.object(Path, "home", return_value=tmp_path):
+        svc.register()
+    wrapper = tmp_path / ".archon-search" / "run-server.sh"
+    assert wrapper.exists()
+    content = wrapper.read_text()
+    assert "[ -f" in content
+    assert "set -a" in content
+    assert "set +a" in content
+    assert ".secrets.env" in content
+
+
+def test_register_writes_wrapper_script_on_macos(tmp_path: Path) -> None:
+    """register() writes run-server.sh with mode 0o755 in ~/.archon-search/."""
+    import stat as _stat
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    with patch.object(Path, "home", return_value=tmp_path):
+        svc.register()
+    wrapper = tmp_path / ".archon-search" / "run-server.sh"
+    assert wrapper.exists(), "run-server.sh must be written by register()"
+    mode = wrapper.stat().st_mode
+    assert _stat.S_IMODE(mode) == 0o755, f"run-server.sh must have mode 0o755, got {oct(_stat.S_IMODE(mode))}"
+
+
+def test_wrapper_script_syntax_is_valid(tmp_path: Path) -> None:
+    """Generated wrapper script passes sh -n syntax check; [ -f ] guard handles absent .secrets.env."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    with patch.object(Path, "home", return_value=tmp_path):
+        svc.register()
+    wrapper = tmp_path / ".archon-search" / "run-server.sh"
+    result = subprocess.run(["sh", "-n", str(wrapper)], capture_output=True, text=True)
+    assert result.returncode == 0, f"sh -n syntax check failed: {result.stderr}"
+
+
+def test_register_dry_run_skips_wrapper_creation(tmp_path: Path) -> None:
+    """register(dry_run=True) must not create run-server.sh or plist."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    with patch.object(Path, "home", return_value=tmp_path):
+        svc.register(dry_run=True)
+    wrapper = tmp_path / ".archon-search" / "run-server.sh"
+    assert not wrapper.exists(), "dry_run must not create the wrapper script"
+    plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
+    assert not plist.exists(), "dry_run must not create the plist"
