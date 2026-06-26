@@ -99,6 +99,8 @@ The original Phase B / C retrieval slate is shipped. Items 1–8 below are all m
 
 ## Priority 4 — Product Surface and UX
 
+- **E0 — UX limitations and file-type gaps.** *Backlog — 5 sub-briefs, ready for planning.* Refined from a full codebase audit into five actionable briefs: (E0a) file-type completeness — markitdown as core dep + 8 missing extensions; (E0b) silent failure transparency — HyDE/RAG Fusion fallback signal, `ANTHROPIC_API_KEY` service env, `FAILED_EXPIRED` job state, telemetry truncation, ACL warning; (E0c) API surface fixes — `list_documents` cursor pagination, `max_fanout` tracks TOML config, `top_k` operator cap; (E0d) PDF large-file support — streaming parse + configurable size guard; (E0e) multi-collection filters — lift v1 restriction, per-leg filter injection. Windows service deferred. \[[index](Backlog/e0-ux-limitations-and-file-type-gaps-brief.md) · [E0a](Backlog/e0a-file-type-completeness-brief.md) · [E0b](Backlog/e0b-silent-failure-transparency-brief.md) · [E0c](Backlog/e0c-api-surface-fixes-brief.md) · [E0d](Backlog/e0d-pdf-large-file-support-brief.md) · [E0e](Backlog/e0e-multi-collection-filters-brief.md)\]
+
 - Streaming search results.
 - Python and TypeScript SDKs.
 - Admin / debug UI (only after explain APIs stabilise — A4 has stabilised them).

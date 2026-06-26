@@ -123,6 +123,12 @@ Security-focused documentation for security engineers, IT admins, and reviewers 
 | [`Backlog/01_competitive_analysis_field.md`](../Backlog/01_competitive_analysis_field.md) | Competitive analysis (field-level). |
 | [`Backlog/02_competitive_analysis_marveen.md`](../Backlog/02_competitive_analysis_marveen.md) | Competitive analysis (Marveen). |
 | [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) | Long-form roadmap for reaching world-class retrieval quality. |
+| [`Backlog/e0-ux-limitations-and-file-type-gaps-brief.md`](../Backlog/e0-ux-limitations-and-file-type-gaps-brief.md) | E0 audit index: 14 user-facing limitations and 8 file-type gaps vs R2R. |
+| [`Backlog/e0a-file-type-completeness-brief.md`](../Backlog/e0a-file-type-completeness-brief.md) | E0a: markitdown core dep + 8 missing file extensions. |
+| [`Backlog/e0b-silent-failure-transparency-brief.md`](../Backlog/e0b-silent-failure-transparency-brief.md) | E0b: HyDE fallback signal, ANTHROPIC_API_KEY env, FAILED_EXPIRED state, telemetry truncation. |
+| [`Backlog/e0c-api-surface-fixes-brief.md`](../Backlog/e0c-api-surface-fixes-brief.md) | E0c: list_documents pagination, max_fanout config, top_k operator cap. |
+| [`Backlog/e0d-pdf-large-file-support-brief.md`](../Backlog/e0d-pdf-large-file-support-brief.md) | E0d: PDF streaming ingest + configurable size guard. |
+| [`Backlog/e0e-multi-collection-filters-brief.md`](../Backlog/e0e-multi-collection-filters-brief.md) | E0e: lift multi-collection filter v1 restriction. |
 
 ## Root-level docs
 

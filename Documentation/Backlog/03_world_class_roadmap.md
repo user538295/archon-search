@@ -120,6 +120,7 @@ Goal: support real operational workflows — backup, migration, key rotation, ma
 
 Goal: make adoption easy, and broaden the surface beyond power users.
 
+- [ ] **E0. UX limitations and file-type gaps** — five focused briefs, each ready for `/plan-maker`. (E0a) [File-type completeness](../Backlog/e0a-file-type-completeness-brief.md): `markitdown` as core dep + 8 missing extensions (`.doc`, `.xls`, `.ppt`, `.odt`, `.rtf`, `.epub`, `.eml`, `.msg`). (E0b) [Silent failure transparency](../Backlog/e0b-silent-failure-transparency-brief.md): `SearchResponse.expansion_warning`, `ANTHROPIC_API_KEY` service env fix, `FAILED_EXPIRED` job state, telemetry truncation, ACL sidecar warning, `--wait --timeout`. (E0c) [API surface fixes](../Backlog/e0c-api-surface-fixes-brief.md): `list_documents` cursor pagination, `max_fanout` validation reads config, `top_k_max` operator config, description random sampling. (E0d) [PDF large-file support](../Backlog/e0d-pdf-large-file-support-brief.md): streaming parse, `[ingest].max_file_mb` guard, 413-style error. (E0e) [Multi-collection filters](../Backlog/e0e-multi-collection-filters-brief.md): lift v1 filter restriction, per-leg injection in `search_many()`, MCP parity. Windows service deferred. See [audit index](../Backlog/e0-ux-limitations-and-file-type-gaps-brief.md).
 - [ ] **E1. Streaming search results (item 27)** — partial-results delivery for large rerank candidate sets.
 - [ ] **E2. Python SDK (item 28a)** — generated from OpenAPI.
 - [ ] **E3. TypeScript SDK (item 28b)** — generated from OpenAPI.
