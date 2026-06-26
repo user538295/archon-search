@@ -573,7 +573,7 @@ flowchart LR
         - [x] #integration_test — `test_status_cli_warns_when_hyde_key_unavailable` — Click test runner; mock GET /status with `hyde.key_available=false`; assert stderr contains "ANTHROPIC_API_KEY"
         - [x] #integration_test — `test_status_cli_shows_failed_expired_count` — mock GET /status with `failed_expired_ingest_count=3`; assert stdout contains "3" and "re-ingest"
 
-- [ ] **FE-4** — `cli/ingest.py`: after ingestion loop, print any `result.warnings` entries to stderr #frontend-role
+- [x] **FE-4** — `cli/ingest.py`: after ingestion loop, print any `result.warnings` entries to stderr #frontend-role
     - Presentation · 0.5h
     - needs BE-7 · completes S19
     - Tests

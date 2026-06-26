@@ -61,6 +61,9 @@ def ingest(ingest_path: Path | None, collection: str | None, config_path: Path |
                 results = await pipeline.ingest_directory(ingest_path, collection_name, embedder=pipeline._global_embedder)
             ok = sum(1 for r in results if r.status == "ok")
             errors = sum(1 for r in results if r.status == "error")
+            for r in results:
+                for warning in r.warnings:
+                    click.echo(f"Warning: {warning}", err=True)
             click.echo(f"Ingest complete: {ok} ingested, {errors} errors.")
         finally:
             await pipeline.store.disconnect()
