@@ -386,6 +386,98 @@ def test_parse_with_docling_emits_page_marker(three_page_pdf: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ext", [".xls", ".rtf", ".epub", ".eml", ".msg"])
+async def test_parser_office_new_extensions_routed(ext: str, tmp_path: Path) -> None:
+    """All supported new Office extensions must route to _parse_office and return content."""
+    f = tmp_path / f"doc{ext}"
+    f.write_bytes(b"fake office doc")
+    parser = DocumentParser()
+
+    mock_md_instance = MagicMock()
+    mock_md_instance.convert.return_value.text_content = "office content"
+    mock_md_cls = MagicMock(return_value=mock_md_instance)
+    mock_markitdown = MagicMock()
+    mock_markitdown.MarkItDown = mock_md_cls
+
+    with patch.dict("sys.modules", {"markitdown": mock_markitdown}):
+        with patch.object(parser, "_parse_office", wraps=parser._parse_office) as mock_office:
+            result = await parser.parse(f)
+
+    mock_office.assert_called_once_with(f)
+    mock_md_instance.convert.assert_called_once()
+    assert result == "office content"
+
+
+@pytest.mark.asyncio
+async def test_parser_tsv_routed_to_plain(tmp_path: Path) -> None:
+    """TSV files route to _parse_plain; no markitdown call."""
+    f = tmp_path / "data.tsv"
+    f.write_text("col1\tcol2\nval1\tval2")
+    parser = DocumentParser()
+
+    with patch.object(parser, "_parse_plain", wraps=parser._parse_plain) as mock_plain:
+        result = await parser.parse(f)
+
+    mock_plain.assert_called_once_with(f)
+    assert "col1" in result
+    assert "col2" in result
+
+
+@pytest.mark.asyncio
+async def test_parser_office_import_error_surfaces_message(tmp_path: Path) -> None:
+    """When markitdown is absent, ParseError.cause must mention 'markitdown'."""
+    f = tmp_path / "doc.docx"
+    f.write_bytes(b"fake docx")
+    parser = DocumentParser()
+
+    with patch.dict("sys.modules", {"markitdown": None}):
+        with pytest.raises(ParseError) as exc_info:
+            await parser.parse(f)
+
+    assert "markitdown" in str(exc_info.value.cause).lower()
+
+
+@pytest.mark.asyncio
+async def test_parser_office_malformed_file_raises_parse_error(tmp_path: Path) -> None:
+    """If MarkItDown().convert() raises, ParseError is raised (not ImportError)."""
+    f = tmp_path / "doc.docx"
+    f.write_bytes(b"truncated")
+    parser = DocumentParser()
+
+    mock_md_instance = MagicMock()
+    mock_md_instance.convert.side_effect = RuntimeError("conversion failed")
+    mock_md_cls = MagicMock(return_value=mock_md_instance)
+    mock_markitdown = MagicMock()
+    mock_markitdown.MarkItDown = mock_md_cls
+
+    with patch.dict("sys.modules", {"markitdown": mock_markitdown}):
+        with pytest.raises(ParseError) as exc_info:
+            await parser.parse(f)
+
+    assert exc_info.value.path == f
+    assert isinstance(exc_info.value.cause, RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_parser_office_none_content_returns_empty_string(tmp_path: Path) -> None:
+    """When markitdown text_content is None, parse() must return '' not raise TypeError."""
+    f = tmp_path / "doc.docx"
+    f.write_bytes(b"fake docx")
+    parser = DocumentParser()
+
+    mock_md_instance = MagicMock()
+    mock_md_instance.convert.return_value.text_content = None
+    mock_md_cls = MagicMock(return_value=mock_md_instance)
+    mock_markitdown = MagicMock()
+    mock_markitdown.MarkItDown = mock_md_cls
+
+    with patch.dict("sys.modules", {"markitdown": mock_markitdown}):
+        result = await parser.parse(f)
+
+    assert result == ""
+
+
+@pytest.mark.asyncio
 async def test_parser_parse_error_has_path_and_cause(tmp_path: Path) -> None:
     f = tmp_path / "doc.pdf"
     f.write_bytes(b"bad pdf")

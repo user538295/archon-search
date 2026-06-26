@@ -2,10 +2,10 @@
 
 Supported formats:
 - Plain text: .md, .txt, .py, .js, .ts, .go, .rs, .java, .sh,
-              .yaml, .yml, .json, .toml, .csv (and any unknown extension)
+              .yaml, .yml, .json, .toml, .csv, .tsv (and any unknown extension)
 - HTML: .html, .htm — via trafilatura
 - PDF: .pdf — via docling (lazy import)
-- Office: .docx, .pptx, .xlsx — via markitdown (lazy import)
+- Office: .docx, .pptx, .xlsx, .xls, .rtf, .epub, .eml, .msg — via markitdown (lazy import)
 - Images: .png, .jpg, .jpeg, .tiff, .tif, .bmp, .webp — via docling OCR
 """
 
@@ -32,11 +32,16 @@ class ParseError(Exception):
 
 _PLAIN_EXTENSIONS = {
     ".md", ".txt", ".py", ".js", ".ts", ".go", ".rs", ".java", ".sh",
-    ".yaml", ".yml", ".json", ".toml", ".csv",
+    ".yaml", ".yml", ".json", ".toml",
+    ".csv", ".tsv",  # intentionally treated as raw text; no CSV/TSV parser (structure is not useful for retrieval)
 }
 _HTML_EXTENSIONS = {".html", ".htm"}
 _PDF_EXTENSIONS = {".pdf"}
-_OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
+_OFFICE_EXTENSIONS = {
+    ".docx", ".pptx", ".xlsx",
+    ".xls", ".rtf", ".epub", ".eml", ".msg",
+    # .doc, .ppt, .odt excluded: markitdown has no converter for these formats and raises UnsupportedFormatException
+}
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}
 # .gif and .svg are intentionally excluded: .gif has animated frames (OCR on frame 0 is
 # misleading) and .svg is XML text (plain-text fallback is more appropriate).
@@ -119,6 +124,12 @@ class DocumentParser:
     def _parse_office(self, path: Path) -> str:
         try:
             from markitdown import MarkItDown  # noqa: PLC0415
-            return MarkItDown().convert(str(path)).text_content
+        except ImportError as exc:
+            raise ParseError(
+                path,
+                ImportError("markitdown is not installed; run: pip install markitdown"),
+            ) from exc
+        try:
+            return MarkItDown().convert(str(path)).text_content or ""
         except Exception as exc:
             raise ParseError(path, exc) from exc

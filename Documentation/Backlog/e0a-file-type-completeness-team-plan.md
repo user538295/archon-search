@@ -269,7 +269,7 @@ flowchart LR
         - BE-1 must verify: run `uv pip show markitdown | grep Requires` to confirm `extract-msg` is a hard transitive dep (not an optional extra of markitdown). If optional, add `extract-msg` explicitly to `[project.dependencies]`.
         - Verified: `extract-msg` is not a transitive dep. `.msg` support uses `olefile` (in markitdown's `[all]` optional extra only). Added `olefile>=0.46,<1` to core deps with `test_olefile_declared_as_core_dep`.
 
-- [ ] **BE-2** — Expand `_OFFICE_EXTENSIONS`, add `.tsv` to `_PLAIN_EXTENSIONS`, add `ImportError` branch in `_parse_office`, update module docstring #backend-role
+- [x] **BE-2** — Expand `_OFFICE_EXTENSIONS`, add `.tsv` to `_PLAIN_EXTENSIONS`, add `ImportError` branch in `_parse_office`, update module docstring #backend-role
     - Frameworks & Drivers · 2.0h
     - needs BE-1 · completes S1, S2, S3, S4, S5, S7
     - Tests

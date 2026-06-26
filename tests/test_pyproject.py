@@ -48,8 +48,9 @@ def test_markitdown_declared_as_core_dep():
     assert any("markitdown" in dep for dep in core_deps), (
         "markitdown must be declared in [project.dependencies] (core, not optional)"
     )
-    assert any("markitdown>=0.1.6,<0.2" in dep for dep in core_deps), (
-        "markitdown must have version spec >=0.1.6,<0.2"
+    assert any("markitdown[docx,pptx,xls,xlsx,outlook]>=0.1.6,<0.2" in dep for dep in core_deps), (
+        "markitdown must declare extras [docx,pptx,xls,xlsx,outlook] to pull in: "
+        "mammoth+lxml (docx), python-pptx (pptx), xlrd+pandas (xls), openpyxl+pandas (xlsx), olefile (outlook/.msg)"
     )
     assert not any("markitdown" in dep for dep in dev_deps), (
         "markitdown must not appear in dependency-groups.dev"
@@ -60,28 +61,17 @@ def test_markitdown_declared_as_core_dep():
         )
 
 
-def test_olefile_declared_as_core_dep():
-    """olefile must appear in [project.dependencies].
+def test_olefile_covered_via_markitdown_outlook_extra():
+    """olefile (needed for .msg ingestion) must be reachable via markitdown[outlook].
 
-    olefile is not a hard transitive dep of markitdown; it is only in markitdown's
-    [all] optional extra. We declare it explicitly so .msg ingestion works on a
-    fresh `uv sync --dev` without extra steps.
+    markitdown's [outlook] extra declares olefile as its dependency. We include
+    the [outlook] extra in our markitdown dep spec so .msg ingestion works on a
+    fresh `uv sync --dev` without a separate olefile declaration.
     """
     data = _load_pyproject()
     core_deps = data["project"].get("dependencies", [])
-    optional_deps = data["project"].get("optional-dependencies", {})
-    dev_deps = data.get("dependency-groups", {}).get("dev", [])
 
-    assert any("olefile" in dep for dep in core_deps), (
-        "olefile must be declared in [project.dependencies] (markitdown's .msg support)"
+    # olefile is pulled in transitively via markitdown[outlook]; no standalone line needed
+    assert any("markitdown[" in dep and "outlook" in dep for dep in core_deps), (
+        "markitdown dep must include [outlook] extra so olefile is available for .msg ingestion"
     )
-    assert any("olefile>=0.46" in dep for dep in core_deps), (
-        "olefile must have a version lower bound of >=0.46"
-    )
-    assert not any("olefile" in dep for dep in dev_deps), (
-        "olefile must not appear in dependency-groups.dev"
-    )
-    for extra_name, extra_deps in optional_deps.items():
-        assert not any("olefile" in dep for dep in extra_deps), (
-            f"olefile must not appear in optional-dependencies[{extra_name!r}]"
-        )

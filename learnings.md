@@ -2,6 +2,36 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0a BE-1: markitdown's optional-extra deps require explicit core declarations**
+- Observation: `markitdown`'s `.msg` converter uses `olefile` internally, but `olefile` is only in markitdown's `[all]` optional extra — not a hard transitive dep (`uv pip show markitdown | grep Requires` confirmed). The plan said "if extract-msg is optional, add it explicitly." The real dep was `olefile`, not `extract-msg`. Without explicit declaration, `.msg` ingestion fails on a fresh install despite markitdown being installed.
+- Action: For any dep that claims format support via optional-extra helpers, always verify the actual transitive dep tree with `uv pip show <pkg> | grep Requires` before declaring the dep done. The plan's "verify the transitive dep chain" instruction is non-optional — it may reveal a different package than the plan names.
+- Confidence: high
+
+**2026-06-26 — E0a BE-1: Version specifier floor should match the tested version, not an earlier floor**
+- Observation: The plan said `markitdown>=0.1.0` but the implementer had only tested against 0.1.6. Using `>=0.1.0` admits untested versions. Reviewers (C1) flagged this as Major. The correct floor is the version verified to work (`>=0.1.6`), plus an upper bound `<0.2` for pre-1.0 libraries per project convention.
+- Action: Set the version floor to the exact version verified in the current environment, not a guess at the earliest version that might work. For pre-1.0 libraries, always add `<X.0` upper bound matching the project's convention (`fastmcp>=3.4,<4`, `python-json-logger>=2.0,<3`).
+- Confidence: high
+
+**2026-06-26 — E0a BE-1: pyproject.toml dep tests should assert the full version spec string, not just presence**
+- Observation: Initial test only checked `"markitdown" in dep` — this would pass for `markitdown<0.1.0` or `markitdown>=999`. The sibling test pattern (`test_multilingual_extra_declared`) asserts the full version string (`"fasttext-wheel>=0.9.2" in pkg`). The upper bound assertion was added only after reviewers flagged it as Moderate in cycle 2.
+- Action: When writing a dep-declaration test, always assert the full version specifier string (e.g., `"markitdown>=0.1.6,<0.2" in dep`), not just the package name substring. This matches the established pattern and enforces both floor and ceiling.
+- Confidence: high
+
+**2026-06-26 — E0a K1: TypeSpec contract seam accuracy — union-return vs raise/except is the #1 source of contract inaccuracy**
+- Observation: The `document-parser-contract.tsp` modeled `parse()` as returning a `ParseResult` union (success|failure). The actual Python seam raises `ParseError` on failure and is async — callers use `try/except`, not union dispatch. All four reviewers (3 DA + Brooks-Lint) independently flagged this as the primary finding. The plan prose correctly said "raises ParseError" but the linked `.tsp` artifact said the opposite.
+- Action: Whenever a TypeSpec contract is written for a Python exception-raising seam, add a prominent impedance-note header explaining that the union is a logical documentation model only — Python uses raise/except, never returns the failure variant. Do this at the contract-authoring step, not during review.
+- Confidence: high
+
+**2026-06-26 — E0a K1: Scenario traceability completeness — a scenario must appear in ALL four locations**
+- Observation: Adding S7 to only the scenario table left it orphaned. Reviewers (both cycles) required S7 to appear in: (1) scenario table, (2) Tester allocation table, (3) the completing task's `completes` line, and (4) the Backend "Done when" checklist. Missing any one of the four creates a traceability gap that iterative-review reliably flags as Major.
+- Action: When adding a new scenario to a plan, always propagate it to all four locations in the same edit. Use a mental checklist: scenario table → allocation table → task `completes` → "Done when" checklist.
+- Confidence: high
+
+**2026-06-26 — E0a K1: `pipeline.py:27` is an import line, not the call site**
+- Observation: The plan cited `pipeline.py:27` as "the caller" for the ParseError seam. Line 27 is `from archon_search.parser import DocumentParser, ParseError`. The actual call/handler is `pipeline.py:296` (`await self._parser.parse(path)`) inside a `try/except ParseError` block. Brooks-Lint caught this as Moderate in Cycle 2. Always verify line citations by reading the actual file.
+- Action: When writing a plan that references a specific line number as a "caller" or "handler", verify by reading that exact line. Import lines are not callers.
+- Confidence: high
+
 **2026-06-26 — MIS T-4: project close-out**
 - Observation: Moving completed brief+plan files from `Documentation/Backlog/` to `Documentation/Completed/` is a universal project convention — every completed feature does this, but it is easy to forget during close-out tasks that are otherwise focused on code or test cleanup.
 - Action: Make `mv Documentation/Backlog/<feature>-*.md Documentation/Completed/` an explicit checklist item in every T-4/close-out task; do not consider a feature closed until the files are moved.
