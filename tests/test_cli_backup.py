@@ -97,7 +97,8 @@ def test_backup_now_wait_polls_until_done() -> None:
     assert "completed" in result.output.lower()
 
 
-def test_backup_now_wait_exits_1_on_failed() -> None:
+def test_backup_now_wait_exits_2_on_failed() -> None:
+    """E0b: exit code on FAILED changed from 1 → 2."""
     runner = CliRunner()
     post_resp = _mock_response(202, {"queued": ["job-f"], "skipped": []})
     get_resp = _mock_response(200, _job_payload("job-f", "FAILED", error="boom"))
@@ -110,7 +111,7 @@ def test_backup_now_wait_exits_1_on_failed() -> None:
             backup_cmd, ["--now", "--wait", "--api-key", "deadbeef"]
         )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "FAILED" in result.output or "boom" in result.output
 
 
@@ -207,6 +208,81 @@ def test_backup_status_server_unavailable_degrades_gracefully(tmp_path: Path) ->
 
     assert result.exit_code == 0
     assert "server unavailable" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# FE-2: backup --now --wait --timeout tests (S25)
+# ---------------------------------------------------------------------------
+
+
+def test_backup_wait_timeout_exits_0() -> None:
+    """--now --wait --timeout N exits 0 on poll timeout with job IDs + recovery hint in output.
+
+    Monkeypatches httpx.get to always return RUNNING so the poll loop exhausts
+    the timeout. Do NOT monkeypatch _wait_for_jobs itself — the test exercises
+    the timeout parameter through the real polling function.
+    """
+    runner = CliRunner()
+    job_id = "job-timeout-backup"
+    post_resp = _mock_response(202, {"queued": [job_id], "skipped": []})
+    running_resp = _mock_response(200, _job_payload(job_id, "RUNNING"))
+
+    with (
+        patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.backup_cmd.httpx.get", return_value=running_resp),
+        patch("archon_search.cli.backup_cmd.time.sleep"),
+    ):
+        # --timeout 4 with _POLL_INTERVAL_SECONDS=2 → max 2 poll rounds, then timeout
+        result = runner.invoke(
+            backup_cmd,
+            ["--now", "--wait", "--timeout", "4", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 0, f"output={result.output!r}"
+    # Recovery hint must appear in output and include the job ID
+    assert job_id in result.output, f"expected job ID in output: {result.output!r}"
+    assert "Timed out" in result.output, f"expected timeout message in output: {result.output!r}"
+    assert "poll with" in result.output, f"expected recovery hint in output: {result.output!r}"
+
+
+def test_backup_wait_exits_2_on_failed() -> None:
+    """--now --wait exits 2 when any backup job transitions to FAILED (E0b contract)."""
+    runner = CliRunner()
+    job_id = "job-fail-backup"
+    post_resp = _mock_response(202, {"queued": [job_id], "skipped": []})
+    failed_resp = _mock_response(200, _job_payload(job_id, "FAILED", error="storage error"))
+
+    with (
+        patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.backup_cmd.httpx.get", return_value=failed_resp),
+        patch("archon_search.cli.backup_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            backup_cmd, ["--now", "--wait", "--api-key", "deadbeef"]
+        )
+
+    assert result.exit_code == 2, f"output={result.output!r}"
+    assert "FAILED" in result.output or "storage error" in result.output
+
+
+def test_backup_wait_exits_2_on_failed_expired() -> None:
+    """--now --wait exits 2 when any backup job transitions to FAILED_EXPIRED (treated same as FAILED)."""
+    runner = CliRunner()
+    job_id = "job-fail-expired-backup"
+    post_resp = _mock_response(202, {"queued": [job_id], "skipped": []})
+    failed_expired_resp = _mock_response(200, _job_payload(job_id, "FAILED_EXPIRED", error="job expired"))
+
+    with (
+        patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.backup_cmd.httpx.get", return_value=failed_expired_resp),
+        patch("archon_search.cli.backup_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            backup_cmd, ["--now", "--wait", "--api-key", "deadbeef"]
+        )
+
+    assert result.exit_code == 2, f"output={result.output!r}"
+    assert "FAILED" in result.output
 
 
 def test_backup_status_uses_server_data_when_reachable(tmp_path: Path) -> None:

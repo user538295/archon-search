@@ -28,6 +28,7 @@ from archon_search.paths import get_data_dir
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
+_DEFAULT_WAIT_TIMEOUT_SECONDS = 300
 _TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
 _STATE_FILE_NAME = ".backup-state.json"
 
@@ -48,6 +49,17 @@ def _resolve_api_key(api_key: str | None) -> str:
               help="Trigger immediate backup of all non-excluded collections.")
 @click.option("--wait", is_flag=True, default=False,
               help="Poll until all triggered backup jobs complete (requires --now).")
+@click.option(
+    "--timeout",
+    "timeout_seconds",
+    default=_DEFAULT_WAIT_TIMEOUT_SECONDS,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help=(
+        "Maximum seconds to wait for all backup jobs to complete "
+        "(only used with --now --wait). On timeout: exits 0 and prints a recovery hint."
+    ),
+)
 @click.option("--api-url", default=_DEFAULT_API_URL, show_default=True,
               help="Base URL of the archon-search server.")
 @click.option("--api-key", default=None,
@@ -57,6 +69,7 @@ def backup_cmd(
     ctx: click.Context,
     now: bool,
     wait: bool,
+    timeout_seconds: int,
     api_url: str,
     api_key: str | None,
 ) -> None:
@@ -66,10 +79,15 @@ def backup_cmd(
     if not now:
         click.echo(ctx.get_help())
         return
-    _trigger_backup(api_url, api_key, wait)
+    _trigger_backup(api_url, api_key, wait, timeout_seconds)
 
 
-def _trigger_backup(api_url: str, api_key: str | None, wait: bool) -> None:
+def _trigger_backup(
+    api_url: str,
+    api_key: str | None,
+    wait: bool,
+    timeout_seconds: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+) -> None:
     """POST /backup/trigger and optionally poll resulting jobs."""
     key = _resolve_api_key(api_key)
     headers = {"Authorization": f"Bearer {key}"}
@@ -106,14 +124,45 @@ def _trigger_backup(api_url: str, api_key: str | None, wait: bool) -> None:
     if not wait or not queued:
         return
 
-    _wait_for_jobs(queued, api_url, headers)
+    _wait_for_jobs(queued, api_url, headers, timeout_seconds)
 
 
-def _wait_for_jobs(job_ids: list[str], api_url: str, headers: dict[str, str]) -> None:
-    """Poll each job until terminal; exit 1 if any FAILED."""
+def _wait_for_jobs(
+    job_ids: list[str],
+    api_url: str,
+    headers: dict[str, str],
+    timeout_seconds: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+) -> None:
+    """Poll each job until terminal; exit 2 if any FAILED, exit 0 on timeout or success.
+
+    Exit codes:
+    - Exits 0 on success (all DONE) or timeout — prints a recovery hint on timeout.
+    - Exits 2 when any job confirms FAILED.
+    - Exits 1 on fatal errors (network, auth, HTTP errors).
+    """
     failed: list[str] = []
     pending = set(job_ids)
+    max_polls = max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)
+    polls = 0
+
     while pending:
+        if polls >= max_polls:
+            if failed:
+                click.echo(
+                    "Some backup jobs failed before timeout. "
+                    "Run 'archon-search backup status' to see details.",
+                    err=True,
+                )
+                raise SystemExit(2)
+            pending_ids = " ".join(sorted(pending))
+            click.echo(
+                f"Timed out after {timeout_seconds}s waiting for backup jobs to complete. "
+                f"Pending job IDs: {pending_ids} — "
+                "poll with 'archon-search backup status' to check progress.",
+                err=True,
+            )
+            raise SystemExit(0)
+
         for job_id in list(pending):
             url = f"{api_url.rstrip('/')}/jobs/{job_id}"
             try:
@@ -131,7 +180,7 @@ def _wait_for_jobs(job_ids: list[str], api_url: str, headers: dict[str, str]) ->
             status: str = job.get("status", "")
             if status in _TERMINAL_STATUSES:
                 pending.discard(job_id)
-                if status == "FAILED":
+                if status in {"FAILED", "FAILED_EXPIRED"}:
                     err = job.get("error") or "unknown error"
                     click.echo(f"Backup FAILED for {job_id}: {err}", err=True)
                     failed.append(job_id)
@@ -139,9 +188,10 @@ def _wait_for_jobs(job_ids: list[str], api_url: str, headers: dict[str, str]) ->
                     click.echo(f"Backup cancelled: {job_id}")
         if pending:
             time.sleep(_POLL_INTERVAL_SECONDS)
+            polls += 1
 
     if failed:
-        raise SystemExit(1)
+        raise SystemExit(2)
     click.echo("Backup completed for all collections")
 
 

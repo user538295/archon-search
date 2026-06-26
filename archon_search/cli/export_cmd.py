@@ -11,6 +11,7 @@ from archon_search.key_manager import load_or_generate_key
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
+_DEFAULT_WAIT_TIMEOUT_SECONDS = 300
 _TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
 
 
@@ -39,6 +40,17 @@ def _resolve_api_key(api_key: str | None) -> str:
     help="Poll until the job completes and print progress.",
 )
 @click.option(
+    "--timeout",
+    "timeout_seconds",
+    default=_DEFAULT_WAIT_TIMEOUT_SECONDS,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help=(
+        "Maximum seconds to wait for the export job to complete "
+        "(only used with --wait). On timeout: exits 0 and prints a recovery hint."
+    ),
+)
+@click.option(
     "--api-url",
     default=_DEFAULT_API_URL,
     show_default=True,
@@ -53,6 +65,7 @@ def export_cmd(
     collection: str,
     output_dir: str,
     wait: bool,
+    timeout_seconds: int,
     api_url: str,
     api_key: str | None,
 ) -> None:
@@ -81,16 +94,34 @@ def export_cmd(
     if not wait:
         return
 
-    _poll_job(job_id, api_url, headers)
+    _poll_job(job_id, api_url, headers, timeout_seconds)
 
 
-def _poll_job(job_id: str, api_url: str, headers: dict) -> None:
-    """Poll GET /jobs/{job_id} until terminal, printing progress."""
+def _poll_job(
+    job_id: str,
+    api_url: str,
+    headers: dict,
+    timeout_seconds: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+) -> None:
+    """Poll GET /jobs/{job_id} until terminal, printing progress.
+
+    Exit codes:
+    - Exits 0 on success (DONE) or timeout — prints a recovery hint on timeout.
+    - Exits 2 on confirmed FAILED status.
+    - Exits 1 on fatal errors (network, auth, HTTP errors).
+    """
     url = f"{api_url.rstrip('/')}/jobs/{job_id}"
+    max_polls = max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)
 
     try:
-        while True:
-            resp = httpx.get(url, headers=headers)
+        status = "UNKNOWN"
+        job: dict = {}
+        for _ in range(max_polls):
+            try:
+                resp = httpx.get(url, headers=headers)
+            except httpx.HTTPError as exc:
+                click.echo(f"Error polling job: {exc}", err=True)
+                raise SystemExit(1) from exc
             if resp.status_code != 200:
                 click.echo(
                     f"Error polling job: server returned {resp.status_code}: {resp.text}",
@@ -99,7 +130,7 @@ def _poll_job(job_id: str, api_url: str, headers: dict) -> None:
                 raise SystemExit(1)
 
             job = resp.json()
-            status: str = job["status"]
+            status = job["status"]
             progress = job.get("progress")
 
             if progress:
@@ -112,6 +143,14 @@ def _poll_job(job_id: str, api_url: str, headers: dict) -> None:
                 break
 
             time.sleep(_POLL_INTERVAL_SECONDS)
+        else:
+            # Loop exhausted without hitting a terminal status → timeout
+            click.echo(
+                f"Timed out after {timeout_seconds}s waiting for export job to complete. "
+                f"Job ID: {job_id} — check job status with the REST API: GET /jobs/{job_id}",
+                err=True,
+            )
+            raise SystemExit(0)
 
     except KeyboardInterrupt:
         click.echo("Polling stopped — job continues on server")
@@ -121,10 +160,10 @@ def _poll_job(job_id: str, api_url: str, headers: dict) -> None:
         result = job.get("result") or {}
         archive_path = result.get("archive_path", "")
         click.echo(f"Done. Archive: {archive_path}")
-    elif status == "FAILED":
+    elif status in {"FAILED", "FAILED_EXPIRED"}:
         error = job.get("error") or "unknown error"
         click.echo(f"Export FAILED: {error}", err=True)
-        raise SystemExit(1)
+        raise SystemExit(2)
     else:
         click.echo(f"Job ended with status: {status}")
 
@@ -214,7 +253,12 @@ def import_cmd(
 
 
 def _poll_import_job(job_id: str, api_url: str, headers: dict) -> None:
-    """Poll GET /jobs/{job_id} until terminal, printing progress and result."""
+    """Poll GET /jobs/{job_id} until terminal, printing progress and result.
+
+    Tech debt (E0b FE-2): import --wait does not support --timeout or the E0b
+    exit-code contract (exit 2 on FAILED, exit 0 on timeout). Adding --timeout to
+    import --wait is deferred to a future task for CLI consistency.
+    """
     url = f"{api_url.rstrip('/')}/jobs/{job_id}"
 
     try:

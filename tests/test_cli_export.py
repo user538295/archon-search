@@ -107,12 +107,12 @@ def test_export_cmd_wait_prints_progress() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_export_cmd_wait_exits_1_on_failed() -> None:
-    """--wait exits with code 1 when job transitions to FAILED."""
+def test_export_cmd_wait_exits_2_on_failed_expired() -> None:
+    """--wait exits 2 when job transitions to FAILED_EXPIRED (treated same as FAILED)."""
     runner = CliRunner()
-    job_id = "job-fail-1"
+    job_id = "job-fail-expired-1"
     post_resp = _mock_post_response(202, _job_response(job_id, "QUEUED"))
-    poll_failed = _job_response(job_id, "FAILED", error="something went wrong")
+    poll_failed = _job_response(job_id, "FAILED_EXPIRED", error="job expired")
     get_resp = _mock_get_response(200, poll_failed)
 
     with (
@@ -124,8 +124,8 @@ def test_export_cmd_wait_exits_1_on_failed() -> None:
             export_cmd, ["my-collection", "--wait", "--api-key", "deadbeef"]
         )
 
-    assert result.exit_code == 1
-    assert "something went wrong" in result.output or "FAILED" in result.output
+    assert result.exit_code == 2, f"output={result.output!r}"
+    assert "FAILED" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -246,3 +246,58 @@ def test_import_cmd_collection_exists_no_force() -> None:
 
     assert result.exit_code == 1
     assert "force-overwrite" in result.output.lower() or "already exists" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# FE-2: export --wait --timeout tests (S24)
+# ---------------------------------------------------------------------------
+
+
+def test_export_wait_timeout_exits_0() -> None:
+    """--wait --timeout N exits 0 on poll timeout with job ID + recovery hint in output.
+
+    Monkeypatches httpx.get to always return RUNNING status so the poll loop
+    exhausts the timeout. Do NOT monkeypatch _poll_job itself — the test must
+    exercise the timeout parameter path through the real polling logic.
+    """
+    runner = CliRunner()
+    job_id = "job-timeout-export"
+    post_resp = _mock_post_response(202, _job_response(job_id, "QUEUED"))
+    running_resp = _mock_get_response(200, _job_response(job_id, "RUNNING"))
+
+    with (
+        patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.export_cmd.httpx.get", return_value=running_resp),
+        patch("archon_search.cli.export_cmd.time.sleep"),
+    ):
+        # --timeout 4 with _POLL_INTERVAL_SECONDS=2 → max 2 polls, then timeout
+        result = runner.invoke(
+            export_cmd,
+            ["my-collection", "--wait", "--timeout", "4", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 0, f"output={result.output!r}"
+    # Recovery hint must be in output and contain the job ID
+    assert job_id in result.output, f"expected job ID in output: {result.output!r}"
+    assert "Timed out" in result.output, f"expected timeout message in output: {result.output!r}"
+    assert "check job status" in result.output, f"expected recovery hint in output: {result.output!r}"
+
+
+def test_export_wait_exits_2_on_failed() -> None:
+    """--wait exits 2 when job transitions to FAILED (E0b exit-code contract)."""
+    runner = CliRunner()
+    job_id = "job-fail-export"
+    post_resp = _mock_post_response(202, _job_response(job_id, "QUEUED"))
+    failed_resp = _mock_get_response(200, _job_response(job_id, "FAILED", error="disk full"))
+
+    with (
+        patch("archon_search.cli.export_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.export_cmd.httpx.get", return_value=failed_resp),
+        patch("archon_search.cli.export_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            export_cmd, ["my-collection", "--wait", "--api-key", "deadbeef"]
+        )
+
+    assert result.exit_code == 2, f"output={result.output!r}"
+    assert "FAILED" in result.output or "disk full" in result.output

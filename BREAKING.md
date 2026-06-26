@@ -8,6 +8,30 @@
 
 ## Changelog
 
+### [next release] — E0b FE-2: `export --wait` and `backup --now --wait` exit codes changed; `--timeout` option added
+
+**Surface**: `archon-search export --wait` and `archon-search backup --now --wait` CLI commands.
+
+**Breaking changes**:
+1. `archon-search export --wait` previously exited with code `1` when the job status was `FAILED`. It now exits `2` on `FAILED` or `FAILED_EXPIRED`. Callers that relied on exit code `1` to detect export failure must update to check exit code `2`.
+2. `archon-search backup --now --wait` previously exited with code `1` when any backup job status was `FAILED`. It now exits `2` on `FAILED` or `FAILED_EXPIRED`. Same migration requirement.
+3. Both commands previously had no timeout — they polled indefinitely. They now exit `0` on timeout (with a recovery hint on stderr) after the `--timeout` duration (default 300 s).
+
+**New behavior summary for both commands**:
+- Exit 0 + recovery message on stderr: timed out (job(s) may still be running).
+- Exit 0 + success message: job(s) completed successfully (DONE).
+- Exit 2 + error on stderr: job confirmed FAILED or FAILED_EXPIRED.
+- Exit 1: fatal error (auth failure, network error, HTTP 4xx).
+
+**New `--timeout SECONDS` option** (default 300): controls the maximum seconds `--wait` polls before declaring a timeout. The option is additive and backward-compatible for scripts that do not pass `--timeout`; the only behavioral change is the new finite timeout (previously infinite) and the exit-code changes on FAILED.
+
+**Migration**:
+- Scripts that check `exit_code == 1` to detect `export --wait` or `backup --now --wait` failure must update to `exit_code == 2`. Both `FAILED` and `FAILED_EXPIRED` now exit 2.
+- A timeout now exits 0; check stderr for the recovery hint string if distinction is required.
+- The import command's `--wait` path is explicitly OUT OF SCOPE for E0b — its timeout behavior is noted as tech debt for CLI consistency.
+
+---
+
 ### [next release] — E0b FE-1: `maintenance run --wait` timeout exit code changed 1 → 0
 
 **Surface**: `archon-search maintenance run --wait` CLI command.
