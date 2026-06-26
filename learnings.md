@@ -2,6 +2,21 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0a BE-2: Declare markitdown extras explicitly — don't rely on transitive incidental coverage**
+- Observation: `.xlsx` and `.pptx` converters worked in the dev environment only because docling's transitive deps (openpyxl, python-pptx) happened to be installed. The markitdown dep had no `[xlsx]` or `[pptx]` extras declared. Brooks-Lint correctly identified this as a "works by accident" dependency. The fix was `markitdown[docx,pptx,xls,xlsx,outlook]` to make the dependency contract explicit.
+- Action: When adding a new format via a library that uses optional extras, declare ALL needed extras explicitly. Never assume a format works because it passes in the current environment — check if the required backend is actually pulled by the declared dep spec.
+- Confidence: high
+
+**2026-06-26 — E0a BE-2: Empirical testing beats static analysis for markitdown format support**
+- Observation: Multiple reviewers (including Brooks-Lint) incorrectly claimed `.rtf` and `.eml` have no markitdown converter and would fail at runtime. Static analysis of converter registration showed only the Azure-cloud converter for these. But empirical testing (`MarkItDown().convert()` with real files) showed both work via Magika content detection routing to `PlainTextConverter`. The static analysis missed the content-detection layer. The hallucination survived 3 review cycles until the empirical test settled it.
+- Action: For any "format X is unsupported" claim from a reviewer, run a direct empirical test before accepting the finding. `uv run python -c "from markitdown import MarkItDown; m=MarkItDown(); r=m.convert(path); print(r.text_content)"` is the definitive test. Reviewer findings about third-party library behavior require verification — not just their word.
+- Confidence: high
+
+**2026-06-26 — E0a BE-2: `olefile` as standalone dep vs via markitdown extras — prefer extras mechanism**
+- Observation: BE-1 added `olefile>=0.46,<1` as a standalone dep because markitdown's `.msg` support needed it. BE-2 superseded this by including `[outlook]` in the markitdown extras spec, which pulls olefile transitively. The extras mechanism is the correct approach — it keeps the dep chain encapsulated in markitdown's own contract, so if markitdown ever changes its `.msg` implementation, the extras update automatically.
+- Action: When a dep is only needed as a backend for another library's format support, prefer the library's optional extras mechanism over declaring the backend directly. Only use explicit declaration when the extras mechanism doesn't exist or the version pin needs to be stricter.
+- Confidence: high
+
 **2026-06-26 — E0a BE-1: markitdown's optional-extra deps require explicit core declarations**
 - Observation: `markitdown`'s `.msg` converter uses `olefile` internally, but `olefile` is only in markitdown's `[all]` optional extra — not a hard transitive dep (`uv pip show markitdown | grep Requires` confirmed). The plan said "if extract-msg is optional, add it explicitly." The real dep was `olefile`, not `extract-msg`. Without explicit declaration, `.msg` ingestion fails on a fresh install despite markitdown being installed.
 - Action: For any dep that claims format support via optional-extra helpers, always verify the actual transitive dep tree with `uv pip show <pkg> | grep Requires` before declaring the dep done. The plan's "verify the transitive dep chain" instruction is non-optional — it may reveal a different package than the plan names.
