@@ -2,6 +2,11 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0b BE-5 Cycle 2 Brooks-Lint: docstring step-list drifted from code after restructuring a numbered algorithm**
+- Observation: `_run_failed_ingest_retry`'s docstring (maintenance_loop.py:317-335) still lists "7. Increment retry_counts keyed ..." as an unconditional algorithm step, but after the FAILED_EXPIRED restructure the increment at line 500 only happens on the re-enqueue path — the two transition paths (aged-out, exhausted) `continue` before it. Step 5/6 were renumbered correctly but step 7's wording ("Increment retry_counts") reads as always-happens. Minor doc-accuracy drift, not a code bug. Also the new `test_maintenance_loop_invalid_created_at_skips_with_warning` asserts only `any(r.levelno >= WARNING)` — any incidental warning satisfies it rather than the specific unparseable-timestamp message; weak but the path is real (cutoff non-None → line 421 WARNING fires).
+- Action: When restructuring a numbered-step docstring where some steps become conditional (guarded by an early `continue`), re-read every remaining step number for accuracy, not just the ones you renumbered. For "WARNING is logged" tests, assert on `r.getMessage()` substring (e.g. "unparseable") not just `r.levelno >= WARNING`.
+- Confidence: high
+
 **2026-06-26 — E0b BE-2: Changing exception-swallowing to re-raise breaks existing tests that asserted the swallowed behavior**
 - Observation: `rag_fusion.generate_variants()` previously caught `asyncio.TimeoutError` and generic `Exception` and returned `[]`. Three existing tests (`test_generate_variants_timeout_fallback`, `test_generate_variants_api_error_fallback`, `test_fingerprint_no_raw_query_in_log`) all asserted `result == []` or called the function without `pytest.raises`. When BE-2 changed both handlers to `raise`, all three broke. Found immediately by running the rag_fusion test file before the full suite.
 - Action: When changing exception-swallowing code to re-raise, always grep for tests that call the function without `pytest.raises`. Run that file's tests before the full suite to catch failures fast.

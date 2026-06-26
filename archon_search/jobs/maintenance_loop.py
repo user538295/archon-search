@@ -320,15 +320,19 @@ class MaintenanceLoop:
         2. Prune stale keys: remove keys where the source_path no longer appears
            in JobStore AND count == 0.
         3. Filter JobStore.list() for FAILED IngestJobs (only base IngestJob, not
-           subclasses like ExportJob/MigrationJob) within age and retry_count limits.
+           subclasses like ExportJob/MigrationJob).
         4. Skip jobs where source_path == '' (pre-D5 jobs — log DEBUG).
-        5. Re-enqueue eligible jobs via JobStore.create(source="maintenance").
+           Skip jobs with unparseable created_at (log WARNING).
+        5. Aged-out jobs (job_created < cutoff) → transition to FAILED_EXPIRED via
+           ``transition(from_statuses={FAILED}, to_status=FAILED_EXPIRED)``.
+           Retry-exhausted jobs (retry_count >= max_attempts, within age) → same.
+           If transition() returns None, the job was already handled or evicted (log DEBUG).
+        6. Re-enqueue eligible jobs via JobStore.create(source="maintenance").
            On create() failure: log WARNING; retry_count still incremented.
-        6. Increment retry_counts keyed '{namespace}/{collection}/{source_path}'.
-        7. Log WARNING for exhausted jobs (retry_count >= retry_max_attempts).
+        7. Increment retry_counts keyed '{namespace}/{collection}/{source_path}'.
         8. Update last_retry_at in collection_health for each collection that had
            at least one re-enqueued job.
-        9. Deduplicate: only ONE re-enqueue per unique retry_key per pass.
+        9. Deduplicate: only ONE transition/re-enqueue per unique retry_key per pass.
         """
         if not self._config.failed_ingest_retry:
             return
@@ -353,7 +357,14 @@ class MaintenanceLoop:
 
         for key, key_jobs in jobs_by_key.items():
             # Use ISO timestamp comparison for correct chronological ordering.
-            latest = max(key_jobs, key=lambda j: datetime.fromisoformat(j.created_at))
+            try:
+                latest = max(key_jobs, key=lambda j: datetime.fromisoformat(j.created_at))
+            except (ValueError, TypeError):
+                logger.debug(
+                    "MaintenanceLoop: skipping DONE-reset for key %s — unparseable created_at in job group",
+                    key,
+                )
+                continue
             if latest.status == JobStatus.DONE and key in retry_counts:
                 retry_counts[key] = 0
 
@@ -374,7 +385,7 @@ class MaintenanceLoop:
 
         # Track collections that had at least one re-enqueue.
         retried_collections: set[str] = set()
-        # Deduplicate: only one re-enqueue per unique retry_key per pass.
+        # Deduplicate: only one transition/re-enqueue per unique retry_key per pass.
         seen_keys: set[str] = set()
 
         for job in all_jobs:
@@ -392,37 +403,83 @@ class MaintenanceLoop:
                 )
                 continue
 
-            # Age filter.
-            if cutoff is not None:
-                try:
-                    job_created = datetime.fromisoformat(job.created_at)
-                    if job_created < cutoff:
-                        continue
-                except (ValueError, TypeError):
-                    continue
-
+            # Compute retry_key before age filter — needed for dedup and FAILED_EXPIRED transition.
             retry_key = f"{job.namespace}/{job.collection}/{job.source_path}"
 
-            # Step 9: deduplicate — skip if already processed this key in this pass.
+            # Deduplicate — skip if already processed this key in this pass.
             if retry_key in seen_keys:
                 continue
 
             current_count = retry_counts.get(retry_key, 0)
 
-            # Step 7: log WARNING for exhausted jobs.
+            # Age filter — aged-out jobs transition to FAILED_EXPIRED regardless of retry count.
+            if cutoff is not None:
+                try:
+                    job_created = datetime.fromisoformat(job.created_at)
+                    aged_out = job_created < cutoff
+                except (ValueError, TypeError):
+                    logger.warning(
+                        "MaintenanceLoop: FAILED job %s for %s in %s/%s has an unparseable "
+                        "created_at timestamp (%r); skipping",
+                        job.job_id,
+                        job.source_path,
+                        job.namespace,
+                        job.collection,
+                        job.created_at,
+                    )
+                    seen_keys.add(retry_key)
+                    continue
+                if aged_out:
+                    logger.warning(
+                        "MaintenanceLoop: FAILED job %s for %s in %s/%s has aged out "
+                        "(created %s, cutoff %s); transitioning to FAILED_EXPIRED",
+                        job.job_id,
+                        job.source_path,
+                        job.namespace,
+                        job.collection,
+                        job.created_at,
+                        cutoff.isoformat(),
+                    )
+                    result = self._job_store.transition(
+                        job.job_id,
+                        from_statuses={JobStatus.FAILED},
+                        to_status=JobStatus.FAILED_EXPIRED,
+                    )
+                    if result is None:
+                        logger.debug(
+                            "MaintenanceLoop: transition to FAILED_EXPIRED for job %s "
+                            "returned None — already handled or evicted",
+                            job.job_id,
+                        )
+                    seen_keys.add(retry_key)
+                    continue
+
+            # Retry-exhausted jobs (within age cutoff) also transition to FAILED_EXPIRED.
             if current_count >= max_attempts:
                 logger.warning(
-                    "MaintenanceLoop: FAILED job for %s in %s/%s has reached "
-                    "max retry attempts (%d); not re-enqueuing",
+                    "MaintenanceLoop: FAILED job %s for %s in %s/%s has reached "
+                    "max retry attempts (%d); transitioning to FAILED_EXPIRED",
+                    job.job_id,
                     job.source_path,
                     job.namespace,
                     job.collection,
                     max_attempts,
                 )
+                result = self._job_store.transition(
+                    job.job_id,
+                    from_statuses={JobStatus.FAILED},
+                    to_status=JobStatus.FAILED_EXPIRED,
+                )
+                if result is None:
+                    logger.debug(
+                        "MaintenanceLoop: transition to FAILED_EXPIRED for job %s "
+                        "returned None — already handled or evicted",
+                        job.job_id,
+                    )
                 seen_keys.add(retry_key)
                 continue
 
-            # Step 5: re-enqueue via JobStore.create().
+            # Re-enqueue eligible jobs via JobStore.create().
             try:
                 self._job_store.create(
                     path=job.source_path,
@@ -439,12 +496,12 @@ class MaintenanceLoop:
                     exc,
                 )
 
-            # Step 6: increment retry count regardless of create() success/failure.
+            # Increment retry count regardless of create() success/failure.
             retry_counts[retry_key] = current_count + 1
             retried_collections.add(f"{job.namespace}/{job.collection}")
             seen_keys.add(retry_key)
 
-        # Step 8: update last_retry_at in collection_health for retried collections.
+        # Update last_retry_at in collection_health for retried collections.
         now_str = now.isoformat()
         for col_key in retried_collections:
             if col_key not in health:
