@@ -511,14 +511,14 @@ flowchart LR
         - #unit_test — `test_compute_stats_truncated_count_respects_date_window` — seed JSONL with 3 truncated entries, 1 inside `since`/`until` window and 2 outside; assert `truncated_count=1`
         - #integration_test — `test_telemetry_stats_route_includes_truncated_count` — TestClient GET /telemetry/stats; assert field present
 
-- [ ] **BE-10** — Add `failed_expired_ingest_count: int = 0` to `StatusResponse`; `routes_status.py` queries job store for count of `FAILED_EXPIRED` `IngestJob` instances in the request namespace #backend-role
+- [x] **BE-10** — Add `failed_expired_ingest_count: int = 0` to `StatusResponse`; `routes_status.py` queries job store for count of `FAILED_EXPIRED` `IngestJob` instances in the request namespace #backend-role
     - Interface Adapters · 1.5h
     - needs BE-4 · completes S13, S14
     - Tests
-        - #unit_test — `test_status_failed_expired_count_zero_when_no_failed_jobs` — empty job store; assert `failed_expired_ingest_count=0`
-        - #integration_test — `test_status_failed_expired_count_via_test_client` — seed job store with 2 FAILED_EXPIRED jobs; GET /status; assert `failed_expired_ingest_count=2`
-        - #integration_test — `test_status_failed_expired_count_namespace_isolated` — seed 2 FAILED_EXPIRED jobs in namespace-A and 3 in namespace-B; GET /status as namespace-A; assert `failed_expired_ingest_count=2`
-        - #integration_test — `test_jobs_filter_by_failed_expired_status` — TestClient GET /jobs?status=FAILED_EXPIRED; assert only FAILED_EXPIRED jobs returned
+        - [x] #unit_test — `test_status_failed_expired_count_zero_when_no_failed_jobs` — empty job store; assert `failed_expired_ingest_count=0`
+        - [x] #integration_test — `test_status_failed_expired_count_via_test_client` — seed job store with 2 FAILED_EXPIRED jobs; GET /status; assert `failed_expired_ingest_count=2`
+        - [x] #integration_test — `test_status_failed_expired_count_namespace_isolated` — seed 2 FAILED_EXPIRED jobs in namespace-A and 3 in namespace-B; GET /status as namespace-A; assert `failed_expired_ingest_count=2`
+        - [x] #integration_test — `test_jobs_filter_by_failed_expired_status` — TestClient GET /jobs?status=FAILED_EXPIRED; assert only FAILED_EXPIRED jobs returned
 
 - [ ] **T-3** — Verify end-to-end: GET /status key availability, failed_expired_count, and GET /telemetry/stats truncated_count #tester-role
     - — · 2.0h

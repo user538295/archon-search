@@ -2832,6 +2832,11 @@
             "title": "Collections Schema Behind",
             "type": "integer"
           },
+          "failed_expired_ingest_count": {
+            "default": 0,
+            "title": "Failed Expired Ingest Count",
+            "type": "integer"
+          },
           "hyde": {
             "anyOf": [
               {

@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 
 from archon_search.config import SearchConfig
+from archon_search.jobs.model import IngestJob, JobStatus
 from archon_search.progress import compute_eta_seconds
 from archon_search.server.readiness import collect_readiness
 from archon_search.server.schemas import (
@@ -119,6 +120,7 @@ async def status(request: Request) -> StatusResponse:
     mcp_detail = _build_mcp_status(request, config)
     hyde_detail = _build_hyde_status(request, config)
     rag_fusion_detail = _build_rag_fusion_status(request, config)
+    failed_expired_count = _count_failed_expired_ingest_jobs(request, ns)
     return StatusResponse(
         running=True,
         pid=pid,
@@ -134,6 +136,30 @@ async def status(request: Request) -> StatusResponse:
         mcp=mcp_detail,
         hyde=hyde_detail,
         rag_fusion=rag_fusion_detail,
+        failed_expired_ingest_count=failed_expired_count,
+    )
+
+
+def _count_failed_expired_ingest_jobs(request: Request, ns: str) -> int:
+    """Count exact base-class IngestJob instances with status FAILED_EXPIRED in the caller's namespace.
+
+    Only counts exact ``IngestJob`` instances (``type(j) is IngestJob``) — the same
+    predicate used by ``MaintenanceLoop`` when it transitions FAILED jobs to
+    FAILED_EXPIRED.  Subclasses (``ExportJob``, ``ImportJob``, etc.) are excluded.
+
+    Reads the job store synchronously; the store's ``list()`` method is safe to call
+    without an ``await`` — asyncio's single-thread scheduling guarantee prevents
+    concurrent coroutine mutation during iteration.
+    """
+    job_store = getattr(request.app.state, "job_store", None)
+    if job_store is None:
+        return 0
+    return sum(
+        1
+        for j in job_store.list()
+        if type(j) is IngestJob
+        and j.status == JobStatus.FAILED_EXPIRED
+        and j.namespace == ns
     )
 
 

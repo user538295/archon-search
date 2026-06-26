@@ -253,6 +253,8 @@ class StatusResponse(BaseModel):
     hyde: HydeStatusDetail | None = None
     # E0b BE-8 — RAG Fusion key availability (additive, nullable); null when rag_fusion.enabled=false
     rag_fusion: RagFusionStatusDetail | None = None
+    # E0b BE-10 — count of FAILED_EXPIRED IngestJob instances in the caller's namespace
+    failed_expired_ingest_count: int = 0
 
 
 class IndexingStateCollectionEntry(BaseModel):
