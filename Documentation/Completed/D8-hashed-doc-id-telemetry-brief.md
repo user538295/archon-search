@@ -17,7 +17,7 @@ Operators running archon-search on shared infrastructure (VMs, containers, CI en
 1. Operator opens `archon-search.toml` and sets `[telemetry] hash_doc_ids = true`.
 2. Server starts; config loader reads the flag and generates (or loads from disk) a server-bound HMAC salt stored at `get_data_dir() / ".telemetry-salt"` with mode 600.
 3. A search request arrives; the pipeline resolves results with their raw `doc_id` hashes.
-4. Before the telemetry entry is written, each `doc_id` in `result_doc_ids` is transformed: `HMAC-SHA256(salt, doc_id_hex)` → truncated to 32 hex characters (128-bit, collision-safe for realistic collection sizes).
+4. Before the telemetry entry is written, each `doc_id` in `result_doc_ids` is transformed: `HMAC-SHA256(salt, doc_id_hex)` → the full 64-character hex output (no truncation — see Key Decisions).
 5. The JSONL entry is written with the hashed `result_doc_ids`; the raw `doc_id` values never touch the log file.
 6. `/telemetry/stats` and `/telemetry/entries` responses reflect the hashed values unchanged — the API surface is unmodified.
 7. If the operator disables `hash_doc_ids` later, new entries contain raw `doc_id` hashes; existing log entries are not retroactively transformed.
@@ -26,7 +26,7 @@ Operators running archon-search on shared infrastructure (VMs, containers, CI en
 
 - New `TelemetryConfig` field: `hash_doc_ids: bool = False` (default off; backward-compatible).
 - Salt management: on first start with `hash_doc_ids = true`, generate a 32-byte cryptographic random salt, write it to `get_data_dir() / ".telemetry-salt"` with mode 600. On subsequent starts, load the existing salt. Salt file path follows the same `get_data_dir()` convention as `key_manager.py`.
-- Transform function applied in `TelemetryEntry` factory methods (`from_search_tool_result`, `from_search_multi_result`) — the two factories that populate `result_doc_ids`. The transform is a pure function `hash_doc_id(salt: bytes, doc_id: str) -> str` in `archon_search/telemetry/entry.py` (or a sibling module `archon_search/telemetry/hasher.py`).
+- Transform function applied in the `from_search_tool_result` `TelemetryEntry` factory method — the only factory that populates `result_doc_ids`. (`from_search_multi_result` does NOT populate `result_doc_ids` and is out of scope; see "What does NOT change" in the team plan.) The transform is a pure function `hash_doc_id(salt: bytes, doc_id: str) -> str` in a sibling module `archon_search/telemetry/hasher.py`.
 - The transform is passed into the factory method as an optional callable argument `doc_id_hasher: Callable[[str], str] | None = None`; when `None`, raw values are used. This keeps the factory signature clean and the behaviour testable without a real salt.
 - `routes_search.py` constructs and passes the hasher when the config flag is on.
 - `archon-search.toml.example` updated with the new `hash_doc_ids` key and a comment explaining what it does and when to use it.
@@ -58,12 +58,14 @@ Operators running archon-search on shared infrastructure (VMs, containers, CI en
 - **Salt file missing at startup with `hash_doc_ids = true`**: generate a fresh salt and write it. Log a WARNING so operators know a new salt was created (metric continuity is broken from this point).
 - **Salt file unreadable (permissions issue)**: log an ERROR and fall back to `hash_doc_ids = false` for this session. Do not crash the server. The WARNING must be prominent enough for operators to act on.
 - **`hash_doc_ids` toggled off then on between restarts**: the same salt file is reused if it still exists; metric continuity is preserved within the salt's lifetime.
-- **`result_doc_ids` is `None`**: factory methods already handle `None`; the hasher is not called. No change needed.
+- **`result_doc_ids` is `None`**: the `from_search_tool_result` factory parameter is a required `list[str]` (not optional), so callers never pass `None` through this factory — the hasher is simply not invoked on a `None`. The `TelemetryEntry` *model* field is `list[str] | None` and is only `None` for entries built by the other factories (`from_error`, `from_route_response`, etc.), which never receive a hasher. Either way `doc_ids_hashed` is `False`. No change needed.
 - **Empty `result_doc_ids` list**: hasher is applied to an empty list; result is an empty list. No special case needed.
 - **`from_explain_result` factory**: this factory does not populate `result_doc_ids` (it is `None`). No hasher parameter needed for this factory.
 - **`from_error` and `from_route_response` factories**: neither populates `result_doc_ids`. No hasher parameter needed.
 - **Concurrent search requests**: the hasher callable is stateless (pure function over salt + input); no locking required.
 - **`ARCHON_SEARCH_DATA_DIR` override**: salt file path derives from `get_data_dir()`, so it follows the data directory correctly in all deployment modes including Docker.
+- **Salt co-location — scope of protection**: the salt lives at `get_data_dir() / ".telemetry-salt"`, co-located with LanceDB (which stores the raw `source_path` in plaintext). HMAC hashing therefore protects telemetry JSONL logs that are **shared or exported separately** from the data directory (the stated threat: shared logs, support archives, forwarded observability streams). It does **not** defend against an attacker with read access to the entire `~/.archon-search/` directory — such a reader has both the salt and the plaintext `source_path` column. Document this explicitly in `150_security_and_privacy_architecture.md`.
+- **Loaded salt has wrong size**: if the salt file exists and is readable but is not exactly 32 bytes (truncated, empty, or corrupt), treat it as a read error — log an ERROR and fall back to `hash_doc_ids = false` for the session. HMAC accepts any-length key, so a 0-byte or short salt would silently produce weak, effectively-non-secret output; this must be rejected, not used.
 
 ## Open Questions
 
