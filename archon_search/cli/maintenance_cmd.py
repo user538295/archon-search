@@ -26,7 +26,7 @@ from archon_search.paths import get_data_dir
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
-_WAIT_MAX_POLLS = 60  # 60 × 2 s = 2 min default timeout for --wait
+_DEFAULT_WAIT_TIMEOUT_SECONDS = 120
 _STATE_FILE_NAME = ".maintenance-state.json"
 
 
@@ -257,6 +257,17 @@ def _fmt_ok(value: Any) -> str:
     help="Poll GET /status until maintenance.last_run_at changes.",
 )
 @click.option(
+    "--timeout",
+    "timeout_seconds",
+    default=_DEFAULT_WAIT_TIMEOUT_SECONDS,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help=(
+        "Maximum seconds to wait for the maintenance pass to complete "
+        "(only used with --wait). On timeout: exits 0 and prints a recovery hint."
+    ),
+)
+@click.option(
     "--api-url",
     default=_DEFAULT_API_URL,
     show_default=True,
@@ -267,10 +278,13 @@ def _fmt_ok(value: Any) -> str:
     default=None,
     help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
 )
-def run_subcommand(wait: bool, api_url: str, api_key: str | None) -> None:
+def run_subcommand(
+    wait: bool, timeout_seconds: int, api_url: str, api_key: str | None
+) -> None:
     """Trigger an immediate maintenance pass.
 
     With ``--wait``, polls until the pass completes.
+    Exits 0 on success or timeout; exits 2 when the pass completed with errors.
     """
     try:
         key = _resolve_api_key(api_key)
@@ -314,37 +328,70 @@ def run_subcommand(wait: bool, api_url: str, api_key: str | None) -> None:
     if not wait:
         return
 
-    _wait_for_pass(api_url, headers, original_last_run_at)
+    _wait_for_pass(api_url, headers, original_last_run_at, timeout_seconds)
 
 
 def _wait_for_pass(
-    api_url: str, headers: dict[str, str], original_last_run_at: str | None
+    api_url: str,
+    headers: dict[str, str],
+    original_last_run_at: str | None,
+    timeout_seconds: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
 ) -> None:
     """Poll GET /status until maintenance.last_run_at changes, then print result.
 
     ``original_last_run_at`` must be captured BEFORE the POST trigger is sent
     to avoid a race where a fast-completing pass is missed.
+
+    Exit codes:
+    - Exits 0 on successful completion (last_run_at changed, no errors).
+    - Exits 0 on timeout — prints a recovery hint on stderr so the operator
+      knows how to follow up (breaking change from D5 which exited 1).
+    - Exits 2 when the pass completed but at least one collection reported an
+      error in its ``last_error`` field.
     """
     status_url = f"{api_url.rstrip('/')}/status"
+    max_polls = max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)
 
     click.echo(f"Waiting for maintenance pass to complete (current: {original_last_run_at})...")
 
-    for _ in range(_WAIT_MAX_POLLS):
+    for _ in range(max_polls):
         time.sleep(_POLL_INTERVAL_SECONDS)
-        current_last_run_at = _get_last_run_at(status_url, headers)
+        current_last_run_at, has_errors = _get_maintenance_state(status_url, headers)
         if current_last_run_at is None:
             # Could not reach server or maintenance=null.
             continue
         if current_last_run_at != original_last_run_at:
+            if has_errors:
+                click.echo(
+                    "Maintenance pass completed with errors. "
+                    "Run 'archon-search maintenance status' to see details.",
+                    err=True,
+                )
+                raise SystemExit(2)
             click.echo(f"Maintenance pass complete. last_run_at={current_last_run_at}")
             return
 
-    click.echo("Timed out waiting for maintenance pass to complete.", err=True)
-    raise SystemExit(1)
+    click.echo(
+        f"Timed out after {timeout_seconds}s waiting for maintenance pass to complete. "
+        "Poll with 'archon-search maintenance status' to check progress.",
+        err=True,
+    )
+    raise SystemExit(0)
 
 
-def _get_last_run_at(status_url: str, headers: dict[str, str]) -> str | None:
-    """Fetch GET /status and return maintenance.last_run_at, or None on error."""
+def _get_maintenance_state(
+    status_url: str, headers: dict[str, str]
+) -> tuple[str | None, bool]:
+    """Fetch GET /status and return (maintenance.last_run_at, has_errors).
+
+    ``has_errors`` is True when any collection in ``collection_health`` has a
+    non-null ``last_error`` field in the most recent response, indicating the
+    maintenance pass completed with at least one failure.
+
+    Returns ``(None, False)`` on transient errors (5xx) or unparseable payloads
+    — the caller should continue polling.
+    Raises ``SystemExit(1)`` on fatal errors (4xx, network failures).
+    """
     try:
         resp = httpx.get(status_url, headers=headers, timeout=5.0)
     except httpx.HTTPError as exc:
@@ -358,7 +405,7 @@ def _get_last_run_at(status_url: str, headers: dict[str, str]) -> str | None:
                 f"Warning: server returned {resp.status_code} while polling (transient, retrying...)",
                 err=True,
             )
-            return None
+            return None, False
         # 4xx errors (auth failure, not found) are fatal.
         click.echo(
             f"Error: server returned {resp.status_code} while polling", err=True
@@ -368,9 +415,25 @@ def _get_last_run_at(status_url: str, headers: dict[str, str]) -> str | None:
     try:
         payload = resp.json()
     except ValueError:
-        return None
+        return None, False
 
     maintenance = payload.get("maintenance")
     if maintenance is None:
-        return None
-    return maintenance.get("last_run_at")
+        return None, False
+
+    last_run_at: str | None = maintenance.get("last_run_at")
+    collection_health: list[dict] = maintenance.get("collection_health") or []
+    has_errors = any(
+        entry.get("last_error") is not None for entry in collection_health
+    )
+    return last_run_at, has_errors
+
+
+def _get_last_run_at(status_url: str, headers: dict[str, str]) -> str | None:
+    """Fetch GET /status and return maintenance.last_run_at, or None on error.
+
+    Thin wrapper around ``_get_maintenance_state`` for callers that only need
+    the timestamp (e.g., capturing the baseline before POST /maintenance/trigger).
+    """
+    last_run_at, _ = _get_maintenance_state(status_url, headers)
+    return last_run_at

@@ -551,13 +551,13 @@ flowchart LR
         - #integration_test — `test_install_dry_run_secrets_env_not_created` — dry-run mode; assert no file written
         - #integration_test — `test_wizard_creates_secrets_env_and_wrapper_on_macos_positive` — mock platform as macOS; run wizard with `enable_hyde=True`; assert both `.secrets.env` (mode `0o600`) and `run-server.sh` (mode `0o755`) created in correct location
 
-- [ ] **FE-1** — `maintenance_cmd.py`: add `--timeout SECONDS` option (default 120) to `run_subcommand`; pass to `_wait_for_pass()`; on poll timeout print job reference + "poll with `archon-search maintenance status`" and exit 0; exit 2 on FAILED status. Breaking change: changes timeout exit code from 1 (current `maintenance_cmd.py:343`) to 0. Update `BREAKING.md` in this task. #frontend-role
+- [x] **FE-1** — `maintenance_cmd.py`: add `--timeout SECONDS` option (default 120) to `run_subcommand`; pass to `_wait_for_pass()`; on poll timeout print job reference + "poll with `archon-search maintenance status`" and exit 0; exit 2 on FAILED status. Breaking change: changes timeout exit code from 1 (current `maintenance_cmd.py:343`) to 0. Update `BREAKING.md` in this task. #frontend-role
     - Presentation · 2.0h
     - needs BE-5 · completes S21, S22, S23
     - Tests
-        - #unit_test — `test_wait_for_pass_exits_0_on_timeout` — monkeypatch the HTTP GET call inside `_wait_for_pass` to always return a running status, exhausting the timeout; assert `SystemExit(0)` raised with recovery message on stderr. Do NOT monkeypatch `_wait_for_pass` itself.
-        - #integration_test — `test_maintenance_run_wait_timeout_option_accepted` — Click test runner; `--wait --timeout 5`; monkeypatch polling to timeout; assert exit code 0 and stderr contains job reference
-        - #integration_test — `test_maintenance_run_wait_exits_2_on_failed` — Click test runner; monkeypatch poll to return FAILED; assert exit code 2
+        - [x] #unit_test — `test_wait_for_pass_exits_0_on_timeout` — monkeypatch the HTTP GET call inside `_wait_for_pass` to always return a running status, exhausting the timeout; assert `SystemExit(0)` raised with recovery message on stderr. Do NOT monkeypatch `_wait_for_pass` itself.
+        - [x] #integration_test — `test_maintenance_run_wait_timeout_option_accepted` — Click test runner; `--wait --timeout 5`; monkeypatch polling to timeout; assert exit code 0 and stderr contains job reference
+        - [x] #integration_test — `test_maintenance_run_wait_exits_2_on_failed` — Click test runner; monkeypatch poll to return FAILED; assert exit code 2
 
 - [ ] **FE-2** — `export_cmd.py` (export --wait path only) and `backup_cmd.py` (`--now --wait` path): add `--timeout SECONDS` option with `default=300` (exports and backups can be large); same exit-code contract (0 = success or timeout, 2 = FAILED). Scope: `export_cmd.py` export `--wait` path only. The import command's `--wait` path (`export_cmd.py:153`) is explicitly OUT OF SCOPE for E0b — note it as tech debt for CLI consistency. Breaking change: changes timeout exit code from 1 (current) to 0. Update `BREAKING.md` in this task. Note: the `_TERMINAL_STATUSES` update in `export_cmd.py:14` is handled by BE-4; FE-2 implementation must follow BE-4 completion. #frontend-role
     - Presentation · 1.5h

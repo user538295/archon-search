@@ -2,6 +2,21 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0b FE-1: Dead module-level constants must be deleted when replaced by a parameter — not just commented as "legacy"**
+- Observation: `_WAIT_MAX_POLLS` was retained with a "legacy; overridden by --timeout" comment after `_wait_for_pass` was rewritten to use `max_polls = max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)`. Five tests kept patching the constant, giving a false impression it controlled the loop. All 4 reviewers (3 DA + Brooks-Lint) independently flagged it in Cycle 1. The tests passed only by coincidence (mocked `time.sleep` + infinite `return_value`).
+- Action: When replacing a module-level constant with a parameter-derived value, delete the constant immediately and replace all test patches of it with the actual controlling input (e.g. `--timeout N` CLI arg). Leaving it as "legacy" creates Hyrum's Law coupling and future trap for test authors.
+- Confidence: high
+
+**2026-06-26 — E0b FE-1: `_WAIT_MAX_POLLS` patch in test controlled nothing — silent 60-poll regression**
+- Observation: `test_maintenance_run_wait_timeout` patched `_WAIT_MAX_POLLS=3` expecting 3 polls, but actually looped 60 times (default timeout 120 / poll interval 2). The test was slower than designed and the `=3` patch was a lie about what was being tested. Tests passed only because `httpx.get` was mocked with `return_value` (infinite same response).
+- Action: When a polling loop's bound changes from a constant to a parameter, immediately update all tests to exercise the parameter (e.g. `--timeout 6` → 3 polls), not the dead constant.
+- Confidence: high
+
+**2026-06-26 — E0b FE-1: Exit-2 detection via collection health `last_error` is sound because `last_error` is cleared at each pass start**
+- Observation: `_get_maintenance_state` checks `any(entry.get("last_error") is not None ...)` across `collection_health` to detect a failed pass. This is sound because `maintenance_loop.py:565` clears `last_error = None` at the start of each collection's processing in every pass. DA agents independently verified this (cross-pass staleness is not possible for actively processed collections; excluded collections do retain stale errors but that's a pre-existing server-side gap).
+- Action: When detecting failure via a field that might be stale, always verify the server resets it each pass. If it doesn't, the detection could yield false positives from prior passes.
+- Confidence: high
+
 **2026-06-26 — E0b T-3: Pre-seeding JobStore before make_real_app by writing to the same file path**
 - Observation: T-3 needed to seed a FAILED_EXPIRED job visible to a real app started by `make_real_app`. Creating a `JobStore(path=tmp_path/"jobs.json")` before entering `make_real_app` and seeding jobs to it works because `make_real_app` creates its own `JobStore` at the same path, and `JobStore.__init__` reads eagerly from disk via `_load()`. The FAILED_EXPIRED status is not in `_CRASH_STATUSES`, so it survives crash recovery. The 7-day eviction window doesn't affect freshly-created jobs.
 - Action: For e2e tests needing pre-seeded job store data with `make_real_app`, create a `JobStore` at `tmp_path / "jobs.json"` before the context manager, seed it, then enter `make_real_app` — it reads the same file on init. No need to expose the job store from `make_real_app`.

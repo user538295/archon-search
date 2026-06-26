@@ -480,7 +480,15 @@ def test_maintenance_run_wait_polls_until_last_run_at_changes(tmp_path: Path) ->
 
 
 def test_maintenance_run_wait_timeout(tmp_path: Path) -> None:
-    """--wait: exits with non-zero exit code after max polls without change."""
+    """--wait: exits 0 (not 1) after timeout with recovery message on stderr (FE-1 S22).
+
+    Breaking change from D5: exit code changed from 1 → 0 on poll timeout.
+
+    GET call count breakdown (--timeout 6, _POLL_INTERVAL_SECONDS=2 → max_polls = 3):
+      1 pre-POST GET (returns old_run_at — baseline)
+      3 loop GETs (always return old_run_at — never changes)
+      total = 4 responses needed (return_value covers all)
+    """
     runner = CliRunner()
     old_run_at = "2026-06-20T10:00:00+00:00"
 
@@ -493,14 +501,14 @@ def test_maintenance_run_wait_timeout(tmp_path: Path) -> None:
         patch("archon_search.cli.maintenance_cmd.httpx.post", return_value=post_resp),
         patch("archon_search.cli.maintenance_cmd.httpx.get", return_value=get_resp),
         patch("archon_search.cli.maintenance_cmd.time.sleep"),
-        # override max polls to a small value
-        patch("archon_search.cli.maintenance_cmd._WAIT_MAX_POLLS", 3),
     ):
         result = runner.invoke(
-            maintenance_cmd, ["run", "--wait", "--api-key", "deadbeef"]
+            maintenance_cmd, ["run", "--wait", "--timeout", "6", "--api-key", "deadbeef"]
         )
 
-    assert result.exit_code != 0
+    # FE-1: timeout exits 0 (was 1), recovery message on stderr
+    assert result.exit_code == 0
+    assert "archon-search maintenance status" in result.stderr
 
 
 def test_maintenance_run_wait_server_error_mid_poll(tmp_path: Path) -> None:
@@ -509,7 +517,7 @@ def test_maintenance_run_wait_server_error_mid_poll(tmp_path: Path) -> None:
     5xx errors are transient and loop-continue; 4xx errors are fatal.
     This test exercises the fatal path using a 401 response.
 
-    GET call count breakdown (with _WAIT_MAX_POLLS=3):
+    GET call count breakdown:
       1 pre-POST GET (returns old_run_at — captures baseline)
       1 loop GET (returns 401 — fatal, exits immediately)
       total = 2 responses needed
@@ -530,7 +538,6 @@ def test_maintenance_run_wait_server_error_mid_poll(tmp_path: Path) -> None:
             side_effect=get_responses,
         ),
         patch("archon_search.cli.maintenance_cmd.time.sleep"),
-        patch("archon_search.cli.maintenance_cmd._WAIT_MAX_POLLS", 3),
     ):
         result = runner.invoke(
             maintenance_cmd, ["run", "--wait", "--api-key", "deadbeef"]
@@ -539,10 +546,170 @@ def test_maintenance_run_wait_server_error_mid_poll(tmp_path: Path) -> None:
     assert result.exit_code == 1
 
 
+def test_wait_for_pass_exits_0_on_timeout(tmp_path: Path) -> None:
+    """_wait_for_pass: exhausting timeout exits 0 with recovery message on stderr.
+
+    Monkeypatches httpx.get inside _wait_for_pass to always return a running
+    status (last_run_at never changes). Does NOT monkeypatch _wait_for_pass
+    itself (per plan spec). Verifies SystemExit(0) is raised with a recovery
+    message on stderr containing 'archon-search maintenance status'.
+    """
+    old_run_at = "2026-06-20T10:00:00+00:00"
+    post_resp = _mock_response(202, {"status": "triggered"})
+    get_resp = _mock_response(200, _status_server_payload(last_run_at=old_run_at))
+
+    runner = CliRunner()
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch("archon_search.cli.maintenance_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.maintenance_cmd.httpx.get", return_value=get_resp),
+        patch("archon_search.cli.maintenance_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            maintenance_cmd,
+            ["run", "--wait", "--timeout", "4", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 0
+    assert "archon-search maintenance status" in (result.output + (result.stderr or ""))
+
+
+def test_maintenance_run_wait_timeout_option_accepted(tmp_path: Path) -> None:
+    """--wait --timeout N: option is accepted; timeout exits 0 with job reference on stderr (S22)."""
+    runner = CliRunner()
+    old_run_at = "2026-06-20T10:00:00+00:00"
+
+    post_resp = _mock_response(202, {"status": "triggered"})
+    get_resp = _mock_response(200, _status_server_payload(last_run_at=old_run_at))
+
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch("archon_search.cli.maintenance_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.maintenance_cmd.httpx.get", return_value=get_resp),
+        patch("archon_search.cli.maintenance_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            maintenance_cmd,
+            ["run", "--wait", "--timeout", "5", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 0, result.output
+    # stderr should contain "archon-search maintenance status" as recovery hint
+    assert "archon-search maintenance status" in result.stderr
+
+
+def test_maintenance_run_wait_exits_2_on_failed(tmp_path: Path) -> None:
+    """--wait: poll detects FAILED pass (collection health last_error non-null) → exit 2 (S23)."""
+    runner = CliRunner()
+    old_run_at = "2026-06-20T10:00:00+00:00"
+    new_run_at = "2026-06-21T11:00:00+00:00"
+
+    post_resp = _mock_response(202, {"status": "triggered"})
+
+    failed_payload = {
+        "maintenance": {
+            "enabled": True,
+            "interval_hours": 24,
+            "last_run_at": new_run_at,
+            "next_run_at": None,
+            "collection_health": [
+                {
+                    "collection": "default/docs",
+                    "fts_optimized_at": None,
+                    "orphans_removed_last_run": 0,
+                    "last_retry_at": None,
+                    "last_error": "FTS index rebuild failed: disk full",
+                    "mutations_since_recompute": 0,
+                    "centroid_recompute_threshold": 200,
+                    "meta_chunk_count": 42,
+                }
+            ],
+        }
+    }
+
+    get_responses = [
+        # pre-POST: capture baseline
+        _mock_response(200, _status_server_payload(last_run_at=old_run_at)),
+        # loop: last_run_at changed, but a collection has last_error → FAILED
+        _mock_response(200, failed_payload),
+    ]
+
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch("archon_search.cli.maintenance_cmd.httpx.post", return_value=post_resp),
+        patch(
+            "archon_search.cli.maintenance_cmd.httpx.get",
+            side_effect=get_responses,
+        ),
+        patch("archon_search.cli.maintenance_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            maintenance_cmd,
+            ["run", "--wait", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 2
+    assert "archon-search maintenance status" in result.stderr
+
+
+def test_maintenance_run_timeout_without_wait_is_silently_ignored(tmp_path: Path) -> None:
+    """--timeout without --wait: the option is accepted and silently ignored; command triggers and exits 0."""
+    runner = CliRunner()
+    post_resp = _mock_response(202, {"status": "triggered"})
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch("archon_search.cli.maintenance_cmd.httpx.post", return_value=post_resp),
+    ):
+        result = runner.invoke(
+            maintenance_cmd,
+            ["run", "--timeout", "30", "--api-key", "deadbeef"],
+        )
+    assert result.exit_code == 0
+    assert "triggered" in result.output.lower()
+
+
+def test_maintenance_run_wait_5xx_transient_then_success(tmp_path: Path) -> None:
+    """--wait: 5xx during polling is transient; retries and succeeds on next poll.
+
+    GET call count breakdown (--timeout 6 → max_polls = 3):
+      1 pre-POST GET (returns old_run_at — baseline)
+      1 loop GET (returns 500 — transient, retried)
+      1 loop GET (returns 200 with new_run_at — success)
+      total = 3 responses needed
+    """
+    runner = CliRunner()
+    old_run_at = "2026-06-20T10:00:00+00:00"
+    new_run_at = "2026-06-21T11:00:00+00:00"
+
+    post_resp = _mock_response(202, {"status": "triggered"})
+    get_responses = [
+        _mock_response(200, _status_server_payload(last_run_at=old_run_at)),  # pre-POST baseline
+        _mock_response(500, {}),  # transient server error
+        _mock_response(200, _status_server_payload(last_run_at=new_run_at)),  # success
+    ]
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch("archon_search.cli.maintenance_cmd.httpx.post", return_value=post_resp),
+        patch(
+            "archon_search.cli.maintenance_cmd.httpx.get",
+            side_effect=get_responses,
+        ),
+        patch("archon_search.cli.maintenance_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            maintenance_cmd,
+            ["run", "--wait", "--timeout", "6", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert new_run_at in result.output or "complete" in result.output.lower()
+
+
 def test_maintenance_run_wait_maintenance_null(tmp_path: Path) -> None:
     """--wait: GET /status returns maintenance=null → no crash, informative message.
 
-    GET call count breakdown (with _WAIT_MAX_POLLS=2):
+    GET call count breakdown (with --timeout 4, _POLL_INTERVAL_SECONDS=2):
+      max_polls = 4 // 2 = 2 polls in the loop
       1 GET before the POST (capture original_last_run_at)
       2 GETs inside the polling loop
       total = 3 responses needed
@@ -563,22 +730,23 @@ def test_maintenance_run_wait_maintenance_null(tmp_path: Path) -> None:
             side_effect=get_responses,
         ),
         patch("archon_search.cli.maintenance_cmd.time.sleep"),
-        # _WAIT_MAX_POLLS=2 → 1 pre-POST GET + 2 loop GETs = 3 total responses
-        patch("archon_search.cli.maintenance_cmd._WAIT_MAX_POLLS", 2),
     ):
         result = runner.invoke(
-            maintenance_cmd, ["run", "--wait", "--api-key", "deadbeef"]
+            maintenance_cmd,
+            # --timeout 4 → max_polls = 4 // 2 = 2 loop GETs (+ 1 pre-POST = 3 total)
+            ["run", "--wait", "--timeout", "4", "--api-key", "deadbeef"],
         )
 
     # Should not crash with an exception
     assert "Traceback" not in result.output
-    assert result.exit_code != 0  # timed out or gave up
+    # FE-1: timeout now exits 0 (not 1); recovery message on stderr
+    assert result.exit_code == 0
 
 
 def test_maintenance_run_wait_first_run_success(tmp_path: Path) -> None:
     """--wait: first-ever run where last_run_at starts as None → succeeds when it appears.
 
-    GET call count breakdown (with _WAIT_MAX_POLLS=3):
+    GET call count breakdown:
       1 pre-POST GET (returns last_run_at=None — first-ever run)
       1 loop GET (returns new timestamp — pass completed)
       total = 2 responses needed
@@ -601,7 +769,6 @@ def test_maintenance_run_wait_first_run_success(tmp_path: Path) -> None:
             side_effect=get_responses,
         ),
         patch("archon_search.cli.maintenance_cmd.time.sleep"),
-        patch("archon_search.cli.maintenance_cmd._WAIT_MAX_POLLS", 3),
     ):
         result = runner.invoke(
             maintenance_cmd, ["run", "--wait", "--api-key", "deadbeef"]

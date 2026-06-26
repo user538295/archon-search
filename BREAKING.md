@@ -8,6 +8,24 @@
 
 ## Changelog
 
+### [next release] — E0b FE-1: `maintenance run --wait` timeout exit code changed 1 → 0
+
+**Surface**: `archon-search maintenance run --wait` CLI command.
+
+**Breaking change**: `archon-search maintenance run --wait` previously exited with code `1` when the poll timed out waiting for the maintenance pass to complete. It now exits `0` on timeout and prints a recovery hint on stderr: `"Poll with 'archon-search maintenance status' to check progress."` Callers that relied on exit code `1` to detect timeout must now distinguish between timeout (exit 0 + stderr hint) and success (exit 0, no hint).
+
+**New behavior summary**:
+- Exit 0 + recovery message on stderr: timed out (pass may still be running).
+- Exit 0 + "Maintenance pass complete." on stdout: pass completed successfully.
+- Exit 2 + error on stderr: pass completed with errors (collection-level failures visible via `archon-search maintenance status`).
+- Exit 1: fatal error (auth failure, network error, HTTP 4xx).
+
+**New `--timeout SECONDS` option** (default 120): controls the maximum seconds `--wait` polls before declaring a timeout. The option is additive and backward-compatible; existing scripts that do not pass `--timeout` continue to behave as before except for the exit-code change on timeout.
+
+**Migration**: scripts that check `exit_code == 1` to detect a `--wait` timeout must be updated. A timeout now exits 0; check stderr for the recovery hint string `"archon-search maintenance status"` if distinction is required.
+
+---
+
 ### [next release] — D7: new `/keys` REST endpoints and `key` CLI commands (additive)
 
 **Surface**: four new REST endpoints under `/keys`; four new MCP tools; new `key` CLI command group.
