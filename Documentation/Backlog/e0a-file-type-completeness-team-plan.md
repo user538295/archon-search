@@ -168,12 +168,12 @@ N/A — no frontend work for this feature. This project has no web UI; the CLI i
 - Interface Adapters: BE-3 (UserManual extension table)
 
 **Done when**
-- [ ] `uv sync --dev` installs `markitdown` — S6
-- [ ] All 5 new Office extensions route to `_parse_office` — S1
-- [ ] `.tsv` routes to `_parse_plain` — S2
-- [ ] `None` from markitdown `text_content` returns empty string — S7
-- [ ] `ImportError` branch fires with a helpful message — S4
-- [ ] Existing `.docx`/`.pptx`/`.xlsx` parametrized test still passes — S5
+- [x] `uv sync --dev` installs `markitdown` — S6
+- [x] All 5 new Office extensions route to `_parse_office` — S1
+- [x] `.tsv` routes to `_parse_plain` — S2
+- [x] `None` from markitdown `text_content` returns empty string — S7
+- [x] `ImportError` branch fires with a helpful message — S4
+- [x] Existing `.docx`/`.pptx`/`.xlsx` parametrized test still passes — S5
 - [x] UserManual lists all supported extensions — (close-out acceptance)
 
 ---
@@ -204,14 +204,14 @@ N/A — no frontend work for this feature. This project has no web UI; the CLI i
 
 Docs the feature touches — the close-out task works through this list.
 
-- [ ] `Documentation/Backlog/e0a-file-type-completeness-brief.md` — no changes needed (source brief)
-- [ ] `Documentation/Backlog/e0a-file-type-completeness-team-plan.md` — this file
-- [ ] `Documentation/Backlog/document-parser-contract.tsp` — this file (contract artefact)
-- [ ] `Documentation/UserManual/04_ingestion_and_collections.md` — add supported-extension table (in-scope deliverable, covered by BE-3)
-- [ ] `archon_search/parser.py` module docstring — update to list new extensions (in-scope, covered by BE-2)
-- [ ] `Documentation/Architecture/100_system_architecture_overview.md` — verify parser capabilities section; update if it lists supported formats explicitly
-- [ ] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — verify `DocumentParser` entry lists supported extensions; update to include new Office and TSV extensions
-- [ ] `CLAUDE.md` — no change needed (parser layer not documented there)
+- [x] `Documentation/Backlog/e0a-file-type-completeness-brief.md` — no changes needed (source brief)
+- [x] `Documentation/Backlog/e0a-file-type-completeness-team-plan.md` — this file
+- [x] `Documentation/Backlog/document-parser-contract.tsp` — this file (contract artefact)
+- [x] `Documentation/UserManual/04_ingestion_and_collections.md` — add supported-extension table (in-scope deliverable, covered by BE-3)
+- [x] `archon_search/parser.py` module docstring — update to list new extensions (in-scope, covered by BE-2)
+- [x] `Documentation/Architecture/100_system_architecture_overview.md` — verify parser capabilities section; update if it lists supported formats explicitly
+- [x] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — verify `DocumentParser` entry lists supported extensions; update to include new Office and TSV extensions
+- [x] `CLAUDE.md` — no change needed (parser layer not documented there)
 
 ---
 
@@ -297,7 +297,7 @@ flowchart LR
 
 ### Phase 2 · Close-out
 
-- [ ] **T-2** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-2** — Project close-out & acceptance fact-check #tester-role
     - — · 2.0h
     - needs BE-3, T-1
     - Tests
