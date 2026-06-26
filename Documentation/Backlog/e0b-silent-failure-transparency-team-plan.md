@@ -427,7 +427,7 @@ flowchart LR
         - #integration_test — `test_search_response_expansion_warning_on_rag_fusion_generic_error` — TestClient POST /search with forced generic Exception (not TimeoutError) from `generate_variants`; assert `expansion_used=false`, `expansion_warning='RAG Fusion expansion failed'`
         - #integration_test — `test_mcp_search_tool_returns_expansion_fields` — invoke MCP `search` tool with forced HyDE failure (`resolve_hyde_vector` returning `(None, False)` with hyde requested); assert tool response contains `expansion_warning` and `expansion_used=false`
 
-- [ ] **T-1** — Verify end-to-end: POST /search expansion warning in all cases #tester-role
+- [x] **T-1** — Verify end-to-end: POST /search expansion warning in all cases #tester-role
     - — · 1.5h
     - needs BE-3 · completes S1, S2, S3, S4, S4b, S5
     - Note: TestClient-based tests are integration-level (in-process ASGI). Labeled #e2e_test here because they exercise the full application stack; true process-isolated e2e is not required for E0b.
