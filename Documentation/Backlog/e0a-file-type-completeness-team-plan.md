@@ -174,7 +174,7 @@ N/A — no frontend work for this feature. This project has no web UI; the CLI i
 - [ ] `None` from markitdown `text_content` returns empty string — S7
 - [ ] `ImportError` branch fires with a helpful message — S4
 - [ ] Existing `.docx`/`.pptx`/`.xlsx` parametrized test still passes — S5
-- [ ] UserManual lists all supported extensions — (close-out acceptance)
+- [x] UserManual lists all supported extensions — (close-out acceptance)
 
 ---
 
@@ -279,7 +279,7 @@ flowchart LR
         - #unit_test — `test_parser_office_malformed_file_raises_parse_error` — mock `MarkItDown().convert()` to raise `RuntimeError`; assert `ParseError` (not `ImportError`) with correct `path` and `cause`
         - #unit_test — `test_parser_office_none_content_returns_empty_string` — mock `MarkItDown().convert().text_content = None`; assert `parse()` returns `""`
 
-- [ ] **BE-3** — Add supported-extension table to `Documentation/UserManual/04_ingestion_and_collections.md` #backend-role
+- [x] **BE-3** — Add supported-extension table to `Documentation/UserManual/04_ingestion_and_collections.md` #backend-role
     - Interface Adapters · 0.5h
     - needs BE-2
     - Tests

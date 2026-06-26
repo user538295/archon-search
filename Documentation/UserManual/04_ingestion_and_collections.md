@@ -1,7 +1,7 @@
 **Purpose**: Ingest documents and manage collections.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-05-20 / **Next review**: 2027-05-20
+**Last reviewed**: 2026-06-26 / **Next review**: 2027-06-26
 
 # Ingestion and collections
 
@@ -12,6 +12,32 @@
 3. **Only `sync` is incremental.** `archon-search sync` consults the indexing state store and skips already-indexed files; it also resets stale `IN_PROGRESS` entries to `PENDING` for crash recovery (`sync.py:_reset_stale_in_progress`). In contrast, `archon-search ingest` calls `pipeline.ingest_directory` directly and re-processes every file under the path with no state-store consultation. Use `collection reindex` to force a full rebuild (clears state and drops the LanceDB table).
 4. **The watcher is opt-in.** Set `[collections].watch = true` to keep the index in sync with on-disk changes via watchdog (`archon_search/watcher.py`, `sync.py`).
 5. **Chunk-size changes trigger reindex.** If `chunk_size` differs from the value previously used for a collection and `auto_reindex_on_chunk_size_change = true` (default), affected collections rebuild on the next start.
+
+## Supported file types
+
+`archon-search` routes each file to a format handler by extension. The table below lists every supported extension and the underlying library used.
+
+| Extension(s) | Category | Handler |
+|---|---|---|
+| `.md` `.txt` `.py` `.js` `.ts` `.go` `.rs` `.java` `.sh` `.yaml` `.yml` `.json` `.toml` `.csv` `.tsv` | Plain text | built-in (`Path.read_text`) |
+| `.html` `.htm` | HTML | trafilatura |
+| `.pdf` | PDF | docling |
+| `.docx` `.pptx` `.xlsx` | Office (Open XML) | markitdown |
+| `.xls` | Legacy Excel | markitdown |
+| `.rtf` | Rich Text | markitdown |
+| `.epub` | E-book | markitdown |
+| `.eml` | Email (RFC 822) | markitdown |
+| `.msg` | Outlook message | markitdown |
+| `.png` `.jpg` `.jpeg` `.tiff` `.tif` `.bmp` `.webp` | Images | docling (OCR) |
+| *(any other extension)* | Fallback | built-in (`Path.read_text`) |
+
+**Notes:**
+- `.doc`, `.ppt`, and `.odt` are **not** in the Office handler — markitdown has no converter for these formats (it would raise `UnsupportedFormatException`). They fall through to the plain-text fallback (`_parse_plain`) and are read as raw UTF-8 with `errors="replace"`, producing garbled binary output.
+- `.gif` falls through to the plain-text fallback and produces garbled output (binary content read as UTF-8 with `errors="replace"`). It is excluded from the image/OCR handler because running OCR on a single animation frame would be misleading.
+- `.svg` also falls through to the plain-text fallback, but produces readable SVG/XML markup — not binary garbage. The source code explicitly notes that "the plain-text fallback is more appropriate" for `.svg`. The resulting text is indexable but contains XML markup rather than human-readable prose.
+- `.rtf` is handled by markitdown, but markitdown returns raw RTF control codes (e.g. `{\rtf1\ansi ...}`) rather than extracted plain text. The content is technically ingested but is not useful for search.
+- trafilatura is **not** bundled with `archon-search` and must be installed separately (via the install wizard or `uv pip install trafilatura`); HTML ingestion fails on a bare `uv sync --dev`.
+- All markitdown-backed formats use extras declared in `pyproject.toml` as `markitdown[docx,pptx,xls,xlsx,outlook]`. These extras transitively install the required backends (e.g. `mammoth` for `.docx`, `openpyxl` for `.xlsx`, `olefile` for `.msg`) and are pulled in automatically by `uv sync`.
 
 ## CLI commands
 
