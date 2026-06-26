@@ -18,7 +18,7 @@ Every silent failure surface emits an observable signal: a response field, a CLI
 1. User sends `POST /search` with `hyde=true`.
 2. Anthropic API call times out after 10 s (raised from 5 s).
 3. Search falls back to non-expanded retrieval.
-4. Response includes `expansion_warning: "HyDE timed out after 10s — results may be less relevant"` and `expansion_used: false`.
+4. Response includes `expansion_warning: "HyDE expansion failed"` and `expansion_used: false`. (All HyDE failure modes — timeout, API error, missing key, empty response — produce the same generic message because `resolve_hyde_vector()` returns `(None, False)` for all cases, making the specific cause undetectable at the route level. See plan Known limitations.)
 
 ### ANTHROPIC_API_KEY not forwarded by managed service (L6)
 1. Operator runs `archon-search start` on macOS/Linux.

@@ -14,7 +14,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StatusResponse'
+                $ref: '#/components/schemas/StatusResponseE0bExtension'
 components:
   schemas:
     HydeStatusDetail:
@@ -24,7 +24,9 @@ components:
       properties:
         key_available:
           type: boolean
-          description: True when ANTHROPIC_API_KEY is present in the server environment at startup.
+          description: >-
+            True when ANTHROPIC_API_KEY is present in os.environ at the time
+            GET /status is called (checked at call time, not cached at startup).
       description: 'L6: HyDE expansion availability detail nested under GET /status.'
     RagFusionStatusDetail:
       type: object
@@ -33,25 +35,17 @@ components:
       properties:
         key_available:
           type: boolean
-          description: True when ANTHROPIC_API_KEY is present in the server environment at startup.
+          description: >-
+            True when ANTHROPIC_API_KEY is present in os.environ at the time
+            GET /status is called (checked at call time, not cached at startup).
       description: 'L6: RAG Fusion expansion availability detail nested under GET /status.'
-    StatusResponse:
+    StatusResponseE0bExtension:
       type: object
       required:
-        - running
-        - pid
-        - version
         - hyde
         - rag_fusion
         - failed_expired_ingest_count
       properties:
-        running:
-          type: boolean
-        pid:
-          type: integer
-          format: int32
-        version:
-          type: string
         hyde:
           type: object
           allOf:
@@ -67,5 +61,9 @@ components:
         failed_expired_ingest_count:
           type: integer
           format: int32
-          description: 'L10: count of IngestJobs that aged past retry_max_age_hours without completing.'
-      description: Partial StatusResponse showing only E0b L6 additions.
+          description: >-
+            L10: count of IngestJobs in FAILED_EXPIRED state
+            (aged past retry_max_age_hours OR exhausted retry_max_attempts).
+      description: >-
+        E0b additions to StatusResponse (L6 + L10). Partial model — only fields added
+        by E0b shown. Full StatusResponse in archon_search/server/schemas.py.

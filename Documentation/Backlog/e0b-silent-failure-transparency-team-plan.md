@@ -180,13 +180,15 @@ See [`e0b-ingest-result.tsp`](e0b-ingest-result.tsp)
 | **S2** | **Given** RAG Fusion is enabled and key is set · **When** `POST /search` with `rag_fusion=true` and all variant calls succeed · **Then** `expansion_used=true`, `expansion_warning=null` |
 | **S3** | **Given** HyDE is enabled · **When** the Anthropic API call exceeds the 10 s timeout · **Then** `expansion_used=false`, `expansion_warning` contains "HyDE expansion failed" (generic message — all HyDE failure modes indistinguishable at route level) |
 | **S4** | **Given** RAG Fusion is enabled · **When** `generate_variants` exceeds the 10 s timeout · **Then** `expansion_used=false`, `expansion_warning` contains "RAG Fusion timed out" |
+| **S4b** | **Given** RAG Fusion is enabled · **When** `generate_variants` raises a non-timeout exception (API error, parse failure) · **Then** `expansion_used=false`, `expansion_warning` contains "RAG Fusion expansion failed" |
 | **S5** | **Given** neither HyDE nor RAG Fusion was requested · **When** `POST /search` · **Then** `expansion_used=false`, `expansion_warning=null` |
 | **S6** | **Given** `[hyde] enabled = true` in config · **When** server starts with `ANTHROPIC_API_KEY` set · **Then** `GET /status` returns `hyde.key_available=true` |
 | **S7** | **Given** `[hyde] enabled = true` · **When** server starts without `ANTHROPIC_API_KEY` · **Then** `GET /status` returns `hyde.key_available=false`; `archon-search status` prints a warning to stderr |
 | **S8** | **Given** `[hyde] enabled = true` and `key_available=false` · **When** operator runs `archon-search status` · **Then** stderr contains "HyDE enabled but ANTHROPIC_API_KEY is not set" |
 | **S9** | **Given** macOS managed service with `ANTHROPIC_API_KEY` in `~/.archon-search/.secrets.env` · **When** `archon-search start` registers and loads the service · **Then** the key is available in the server environment (manual) |
 | **S10** | **Given** macOS managed service with no `~/.archon-search/.secrets.env` · **When** `archon-search start` launches the service · **Then** service starts successfully; no key is set but no startup failure occurs (manual) |
-| **S11** | **Given** a FAILED ingest job within `retry_max_age_hours` · **When** maintenance loop runs · **Then** job is re-enqueued and stays FAILED until next attempt |
+| **S11** | **Given** a FAILED ingest job within `retry_max_age_hours` AND `retry_count < retry_max_attempts` · **When** maintenance loop runs · **Then** job is re-enqueued and stays FAILED until next attempt |
+| **S11b** | **Given** a FAILED ingest job within `retry_max_age_hours` AND `retry_count >= retry_max_attempts` · **When** maintenance loop runs · **Then** job transitions to `FAILED_EXPIRED` (retries exhausted regardless of age) |
 | **S12** | **Given** a FAILED ingest job older than `retry_max_age_hours` with attempts ≥ `retry_max_attempts` · **When** maintenance loop runs · **Then** job transitions to `FAILED_EXPIRED` |
 | **S12b** | **Given** a FAILED ingest job older than `retry_max_age_hours` with `retry_count < retry_max_attempts` · **When** maintenance loop runs · **Then** job transitions to `FAILED_EXPIRED` (aged-out regardless of remaining retries) |
 | **S13** | **Given** FAILED_EXPIRED jobs exist · **When** `GET /jobs?status=FAILED_EXPIRED` · **Then** response lists those jobs |
@@ -235,10 +237,10 @@ See [`e0b-ingest-result.tsp`](e0b-ingest-result.tsp)
 - Presentation (CLI): BE-4 (also updates _TERMINAL_STATUSES in cli/backup_cmd.py, cli/export_cmd.py, cli/collection.py)
 
 **Done when**
-- [ ] `SearchPipelineResult.rag_fusion_warning` populated on RAG Fusion timeout; route assembles `expansion_warning` from HyDE detection + `rag_fusion_warning` — S3, S4
-- [ ] `SearchResponse` carries `expansion_used` and `expansion_warning` — S1, S2, S3, S4, S5
+- [ ] `SearchPipelineResult.rag_fusion_warning` populated on RAG Fusion timeout; route assembles `expansion_warning` from HyDE detection + `rag_fusion_warning` — S3, S4, S4b
+- [ ] `SearchResponse` carries `expansion_used` and `expansion_warning` — S1, S2, S3, S4, S4b, S5
 - [ ] `GET /status` carries `hyde.key_available`, `rag_fusion.key_available`, `failed_expired_ingest_count` — S6, S7, S13, S14
-- [ ] `FAILED_EXPIRED` in `JobStatus`; maintenance loop transitions aged-out jobs — S11, S12
+- [ ] `FAILED_EXPIRED` in `JobStatus`; maintenance loop transitions aged-out and retry-exhausted jobs — S11, S11b, S12, S12b
 - [ ] `GET /telemetry/stats` carries `truncated_count` — S16, S17
 - [ ] `IngestResult.warnings` populated from ACL sidecar check — S18, S19, S20
 - [ ] Linux service unit gains `EnvironmentFile=-`; macOS service generates wrapper script — S9, S10
@@ -259,11 +261,13 @@ See [`e0b-ingest-result.tsp`](e0b-ingest-result.tsp)
 |---|---|
 | S1, S2 | integration (TestClient POST /search, mock Anthropic) |
 | S3, S4 | integration (TestClient POST /search, force asyncio.TimeoutError) |
+| S4b | integration (TestClient POST /search, force non-timeout Exception from generate_variants) |
 | S5 | integration (TestClient POST /search, no hyde/rag_fusion) |
 | S6, S7 | integration (TestClient GET /status, monkeypatch `os.environ["ANTHROPIC_API_KEY"]`) |
 | S8 | integration (Click test runner, capture stderr) |
 | S9, S10 | **manual** (requires real launchd on macOS) |
-| S11 | unit (maintenance_loop with mock job store) |
+| S11 | unit (maintenance_loop with mock job store, retry_count < max_attempts) |
+| S11b | unit (maintenance_loop, within-age job, retry_count >= max_attempts → FAILED_EXPIRED) |
 | S12 | unit (maintenance_loop age cutoff, verify FAILED_EXPIRED transition) |
 | S12b | unit (maintenance_loop, aged job, retry_count < max_attempts → FAILED_EXPIRED) |
 | S13 | integration (TestClient GET /jobs?status=FAILED_EXPIRED) |
@@ -278,7 +282,7 @@ See [`e0b-ingest-result.tsp`](e0b-ingest-result.tsp)
 
 ## Documentation update
 
-- [ ] `Documentation/Backlog/e0b-silent-failure-transparency-brief.md` — no changes needed (source brief)
+- [x] `Documentation/Backlog/e0b-silent-failure-transparency-brief.md` — updated HyDE warning message from stale "HyDE timed out after 10s — results may be less relevant" to canonical "HyDE expansion failed" (K1)
 - [ ] `Documentation/Backlog/e0b-silent-failure-transparency-team-plan.md` — this file
 - [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `expansion_used`, `expansion_warning` to SearchResponse; `hyde`, `rag_fusion`, `failed_expired_ingest_count` to StatusResponse; `truncated_count` to TelemetryStats
 - [ ] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — document `FAILED_EXPIRED` state; `IngestResult.warnings`; `HydeStatusDetail`/`RagFusionStatusDetail`
@@ -384,7 +388,7 @@ flowchart LR
 
 ### Phase 0 · Kickoff
 
-- [ ] **K1** — Agree contracts C1–C6 and scenarios S1–S25 + S12b with the team #team
+- [x] **K1** — Agree contracts C1–C6 and scenarios S1–S25 + S12b with the team #team
     - — · 1.0h
     - completes C1, C2, C3, C4, C5, C6
     - Tests
@@ -400,7 +404,7 @@ flowchart LR
         - #unit_test — `test_hyde_config_timeout_default_is_10` — asserts `HydeConfig().timeout_seconds == 10.0`
         - #unit_test — `test_rag_fusion_config_timeout_default_is_10` — asserts `RAGFusionConfig().timeout_seconds == 10.0`
 
-- [ ] **BE-2** — Add `rag_fusion_warning: str | None` to `SearchPipelineResult`; pipeline captures `asyncio.TimeoutError` OR any `Exception` from RAG Fusion and populates the field. HyDE timeout detection moves to the route in BE-3 (HyDE runs before `pipeline.search()` is called). Handle RAG Fusion failure in both `pipeline.search()` and `pipeline.search_many()`: `search_many` has two distinct failure paths — `generate_variants` failure at `pipeline.py:1091-1101` AND embedding gather failure at `pipeline.py:1107-1116` — both must set `rag_fusion_warning`. #backend-role
+- [ ] **BE-2** — Add `rag_fusion_warning: str | None` to `SearchPipelineResult`; pipeline captures `asyncio.TimeoutError` OR any `Exception` from RAG Fusion and populates the field. HyDE timeout detection moves to the route in BE-3 (HyDE runs before `pipeline.search()` is called). Handle RAG Fusion failure in both `pipeline.search()` and `pipeline.search_many()`: `search_many` has two distinct failure paths — `generate_variants` failure at `pipeline.py:1091-1101` AND embedding gather failure at `pipeline.py:1107-1116` — both must set `rag_fusion_warning`. **Critical implementation note:** `rag_fusion.generate_variants()` currently catches ALL exceptions internally (including `asyncio.TimeoutError` at `rag_fusion.py:162-168`) and returns `[]` — the pipeline's outer `except` at `pipeline.py:619` is dead code for these cases. BE-2 MUST change `generate_variants()` to re-raise `asyncio.TimeoutError` (and optionally other exceptions) so the pipeline can distinguish failure from empty-variant success. The integration test (`test_search_pipeline_rag_fusion_fallback_signal` with `monkeypatched generate_variants() raising asyncio.TimeoutError`) will verify this propagation. #backend-role
     - Use Cases · 3.0h
     - needs BE-1 · completes S3, S4
     - Tests
@@ -413,17 +417,19 @@ flowchart LR
 
 - [ ] **BE-3** — Add `expansion_used: bool` and `expansion_warning: str | None` to `SearchResponse` in `routes_search.py`. Route assembles `expansion_warning` from two sources: (a) HyDE failure detected at route level when `resolve_hyde_vector()` returns `(None, False)` and HyDE was requested — `expansion_warning = 'HyDE expansion failed'` (generic message; all HyDE failure modes produce identical `(None, False)` returns — timeout, API error, missing key, empty response are indistinguishable at this level); (b) pipeline's `rag_fusion_warning` when set. Since HyDE and RAG Fusion are mutually exclusive (the route suppresses HyDE when RAG Fusion is requested), `expansion_warning` will never contain both messages in the same response — only whichever source is non-None is used. Also add `expansion_used` and `expansion_warning` to `McpSearchResponse` and `SearchWithContextResponse` in `mcp_schemas.py`; wire them in the `search` and `search_with_context` tool closures in `mcp.py` using the same route-level assembly logic. Run the OpenAPI snapshot test (`uv run --python 3.12 pytest tests/server/test_openapi_snapshot.py -n0`) to verify BE-3 changes are consistent; do NOT regenerate yet — T-close does the final regeneration after all schema changes. #backend-role
     - Interface Adapters · 3.5h
-    - needs BE-2 · completes C1, S1, S2, S3, S4, S5
+    - needs BE-2 · completes C1, S1, S2, S3, S4, S4b, S5
     - Tests
         - #integration_test — `test_search_response_expansion_used_true_on_success` — TestClient POST /search with mocked HyDE success; assert `expansion_used=true`, `expansion_warning=null`
         - #integration_test — `test_search_response_expansion_warning_on_hyde_failure` — TestClient POST /search with `resolve_hyde_vector` returning `(None, False)` and HyDE requested; assert `expansion_used=false`, `expansion_warning='HyDE expansion failed'`
         - #integration_test — `test_search_response_expansion_used_or_logic` — POST /search with hyde=true; HyDE succeeds (`expansion_used=true`, `expansion_warning=null`); then POST with hyde=true and `resolve_hyde_vector` forced to return `(None, False)` (`expansion_used=false`, `expansion_warning='HyDE expansion failed'`); assert the derived field correctly reflects both true/false cases
         - #integration_test — `test_search_response_expansion_warning_on_rag_fusion_timeout` — TestClient POST /search with forced RAG Fusion timeout; assert `expansion_used=false`, `expansion_warning='RAG Fusion timed out'`
         - #integration_test — `test_search_response_no_expansion_fields_default` — POST /search without hyde/rag_fusion; assert `expansion_used=false`, `expansion_warning=null`
+        - #integration_test — `test_search_response_expansion_warning_on_rag_fusion_generic_error` — TestClient POST /search with forced generic Exception (not TimeoutError) from `generate_variants`; assert `expansion_used=false`, `expansion_warning='RAG Fusion expansion failed'`
+        - #integration_test — `test_mcp_search_tool_returns_expansion_fields` — invoke MCP `search` tool with forced HyDE failure (`resolve_hyde_vector` returning `(None, False)` with hyde requested); assert tool response contains `expansion_warning` and `expansion_used=false`
 
 - [ ] **T-1** — Verify end-to-end: POST /search expansion warning in all cases #tester-role
     - — · 1.5h
-    - needs BE-3 · completes S1, S2, S3, S4, S5
+    - needs BE-3 · completes S1, S2, S3, S4, S4b, S5
     - Note: TestClient-based tests are integration-level (in-process ASGI). Labeled #e2e_test here because they exercise the full application stack; true process-isolated e2e is not required for E0b.
     - Tests
         - #e2e_test — `test_e2e_search_expansion_failure_warning` — real app via TestClient; force `resolve_hyde_vector()` to return `(None, False)` with HyDE requested; assert response has `expansion_used=false`, `expansion_warning` is non-null (contains 'HyDE expansion failed')
@@ -444,9 +450,10 @@ flowchart LR
 
 - [ ] **BE-5** — Maintenance loop transitions FAILED jobs to `FAILED_EXPIRED` via `job_store.update_status()`; logs WARNING per transition. Restructures the age-filter in `_run_failed_ingest_retry`: when `job_created < cutoff` (aged-out), instead of `continue`, checks `retry_count` — if `>= max_attempts`: transition to `FAILED_EXPIRED`; if `< max_attempts`: **also** transition to `FAILED_EXPIRED` (job is too old to retry, must not be silently dropped). Only jobs WITHIN the age cutoff proceed to the normal retry path. **Implementation note:** move `retry_key` computation and `seen_keys` dedup check (`maintenance_loop.py:404-408`) to BEFORE the age filter. The restructured order is: (1) compute `retry_key`; (2) check `seen_keys` (dedup); (3) check `job_created < cutoff` — if aged-out, transition to `FAILED_EXPIRED` regardless of retry_count; (4) check `retry_count >= max_attempts` — if exhausted, transition to `FAILED_EXPIRED`; (5) otherwise: enqueue retry and mark `seen_keys`. Without this reordering, the age-filter branch cannot access retry counts. #backend-role
     - Use Cases · 2.5h
-    - needs BE-4 · completes S11, S12, S12b
+    - needs BE-4 · completes S11, S11b, S12, S12b
     - Tests
-        - #unit_test — `test_maintenance_loop_skips_failed_job_within_age_limit` — FAILED job within cutoff; assert still FAILED after pass
+        - #unit_test — `test_maintenance_loop_skips_failed_job_within_age_limit` — FAILED job within cutoff AND `retry_count < max_attempts`; assert still FAILED after pass (re-enqueued)
+        - #unit_test — `test_maintenance_loop_within_age_but_retries_exhausted_transitions_to_failed_expired` — FAILED job within cutoff AND `retry_count >= max_attempts`; assert transitions to FAILED_EXPIRED (S11b)
         - #unit_test — `test_maintenance_loop_transitions_failed_job_to_failed_expired` — FAILED job older than cutoff with max attempts reached; assert job transitions to FAILED_EXPIRED
         - #unit_test — `test_maintenance_loop_aged_job_under_max_attempts_transitions_to_failed_expired` — FAILED job older than cutoff with `retry_count=1`, `max_attempts=3`; assert transitions to FAILED_EXPIRED (cannot retry due to age)
         - #unit_test — `test_maintenance_loop_does_not_reenqueue_failed_expired` — FAILED_EXPIRED job; assert no new job created

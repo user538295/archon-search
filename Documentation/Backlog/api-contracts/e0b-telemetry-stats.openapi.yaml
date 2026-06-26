@@ -14,31 +14,22 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StatsResponse'
+                $ref: '#/components/schemas/StatsResponseE0bExtension'
 components:
   schemas:
-    StatsResponse:
+    StatsResponseE0bExtension:
       type: object
       required:
-        - schema_version
-        - enabled
-        - total_queries
-        - skipped_lines
         - truncated_count
       properties:
-        schema_version:
-          type: integer
-          format: int32
-        enabled:
-          type: boolean
-        total_queries:
-          type: integer
-          format: int32
-        skipped_lines:
-          type: integer
-          format: int32
         truncated_count:
           type: integer
           format: int32
-          description: 'L11: count of entries where result_doc_ids was truncated to fit MAX_ENTRY_BYTES.'
-      description: StatsResponse shape after E0b L11. Additive — no existing fields removed.
+          description: >-
+            L11: count of entries where result_doc_ids was truncated to fit MAX_ENTRY_BYTES.
+            Count logic must use `entry.truncated is True` (identity check) — TelemetryEntry.truncated
+            defaults to None (not False).
+      description: >-
+        E0b addition to StatsResponse (L11). Partial model — only the field added by E0b shown.
+        Full StatsResponse in archon_search/server/schemas_telemetry.py.
+        Implementers extend StatsResponse, not a new class.
