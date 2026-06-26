@@ -41,7 +41,7 @@ pytestmark = pytest.mark.integration
 # Constants
 # ---------------------------------------------------------------------------
 
-_TERMINAL = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
+_TERMINAL = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED, JobStatus.CANCELLED}
 
 # ---------------------------------------------------------------------------
 # Helpers

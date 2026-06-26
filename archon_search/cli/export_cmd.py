@@ -11,7 +11,7 @@ from archon_search.key_manager import load_or_generate_key
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
-_TERMINAL_STATUSES = {"DONE", "FAILED", "CANCELLED"}
+_TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
 
 
 def _resolve_api_key(api_key: str | None) -> str:

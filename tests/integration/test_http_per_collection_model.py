@@ -49,7 +49,7 @@ def _poll_job_until_terminal(
     Accepts DONE, FAILED, and CANCELLED as terminal states.
     """
     deadline = time.monotonic() + timeout_s
-    terminal = {"DONE", "FAILED", "CANCELLED"}
+    terminal = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
     while time.monotonic() < deadline:
         r = client.get(f"/jobs/{job_id}", headers=_auth(api_key))
         assert r.status_code == 200, f"GET /jobs/{job_id} returned {r.status_code}: {r.text}"

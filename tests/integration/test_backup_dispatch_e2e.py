@@ -62,7 +62,7 @@ def _poll_all_backup_jobs_done(
     Calls ``pytest.fail`` if any job has not reached terminal state within
     ``timeout_s`` seconds.
     """
-    terminal = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
+    terminal = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED, JobStatus.CANCELLED}
     deadline = time.monotonic() + timeout_s
 
     while time.monotonic() < deadline:

@@ -23,7 +23,7 @@ _CRASH_STATUSES = {JobStatus.RUNNING, JobStatus.CANCELLING}
 _EVICTION_DAYS = 7
 # Only terminal jobs are eligible for eviction; non-terminal jobs (PENDING, QUEUED,
 # RUNNING, CANCELLING) are retained regardless of age.
-_TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
+_TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED, JobStatus.CANCELLED}
 
 
 def _now_iso() -> str:

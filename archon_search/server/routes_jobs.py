@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Terminal statuses — DELETE is idempotent for these
-_TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
+_TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED, JobStatus.CANCELLED}
 # Active statuses — DELETE sets CANCELLING
 _ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.PENDING}
 

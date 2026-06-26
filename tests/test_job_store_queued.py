@@ -215,6 +215,15 @@ def test_evict_old_removes_cancelled(tmp_path: Path) -> None:
     assert store.get(jid) is None, "CANCELLED job older than 8 days MUST be evicted"
 
 
+def test_evict_old_removes_failed_expired(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "jobs.json"
+    jid = str(uuid.uuid4())
+    data = [_make_old_job_dict(jid, "FAILED_EXPIRED")]
+    jobs_path.write_text(json.dumps(data))
+    store = JobStore(path=jobs_path)
+    assert store.get(jid) is None, "FAILED_EXPIRED job older than 8 days MUST be evicted"
+
+
 # ---------------------------------------------------------------------------
 # update_progress
 # ---------------------------------------------------------------------------

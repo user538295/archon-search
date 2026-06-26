@@ -140,6 +140,17 @@ def test_delete_job_failed_returns_200(client: TestClient, tmp_store: JobStore) 
     assert data["status"] == JobStatus.FAILED.value
 
 
+def test_delete_job_failed_expired_returns_200(client: TestClient, tmp_store: JobStore) -> None:
+    """FAILED_EXPIRED is terminal — DELETE is idempotent, returns 200."""
+    job = tmp_store.create()
+    tmp_store.update(job.job_id, status=JobStatus.FAILED_EXPIRED)
+    response = client.delete(f"/jobs/{job.job_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job_id"] == job.job_id
+    assert data["status"] == JobStatus.FAILED_EXPIRED.value
+
+
 def test_delete_job_cancelling_returns_202(client: TestClient, tmp_store: JobStore) -> None:
     """CANCELLING job — already being cancelled, returns 202."""
     job = tmp_store.create()

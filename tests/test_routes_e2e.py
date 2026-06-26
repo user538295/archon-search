@@ -287,7 +287,7 @@ def test_H3_6_ingest_job_transitions_pending_to_done(tmp_path: Path) -> None:
         get_resp = client.get(f"/jobs/{job_id}")
         assert get_resp.status_code == 200
         status = get_resp.json()["status"]
-        if status in (JobStatus.DONE.value, JobStatus.FAILED.value, JobStatus.CANCELLED.value):
+        if status in (JobStatus.DONE.value, JobStatus.FAILED.value, JobStatus.FAILED_EXPIRED.value, JobStatus.CANCELLED.value):
             break
         import time
         time.sleep(0.05)
@@ -312,7 +312,7 @@ def test_H3_7_ingest_job_failure_sets_failed_status(tmp_path: Path) -> None:
     for _ in range(20):
         get_resp = client.get(f"/jobs/{job_id}")
         status = get_resp.json()["status"]
-        if status in (JobStatus.DONE.value, JobStatus.FAILED.value, JobStatus.CANCELLED.value):
+        if status in (JobStatus.DONE.value, JobStatus.FAILED.value, JobStatus.FAILED_EXPIRED.value, JobStatus.CANCELLED.value):
             break
         import time
         time.sleep(0.05)

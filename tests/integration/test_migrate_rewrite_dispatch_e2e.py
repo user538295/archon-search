@@ -25,7 +25,7 @@ from tests.integration.conftest import make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("benchmark")]
 
-_TERMINAL = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
+_TERMINAL = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED, JobStatus.CANCELLED}
 
 
 def _auth(api_key: str) -> dict[str, str]:

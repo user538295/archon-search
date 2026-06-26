@@ -162,7 +162,7 @@ def _poll_job_done(port: int, job_id: str, bearer: str, timeout_s: int) -> str:
     Raises ``TimeoutError`` if the job has not completed within *timeout_s*.
     """
     deadline = time.monotonic() + timeout_s
-    terminal = {"DONE", "FAILED", "CANCELLED"}
+    terminal = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
     while time.monotonic() < deadline:
         status_code, body, _ = _http_get(
             f"http://localhost:{port}/jobs/{job_id}", bearer=bearer

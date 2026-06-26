@@ -103,7 +103,7 @@ def _poll_job_store(job_store, job_id: str, *, timeout_s: float = 30.0):
     known Pydantic validation issue where ``result: dict`` serialises as 500
     through the REST endpoint.
     """
-    terminal = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
+    terminal = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED, JobStatus.CANCELLED}
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         job = job_store.get(job_id)

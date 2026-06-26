@@ -81,6 +81,16 @@
 - Action: For any format listed in `_OFFICE_EXTENSIONS` or falling through to `_parse_plain`, always run `uv run python -c "from markitdown import MarkItDown; r = MarkItDown().convert(path); print(repr(r.text_content[:100]))"` before writing documentation claims about output quality. Never infer quality from extension-set membership alone.
 - Confidence: high
 
+**2026-06-26 — E0b T-1: Dead config mutation in e2e tests using full mocks — remove or replace**
+- Observation: `test_e2e_search_expansion_failure_warning` set `cfg.hyde.enabled = True` with a comment "Enable HyDE so resolve_hyde_vector is called." Both claims were wrong: (a) the route calls `resolve_hyde_vector` whenever `body.rag_fusion=False`, regardless of `config.hyde.enabled`; (b) the test mocked `resolve_hyde_vector` entirely, so the config parameter is never read. The mutation had zero effect on test outcome. All 4 reviewers (3 DA + Brooks-Lint) independently caught this in Cycle 1.
+- Action: When mocking a function entirely (via `patch(..., new=AsyncMock(...))`), any test setup that would only matter if the real function ran is dead code. Remove it or replace the mock with a lower-level stub that lets config flow through.
+- Confidence: high
+
+**2026-06-26 — E0b T-1: Place all assertions inside `with patch(...)` when using synchronous TestClient**
+- Observation: The initial draft placed assertions outside the `with patch(...)` block. Since `TestClient.post()` is synchronous (the response is buffered by the time it returns), the assertions technically work outside the block, but this pattern is fragile — an async refactor or switch to `httpx.AsyncClient` would break it silently. All reviewers flagged it as a Major structural issue.
+- Action: When using `with patch(...)` in synchronous TestClient tests, always place the HTTP request call AND all assertions inside the `with` block. There is no downside; it eliminates fragility and makes the scope of the mock explicit.
+- Confidence: high
+
 **2026-06-26 — E0a BE-3: Extras names vs transitive packages are different things — don't confuse them in docs**
 - Observation: The initial extras note said `(e.g. mammoth for .docx, openpyxl for .xlsx, olefile for .msg)` calling these "extras declared in pyproject.toml." A DA reviewer correctly flagged that `mammoth`, `openpyxl`, `olefile` are transitive packages, not the extra names. The actual extras in pyproject.toml are `[docx]`, `[xlsx]`, `[outlook]`. Users grepping pyproject.toml for `mammoth` would find nothing. The fix: name the actual extras spec (`markitdown[docx,pptx,xls,xlsx,outlook]`) and describe the transitive packages as "required backends... transitively installed."
 - Action: When documenting dependency extras, name the extra spec exactly as it appears in pyproject.toml, and separately describe transitive packages as "transitively installed by" those extras. Never call a transitive package an "extra."

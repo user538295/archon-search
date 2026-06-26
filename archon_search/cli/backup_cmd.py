@@ -28,7 +28,7 @@ from archon_search.paths import get_data_dir
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
-_TERMINAL_STATUSES = {"DONE", "FAILED", "CANCELLED"}
+_TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
 _STATE_FILE_NAME = ".backup-state.json"
 
 

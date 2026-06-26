@@ -2438,6 +2438,22 @@
             "title": "Excluded Collections",
             "type": "array"
           },
+          "expansion_used": {
+            "default": false,
+            "title": "Expansion Used",
+            "type": "boolean"
+          },
+          "expansion_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expansion Warning"
+          },
           "hyde_applied": {
             "default": false,
             "title": "Hyde Applied",
