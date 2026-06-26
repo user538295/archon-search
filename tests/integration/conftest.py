@@ -38,6 +38,8 @@ def make_real_app(
     telemetry_enabled: bool = False,
     hash_doc_ids_enabled: bool = False,
     namespaces: dict[str, str] | None = None,
+    hyde_enabled: bool = False,
+    rag_fusion_enabled: bool = False,
 ) -> Iterator[tuple[TestClient, Any, str]]:
     """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
 
@@ -50,6 +52,8 @@ def make_real_app(
     Pass ``hash_doc_ids_enabled=True`` to enable HMAC hashing of result_doc_ids in telemetry
     (D8 / BE-4). Requires ``telemetry_enabled=True`` to produce JSONL output.
     Pass ``namespaces={'key_hex': 'ns-name', ...}`` for multi-namespace tests.
+    Pass ``hyde_enabled=True`` to enable HyDE in config (E0b / BE-8, T-3).
+    Pass ``rag_fusion_enabled=True`` to enable RAG Fusion in config (E0b / BE-8, T-3).
     The TestClient lifespan (startup + shutdown) is managed by the context block.
     """
     import secrets
@@ -86,6 +90,12 @@ def make_real_app(
 
     if namespaces is not None:
         cfg.namespaces = namespaces
+
+    if hyde_enabled:
+        cfg.hyde.enabled = True
+
+    if rag_fusion_enabled:
+        cfg.rag_fusion.enabled = True
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     scheduler = JobScheduler(

@@ -2,6 +2,16 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0b BE-10: `type(j) is IngestJob` subclass exclusion must always have a negative-case test**
+- Observation: All 4 reviewers (3 DA + Brooks-Lint) independently flagged that the `type(j) is IngestJob` predicate — the key distinguishing logic — had zero test coverage in the negative direction. `_seed_failed_expired_job` only calls `job_store.create()` which returns base `IngestJob`, so no test could catch a regression to `isinstance`. A fix agent added `test_status_failed_expired_count_excludes_export_jobs` (seeds an `ExportJob` with `FAILED_EXPIRED`, asserts count=1 not 2). Without this test, replacing `type(j) is IngestJob` with `isinstance(j, IngestJob)` would silently pass all tests while counting ExportJob failures.
+- Action: Whenever a count/filter uses an exact-type predicate (`type(j) is X`), always add a test that seeds a subclass instance with the target status and asserts it is NOT counted. The predicate is the whole point — test its negative direction explicitly.
+- Confidence: high
+
+**2026-06-26 — E0b BE-10: Namespace isolation tests must be two-sided**
+- Observation: The initial namespace isolation test seeded 2 jobs in nsA and 3 in nsB, then asserted nsA saw count=2. All reviewers noted the test is one-sided — a constant-return implementation that always returned 2 would pass. Fix: add a second client (nsB) and assert count=3. This turns the test from "nsA doesn't see too many" to "each namespace sees exactly its own jobs."
+- Action: For any namespace-scoped count test, always assert both namespaces return their expected distinct values. One-sided assertions cannot detect constant-return bugs.
+- Confidence: high
+
 **2026-06-26 — E0b BE-9: `truncated_count` — `is True` identity check is the correct pattern for `bool | None` optional fields**
 - Observation: `TelemetryEntry.truncated` is `bool | None` defaulting to `None`. Using `entry.truncated is True` (identity check) correctly excludes both `None` (field absent / legacy entries) and `False` (explicitly not truncated). A truthiness check (`if entry.truncated`) would behave the same for `True`/`None` but documents the wrong intent. All 4 reviewers confirmed the identity check is correct and asked for a `truncated=False` test to lock down the three-state contract.
 - Action: For any `bool | None` field where `None` and `False` are semantically different and must both be excluded, use `is True`. Always add a test for all three states (`True` counted, `False` excluded, `None` excluded) — reviewers will flag a two-test suite as a coverage gap.

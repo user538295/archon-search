@@ -520,13 +520,13 @@ flowchart LR
         - [x] #integration_test — `test_status_failed_expired_count_namespace_isolated` — seed 2 FAILED_EXPIRED jobs in namespace-A and 3 in namespace-B; GET /status as namespace-A; assert `failed_expired_ingest_count=2`
         - [x] #integration_test — `test_jobs_filter_by_failed_expired_status` — TestClient GET /jobs?status=FAILED_EXPIRED; assert only FAILED_EXPIRED jobs returned
 
-- [ ] **T-3** — Verify end-to-end: GET /status key availability, failed_expired_count, and GET /telemetry/stats truncated_count #tester-role
+- [x] **T-3** — Verify end-to-end: GET /status key availability, failed_expired_count, and GET /telemetry/stats truncated_count #tester-role
     - — · 2.0h
     - needs BE-8, BE-9, BE-10 · completes S6, S7, S13, S14, S16, S17
     - Tests
-        - #e2e_test — `test_e2e_status_key_available_false` — real app, no API key; assert `hyde.key_available=false`
-        - #e2e_test — `test_e2e_status_failed_expired_count` — seed FAILED_EXPIRED job; assert `failed_expired_ingest_count >= 1`
-        - #e2e_test — `test_e2e_telemetry_stats_truncated_count` — write truncated telemetry entry; GET /telemetry/stats; assert `truncated_count >= 1`
+        - [x] #e2e_test — `test_e2e_status_key_available_false` — real app, no API key; assert `hyde.key_available=false`
+        - [x] #e2e_test — `test_e2e_status_failed_expired_count` — seed FAILED_EXPIRED job; assert `failed_expired_ingest_count >= 1`
+        - [x] #e2e_test — `test_e2e_telemetry_stats_truncated_count` — write truncated telemetry entry; GET /telemetry/stats; assert `truncated_count >= 1`
 
 ---
 
