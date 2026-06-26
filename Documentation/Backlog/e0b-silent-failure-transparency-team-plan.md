@@ -481,7 +481,7 @@ flowchart LR
         - #integration_test — `test_async_ingest_warnings_in_job_result` — POST /ingest with oversized ACL sidecar; poll `GET /jobs/{id}`; assert job result contains warnings
         - #integration_test — `test_mcp_ingest_file_tool_returns_warnings_for_oversized_sidecar` — call MCP `ingest_file` tool with oversized ACL sidecar; assert tool response dict contains `warnings` field
 
-- [ ] **T-2** — Verify end-to-end: ingest with oversized ACL sidecar returns warning #tester-role
+- [x] **T-2** — Verify end-to-end: ingest with oversized ACL sidecar returns warning #tester-role
     - — · 1.5h
     - needs BE-7 · completes S18, S19, S20
     - Note: TestClient-based tests are integration-level (in-process ASGI). Labeled #e2e_test here because they exercise the full application stack; true process-isolated e2e is not required for E0b.

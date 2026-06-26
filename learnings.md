@@ -156,6 +156,16 @@
 - Action: When adding a new scenario to a plan, always propagate it to all four locations in the same edit. Use a mental checklist: scenario table → allocation table → task `completes` → "Done when" checklist.
 - Confidence: high
 
+**2026-06-26 — E0b BE-7: MCP responses are SSE-formatted — add Accept header and parse `data:` lines**
+- Observation: MCP tool-call responses are `text/event-stream` (SSE), not plain JSON. Without `"Accept": "application/json, text/event-stream"` on the HTTP request, the server returns 406 Not Acceptable. Even with the header, calling `response.json()` on the raw body fails — the payload is a `data: {...}` prefixed SSE line. Must parse manually: iterate `response.text.splitlines()`, find lines starting with `"data: "`, and `json.loads(line[len("data: "):])`
+- Action: For any integration test hitting the MCP endpoint directly (not via MCP client), always (1) include `"Accept": "application/json, text/event-stream"` in the headers dict, and (2) parse the SSE response by splitting on `"data: "` prefix rather than calling `.json()`.
+- Confidence: high
+
+**2026-06-26 — E0b BE-7: Use `list[str] | None` sentinel to distinguish dispatch path from test-seam path in job tasks**
+- Observation: `_default_ingest_task` has two branches: the real dispatch path (calls `_dispatch_ingest()`) and a `pipeline_fn` test-seam path. Initial implementation set `ingest_warnings = []` and overwrote `job.result` on BOTH paths, corrupting pre-existing test assertions. Fix: initialize `ingest_warnings: list[str] | None = None`; only the dispatch path sets it to a real list; the `_finalize_ingest_done()` helper only calls `store.update(..., result={"warnings": ingest_warnings})` when `ingest_warnings is not None`.
+- Action: When adding job-result storage to a task coroutine that has a test-seam bypass (`pipeline_fn` override), use `None` as sentinel (not `[]`) and guard the `store.update()` on `is not None`. Otherwise the bypass path silently overwrites result state set by the test fixture.
+- Confidence: high
+
 **2026-06-26 — E0a K1: `pipeline.py:27` is an import line, not the call site**
 - Observation: The plan cited `pipeline.py:27` as "the caller" for the ParseError seam. Line 27 is `from archon_search.parser import DocumentParser, ParseError`. The actual call/handler is `pipeline.py:296` (`await self._parser.parse(path)`) inside a `try/except ParseError` block. Brooks-Lint caught this as Moderate in Cycle 2. Always verify line citations by reading the actual file.
 - Action: When writing a plan that references a specific line number as a "caller" or "handler", verify by reading that exact line. Import lines are not callers.
