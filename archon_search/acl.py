@@ -116,37 +116,45 @@ def parse_acl_value(raw: Any, doc_path: str) -> list[str] | None:
     return None
 
 
-def read_acl_sidecar(doc_path: Path) -> list[str] | None:
+def read_acl_sidecar(doc_path: Path) -> tuple[list[str] | None, list[str]]:
     """Read ACL from a sidecar file (<doc_path>.acl).
 
-    Returns:
-        - None: no sidecar, empty sidecar, or unreadable (fail-open)
-        - []: deny-all sentinel found
-        - [str, ...]: list of valid namespace names
+    Returns a tuple of ``(acl_entries, warnings)``:
+
+    - ``acl_entries``:
+        - ``None``: no sidecar, empty sidecar, or unreadable (fail-open)
+        - ``[]``: deny-all sentinel found
+        - ``[str, ...]``: list of valid namespace names
+    - ``warnings``: list of human-readable warning strings; non-empty only when
+      the sidecar exists but is skipped due to exceeding the 64 KB size limit.
     """
     sidecar = doc_path.parent / (doc_path.name + ".acl")
 
     if not sidecar.exists():
-        return None
+        return None, []
 
     if sidecar.is_symlink():
         logger.warning("ACL sidecar %s is a symlink; ignoring", sidecar)
-        return None
+        return None, []
 
     raw_bytes = sidecar.read_bytes()
     if len(raw_bytes) > _ACL_SIDECAR_MAX_BYTES:
+        warning_msg = (
+            f"ACL sidecar {sidecar} exceeds {_ACL_SIDECAR_MAX_BYTES // 1024} KB limit "
+            f"({len(raw_bytes)} bytes); ACL not applied"
+        )
         logger.warning(
             "ACL sidecar %s exceeds %d bytes; ignoring",
             sidecar,
             _ACL_SIDECAR_MAX_BYTES,
         )
-        return None
+        return None, [warning_msg]
 
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError:
         logger.warning("ACL sidecar %s is not valid UTF-8; ignoring", sidecar)
-        return None
+        return None, []
 
     # Strip UTF-8 BOM if present
     text = text.lstrip("﻿")
@@ -155,7 +163,7 @@ def read_acl_sidecar(doc_path: Path) -> list[str] | None:
     non_empty = [line for line in lines if line]
 
     if not non_empty:
-        return None
+        return None, []
 
     first = non_empty[0]
     if first.upper() == "DENY-ALL":
@@ -164,7 +172,7 @@ def read_acl_sidecar(doc_path: Path) -> list[str] | None:
                 "ACL sidecar %s has content after 'deny-all' sentinel; extra lines ignored",
                 sidecar,
             )
-        return []
+        return [], []
 
     valid: list[str] = []
     for line in non_empty:
@@ -175,7 +183,7 @@ def read_acl_sidecar(doc_path: Path) -> list[str] | None:
                 "ACL sidecar %s: invalid namespace name %r (dropped)", sidecar, line
             )
 
-    return valid if valid else None
+    return (valid if valid else None), []
 
 
 _T = TypeVar("_T")
@@ -214,7 +222,9 @@ def apply_acl_filter(
     return passing, dropped
 
 
-def resolve_acl(doc_path: Path, front_matter_acl: Any) -> list[str] | None:
+def resolve_acl(
+    doc_path: Path, front_matter_acl: Any
+) -> tuple[list[str] | None, list[str]]:
     """Resolve the effective ACL for a document.
 
     Precedence: front-matter _acl key > sidecar file.
@@ -225,9 +235,14 @@ def resolve_acl(doc_path: Path, front_matter_acl: Any) -> list[str] | None:
             the key was absent.
 
     Returns:
-        - None: fail-open (no ACL restriction)
-        - []: deny-all
-        - [str, ...]: allowed namespace names
+        A tuple of ``(acl_entries, warnings)``:
+
+        - ``acl_entries``:
+            - ``None``: fail-open (no ACL restriction)
+            - ``[]``: deny-all
+            - ``[str, ...]``: allowed namespace names
+        - ``warnings``: list of human-readable warning strings; non-empty only
+          when the sidecar exceeds the 64 KB size limit.
     """
     sidecar = doc_path.parent / (doc_path.name + ".acl")
 
@@ -239,6 +254,6 @@ def resolve_acl(doc_path: Path, front_matter_acl: Any) -> list[str] | None:
                 sidecar,
                 doc_path,
             )
-        return parse_acl_value(front_matter_acl, str(doc_path))
+        return parse_acl_value(front_matter_acl, str(doc_path)), []
 
     return read_acl_sidecar(doc_path)

@@ -138,3 +138,4 @@ class IngestResult:
     status: str
     error: str | None = None
     needs_recompute: bool = False
+    warnings: list[str] = field(default_factory=list)

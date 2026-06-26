@@ -170,7 +170,9 @@ def test_read_acl_sidecar_namespace_list(tmp_path: pytest.TempPathFactory) -> No
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns1\nns2\n")
-    assert read_acl_sidecar(doc) == ["ns1", "ns2"]
+    acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries == ["ns1", "ns2"]
+    assert warnings == []
 
 
 def test_read_acl_sidecar_deny_all_sentinel(tmp_path: pytest.TempPathFactory) -> None:
@@ -178,7 +180,9 @@ def test_read_acl_sidecar_deny_all_sentinel(tmp_path: pytest.TempPathFactory) ->
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("deny-all\n")
-    assert read_acl_sidecar(doc) == []
+    acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
+    assert warnings == []
 
 
 def test_read_acl_sidecar_deny_all_case_insensitive(tmp_path: pytest.TempPathFactory) -> None:
@@ -186,7 +190,9 @@ def test_read_acl_sidecar_deny_all_case_insensitive(tmp_path: pytest.TempPathFac
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("DENY-ALL\n")
-    assert read_acl_sidecar(doc) == []
+    acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
+    assert warnings == []
 
 
 def test_read_acl_sidecar_empty_returns_none(tmp_path: pytest.TempPathFactory) -> None:
@@ -194,13 +200,17 @@ def test_read_acl_sidecar_empty_returns_none(tmp_path: pytest.TempPathFactory) -
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("   \n\n  \n")
-    assert read_acl_sidecar(doc) is None
+    acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries is None
+    assert warnings == []
 
 
 def test_read_acl_sidecar_absent_returns_none(tmp_path: pytest.TempPathFactory) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text("")
-    assert read_acl_sidecar(doc) is None
+    acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries is None
+    assert warnings == []
 
 
 def test_read_acl_sidecar_size_limit(
@@ -211,8 +221,9 @@ def test_read_acl_sidecar_size_limit(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"ns1\n" * 20000)  # > 64 KB
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = read_acl_sidecar(doc)
-    assert result is None
+        acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries is None
+    assert len(warnings) == 1
     assert caplog.records
 
 
@@ -221,7 +232,9 @@ def test_read_acl_sidecar_bom_stripped(tmp_path: pytest.TempPathFactory) -> None
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"\xef\xbb\xbfns1\n")  # UTF-8 BOM + ns1
-    assert read_acl_sidecar(doc) == ["ns1"]
+    acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries == ["ns1"]
+    assert warnings == []
 
 
 def test_read_acl_sidecar_invalid_lines_dropped(
@@ -232,8 +245,8 @@ def test_read_acl_sidecar_invalid_lines_dropped(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns1\n!!!bad!!!\n")
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = read_acl_sidecar(doc)
-    assert result == ["ns1"]
+        acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries == ["ns1"]
     assert caplog.records
 
 
@@ -247,8 +260,8 @@ def test_read_acl_sidecar_symlink_returns_none(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.symlink_to(real_file)
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = read_acl_sidecar(doc)
-    assert result is None
+        acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries is None
     assert caplog.records
 
 
@@ -260,8 +273,8 @@ def test_read_acl_sidecar_deny_all_with_trailing_lines(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("deny-all\nns1\nns2\n")
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = read_acl_sidecar(doc)
-    assert result == []
+        acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries == []
     assert caplog.records
 
 
@@ -273,8 +286,8 @@ def test_read_acl_sidecar_invalid_utf8_returns_none(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"\xff\xfe invalid bytes")
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = read_acl_sidecar(doc)
-    assert result is None
+        acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries is None
     assert caplog.records
 
 
@@ -291,8 +304,9 @@ def test_resolve_acl_front_matter_takes_precedence(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns2\n")
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = resolve_acl(doc, "ns1")
-    assert result == ["ns1"]
+        acl_entries, warnings = resolve_acl(doc, "ns1")
+    assert acl_entries == ["ns1"]
+    assert warnings == []
     assert caplog.records  # warning about both existing
 
 
@@ -301,8 +315,9 @@ def test_resolve_acl_sidecar_used_when_no_front_matter(tmp_path: pytest.TempPath
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns2\n")
-    result = resolve_acl(doc, None)
-    assert result == ["ns2"]
+    acl_entries, warnings = resolve_acl(doc, None)
+    assert acl_entries == ["ns2"]
+    assert warnings == []
 
 
 def test_resolve_acl_explicit_null_front_matter_falls_through_to_sidecar(
@@ -312,8 +327,9 @@ def test_resolve_acl_explicit_null_front_matter_falls_through_to_sidecar(
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns3\n")
-    result = resolve_acl(doc, None)
-    assert result == ["ns3"]
+    acl_entries, warnings = resolve_acl(doc, None)
+    assert acl_entries == ["ns3"]
+    assert warnings == []
 
 
 # ---------------------------------------------------------------------------
@@ -390,3 +406,107 @@ def test_apply_acl_filter_all_denied() -> None:
     result, dropped = apply_acl_filter(items, lambda x: x["acl"], "ns1")
     assert result == []
     assert dropped is True
+
+
+# ---------------------------------------------------------------------------
+# BE-6: read_acl_sidecar returns (acl, warnings) tuple
+# ---------------------------------------------------------------------------
+
+
+def test_read_acl_sidecar_oversized_returns_warning(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Sidecar > 64 KB must return (None, [warning_str]) with message naming the file and limit."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_bytes(b"ns1\n" * 20000)  # > 64 KB
+    acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries is None
+    assert len(warnings) == 1
+    assert "64" in warnings[0]  # mentions the limit
+    assert str(sidecar) in warnings[0] or sidecar.name in warnings[0]  # names the file
+
+
+def test_read_acl_sidecar_normal_returns_no_warning(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Sidecar ≤ 64 KB must return (acl_list, []) with empty warnings."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("ns1\nns2\n")
+    acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries == ["ns1", "ns2"]
+    assert warnings == []
+
+
+def test_read_acl_sidecar_absent_returns_no_warning(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """No sidecar must return (None, []) with empty warnings."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    acl_entries, warnings = read_acl_sidecar(doc)
+    assert acl_entries is None
+    assert warnings == []
+
+
+def test_resolve_acl_sidecar_path_returns_tuple(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """resolve_acl() via sidecar path returns tuple[list[str] | None, list[str]] with empty warnings."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("ns1\n")
+    result = resolve_acl(doc, None)
+    assert isinstance(result, tuple)
+    acl_entries, warnings = result
+    assert acl_entries == ["ns1"]
+    assert warnings == []
+
+
+def test_resolve_acl_frontmatter_path_returns_tuple(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """resolve_acl() via front-matter path returns (parsed_acl, []) tuple."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    result = resolve_acl(doc, "ns1")
+    assert isinstance(result, tuple)
+    acl_entries, warnings = result
+    assert acl_entries == ["ns1"]
+    assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# BE-6: IngestResult.warnings default empty list
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_acl_oversized_sidecar_propagates_warning(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """resolve_acl() must propagate the oversized-sidecar warning from read_acl_sidecar()."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_bytes(b"ns1\n" * 20000)  # > 64 KB
+    acl_entries, warnings = resolve_acl(doc, None)
+    assert acl_entries is None
+    assert len(warnings) == 1
+    assert "64" in warnings[0]
+
+
+# ---------------------------------------------------------------------------
+# BE-6: IngestResult.warnings default empty list
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_result_warnings_default_empty() -> None:
+    """IngestResult.warnings must default to empty list."""
+    from archon_search._types import IngestResult
+
+    result = IngestResult(doc_id="abc123", chunks_created=1, status="ok")
+    assert result.warnings == []
