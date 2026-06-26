@@ -2,6 +2,16 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0b BE-9: `truncated_count` — `is True` identity check is the correct pattern for `bool | None` optional fields**
+- Observation: `TelemetryEntry.truncated` is `bool | None` defaulting to `None`. Using `entry.truncated is True` (identity check) correctly excludes both `None` (field absent / legacy entries) and `False` (explicitly not truncated). A truthiness check (`if entry.truncated`) would behave the same for `True`/`None` but documents the wrong intent. All 4 reviewers confirmed the identity check is correct and asked for a `truncated=False` test to lock down the three-state contract.
+- Action: For any `bool | None` field where `None` and `False` are semantically different and must both be excluded, use `is True`. Always add a test for all three states (`True` counted, `False` excluded, `None` excluded) — reviewers will flag a two-test suite as a coverage gap.
+- Confidence: high
+
+**2026-06-26 — E0b BE-9: Adding a field to `StatsResponse` breaks the OpenAPI snapshot — regenerate in the same task**
+- Observation: Adding `truncated_count: int = 0` to `StatsResponse` broke `test_openapi_spec_matches_snapshot` immediately. Per the D9 BE-9 learning (already in file), regenerate with `uv run --python 3.12 pytest tests/server/test_openapi_snapshot.py --update-openapi-snapshot` in the same commit. This is confirmed: additive fields with defaults do NOT require a `schema_version` bump (the architecture DA said this, confirmed by the project's existing pattern — no bump has ever been done for additive fields).
+- Action: Any additive Pydantic field on a response model that appears in the OpenAPI surface requires regenerating `tests/server/openapi_snapshot.json` (Python 3.12) in the same commit. No `schema_version` bump needed for additive backward-compatible fields.
+- Confidence: high
+
 **2026-06-26 — E0b BE-5: Use `JobStore.transition()` not `update()` for state transitions in maintenance loops**
 - Observation: Initial BE-5 implementation called `job_store.update(job_id, status=FAILED_EXPIRED)` which raises `KeyError` if a job is evicted between `list()` and `update()` — this would abort all remaining jobs in the pass. `JobStore.transition(job_id, {FAILED}, FAILED_EXPIRED)` returns `None` instead of raising, preventing the abort. All 4 reviewers (3 DA + Brooks-Lint) independently caught this in Cycle 1.
 - Action: For any status transition in a batch loop, use `transition()` not `update()`. Check the return for `None` (evicted/already-changed) and log DEBUG. This is exactly why `transition()` exists. The `create()` call in the same loop was already guarded with try/except — always apply the same defensive pattern to sibling write operations.
