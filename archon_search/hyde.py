@@ -64,6 +64,14 @@ class HyDEGenerator:
         self._warned_no_key: bool = False
         self._rate_limit_warned_at: float = 0.0
 
+    def is_key_available(self) -> bool:
+        """Return ``True`` when ``ANTHROPIC_API_KEY`` is set in the environment at call time.
+
+        Checked at call time (not at construction) so the status endpoint reflects
+        the live environment, not the state at startup.
+        """
+        return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
     async def generate(self, query: str) -> list[float] | None:
         """Generate a hypothetical document embedding for the given query.
 
@@ -98,7 +106,7 @@ class HyDEGenerator:
             self._rpm_tokens -= 1
 
         # API key check (one-time warning)
-        if not os.environ.get("ANTHROPIC_API_KEY"):
+        if not self.is_key_available():
             if not self._warned_no_key:
                 _logger.warning(
                     "ANTHROPIC_API_KEY is not set; HyDE will not run (fp=%s)",

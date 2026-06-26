@@ -205,6 +205,32 @@ class McpStatusDetail(BaseModel):
     )
 
 
+class HydeStatusDetail(BaseModel):
+    """HyDE feature status sub-object for GET /status (E0b BE-8 / C2).
+
+    Present only when ``[hyde] enabled = true``; the parent ``hyde`` field
+    being ``null`` signals that HyDE is not configured.
+
+    ``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the
+    server's environment at request time.
+    """
+
+    key_available: bool
+
+
+class RagFusionStatusDetail(BaseModel):
+    """RAG Fusion feature status sub-object for GET /status (E0b BE-8 / C2).
+
+    Present only when ``[rag_fusion] enabled = true``; the parent ``rag_fusion``
+    field being ``null`` signals that RAG Fusion is not configured.
+
+    ``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the
+    server's environment at request time.
+    """
+
+    key_available: bool
+
+
 class StatusResponse(BaseModel):
     running: bool
     pid: int
@@ -223,6 +249,10 @@ class StatusResponse(BaseModel):
     telemetry: TelemetryStatusDetail | None = None
     # D9 BE-8 — MCP status field (additive, nullable)
     mcp: McpStatusDetail | None = None
+    # E0b BE-8 — HyDE key availability (additive, nullable); null when hyde.enabled=false
+    hyde: HydeStatusDetail | None = None
+    # E0b BE-8 — RAG Fusion key availability (additive, nullable); null when rag_fusion.enabled=false
+    rag_fusion: RagFusionStatusDetail | None = None
 
 
 class IndexingStateCollectionEntry(BaseModel):

@@ -31,16 +31,22 @@ from pathlib import Path
 
 import pytest
 
-# Matches an if-statement that guards on ANTHROPIC_API_KEY via os.environ.get.
-# - ``^\s*if\b`` — line must start with ``if`` (possibly indented); rules out ``#``-prefixed comment lines.
-# - ``[^#\n]*`` — no ``#`` before the key name (prevents "# if os.environ.get(...)" matching).
-# - Tolerates either quote style around the key name.
-# - Only ``os.environ.get()`` form is recognised by design; ``os.getenv()`` or bracket
-#   access would cause this guard test to fail, which is the correct signal to review the change.
+# Matches an if-statement that guards on ANTHROPIC_API_KEY.
+# Accepted forms:
+#   - ``if ... os.environ.get("ANTHROPIC_API_KEY"`` — direct env-var check (original C18 form)
+#   - ``if ... self.is_key_available()`` — delegation to the canonical method (E0b BE-8 form;
+#     ``is_key_available()`` calls ``os.environ.get("ANTHROPIC_API_KEY")`` internally)
+# Rules:
+# - ``^\s*if\b`` — line must start with ``if`` (possibly indented); rules out ``#``-prefixed comments.
+# - ``[^#\n]*`` — no ``#`` before the guard expression.
+# - Only ``os.environ.get()`` or ``self.is_key_available()`` are recognised by design;
+#   ``os.getenv()``, bracket access, or other helpers would cause this guard test to fail,
+#   which is the correct signal to review the change.
 # install.py and cli/install_cmd.py also reference ANTHROPIC_API_KEY but for install-wizard
 # UI validation, not for runtime SDK timeout prevention — they are intentionally excluded.
 _GUARD_PATTERN = re.compile(
-    r"^\s*if\b[^#\n]*\bos\.environ\.get\(['\"]ANTHROPIC_API_KEY['\"]",
+    r"^\s*if\b[^#\n]*(?:os\.environ\.get\(['\"]ANTHROPIC_API_KEY['\"]"
+    r"|self\.is_key_available\(\))",
     re.MULTILINE,
 )
 
@@ -61,6 +67,20 @@ def test_guard_pattern_matches_double_quote_guard() -> None:
     line = '    if not os.environ.get("ANTHROPIC_API_KEY"):\n'
     assert _GUARD_PATTERN.search(line) is not None, (
         "_GUARD_PATTERN failed to match the canonical double-quote guard line"
+    )
+
+
+def test_guard_pattern_matches_is_key_available_delegation() -> None:
+    """_GUARD_PATTERN must fire on the is_key_available() delegation form (E0b BE-8).
+
+    When ``generate()`` delegates the key check to ``self.is_key_available()``,
+    the early-exit guard still exists — it is just behind a method call.  The
+    pattern must accept this form so that refactoring the inline guard to use
+    the canonical method does not falsely signal a C18 regression.
+    """
+    line = "        if not self.is_key_available():\n"
+    assert _GUARD_PATTERN.search(line) is not None, (
+        "_GUARD_PATTERN failed to match the self.is_key_available() delegation form"
     )
 
 

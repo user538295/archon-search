@@ -1093,6 +1093,20 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "HydeStatusDetail": {
+        "description": "HyDE feature status sub-object for GET /status (E0b BE-8 / C2).\n\nPresent only when ``[hyde] enabled = true``; the parent ``hyde`` field\nbeing ``null`` signals that HyDE is not configured.\n\n``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the\nserver's environment at request time.",
+        "properties": {
+          "key_available": {
+            "title": "Key Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key_available"
+        ],
+        "title": "HydeStatusDetail",
+        "type": "object"
+      },
       "ImportRequest": {
         "properties": {
           "force_overwrite": {
@@ -2032,6 +2046,20 @@
         "title": "PatchCollectionBody",
         "type": "object"
       },
+      "RagFusionStatusDetail": {
+        "description": "RAG Fusion feature status sub-object for GET /status (E0b BE-8 / C2).\n\nPresent only when ``[rag_fusion] enabled = true``; the parent ``rag_fusion``\nfield being ``null`` signals that RAG Fusion is not configured.\n\n``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the\nserver's environment at request time.",
+        "properties": {
+          "key_available": {
+            "title": "Key Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key_available"
+        ],
+        "title": "RagFusionStatusDetail",
+        "type": "object"
+      },
       "RagFusionSubQueryResult": {
         "additionalProperties": false,
         "properties": {
@@ -2799,6 +2827,16 @@
             "title": "Collections Schema Behind",
             "type": "integer"
           },
+          "hyde": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HydeStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "maintenance": {
             "anyOf": [
               {
@@ -2832,6 +2870,16 @@
           "pid": {
             "title": "Pid",
             "type": "integer"
+          },
+          "rag_fusion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RagFusionStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "readiness": {
             "anyOf": [

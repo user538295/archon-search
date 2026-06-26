@@ -80,6 +80,14 @@ class RAGFusionGenerator:
         self._warned_no_key: bool = False
         self._rate_limit_warned_at: float = 0.0
 
+    def is_key_available(self) -> bool:
+        """Return ``True`` when ``ANTHROPIC_API_KEY`` is set in the environment at call time.
+
+        Checked at call time (not at construction) so the status endpoint reflects
+        the live environment, not the state at startup.
+        """
+        return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
     def _validate_variant(self, text: str) -> str | None:
         """Return stripped text if valid, else None.
 
@@ -135,7 +143,7 @@ class RAGFusionGenerator:
             self._rpm_tokens -= 1
 
         # API key check (one-time warning)
-        if not os.environ.get("ANTHROPIC_API_KEY"):
+        if not self.is_key_available():
             if not self._warned_no_key:
                 _logger.warning(
                     "ANTHROPIC_API_KEY is not set; RAG Fusion will not run (fp=%s)",

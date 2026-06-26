@@ -17,9 +17,11 @@ from archon_search.server.schemas import (
     CollectionBackupStatus,
     CollectionHealthEntry,
     ErrorDetail,
+    HydeStatusDetail,
     MaintenanceStatusDetail,
     McpStatusDetail,
     ModelValidationStatus,
+    RagFusionStatusDetail,
     StatusCollectionEntry,
     StatusResponse,
     TelemetryStatusDetail,
@@ -115,6 +117,8 @@ async def status(request: Request) -> StatusResponse:
     model_validation = _build_model_validation_status(request)
     telemetry_detail = _build_telemetry_status(request, config)
     mcp_detail = _build_mcp_status(request, config)
+    hyde_detail = _build_hyde_status(request, config)
+    rag_fusion_detail = _build_rag_fusion_status(request, config)
     return StatusResponse(
         running=True,
         pid=pid,
@@ -128,6 +132,8 @@ async def status(request: Request) -> StatusResponse:
         model_validation=model_validation,
         telemetry=telemetry_detail,
         mcp=mcp_detail,
+        hyde=hyde_detail,
+        rag_fusion=rag_fusion_detail,
     )
 
 
@@ -151,6 +157,38 @@ def _build_mcp_status(request: Request, config: SearchConfig) -> McpStatusDetail
     bound = getattr(request.app.state, "mcp_bound", False)
     bind_address = f"{config.host}:{config.port}/mcp" if bound else None
     return McpStatusDetail(enabled=True, bind_address=bind_address)
+
+
+def _build_hyde_status(request: Request, config: SearchConfig) -> HydeStatusDetail | None:
+    """Return the HyDE status sub-object when ``hyde.enabled = true``, or ``None`` otherwise (E0b BE-8 / C2).
+
+    ``key_available`` delegates to ``HyDEGenerator.is_key_available()`` so the
+    env-var check stays in the Use Cases layer.  The generator is unconditionally
+    instantiated in ``create_app``; the ``getattr`` guard keeps the endpoint
+    resilient to alternative app factories used in tests.
+    """
+    if not config.hyde.enabled:
+        return None
+    generator = getattr(request.app.state, "hyde_generator", None)
+    if generator is None:
+        return None
+    return HydeStatusDetail(key_available=generator.is_key_available())
+
+
+def _build_rag_fusion_status(request: Request, config: SearchConfig) -> RagFusionStatusDetail | None:
+    """Return the RAG Fusion status sub-object when ``rag_fusion.enabled = true``, or ``None`` otherwise (E0b BE-8 / C2).
+
+    ``key_available`` delegates to ``RAGFusionGenerator.is_key_available()`` so the
+    env-var check stays in the Use Cases layer.  The generator is unconditionally
+    instantiated in ``create_app``; the ``getattr`` guard keeps the endpoint
+    resilient to alternative app factories used in tests.
+    """
+    if not config.rag_fusion.enabled:
+        return None
+    generator = getattr(request.app.state, "rag_fusion_generator", None)
+    if generator is None:
+        return None
+    return RagFusionStatusDetail(key_available=generator.is_key_available())
 
 
 def _build_model_validation_status(request: Request) -> ModelValidationStatus | None:
