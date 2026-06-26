@@ -1205,6 +1205,25 @@ def _install_code_extra(dry_run: bool = False) -> None:
     _install_extra("archon-search[code]", "code enrichment", dry_run)
 
 
+def _create_secrets_env(secrets_path: Path, *, dry_run: bool = False) -> bool:
+    """Create *secrets_path* as an empty file with mode 0o600, if absent.
+
+    Operators populate it with ``ANTHROPIC_API_KEY=<key>`` so the managed
+    service can source it at start time.  No-op when the file already exists
+    (preserves any content the operator has added) or when *dry_run* is True.
+
+    Returns True when the file was created, False otherwise.
+    """
+    if dry_run:
+        return False
+    if secrets_path.exists():
+        return False
+    secrets_path.parent.mkdir(parents=True, exist_ok=True)
+    secrets_path.touch(mode=0o600)
+    secrets_path.chmod(0o600)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Legacy service cleanup (Task 3.4)
 # ---------------------------------------------------------------------------
@@ -1780,6 +1799,20 @@ class SearchInstaller:
                 except InstallError as exc:
                     print(f"Warning: code enrichment install failed: {exc}", file=sys.stderr)
                     # Non-fatal — continue
+
+            # Before Step 14b: create .secrets.env when AI query expansion is enabled
+            if features.enable_hyde or features.enable_rag_fusion:
+                try:
+                    _secrets_env_path = get_data_dir() / ".secrets.env"
+                    _created = _create_secrets_env(_secrets_env_path, dry_run=self.dry_run)
+                    if _created:
+                        print(
+                            f"  Created:    {_secrets_env_path}\n"
+                            "  Add ANTHROPIC_API_KEY=<key> to this file so the managed service\n"
+                            "  can source it at start time for AI query expansion."
+                        )
+                except OSError as exc:
+                    print(f"Warning: could not create .secrets.env: {exc}", file=sys.stderr)
 
             # Before Step 14b: write custom server key if provided
             if server_key is not None and not self.dry_run:

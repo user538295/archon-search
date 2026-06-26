@@ -295,7 +295,11 @@ Enable AI query expansion? [y/N]:
 
 **Default**: No.
 
-If you answer `y`, the wizard enables both `[hyde].enabled = true` and `[rag_fusion].enabled = true` in your config, and installs the `archon-search[hyde,rag_fusion]` optional packages if not already present.
+If you answer `y`, the wizard:
+
+- Enables both `[hyde].enabled = true` and `[rag_fusion].enabled = true` in your config.
+- Installs the `archon-search[hyde,rag_fusion]` optional packages if not already present.
+- Creates `~/.archon-search/.secrets.env` (mode 600, empty) if it does not already exist; existing files are left untouched. The managed service (launchd on macOS, systemd on Linux) sources this file at start time. Add `ANTHROPIC_API_KEY=<key>` to it so the service can reach Anthropic's API without requiring the variable in the shell environment. (If you have set `ARCHON_SEARCH_DATA_DIR` to a custom path, note that the managed service still sources the key from `~/.archon-search/.secrets.env`.)
 
 If `ANTHROPIC_API_KEY` is not set, this prompt is skipped entirely. You can enable HyDE and RAG Fusion later by passing `--enable-hyde --enable-rag-fusion` to the wizard (with the key set), or by editing `archon-search.toml` manually.
 

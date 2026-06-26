@@ -542,7 +542,7 @@ flowchart LR
         - #integration_test — `test_register_writes_wrapper_script_on_macos` — mock macOS platform; call `register()`; assert wrapper file written with mode 0o755
         - #unit_test — `test_wrapper_script_syntax_is_valid` — generated wrapper script content passes basic shell syntax check (`sh -n`); confirm `[ -f ] && source` guard handles absent `.secrets.env` gracefully
 
-- [ ] **BE-12** — Wizard (`install.py`) creates `~/.archon-search/.secrets.env` (mode 600, empty) and the macOS wrapper script when HyDE or RAG Fusion is enabled at install time #backend-role
+- [x] **BE-12** — Wizard (`install.py`) creates `~/.archon-search/.secrets.env` (mode 600, empty) and the macOS wrapper script when HyDE or RAG Fusion is enabled at install time #backend-role
     - Frameworks & Drivers · 1.5h
     - needs BE-11 · completes S9
     - Tests
