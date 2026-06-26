@@ -131,7 +131,7 @@ flowchart TD
 *Using TypeSpec (v1.13.0). This is an internal logical seam (in-process, not HTTP); no OpenAPI emitted.*
 
 **C1 — DocumentParser parse seam**  *(Frameworks & Drivers ↔ Use Cases)*
-`DocumentParser.parse(path)` returns extracted text (`str`) or raises `ParseError(path, cause)`. Callers (`pipeline.py:27`) need only handle `ParseError`. The expansion of `_OFFICE_EXTENSIONS` and `_PLAIN_EXTENSIONS` is internal to Frameworks & Drivers; the seam shape is unchanged.
+`DocumentParser.parse(path)` returns extracted text (`str`) or raises `ParseError(path, cause)`. Callers (`pipeline.py:296`) need only handle `ParseError`. The expansion of `_OFFICE_EXTENSIONS` and `_PLAIN_EXTENSIONS` is internal to Frameworks & Drivers; the seam shape is unchanged.
 — see [`document-parser-contract.tsp`](document-parser-contract.tsp) (validated clean: `tsp compile document-parser-contract.tsp --no-emit`)
 
 - Realised by: BE-1, BE-2 · Verified by: BE-2 (unit tests), T-1 (manual)
@@ -148,6 +148,7 @@ flowchart TD
 | **S4** | **Given** `markitdown` is somehow absent at runtime · **When** `_parse_office` is called · **Then** `ParseError.cause` contains the message "install markitdown" |
 | **S5** | **Given** existing `.docx`, `.pptx`, or `.xlsx` files that ingested successfully before this change · **When** ingested after the change · **Then** behaviour is identical — same chunk count, no error |
 | **S6** | **Given** a developer who runs `uv sync --dev` on a clean clone · **When** they check installed packages · **Then** `markitdown` is present without any manual `pip install` step |
+| **S7** | **Given** a parseable Office file where markitdown's `text_content` returns `None` · **When** the user ingests it · **Then** an empty string is returned (not a `TypeError`) — `parse()` always returns `str`, never `None` |
 
 ---
 
@@ -170,6 +171,7 @@ N/A — no frontend work for this feature. This project has no web UI; the CLI i
 - [ ] `uv sync --dev` installs `markitdown` — S6
 - [ ] All 8 new Office extensions route to `_parse_office` — S1
 - [ ] `.tsv` routes to `_parse_plain` — S2
+- [ ] `None` from markitdown `text_content` returns empty string — S7
 - [ ] `ImportError` branch fires with a helpful message — S4
 - [ ] Existing `.docx`/`.pptx`/`.xlsx` parametrized test still passes — S5
 - [ ] UserManual lists all supported extensions — (close-out acceptance)
@@ -194,6 +196,7 @@ N/A — no frontend work for this feature. This project has no web UI; the CLI i
 | S4 — ImportError → helpful message | unit |
 | S5 — existing .docx/.pptx/.xlsx unchanged | unit (existing parametrized test) |
 | S6 — `uv sync` includes markitdown | manual (requires fresh clone) |
+| S7 — None content → empty string | unit |
 
 ---
 
@@ -249,7 +252,7 @@ flowchart LR
 
 ### Phase 0 · Kickoff *(cross-cutting alignment)*
 
-- [ ] **K1** — Agree on C1 contract seam and scenario list with team #team
+- [x] **K1** — Agree on C1 contract seam and scenario list with team #team
     - — · 0.5h
     - completes C1
     - Tests
@@ -267,7 +270,7 @@ flowchart LR
 
 - [ ] **BE-2** — Expand `_OFFICE_EXTENSIONS`, add `.tsv` to `_PLAIN_EXTENSIONS`, add `ImportError` branch in `_parse_office`, update module docstring #backend-role
     - Frameworks & Drivers · 2.0h
-    - needs BE-1 · completes S1, S2, S3, S4, S5
+    - needs BE-1 · completes S1, S2, S3, S4, S5, S7
     - Tests
         - #unit_test — `test_parser_office_new_extensions_routed` — parametrize `.doc`, `.xls`, `.ppt`, `.odt`, `.rtf`, `.epub`, `.eml`, `.msg`; mock `markitdown`; assert `_parse_office` called and returns content
         - #unit_test — `test_parser_tsv_routed_to_plain` — `.tsv` file routes to `_parse_plain`; assert content returned without markitdown mock
