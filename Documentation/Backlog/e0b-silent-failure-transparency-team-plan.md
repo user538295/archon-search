@@ -566,12 +566,12 @@ flowchart LR
         - #integration_test — `test_export_wait_timeout_exits_0` — Click test runner; `--wait --timeout 5`; monkeypatch poll timeout; assert exit 0 + stderr hint
         - #integration_test — `test_backup_wait_timeout_exits_0` — Click test runner; `--now --wait --timeout 5`; monkeypatch `_wait_for_jobs` timeout; assert exit 0 + stderr hint
 
-- [ ] **FE-3** — `cli/status.py`: after rendering normal status, if `response.hyde.key_available == False` or `response.rag_fusion.key_available == False` print warning to stderr; if `failed_expired_ingest_count > 0` print count + re-ingest hint to stdout #frontend-role
+- [x] **FE-3** — `cli/status.py`: after rendering normal status, if `response.hyde.key_available == False` or `response.rag_fusion.key_available == False` print warning to stderr; if `failed_expired_ingest_count > 0` print count + re-ingest hint to stdout #frontend-role
     - Presentation · 1.5h
     - needs BE-8, BE-10 · completes S7, S8, S15
     - Tests
-        - #integration_test — `test_status_cli_warns_when_hyde_key_unavailable` — Click test runner; mock GET /status with `hyde.key_available=false`; assert stderr contains "ANTHROPIC_API_KEY"
-        - #integration_test — `test_status_cli_shows_failed_expired_count` — mock GET /status with `failed_expired_ingest_count=3`; assert stdout contains "3" and "re-ingest"
+        - [x] #integration_test — `test_status_cli_warns_when_hyde_key_unavailable` — Click test runner; mock GET /status with `hyde.key_available=false`; assert stderr contains "ANTHROPIC_API_KEY"
+        - [x] #integration_test — `test_status_cli_shows_failed_expired_count` — mock GET /status with `failed_expired_ingest_count=3`; assert stdout contains "3" and "re-ingest"
 
 - [ ] **FE-4** — `cli/ingest.py`: after ingestion loop, print any `result.warnings` entries to stderr #frontend-role
     - Presentation · 0.5h

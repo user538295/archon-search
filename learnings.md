@@ -2,6 +2,26 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0b FE-3: Click 8.3.3 default CliRunner() populates result.stderr separately — empirically verified**
+- Observation: DA1 and DA2 in Cycle 2 both flagged the default `CliRunner()` (which has `mix_stderr=True` in older Click) as Major/Critical, claiming `result.stderr` assertions would be vacuous. Empirical test proved them wrong: in Click 8.3.3, `result.stderr` correctly captures `click.echo(..., err=True)` output even with the default runner. `result.output` contains combined stdout+stderr; `result.stderr` contains stderr only. The "Major/Critical" finding was a false alarm based on outdated Click documentation.
+- Action: When a reviewer flags `result.stderr` assertions as vacuous under default `CliRunner()`, always verify empirically: `uv run python -c "from click.testing import CliRunner; r = CliRunner(); print(repr(r.mix_stderr))"` and run a smoke test. Do not trust DA claims about third-party library defaults without verification.
+- Confidence: high
+
+**2026-06-26 — E0b FE-3: Defensive `or 0` on optional server fields must be tested explicitly**
+- Observation: `_print_failed_expired_count` uses `server_payload.get("failed_expired_ingest_count", 0) or 0` — the `or 0` guards against `None` (field present but null). DA3 and DA2 independently flagged missing test for this specific branch. The absent-key test (pre-E0b server) exercises `.get(key, 0)` returning the default; the null-value test exercises `None or 0`. Both are distinct code paths and must both be tested.
+- Action: Whenever `get(key, default) or fallback` is used, add one test for absent key AND one test for null value. They exercise different branches of the compound expression.
+- Confidence: high
+
+**2026-06-26 — E0b FE-2: FAILED_EXPIRED silent-exit discovered via iterative review, not initial implementation**
+- Observation: The initial FE-2 implementation treated `FAILED_EXPIRED` as a non-failure in both `_poll_job` (export) and `_wait_for_jobs` (backup): export printed "Job ended with status: FAILED_EXPIRED" and exited 0; backup silently discarded the job from pending. Cycle 1 review by all three DA agents independently flagged this as Major. The fix was to use `status in {"FAILED", "FAILED_EXPIRED"}` in both paths.
+- Action: Whenever `_TERMINAL_STATUSES` contains `FAILED_EXPIRED`, verify that every code path that checks for FAILED also checks for FAILED_EXPIRED. Silent discard of FAILED_EXPIRED is the most common silent-failure bug in polling loops.
+- Confidence: high
+
+**2026-06-26 — E0b FE-2: FAILED+timeout race in multi-job backup polling**
+- Observation: If any job confirmed FAILED before the timeout counter exhausted `max_polls`, the timeout branch would fire first and exit 0, hiding the confirmed failure. The fix: check `if failed:` before `raise SystemExit(0)` in the timeout branch.
+- Action: In multi-job polling loops with both a timeout and a failed-list accumulator, always check the accumulated failure list in the timeout branch before deciding to exit 0.
+- Confidence: high
+
 **2026-06-26 — E0b FE-1: Dead module-level constants must be deleted when replaced by a parameter — not just commented as "legacy"**
 - Observation: `_WAIT_MAX_POLLS` was retained with a "legacy; overridden by --timeout" comment after `_wait_for_pass` was rewritten to use `max_polls = max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)`. Five tests kept patching the constant, giving a false impression it controlled the loop. All 4 reviewers (3 DA + Brooks-Lint) independently flagged it in Cycle 1. The tests passed only by coincidence (mocked `time.sleep` + infinite `return_value`).
 - Action: When replacing a module-level constant with a parameter-derived value, delete the constant immediately and replace all test patches of it with the actual controlling input (e.g. `--timeout N` CLI arg). Leaving it as "legacy" creates Hyrum's Law coupling and future trap for test authors.

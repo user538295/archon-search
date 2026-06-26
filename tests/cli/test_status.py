@@ -299,3 +299,239 @@ def test_status_cli_integration_with_real_server(tmp_path, monkeypatch) -> None:
         assert "hash_doc_ids_enabled" in telemetry
         # Default config: hash_doc_ids=False → hash_doc_ids_enabled=False
         assert telemetry["hash_doc_ids_enabled"] is False
+
+
+# ---------------------------------------------------------------------------
+# FE-3 — E0b: HyDE/RAG Fusion key warnings and failed_expired_ingest_count
+# ---------------------------------------------------------------------------
+
+
+def test_status_cli_warns_when_hyde_key_unavailable(runner: CliRunner) -> None:
+    """GET /status with hyde.key_available=false → stderr contains 'ANTHROPIC_API_KEY' (S7, S8)."""
+    server_payload = {
+        "hyde": {"key_available": False},
+        "rag_fusion": None,
+        "failed_expired_ingest_count": 0,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "ANTHROPIC_API_KEY" in result.stderr, (
+        f"Expected 'ANTHROPIC_API_KEY' in stderr; got: {result.stderr!r}"
+    )
+    assert "HyDE" in result.stderr, (
+        f"Expected 'HyDE' in stderr; got: {result.stderr!r}"
+    )
+
+
+def test_status_cli_warns_when_rag_fusion_key_unavailable(runner: CliRunner) -> None:
+    """GET /status with rag_fusion.key_available=false → stderr contains 'ANTHROPIC_API_KEY'."""
+    server_payload = {
+        "hyde": None,
+        "rag_fusion": {"key_available": False},
+        "failed_expired_ingest_count": 0,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "ANTHROPIC_API_KEY" in result.stderr, (
+        f"Expected 'ANTHROPIC_API_KEY' in stderr; got: {result.stderr!r}"
+    )
+    assert "RAG Fusion" in result.stderr, (
+        f"Expected 'RAG Fusion' in stderr; got: {result.stderr!r}"
+    )
+
+
+def test_status_cli_no_warning_when_hyde_key_available(runner: CliRunner) -> None:
+    """GET /status with hyde.key_available=true → no ANTHROPIC_API_KEY warning emitted."""
+    server_payload = {
+        "hyde": {"key_available": True},
+        "rag_fusion": None,
+        "failed_expired_ingest_count": 0,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "ANTHROPIC_API_KEY" not in result.stderr, (
+        f"Unexpected 'ANTHROPIC_API_KEY' in stderr; got: {result.stderr!r}"
+    )
+
+
+def test_status_cli_no_warning_when_hyde_null(runner: CliRunner) -> None:
+    """GET /status with hyde=null (feature disabled) → no warning emitted."""
+    server_payload = {
+        "hyde": None,
+        "rag_fusion": None,
+        "failed_expired_ingest_count": 0,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "ANTHROPIC_API_KEY" not in result.stderr
+
+
+def test_status_cli_no_warning_when_rag_fusion_key_available(runner: CliRunner) -> None:
+    """GET /status with rag_fusion.key_available=true → no ANTHROPIC_API_KEY warning emitted."""
+    server_payload = {
+        "hyde": None,
+        "rag_fusion": {"key_available": True},
+        "failed_expired_ingest_count": 0,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "ANTHROPIC_API_KEY" not in result.stderr, (
+        f"Unexpected 'ANTHROPIC_API_KEY' in stderr; got: {result.stderr!r}"
+    )
+
+
+def test_status_cli_warns_for_both_hyde_and_rag_fusion_key_unavailable(runner: CliRunner) -> None:
+    """Both hyde.key_available=false AND rag_fusion.key_available=false → two warnings on stderr."""
+    server_payload = {
+        "hyde": {"key_available": False},
+        "rag_fusion": {"key_available": False},
+        "failed_expired_ingest_count": 0,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "HyDE" in result.stderr, (
+        f"Expected 'HyDE' warning in stderr; got: {result.stderr!r}"
+    )
+    assert "RAG Fusion" in result.stderr, (
+        f"Expected 'RAG Fusion' warning in stderr; got: {result.stderr!r}"
+    )
+    assert result.stderr.count("ANTHROPIC_API_KEY") == 2, (
+        f"Expected two 'ANTHROPIC_API_KEY' occurrences in stderr; got: {result.stderr!r}"
+    )
+
+
+def test_status_cli_shows_failed_expired_count(runner: CliRunner) -> None:
+    """GET /status with failed_expired_ingest_count=3 → stdout contains '3' and 're-ingest' (S15)."""
+    server_payload = {
+        "hyde": None,
+        "rag_fusion": None,
+        "failed_expired_ingest_count": 3,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "3 ingest job(s) expired" in result.stdout, (
+        f"Expected '3 ingest job(s) expired' in stdout; got: {result.stdout!r}"
+    )
+    assert "re-ingest" in result.stdout.lower(), (
+        f"Expected 're-ingest' hint in stdout; got: {result.stdout!r}"
+    )
+
+
+def test_status_cli_no_failed_expired_output_when_zero(runner: CliRunner) -> None:
+    """GET /status with failed_expired_ingest_count=0 → no failed-expired section shown."""
+    server_payload = {
+        "hyde": None,
+        "rag_fusion": None,
+        "failed_expired_ingest_count": 0,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "re-ingest" not in result.stdout.lower()
+
+
+def test_status_cli_no_failed_expired_output_when_key_absent(runner: CliRunner) -> None:
+    """GET /status without failed_expired_ingest_count key (older server) → no crash, no output."""
+    server_payload = {
+        "hyde": None,
+        "rag_fusion": None,
+        # failed_expired_ingest_count intentionally absent (pre-E0b server)
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "re-ingest" not in result.stdout.lower()
+
+
+def test_status_cli_no_failed_expired_output_when_count_is_null(runner: CliRunner) -> None:
+    """GET /status with failed_expired_ingest_count=null → no crash, no re-ingest output.
+
+    The ``or 0`` guard in _print_failed_expired_count coerces ``None`` to 0.
+    This test exercises that specific branch (field present but null).
+    """
+    server_payload = {
+        "hyde": None,
+        "rag_fusion": None,
+        "failed_expired_ingest_count": None,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "re-ingest" not in result.stdout.lower()
+
+
+def test_status_cli_shows_failed_expired_count_singular(runner: CliRunner) -> None:
+    """GET /status with failed_expired_ingest_count=1 → message uses 'job(s)' form (boundary)."""
+    server_payload = {
+        "hyde": None,
+        "rag_fusion": None,
+        "failed_expired_ingest_count": 1,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "1 ingest job(s) expired" in result.stdout, (
+        f"Expected '1 ingest job(s) expired' in stdout; got: {result.stdout!r}"
+    )

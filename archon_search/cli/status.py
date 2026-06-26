@@ -51,6 +51,39 @@ def _fetch_server_status(api_url: str, api_key: str | None) -> dict[str, Any] | 
         return None
 
 
+def _print_expansion_key_warnings(server_payload: dict[str, Any]) -> None:
+    """Emit a stderr warning when HyDE or RAG Fusion is enabled but the API key is absent.
+
+    Only warns when the feature is configured (non-null sub-object) and
+    ``key_available`` is explicitly ``False``.  ``None`` (feature disabled)
+    and ``True`` (key present) are both silent.
+    """
+    hyde = server_payload.get("hyde")
+    if hyde is not None and hyde.get("key_available") is False:
+        click.echo(
+            "Warning: HyDE enabled but ANTHROPIC_API_KEY is not set — "
+            "expansion will fall back to plain search.",
+            err=True,
+        )
+    rag_fusion = server_payload.get("rag_fusion")
+    if rag_fusion is not None and rag_fusion.get("key_available") is False:
+        click.echo(
+            "Warning: RAG Fusion enabled but ANTHROPIC_API_KEY is not set — "
+            "expansion will fall back to plain search.",
+            err=True,
+        )
+
+
+def _print_failed_expired_count(server_payload: dict[str, Any]) -> None:
+    """Print a count and re-ingest hint when FAILED_EXPIRED ingest jobs exist."""
+    count = server_payload.get("failed_expired_ingest_count", 0) or 0
+    if count > 0:
+        click.echo(
+            f"\n{count} ingest job(s) expired without completing. "
+            "Re-ingest the affected files to recover: archon-search ingest <path>"
+        )
+
+
 def _print_telemetry_status(telemetry: dict[str, Any]) -> None:
     """Render the telemetry sub-object from GET /status."""
     enabled = telemetry.get("enabled", False)
@@ -100,6 +133,9 @@ def status(api_url: str, api_key: str | None) -> None:
             "\nTelemetry: [401 Unauthorized — check your API key]"
         )
         return
+
+    _print_expansion_key_warnings(server_payload)
+    _print_failed_expired_count(server_payload)
 
     telemetry = server_payload.get("telemetry")
     if telemetry is None:
