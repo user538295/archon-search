@@ -325,7 +325,11 @@ async def test_generate_variants_success(monkeypatch: pytest.MonkeyPatch) -> Non
 async def test_generate_variants_timeout_fallback(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """generate_variants() returns [] and logs WARNING when LLM times out."""
+    """generate_variants() re-raises asyncio.TimeoutError and logs WARNING when LLM times out.
+
+    BE-2: generate_variants() now re-raises TimeoutError so the pipeline can distinguish
+    timeout from empty-variant success. The WARNING is still logged before re-raising.
+    """
     config = _make_config()
     mock_mod = _make_mock_anthropic_module(side_effect=asyncio.TimeoutError())
 
@@ -339,12 +343,12 @@ async def test_generate_variants_timeout_fallback(
         importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         with caplog.at_level(logging.WARNING, logger="archon_search.rag_fusion"):
-            result = await gen.generate_variants("original query")
+            with pytest.raises(asyncio.TimeoutError):
+                await gen.generate_variants("original query")
         importlib.reload(rf_mod)
 
-    assert result == []
     warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert warning_records, "WARNING should be logged on timeout"
+    assert warning_records, "WARNING should be logged on timeout before re-raise"
     # Verify 16-char hex fingerprint appears in logs
     log_text = " ".join(r.getMessage() for r in warning_records)
     # Fingerprint must be present (16 hex chars)
@@ -356,7 +360,11 @@ async def test_generate_variants_timeout_fallback(
 
 @pytest.mark.asyncio
 async def test_generate_variants_api_error_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """generate_variants() returns [] when anthropic.APIError is raised."""
+    """generate_variants() re-raises when anthropic.APIError is raised.
+
+    BE-2: generate_variants() now re-raises all exceptions (including APIError) so the
+    pipeline can detect and signal the failure via rag_fusion_warning.
+    """
     config = _make_config()
 
     class MockAPIError(Exception):
@@ -374,10 +382,9 @@ async def test_generate_variants_api_error_fallback(monkeypatch: pytest.MonkeyPa
 
         importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
-        result = await gen.generate_variants("test query")
+        with pytest.raises(MockAPIError):
+            await gen.generate_variants("test query")
         importlib.reload(rf_mod)
-
-    assert result == []
 
 
 @pytest.mark.asyncio
@@ -574,7 +581,8 @@ async def test_fingerprint_no_raw_query_in_log(
         assert all(c in "0123456789abcdef" for c in fp)
 
         with caplog.at_level(logging.WARNING, logger="archon_search.rag_fusion"):
-            await gen.generate_variants(query)
+            with pytest.raises(asyncio.TimeoutError):
+                await gen.generate_variants(query)
         importlib.reload(rf_mod)
 
     log_text = " ".join(r.getMessage() for r in caplog.records)

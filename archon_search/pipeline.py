@@ -45,6 +45,7 @@ class SearchPipelineResult:
     rag_fusion_applied: bool = False
     rag_fusion_queries_used: int = 0
     rag_fusion_attempted: bool = False
+    rag_fusion_warning: str | None = None
 
 
 @dataclass
@@ -616,16 +617,30 @@ class SearchPipeline:
                 variants = await rag_fusion_generator.generate_variants(query)
             except RAGFusionDependencyError:
                 raise
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "rag_fusion generate_variants timed out for query=%s; falling back",
+                    _query_fingerprint(query),
+                )
+                fallback = await self._search_standard(
+                    query, collection, namespace, embedder=embedder,
+                    filters=filters, query_vector=None,
+                    rag_fusion_attempted=True,
+                )
+                fallback.rag_fusion_warning = "RAG Fusion timed out"
+                return fallback
             except Exception:
                 logger.warning(
                     "rag_fusion generate_variants failed unexpectedly for query=%s; falling back",
                     _query_fingerprint(query),
                 )
-                return await self._search_standard(
+                fallback = await self._search_standard(
                     query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
                     rag_fusion_attempted=True,
                 )
+                fallback.rag_fusion_warning = "RAG Fusion expansion failed"
+                return fallback
 
             # 3. All queries = original + variants.
             all_queries = [query] + variants
@@ -638,11 +653,13 @@ class SearchPipeline:
                     "rag_fusion embedding stage failed for query=%s; falling back to single-query search",
                     _query_fingerprint(query),
                 )
-                return await self._search_standard(
+                fallback = await self._search_standard(
                     query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
                     rag_fusion_attempted=True,
                 )
+                fallback.rag_fusion_warning = "RAG Fusion expansion failed"
+                return fallback
 
             # 5. Parallel variant searches using hybrid_search_with_trace.
             search_calls = [
@@ -1089,15 +1106,24 @@ class SearchPipeline:
             candidate_depth = max(self._top_k_retrieve * 3, 20)
 
             # Step A: Generate variants once (single LLM call, not per-collection).
+            _rag_fusion_warning: str | None = None
             try:
                 variants = await rag_fusion_generator.generate_variants(query)
             except RAGFusionDependencyError:
                 raise
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "rag_fusion search_many generate_variants timed out for query=%s; falling back",
+                    _query_fingerprint(query),
+                )
+                _rag_fusion_warning = "RAG Fusion timed out"
+                variants = []
             except Exception:
                 logger.warning(
                     "rag_fusion search_many generate_variants failed for query=%s; falling back",
                     _query_fingerprint(query),
                 )
+                _rag_fusion_warning = "RAG Fusion expansion failed"
                 variants = []
 
             all_queries_rf = [query] + variants
@@ -1113,6 +1139,7 @@ class SearchPipeline:
                     "rag_fusion search_many embedding failed for query=%s; falling back to single-query",
                     _query_fingerprint(query),
                 )
+                _rag_fusion_warning = _rag_fusion_warning or "RAG Fusion expansion failed"
                 # Explicit fallback: run standard fan-out with rag_fusion_attempted preserved.
                 std_vector = await self._global_embedder.embed_one(query)
                 std_merged, std_acl_filtered, std_leg_times = await self._fanout_merge_acl(
@@ -1134,6 +1161,7 @@ class SearchPipeline:
                     excluded_collections=excluded_collections,
                     fanout_timings=FanoutTimings(leg_times=std_leg_times, rerank_time_ms=std_rerank_ms),
                     rag_fusion_attempted=True,
+                    rag_fusion_warning=_rag_fusion_warning,
                 )
 
             # Step C: Per-collection fan-out with fusion.
@@ -1211,6 +1239,7 @@ class SearchPipeline:
                 rag_fusion_applied=num_successful_variants > 0,
                 rag_fusion_queries_used=num_successful_variants,
                 rag_fusion_attempted=rag_fusion_attempted,
+                rag_fusion_warning=_rag_fusion_warning,
             )
 
         # --- Standard path ---

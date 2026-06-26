@@ -165,7 +165,7 @@ class RAGFusionGenerator:
                 self._config.timeout_seconds,
                 fp,
             )
-            return []
+            raise
         except Exception as exc:  # noqa: BLE001
             if isinstance(exc, self._APIError):
                 _logger.warning(
@@ -179,7 +179,7 @@ class RAGFusionGenerator:
                     fp,
                     type(exc).__name__,
                 )
-            return []
+            raise
 
         if not response.content:
             _logger.warning("RAG Fusion: empty response content (fp=%s)", fp)
