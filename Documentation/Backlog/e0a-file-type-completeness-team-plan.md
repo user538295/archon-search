@@ -261,12 +261,13 @@ flowchart LR
 
 ### Phase 1 · Ingest any common document format *(walking skeleton: dep + extension routing + smoke)* #backend-role
 
-- [ ] **BE-1** — Add `markitdown` to `[project.dependencies]` in `pyproject.toml` #backend-role
+- [x] **BE-1** — Add `markitdown` to `[project.dependencies]` in `pyproject.toml` #backend-role
     - Frameworks & Drivers · 0.5h
     - needs K1 · completes S6, C1
     - Tests
         - #unit_test — `test_markitdown_declared_as_core_dep` — parse `pyproject.toml` and assert `markitdown` appears in `[project.dependencies]` (not optional-dependencies)
         - BE-1 must verify: run `uv pip show markitdown | grep Requires` to confirm `extract-msg` is a hard transitive dep (not an optional extra of markitdown). If optional, add `extract-msg` explicitly to `[project.dependencies]`.
+        - Verified: `extract-msg` is not a transitive dep. `.msg` support uses `olefile` (in markitdown's `[all]` optional extra only). Added `olefile>=0.46,<1` to core deps with `test_olefile_declared_as_core_dep`.
 
 - [ ] **BE-2** — Expand `_OFFICE_EXTENSIONS`, add `.tsv` to `_PLAIN_EXTENSIONS`, add `ImportError` branch in `_parse_office`, update module docstring #backend-role
     - Frameworks & Drivers · 2.0h
