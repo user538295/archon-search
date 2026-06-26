@@ -2,6 +2,16 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0b T-3: Pre-seeding JobStore before make_real_app by writing to the same file path**
+- Observation: T-3 needed to seed a FAILED_EXPIRED job visible to a real app started by `make_real_app`. Creating a `JobStore(path=tmp_path/"jobs.json")` before entering `make_real_app` and seeding jobs to it works because `make_real_app` creates its own `JobStore` at the same path, and `JobStore.__init__` reads eagerly from disk via `_load()`. The FAILED_EXPIRED status is not in `_CRASH_STATUSES`, so it survives crash recovery. The 7-day eviction window doesn't affect freshly-created jobs.
+- Action: For e2e tests needing pre-seeded job store data with `make_real_app`, create a `JobStore` at `tmp_path / "jobs.json"` before the context manager, seed it, then enter `make_real_app` — it reads the same file on init. No need to expose the job store from `make_real_app`.
+- Confidence: high
+
+**2026-06-26 — E0b T-3: e2e "negative" scenario for bool|None telemetry field only needs to test None (the production path), not False**
+- Observation: S16 tests that a non-truncated telemetry entry (`truncated=None`) produces `truncated_count == 0`. Brooks-Lint C2-B-1 raised that the `is True` vs `is not None` discrimination is not tested (the `False` case). The resolution: S16's purpose is to verify the production path (`None` omitted field → not counted), not to re-test the identity-check logic. The `truncated=False` case is already covered at unit level in `tests/telemetry/test_reader.py::test_compute_stats_truncated_count_excludes_false_entries`. A docstring note pointing to that unit test is sufficient.
+- Action: For `bool | None` fields, the e2e/integration test verifies the production code path (usually `None` when nothing happens). Point to the unit test for the `False` exclusion rather than duplicating it in an e2e test. Add a docstring cross-reference so reviewers don't flag it as a gap.
+- Confidence: high
+
 **2026-06-26 — E0b BE-10: `type(j) is IngestJob` subclass exclusion must always have a negative-case test**
 - Observation: All 4 reviewers (3 DA + Brooks-Lint) independently flagged that the `type(j) is IngestJob` predicate — the key distinguishing logic — had zero test coverage in the negative direction. `_seed_failed_expired_job` only calls `job_store.create()` which returns base `IngestJob`, so no test could catch a regression to `isinstance`. A fix agent added `test_status_failed_expired_count_excludes_export_jobs` (seeds an `ExportJob` with `FAILED_EXPIRED`, asserts count=1 not 2). Without this test, replacing `type(j) is IngestJob` with `isinstance(j, IngestJob)` would silently pass all tests while counting ExportJob failures.
 - Action: Whenever a count/filter uses an exact-type predicate (`type(j) is X`), always add a test that seeds a subclass instance with the target status and asserts it is NOT counted. The predicate is the whole point — test its negative direction explicitly.
