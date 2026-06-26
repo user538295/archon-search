@@ -1,9 +1,0 @@
-{
-  "name": "api-contracts",
-  "private": true,
-  "dependencies": {
-    "@typespec/compiler": "latest",
-    "@typespec/http": "latest",
-    "@typespec/openapi3": "latest"
-  }
-}
