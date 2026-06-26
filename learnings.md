@@ -42,6 +42,21 @@
 - Action: When a section intro says "all X steps required" and a sub-note says "only Y steps are required", resolve at the intro level. Never let the intro and the sub-note tell different stories.
 - Confidence: high
 
+**2026-06-26 — Iterative-review on plan docs: C1 fixes must propagate to ALL cross-referencing sections**
+- Observation: During /iterative-review of e0a-file-type-completeness-team-plan.md, the C1 fix for the integration test claim (F2) corrected the allocation table but left a stale "unit + integration tests" in the Contracts seam section. Both cycle-2 DA agents independently flagged the same stale cross-reference as Major. Propagation misses are the #1 source of cycle-2 findings in plan doc reviews.
+- Action: After any fix that changes a test strategy claim, search the entire document for other occurrences of the same phrase or concept (grep for "integration test") and update every instance. Plan docs reference the same fact in multiple places (allocation table, contracts seam, Backend scope summary).
+- Confidence: high
+
+**2026-06-26 — Iterative-review on plan docs: `.tsv`-style no-op changes need explicit "cosmetic" labelling**
+- Observation: The e0a plan added `.tsv` to `_PLAIN_EXTENSIONS` and described it as a functional change. Direct code inspection revealed `.tsv` already routes via the `else` branch — adding it to the set is a no-op. All four reviewers flagged this independently. The test would have passed on unmodified code, giving false coverage confidence.
+- Action: Whenever a scope item modifies a lookup set for an extension that already routes via a catch-all else-branch, label it explicitly as "explicitness/documentation only — no behavior change." This prevents misleading scope descriptions and tautological tests.
+- Confidence: high
+
+**2026-06-26 — Iterative-review on plan docs: version placeholders like `>=X` are plan blockers**
+- Observation: The e0a plan used `markitdown>=X` as a literal placeholder. All four reviewers flagged it as Major — BE-1 cannot be implemented as written, and the resolved version determines whether the feature's stated goal (all 8 formats supported) holds. Unresolved version floors are the plan equivalent of a `TODO` that blocks the task.
+- Action: Never ship a plan with a version placeholder. Either resolve to a real floor (e.g. `>=0.1.0`) with a verification note, or block the plan as draft until the version is confirmed.
+- Confidence: high
+
 **2026-06-25 — MIS BE-2: `.env.example` "copy and run" contract — active placeholder lines must be safe or clearly marked**
 - Observation: Setting `ARCHON_SEARCH_IMAGE=ghcr.io/user538295/archon-search:TAG` as an active (uncommented) line causes `docker compose up` to fail with `manifest unknown` if copied verbatim to `.env`. The task spec said "uncommented example value" but didn't account for the copy-and-run failure mode. DA review (C1) caught this as Major. Fix: add a "REQUIRED before first use: replace TAG" comment immediately before the line, and describe what the placeholder represents. The file header "copy this file to `.env` and edit the values" implies active lines should either work or be unmistakably marked as requiring substitution.
 - Action: For any `.env.example` active line with a placeholder value, add a prominent "REQUIRED: replace X" comment immediately before it. Never rely on a comment buried in a multi-line block above — operators skim.

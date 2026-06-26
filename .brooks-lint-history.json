@@ -1,0 +1,101 @@
+[
+  {
+    "date": "2026-06-24",
+    "mode": "PR Review",
+    "score": 82,
+    "findings": {
+      "critical": 0,
+      "warning": 2,
+      "suggestion": 2
+    },
+    "scope": "archon_search/server/mcp.py, tests/integration/test_mcp_slice2_be7.py"
+  },
+  {
+    "date": "2026-06-25",
+    "mode": "PR Review",
+    "score": 90,
+    "findings": {
+      "critical": 0,
+      "warning": 1,
+      "suggestion": 0
+    },
+    "scope": "archon_search/server/routes_search.py, archon_search/server/mcp.py, archon_search/server/app.py, tests/integration/conftest.py, tests/integration/test_d8_be4_wire_hasher.py"
+  },
+  {
+    "date": "2026-06-25",
+    "mode": "PR Review",
+    "score": 79,
+    "findings": {
+      "critical": 0,
+      "warning": 2,
+      "suggestion": 3
+    },
+    "scope": "archon_search/cli/status.py, tests/cli/test_status.py"
+  },
+  {
+    "date": "2026-06-25",
+    "mode": "PR Review",
+    "score": 88,
+    "findings": {
+      "critical": 0,
+      "warning": 2,
+      "suggestion": 2
+    },
+    "scope": "CLAUDE.md, Documentation/ADRs/05_opt_in_local_telemetry_no_raw_query.md, Documentation/ADRs/09_mcp_http_mount_and_namespace_propagation.md, Documentation/Architecture/150_security_and_privacy_architecture.md, Documentation/Architecture/530_technical_debt_refactoring_roadmap.md, Documentation/Backlog/03_world_class_roadmap.md, Documentation/Backlog/D8-hashed-doc-id-telemetry-brief.md, Documentation/SecurityGuide/04_telemetry_privacy.md, Documentation/roadmap.md, learnings.md"
+  },
+  {
+    "date": "2026-06-25",
+    "mode": "PR Review",
+    "score": 94,
+    "findings": {
+      "critical": 0,
+      "warning": 1,
+      "suggestion": 1
+    },
+    "scope": ".env.example"
+  },
+  {
+    "date": "2026-06-25",
+    "mode": "PR Review",
+    "score": 92,
+    "findings": {
+      "critical": 0,
+      "warning": 1,
+      "suggestion": 1
+    },
+    "scope": ".env.example"
+  },
+  {
+    "date": "2026-06-25",
+    "mode": "PR Review",
+    "score": 97,
+    "findings": {
+      "critical": 0,
+      "warning": 0,
+      "suggestion": 1
+    },
+    "scope": "Documentation/UserManual/09_multi_instance_setup.md"
+  },
+  {
+    "date": "2026-06-25",
+    "mode": "PR Review",
+    "score": 94,
+    "findings": {
+      "critical": 0,
+      "warning": 1,
+      "suggestion": 1
+    },
+    "scope": "Documentation/UserManual/09_multi_instance_setup.md (Part 5 and Part 6)"
+  },
+  {
+    "date": "2026-06-26",
+    "mode": "PR Review",
+    "score": 97,
+    "findings": {
+      "critical": 0,
+      "warning": 0,
+      "suggestion": 2
+    },
+    "scope": "multi-instance-setup-team-plan.md T-4 close-out + D8 brief/ADR/tsp corrections"
+  }
+]
