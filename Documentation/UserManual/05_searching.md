@@ -99,20 +99,27 @@ A typical workflow is: call `/route`, then call `/search` once per name in `pinn
 
 ## MCP tools
 
-`archon_search/server/mcp.py` registers ten tools, all auth-protected via the same Bearer middleware. The surface is intentionally narrower than REST — it covers search + ingestion + collection inspection + the `explain` debug/trace tool, not async jobs or telemetry.
+`archon_search/server/mcp.py` registers seventeen tools, all auth-protected via the same Bearer middleware. The surface covers search + ingestion + collection inspection + the `explain` debug/trace tool + export/import + key management.
 
 | Tool | Inputs | Output |
 | --- | --- | --- |
-| `search` | `query`, `collection?` | `{"results":[…], "acl_filtered":bool}` (see `BREAKING.md` — was previously a bare list) |
-| `search_with_context` | `query`, `collection?`, `context_window=1` | `[{result, context_before, context_after}, …]` |
+| `search` | `query`, `collection?` | `{"results":[…], "acl_filtered":bool, "excluded_collections":[…], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null}` (**E0b**: gains `expansion_used` and `expansion_warning`) |
+| `search_with_context` | `query`, `collection?`, `context_window=1` | `{"results":[{result, context_before, context_after}, …], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null}` (**E0b**: gains `expansion_used` and `expansion_warning`) |
 | `explain` | `query`, `collection?`, `top_k=5`, `rerank=true` | Per-stage retrieval/reranking trace plus routing decision (mirrors `POST /explain`) |
-| `ingest_file` | `path`, `collection?` | Per-file ingest result dict |
+| `ingest_file` | `path`, `collection?` | Per-file ingest result dict (gains `warnings: list[str]` in **E0b** for ACL sidecar issues) |
 | `ingest_directory` | `path`, `glob_pattern="**/*"`, `collection?` | List of ingest results; reports MCP progress |
 | `list_collections` | — | List of collection summaries (centroid omitted) |
-| `get_collections_meta` | — | Full `CollectionMeta` list (with centroid vectors) |
-| `get_collection_meta` | `name` | Full `CollectionMeta`, or `not_found` error dict |
+| `get_collections_meta` | `include_description_embedding?` | List of `CollectionMeta` dicts (centroid and internal fields stripped; `description_embedding` included only if flag is `true`) |
+| `get_collection_meta` | `name` | `CollectionMeta` dict (internal fields stripped), or `not_found` error dict |
 | `list_documents` | `collection?`, `limit=100` | List of document records |
 | `delete_document` | `doc_id`, `collection?` | `{"deleted": <chunk_count>}` |
+| `update_collection` | `collection_name` (required), `embedding_model` (required) | Updated collection metadata dict; triggers reindex when model changes |
+| `export_collection` | `collection`, `output_path?` | QUEUED job dict with `job_id` |
+| `import_collection` | `collection`, `path`, `force_overwrite?`, `ignore_schema_version?`, `on_error?` | QUEUED job dict with `job_id` |
+| `create_key` | `namespace` (required), `label?`, `expires_at?` (ISO-8601 datetime with tz) | `{"id":…, "token":…, …}` (token shown once only) |
+| `list_keys` | `namespace?`, `status?` | List of key record dicts |
+| `revoke_key` | `key_id` | Key record dict (status=revoked) |
+| `rotate_key` | `grace_seconds?` | `{"new_key_id":…, "token":…, "status":"active", "old_key_id":…, "old_key_expires_at":…, "old_key_status":…}` |
 
 When `collection` is omitted, the server uses the `default_collection` injected at app construction.
 
@@ -234,6 +241,15 @@ curl -s -X POST http://127.0.0.1:8765/search \
 ```
 
 The response includes `hyde_applied: true` when HyDE was used, or `hyde_applied: false` when the fallback (original query embedding) was used instead.
+
+**E0b — expansion signal fields** are present on every `/search` response (including when HyDE was not requested):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `expansion_used` | `bool` | `true` when either `hyde_applied` or `rag_fusion_applied` is `true`. Convenience field; equivalent to `hyde_applied OR rag_fusion_applied`. |
+| `expansion_warning` | `str \| null` | Non-null when query expansion was requested but failed and fell back to the original query embedding. For HyDE: always `'HyDE expansion failed'` (all failure modes are indistinguishable at the route level). For RAG Fusion: `'RAG Fusion timed out'` (timeout) or `'RAG Fusion expansion failed'` (other errors). `null` when expansion succeeded or was not requested. |
+
+A non-null `expansion_warning` means search results were computed from the original query embedding only — the response is valid but may have lower recall than expected.
 
 ### Fallback behaviour
 

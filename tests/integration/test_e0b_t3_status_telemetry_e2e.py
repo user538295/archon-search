@@ -3,6 +3,7 @@ GET /telemetry/stats truncated_count.
 
 Scenarios covered:
   S7:  HyDE enabled, ANTHROPIC_API_KEY absent → GET /status hyde.key_available=false
+  S7b: RAG Fusion enabled, ANTHROPIC_API_KEY absent → GET /status rag_fusion.key_available=false
   S14: FAILED_EXPIRED job seeded → GET /status failed_expired_ingest_count == 1
   S16: Non-truncated telemetry entry written → GET /telemetry/stats truncated_count == 0
   S17: Truncated telemetry entry written → GET /telemetry/stats truncated_count == 1
@@ -69,6 +70,48 @@ def test_e2e_status_key_available_false(
         assert hyde["key_available"] is False, (
             f"expected hyde.key_available=false when ANTHROPIC_API_KEY is absent, "
             f"got: {hyde['key_available']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# S7b: RAG Fusion enabled, ANTHROPIC_API_KEY absent → rag_fusion.key_available=false
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_status_rag_fusion_key_available_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real app with rag_fusion.enabled=True and no ANTHROPIC_API_KEY;
+    assert rag_fusion.key_available=false.
+
+    Covers scenario S7b (symmetric to S7 for RAG Fusion): the status route must
+    expose rag_fusion.key_available=false when the feature is configured but the
+    API key is absent from the environment.
+    conftest.py clears ANTHROPIC_API_KEY for every test, so no extra monkeypatch
+    action is needed.
+    """
+    # ANTHROPIC_API_KEY is cleared by the root conftest.py for every test.
+    with make_real_app(tmp_path, monkeypatch, rag_fusion_enabled=True) as (
+        client,
+        _cfg,
+        api_key,
+    ):
+        resp = client.get("/status", headers=_auth(api_key))
+
+        assert resp.status_code == 200, (
+            f"expected 200, got {resp.status_code}: {resp.text}"
+        )
+        data = resp.json()
+        assert "rag_fusion" in data, (
+            "GET /status must include 'rag_fusion' key when rag_fusion.enabled=True"
+        )
+        rag_fusion = data["rag_fusion"]
+        assert rag_fusion is not None, (
+            "GET /status rag_fusion must not be null when rag_fusion.enabled=True"
+        )
+        assert rag_fusion["key_available"] is False, (
+            f"expected rag_fusion.key_available=false when ANTHROPIC_API_KEY is absent, "
+            f"got: {rag_fusion['key_available']!r}"
         )
 
 

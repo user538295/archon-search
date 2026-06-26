@@ -116,7 +116,7 @@ Response (`StatsResponse`):
 }
 ```
 
-`success_rate` is `null` when the window has zero queries. `by_collection.total` can exceed `total_queries` because routing entries fan out across multiple collections (see the comment in `schemas_telemetry.py:CollectionStats`).
+`success_rate` is `null` when the window has zero queries. `by_collection.total` can exceed `total_queries` because routing entries fan out across multiple collections (see the comment in `schemas_telemetry.py:CollectionStats`). `truncated_count` (**E0b**) is the number of log entries in the window where `result_doc_ids` was trimmed to fit within the 8 KB per-entry size limit (implemented in D8 — entries written before E0b have `truncated=None` and are not counted). A non-zero `truncated_count` indicates large result sets; this is an observability aid, not an error.
 
 ### `GET /telemetry/entries`
 

@@ -2,6 +2,36 @@
 
 ## What Has Worked
 
+**2026-06-27 — E0b T-close: All docs pre-updated during implementation tasks — T-close is a verification pass, not a documentation sprint**
+- Observation: All eleven documentation items in the "Documentation update" section of the E0b plan (600_api_reference, 110_component_catalog, UserManual/02-07, BREAKING.md, CLAUDE.md, learnings.md) were fully updated during their respective implementation tasks (BE-*, FE-*, T-*). T-close found no documentation gaps requiring new edits. The OpenAPI snapshot was also already current (no diff after `--update-openapi-snapshot`). The only T-close action was the learnings.md entry itself and the plan checkbox.
+- Action: For future features, continue this pattern: each implementing task owns its documentation as part of "done". T-close is then a fact-check pass (grep for symbols, hit endpoints, read code) and a clean-up catch-all — not a bulk documentation sprint. This keeps documentation fresh and reduces T-close risk.
+- Confidence: high
+
+**2026-06-27 — E0b T-close: Full test suite clean at close-out — 5574 passed, 0 failed**
+- Observation: Running `uv run pytest` at T-close produced 5574 passed, 13 skipped, 0 failures. Coverage 93.51% (well above 85% gate). All E0b tests were integrated by their respective tasks. No "pre-existing" failures needed fixing at close-out. The acceptance criteria fact-check confirmed all twelve acceptance criteria are wired: expansion_warning in routes_search.py, key_available in routes_status.py, stderr warnings in cli/status.py, FAILED_EXPIRED in maintenance_loop.py (transitions + GET /jobs filter), failed_expired_ingest_count in routes_status.py, truncated_count in reader.py, IngestResult.warnings in acl.py (ACL sidecar path) + cli/ingest.py (stderr print), --timeout exit-0 and exit-2 in maintenance_cmd.py, EnvironmentFile in linux.py, wrapper script in macos.py, and OpenAPI snapshot verified passing.
+- Action: The pattern of running tests after each implementing task (not just at T-close) is what keeps the suite green at close-out. T-close suite run is a final gate, not a discovery mechanism.
+- Confidence: high
+
+**2026-06-26 — E0b T-close: iterative review found doc attribution mismatch (platform/ vs server/) — module-based CLAUDE.md bullets must not mix in feature cross-cutting concerns**
+- Observation: The CLAUDE.md `platform/` bullet was extended with `GET /status` hyde/rag_fusion fields, which are implemented in `routes_status.py` and `schemas.py`, not `platform/`. DA2 flagged this as Major. The fix splits the annotation: platform/ covers only `.secrets.env` and wrapper script; server/ section gets the status response fields. In CLAUDE.md, bullets are organized by module path, not by feature — never bundle cross-module feature documentation into a single module-path bullet.
+- Action: When adding E0b-style annotations to CLAUDE.md, verify that every claim in a module-path bullet is implemented in that module. Use grep to confirm. Cross-cutting features must be documented in their respective module bullets.
+- Confidence: high
+
+**2026-06-26 — E0b T-close: 110 component catalog acl.py and pipeline.py entries need E0b annotations — not just _types.py**
+- Observation: The T-close checklist item "document IngestResult.warnings" was handled by annotating `_types.py` in 110 (correctly), but `acl.py`'s return-type change and `pipeline.py`'s warning-collection logic were not annotated. The 110 catalog convention is to annotate E0b changes inline, and all three modules changed in E0b (acl.py return types, pipeline.py warning collection, _types.py new field). DA3 correctly flagged the gap.
+- Action: For close-out tasks, annotate ALL modules that changed in the feature in the 110 catalog — not just the entity layer. The "IngestResult.warnings" checklist item covers the field, but the use-case and interface-adapter changes (how it's populated) also need annotations in their respective module rows.
+- Confidence: high
+
+**2026-06-26 — E0b T-4: Assert directly on result.stderr, not combined stdout+stderr — enforces the stderr contract**
+- Observation: All 4 reviewers (3 DA + Brooks-Lint) independently flagged the `combined = result.output + (result.stderr or "")` pattern as Major. Asserting on `combined` means a regression where a message moves from stderr to stdout (dropping `err=True`) passes green. The fix: assert directly on `result.stderr`. Lesson applies to any Click test checking error-channel output.
+- Action: Never concatenate `result.output + result.stderr` for assertions on output that must be on stderr. Assert on `result.stderr` directly. Reserve `combined` only when the channel is genuinely irrelevant.
+- Confidence: high
+
+**2026-06-26 — E0b T-4: Add a unique string assertion to pin which code path fired — not just exit code**
+- Observation: S22 asserted `exit_code == 0` which is shared by both the timeout path and the success path. DA3 flagged that the test could silently pass via the success path. Fix: add `assert "Timed out after 6s" in result.stderr` — this string only appears in the timeout branch, uniquely identifying the path and verifying `--timeout` flag propagation simultaneously.
+- Action: For any test with multiple code paths that share an exit code, always add an assertion on a distinguishing string unique to the expected path. Exit code alone is insufficient when paths share the same code.
+- Confidence: high
+
 **2026-06-26 — E0b FE-4: Warning loop after if/else branch convergence is branch-agnostic — no separate test per branch needed**
 - Observation: The warning-printing loop in `cli/ingest.py` sits after the `if timings_enabled / else` block that both produce `results`. All 4 reviewers (3 DA + Brooks-Lint) flagged that only the `timings_enabled=False` branch was exercised by the test, but the loop is structurally outside both branches — it always runs. The finding was Minor in every reviewer's assessment; a second test would be defensive-only, not a real correctness gap.
 - Action: When new code sits after an if/else convergence point, document that position explicitly in the test or a comment. Reviewers will flag the untested branch; having a clear explanation ("loop is outside both branches at line X") stops the finding from being elevated to Moderate.

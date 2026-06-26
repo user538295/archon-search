@@ -5,6 +5,8 @@ Scenarios covered:
        stderr contains 'ANTHROPIC_API_KEY'
   S22: archon-search maintenance run --wait --timeout N (timeout fires) →
        exit 0, stderr has recovery message
+  S23: archon-search maintenance run --wait, pass completes with errors →
+       exit 2
 
 Manual scenarios (cannot be automated — require real launchd/systemd):
   S9:  macOS launchd service loads ANTHROPIC_API_KEY from ~/.archon-search/.secrets.env
@@ -212,4 +214,118 @@ def test_e2e_maintenance_wait_timeout_recovery_message(
     assert "archon-search maintenance status" in result.stderr, (
         f"Expected 'archon-search maintenance status' in stderr after timeout; "
         f"stderr: {result.stderr!r}, output: {result.output!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# S23: maintenance run --wait, pass completes with errors → exit 2
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_maintenance_wait_exits_2_on_failed_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real app; maintenance run --wait sees a pass complete with errors; assert exit 2.
+
+    Covers scenario S23: when the maintenance pass completes (last_run_at changes)
+    but collection_health contains a non-null last_error, the CLI exits 2.
+
+    Flow:
+    1. Start real app via make_real_app.
+    2. Capture real GET /status baseline (last_run_at=None before any pass).
+    3. Invoke maintenance CLI with:
+       - httpx.post returning a 202 triggered response.
+       - httpx.get returning a payload where last_run_at changed AND
+         collection_health contains an entry with a non-null last_error.
+       - time.sleep patched to skip waits.
+       - --timeout 60 (enough polls to detect the changed last_run_at on first poll).
+    4. Assert exit 2.
+
+    The has_errors path in _wait_for_pass() reads collection_health[].last_error
+    from the GET /status response. When last_run_at changes and has_errors=True,
+    SystemExit(2) is raised. This test exercises that code path at the e2e level;
+    the unit-level counterpart is test_maintenance_run_wait_exits_2_on_failed in
+    tests/test_cli_maintenance.py.
+    """
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
+        # Step 1: Build mock HTTP responses.
+        # The CLI calls httpx.get twice: once for the baseline last_run_at (before
+        # triggering) and once per poll iteration. We return None as the baseline
+        # (no pass has run yet) and a "completed with errors" payload on the first
+        # poll — causing _wait_for_pass to detect last_run_at changed AND has_errors.
+
+        # Baseline GET /status: last_run_at is None (no maintenance pass has run).
+        baseline_payload = {
+            "maintenance": {
+                "enabled": False,
+                "interval_hours": 0,
+                "last_run_at": None,
+                "next_run_at": None,
+                "collection_health": [],
+            }
+        }
+        baseline_get_resp = MagicMock()
+        baseline_get_resp.status_code = 200
+        baseline_get_resp.json.return_value = baseline_payload
+        baseline_get_resp.text = json.dumps(baseline_payload)
+
+        # Poll GET /status: last_run_at changed AND collection_health has last_error.
+        # _get_maintenance_state() checks: current_last_run_at != original AND has_errors.
+        failed_pass_payload = {
+            "maintenance": {
+                "enabled": False,
+                "interval_hours": 0,
+                "last_run_at": "2026-06-27T00:00:01+00:00",  # Different from None
+                "next_run_at": None,
+                "collection_health": [
+                    {
+                        "collection": "test-col",
+                        "last_error": "failed to optimize FTS index: disk full",
+                        "chunks_scanned": 10,
+                        "orphans_deleted": 0,
+                        "failed_retried": 0,
+                    }
+                ],
+            }
+        }
+        failed_get_resp = MagicMock()
+        failed_get_resp.status_code = 200
+        failed_get_resp.json.return_value = failed_pass_payload
+        failed_get_resp.text = json.dumps(failed_pass_payload)
+
+        # Build a mock POST 202 response (trigger accepted).
+        trigger_post_resp = MagicMock()
+        trigger_post_resp.status_code = 202
+        trigger_post_resp.json.return_value = {"status": "triggered"}
+        trigger_post_resp.text = '{"status": "triggered"}'
+
+        runner = CliRunner()
+        with (
+            patch(
+                "archon_search.cli.maintenance_cmd.get_data_dir",
+                return_value=tmp_path,
+            ),
+            patch(
+                "archon_search.cli.maintenance_cmd.httpx.post",
+                return_value=trigger_post_resp,
+            ),
+            patch(
+                "archon_search.cli.maintenance_cmd.httpx.get",
+                side_effect=[
+                    baseline_get_resp,  # First call: baseline last_run_at capture
+                    failed_get_resp,    # Second call: first poll — pass complete with errors
+                ],
+            ),
+            patch("archon_search.cli.maintenance_cmd.time.sleep"),
+        ):
+            result = runner.invoke(
+                maintenance_cmd,
+                ["run", "--wait", "--timeout", "60", "--api-key", api_key],
+            )
+
+    # S23: FAILED pass (last_run_at changed + has_errors=True) → exit 2.
+    assert result.exit_code == 2, (
+        f"Expected exit 2 when maintenance pass completed with errors; "
+        f"got {result.exit_code}. "
+        f"Output:\n{result.output}\nStderr:\n{result.stderr}"
     )

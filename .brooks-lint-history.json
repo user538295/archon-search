@@ -97,5 +97,16 @@
       "suggestion": 2
     },
     "scope": "multi-instance-setup-team-plan.md T-4 close-out + D8 brief/ADR/tsp corrections"
+  },
+  {
+    "date": "2026-06-27",
+    "mode": "PR Review",
+    "score": 96,
+    "findings": {
+      "critical": 0,
+      "warning": 1,
+      "suggestion": 2
+    },
+    "scope": "E0b T-close: docs (BREAKING/CLAUDE/110/600/UserManual) + 2 new e2e tests (S7b, S23)"
   }
 ]

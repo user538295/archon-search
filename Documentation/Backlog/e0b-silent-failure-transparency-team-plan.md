@@ -283,16 +283,16 @@ See [`e0b-ingest-result.tsp`](e0b-ingest-result.tsp)
 ## Documentation update
 
 - [x] `Documentation/Backlog/e0b-silent-failure-transparency-brief.md` — updated HyDE warning message from stale "HyDE timed out after 10s — results may be less relevant" to canonical "HyDE expansion failed" (K1)
-- [ ] `Documentation/Backlog/e0b-silent-failure-transparency-team-plan.md` — this file
-- [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `expansion_used`, `expansion_warning` to SearchResponse; `hyde`, `rag_fusion`, `failed_expired_ingest_count` to StatusResponse; `truncated_count` to TelemetryStats
-- [ ] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — document `FAILED_EXPIRED` state; `IngestResult.warnings`; `HydeStatusDetail`/`RagFusionStatusDetail`
-- [ ] `Documentation/UserManual/02_wizard.md` — document that wizard creates `.secrets.env` (and macOS wrapper) when HyDE/RAG Fusion is enabled
-- [ ] `Documentation/UserManual/05_searching.md` — document `expansion_used` and `expansion_warning` response fields
-- [ ] `Documentation/UserManual/06_telemetry.md` — document `truncated_count` in stats
-- [ ] `Documentation/UserManual/07_troubleshooting.md` — add entries: "HyDE key not set", "FAILED_EXPIRED jobs", "ACL sidecar skipped"
-- [ ] `BREAKING.md` — note exit-code change (1→0 on `--wait` timeout for maintenance, export, backup; this is a breaking CLI behavioral change); note OpenAPI snapshot regeneration required; additive changes to SearchResponse, StatusResponse, StatsResponse
-- [ ] `CLAUDE.md` (project) — update `IngestResult` description under `_types.py`; note `FAILED_EXPIRED` terminal state
-- [ ] `learnings.md` — update after task completion
+- [x] `Documentation/Backlog/e0b-silent-failure-transparency-team-plan.md` — this file
+- [x] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `expansion_used`, `expansion_warning` to SearchResponse; `hyde`, `rag_fusion`, `failed_expired_ingest_count` to StatusResponse; `truncated_count` to TelemetryStats
+- [x] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — document `FAILED_EXPIRED` state; `IngestResult.warnings`; `HydeStatusDetail`/`RagFusionStatusDetail`
+- [x] `Documentation/UserManual/02_wizard.md` — document that wizard creates `.secrets.env` (and macOS wrapper) when HyDE/RAG Fusion is enabled
+- [x] `Documentation/UserManual/05_searching.md` — document `expansion_used` and `expansion_warning` response fields
+- [x] `Documentation/UserManual/06_telemetry.md` — document `truncated_count` in stats
+- [x] `Documentation/UserManual/07_troubleshooting.md` — add entries: "HyDE key not set", "FAILED_EXPIRED jobs", "ACL sidecar skipped"
+- [x] `BREAKING.md` — note exit-code change (1→0 on `--wait` timeout for maintenance, export, backup; this is a breaking CLI behavioral change); note OpenAPI snapshot regeneration required; additive changes to SearchResponse, StatusResponse, StatsResponse
+- [x] `CLAUDE.md` (project) — update `IngestResult` description under `_types.py`; note `FAILED_EXPIRED` terminal state
+- [x] `learnings.md` — update after task completion
 
 ---
 
@@ -592,7 +592,7 @@ flowchart LR
 
 ### Phase 5 · Close-out
 
-- [ ] **T-close** — Project close-out and acceptance fact-check #tester-role
+- [x] **T-close** — Project close-out and acceptance fact-check #tester-role
     - — · 4.0h
     - needs T-1, T-2, T-3, T-4
     - Tests

@@ -8,6 +8,21 @@
 
 ## Changelog
 
+### [next release] — E0b: additive fields on SearchResponse, StatusResponse, StatsResponse; new FAILED_EXPIRED job status
+
+**Surface**: `POST /search`, `GET /status`, `GET /telemetry/stats` REST responses; MCP `search` and `search_with_context` tool returns; `JobStatus` enum.
+
+**Additive changes** (non-breaking for tolerant JSON consumers; breaking for strict-schema validators with `extra="forbid"`):
+
+- `POST /search` and MCP `search`/`search_with_context` responses gain `expansion_used: bool` and `expansion_warning: str | null`. `expansion_used = hyde_applied OR rag_fusion_applied`. `expansion_warning` is non-null when expansion was requested but failed (fell back to the original query embedding).
+- `GET /status` response gains `hyde: HydeStatusDetail | null` (present when `[hyde].enabled = true`), `rag_fusion: RagFusionStatusDetail | null` (present when `[rag_fusion].enabled = true`), and `failed_expired_ingest_count: int` (namespace-scoped — counts only `IngestJob` failures in the authenticated namespace). Each detail object has `key_available: bool`.
+- `GET /telemetry/stats` response gains `truncated_count: int` — count of log entries where `result_doc_ids` was trimmed to 8 KB by the writer (since D8). Entries written before E0b have `truncated=None` and are not counted.
+- `JobStatus` enum gains `FAILED_EXPIRED = "FAILED_EXPIRED"`. A terminal state for ingest jobs that aged past `retry_max_age_hours` or exhausted all retry attempts. `GET /jobs?status=FAILED_EXPIRED` is a valid filter. All five `_TERMINAL_STATUSES` definitions are updated to include this value.
+
+**Migration**: no changes required for tolerant JSON consumers. Clients that exhaustively switch/match on `JobStatus` must add a case for `FAILED_EXPIRED`. Clients with strict-schema validators (`extra="forbid"`) must add the new fields to their schemas. Regenerate client types from `GET /openapi.json` (the snapshot in `tests/server/openapi_snapshot.json` has been updated).
+
+---
+
 ### [next release] — E0b FE-2: `export --wait` and `backup --now --wait` exit codes changed; `--timeout` option added
 
 **Surface**: `archon-search export --wait` and `archon-search backup --now --wait` CLI commands.

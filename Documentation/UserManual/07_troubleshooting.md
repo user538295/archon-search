@@ -82,6 +82,37 @@ The route returns 503 when *any* exception is raised by the collection-metadata 
 - Port already in use — change `[server].port`. #Unverified (a port collision causing the install-time health-check to time out specifically, vs. the service failing to start visibly, was not traced end-to-end)
 - Write failure on `db_path` or `log_file` parent — the installer creates these with `mkdir(parents=True, exist_ok=True)` (`install_cmd.py:96-99`), which does **not** raise if a parent already exists under another user. The failure surfaces later, when the server tries to create files inside a directory it cannot write to. If your `db_path` or `log_file` points at a custom location, verify the running user can write there.
 
+## Symptom: HyDE or RAG Fusion not working — "HyDE expansion failed" in response
+
+`POST /search` with `hyde=true` or `rag_fusion=true` returns a non-null `expansion_warning` (and `expansion_used: false`, because expansion fell back to the original query embedding).
+
+1. **Check `GET /status`** — if `[hyde] enabled = true` or `[rag_fusion] enabled = true` in your config, the response includes `hyde.key_available` or `rag_fusion.key_available`. A `false` value means `ANTHROPIC_API_KEY` is not set in the server process environment.
+2. **For the managed service**: the key must be in `~/.archon-search/.secrets.env` (one line: `ANTHROPIC_API_KEY=sk-...`). The wizard creates this file automatically (mode 600, empty) when HyDE or RAG Fusion is enabled — if you skipped the wizard, create it manually. The managed service sources this file at start time via the wrapper script (macOS) or `EnvironmentFile=` (Linux systemd). After editing the file, restart the service (`archon-search stop && archon-search start`).
+3. **For `archon-search serve` (container mode)**: pass the key as an environment variable to the container: `-e ANTHROPIC_API_KEY=sk-...`.
+4. **Run `archon-search status`** — it warns on stderr when HyDE or RAG Fusion is enabled but the key is absent: `Warning: HyDE enabled but ANTHROPIC_API_KEY is not set — expansion will fall back to plain search.`
+5. If the key is set but you still see `expansion_warning`, the Anthropic API call may be timing out. Raise `timeout_seconds` in the `[hyde]` or `[rag_fusion]` TOML section (default is `10.0` seconds).
+
+## Symptom: FAILED_EXPIRED ingest jobs
+
+`GET /status` reports `failed_expired_ingest_count > 0`, or `archon-search status` shows a count with a re-ingest hint.
+
+A `FAILED_EXPIRED` job is an ingest job that failed and was not successfully retried before the `retry_max_age_hours` window closed, **or** that exhausted all `retry_max_attempts` retries. The job will not be retried again automatically.
+
+1. **List affected jobs**: `GET /jobs?status=FAILED_EXPIRED` lists all expired jobs in your namespace. Each job's `error` field contains the failure message; `source_path` contains the original file path. (The `result` field is `null` for failed jobs — it is only populated for successfully completed ingest jobs.)
+2. **Re-ingest**: use `POST /ingest` with the path from the failed job, or `archon-search ingest <path>`. Fix the underlying cause (missing file, permission error, oversized sidecar) before re-ingesting.
+3. **Tune retry policy**: raise `[maintenance].retry_max_age_hours` (default 72) or `retry_max_attempts` (default 3) in `archon-search.toml` if transient failures are common in your environment. Changes take effect on the next maintenance pass.
+4. Jobs transition to `FAILED_EXPIRED` on the next maintenance pass after the cutoff — not at the exact expiry moment.
+
+## Symptom: ACL sidecar skipped — ingest returns warnings
+
+`IngestResult.warnings` (or `GET /jobs/{id}` result) contains a message about an ACL sidecar.
+
+An ACL sidecar file (`.acl` file next to the ingested document) was skipped because it exceeded the 64 KB size limit. The document was ingested without ACL enforcement — all authenticated namespaces can access it.
+
+1. **Check `archon-search ingest <path>` stderr** — warnings are printed there when a sidecar is skipped.
+2. **Check `GET /jobs/{id}`** — the job `result` dict includes a `warnings` list with the message naming the oversized file.
+3. **Resolution**: reduce the sidecar size (64 KB allows ~2500 namespace entries at 25 chars each). Alternatively, use front-matter `_acl` in the document file itself for small ACL lists — there is no *ACL-specific* size limit on front-matter ACL (document-level parsing limits may still apply).
+
 ## Related documents
 
 - [`02_configuration.md`](./02_configuration.md) — every key the loader validates.
