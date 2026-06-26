@@ -245,3 +245,102 @@ async def test_search_with_context_returns_hyde_applied_false_by_default() -> No
     payload = await _call_search_with_context(pipeline_result)
     assert "hyde_applied" in payload
     assert payload["hyde_applied"] is False
+
+
+# ---------------------------------------------------------------------------
+# BE-3: expansion_used and expansion_warning fields in search_with_context tool
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_with_context_expansion_warning_on_hyde_failure() -> None:
+    """search_with_context returns expansion_warning='HyDE expansion failed' when resolve_hyde_vector returns (None, False) with hyde=True."""
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
+    pipeline.search_with_context = AsyncMock(
+        return_value=SearchWithContextResult(
+            results=[],
+            pipeline_result=SearchPipelineResult(results=[], acl_filtered=False),
+        )
+    )
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
+        "archon_search.server.mcp.resolve_hyde_vector",
+        new=AsyncMock(return_value=(None, False)),
+    ):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search_with_context"]
+        result = await fn(query="hello", collection="col", hyde=True)
+
+    assert isinstance(result, dict)
+    assert result.get("expansion_used") is False
+    assert result.get("expansion_warning") == "HyDE expansion failed"
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_with_context_no_expansion_by_default() -> None:
+    """search_with_context returns expansion_used=False and expansion_warning=None when no expansion requested."""
+    pipeline_result = []
+    payload = await _call_search_with_context(pipeline_result)
+    assert payload.get("expansion_used") is False
+    assert payload.get("expansion_warning") is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_with_context_expansion_used_true_on_hyde_success() -> None:
+    """search_with_context returns expansion_used=True when HyDE succeeds."""
+    import numpy as np
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
+    pipeline.search_with_context = AsyncMock(
+        return_value=SearchWithContextResult(
+            results=[],
+            pipeline_result=SearchPipelineResult(results=[], acl_filtered=False),
+        )
+    )
+
+    fake_vector = np.ones(384, dtype=np.float32)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
+        "archon_search.server.mcp.resolve_hyde_vector",
+        new=AsyncMock(return_value=(fake_vector, True)),
+    ):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search_with_context"]
+        result = await fn(query="hello", collection="col", hyde=True)
+
+    assert isinstance(result, dict)
+    assert result.get("expansion_used") is True
+    assert result.get("expansion_warning") is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_with_context_expansion_warning_on_rag_fusion_timeout() -> None:
+    """search_with_context returns expansion_warning='RAG Fusion timed out' when pipeline has rag_fusion_warning."""
+    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
+    pipeline.search_with_context = AsyncMock(
+        return_value=SearchWithContextResult(
+            results=[],
+            pipeline_result=SearchPipelineResult(
+                results=[], acl_filtered=False, rag_fusion_applied=False, rag_fusion_warning="RAG Fusion timed out"
+            ),
+        )
+    )
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search_with_context"]
+        result = await fn(query="hello", collection="col", rag_fusion=True)
+
+    assert isinstance(result, dict)
+    assert result.get("expansion_used") is False
+    assert result.get("expansion_warning") == "RAG Fusion timed out"

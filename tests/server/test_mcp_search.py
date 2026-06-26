@@ -567,3 +567,124 @@ async def test_mcp_search_language_with_collections_returns_validation_error() -
     )
     # Must not have called search_many — rejected before fanout
     pipeline.search_many.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# BE-3: expansion_used and expansion_warning fields in MCP search tool
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_tool_returns_expansion_fields_on_hyde_failure() -> None:
+    """MCP search tool returns expansion_warning='HyDE expansion failed' when resolve_hyde_vector returns (None, False) with hyde=True."""
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
+    pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
+        "archon_search.server.mcp.resolve_hyde_vector",
+        new=AsyncMock(return_value=(None, False)),
+    ):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search"]
+        result = await fn(query="hello", collection="col", hyde=True)
+
+    assert isinstance(result, dict)
+    assert result.get("expansion_used") is False
+    assert result.get("expansion_warning") == "HyDE expansion failed"
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_tool_expansion_used_true_on_hyde_success() -> None:
+    """MCP search tool returns expansion_used=True when HyDE succeeds."""
+    import numpy as np
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
+    pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+
+    fake_vector = np.ones(384, dtype=np.float32)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
+        "archon_search.server.mcp.resolve_hyde_vector",
+        new=AsyncMock(return_value=(fake_vector, True)),
+    ):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search"]
+        result = await fn(query="hello", collection="col", hyde=True)
+
+    assert isinstance(result, dict)
+    assert result.get("expansion_used") is True
+    assert result.get("expansion_warning") is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_tool_no_expansion_by_default() -> None:
+    """MCP search tool returns expansion_used=False and expansion_warning=null when no expansion requested."""
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
+    pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search"]
+        result = await fn(query="hello", collection="col")
+
+    assert isinstance(result, dict)
+    assert result.get("expansion_used") is False
+    assert result.get("expansion_warning") is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_multi_collection_expansion_warning_on_hyde_failure() -> None:
+    """MCP search multi-collection path: expansion_warning='HyDE expansion failed' when HyDE fails."""
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.search_many = AsyncMock(
+        return_value=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
+        "archon_search.server.mcp.resolve_hyde_vector",
+        new=AsyncMock(return_value=(None, False)),
+    ):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search"]
+        result = await fn(query="hello", collections=["col1", "col2"], hyde=True)
+
+    assert isinstance(result, dict)
+    assert result.get("expansion_used") is False
+    assert result.get("expansion_warning") == "HyDE expansion failed"
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_multi_collection_expansion_used_true_on_rag_fusion_success() -> None:
+    """MCP search multi-collection path: expansion_used=True when RAG Fusion succeeds."""
+    import archon_search.server.mcp as mcp_module
+
+    pipeline = MagicMock()
+    pipeline.search_many = AsyncMock(
+        return_value=SearchPipelineResult(
+            results=[], acl_filtered=False, rag_fusion_applied=True, rag_fusion_queries_used=2
+        )
+    )
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        fn = fake_app.tools["search"]
+        result = await fn(query="hello", collections=["col1", "col2"], rag_fusion=True)
+
+    assert isinstance(result, dict)
+    assert result.get("expansion_used") is True
+    assert result.get("expansion_warning") is None

@@ -118,6 +118,8 @@ _SEARCH_RESPONSE_PUBLIC_FIELDS = {
     "acl_filtered",
     "excluded_collections",
     "hyde_applied",
+    "expansion_used",
+    "expansion_warning",
 }
 
 _COLLECTION_LIST_PUBLIC_FIELDS = {

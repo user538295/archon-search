@@ -85,6 +85,8 @@ class McpSearchResponse(BaseModel):
     acl_filtered: bool
     excluded_collections: list[ExcludedCollectionMcpSchema]
     hyde_applied: bool = False
+    expansion_used: bool = False
+    expansion_warning: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +149,8 @@ class SearchWithContextResponse(BaseModel):
 
     results: list[SearchWithContextItemSchema]
     hyde_applied: bool
+    expansion_used: bool = False
+    expansion_warning: str | None = None
 
 
 # ---------------------------------------------------------------------------

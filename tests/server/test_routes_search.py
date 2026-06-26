@@ -1229,3 +1229,184 @@ def test_search_many_rag_fusion_true(tmp_path: Path) -> None:
     assert call_kwargs.get("rag_fusion_config") is not None
     # HyDE must be suppressed: query_vector=None when rag_fusion=True
     assert call_kwargs.get("query_vector") is None
+
+
+# ---------------------------------------------------------------------------
+# BE-3: expansion_used and expansion_warning fields in SearchResponse
+# ---------------------------------------------------------------------------
+
+
+def test_search_response_expansion_used_true_on_hyde_success(tmp_path: Path) -> None:
+    """When HyDE succeeds (returns a vector), expansion_used=True and expansion_warning=null."""
+    import numpy as np
+
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(
+        results=[],
+        acl_filtered=False,
+    )
+    # HyDE returns a valid vector — hyde_applied=True
+    fake_vector = np.ones(384, dtype=np.float32)
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=(fake_vector, True)),
+    ):
+        response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expansion_used"] is True
+    assert data["expansion_warning"] is None
+
+
+def test_search_response_expansion_warning_on_hyde_failure(tmp_path: Path) -> None:
+    """When HyDE was requested but resolve_hyde_vector returns (None, False), expansion_warning='HyDE expansion failed'."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=False)
+    # HyDE fails: returns (None, False) with hyde=True requested
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=(None, False)),
+    ):
+        response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expansion_used"] is False
+    assert data["expansion_warning"] == "HyDE expansion failed"
+
+
+def test_search_response_expansion_used_or_logic(tmp_path: Path) -> None:
+    """expansion_used reflects hyde_applied OR rag_fusion_applied — tests both true and false paths."""
+    import numpy as np
+
+    app, client = _make_app(tmp_path)
+    # Case 1: HyDE succeeds → expansion_used=True
+    app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=False)
+    fake_vector = np.ones(384, dtype=np.float32)
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=(fake_vector, True)),
+    ):
+        resp1 = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+    assert resp1.status_code == 200
+    assert resp1.json()["expansion_used"] is True
+    assert resp1.json()["expansion_warning"] is None
+
+    # Case 2: HyDE fails → expansion_used=False
+    app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=False)
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=(None, False)),
+    ):
+        resp2 = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+    assert resp2.status_code == 200
+    assert resp2.json()["expansion_used"] is False
+    assert resp2.json()["expansion_warning"] == "HyDE expansion failed"
+
+
+def test_search_response_expansion_warning_on_rag_fusion_timeout(tmp_path: Path) -> None:
+    """When RAG Fusion timed out, expansion_warning='RAG Fusion timed out'."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(
+        results=[],
+        acl_filtered=False,
+    )
+    # Inject rag_fusion_warning on the pipeline result
+    app.state.pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(
+            results=[], acl_filtered=False, rag_fusion_applied=False, rag_fusion_warning="RAG Fusion timed out"
+        )
+    )
+    response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expansion_used"] is False
+    assert data["expansion_warning"] == "RAG Fusion timed out"
+
+
+def test_search_response_no_expansion_fields_default(tmp_path: Path) -> None:
+    """Without hyde/rag_fusion, expansion_used=False and expansion_warning=null."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=False)
+
+    response = client.post("/search", json={"collection": "col", "query": "q"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expansion_used"] is False
+    assert data["expansion_warning"] is None
+
+
+def test_search_response_expansion_used_true_on_rag_fusion_success(tmp_path: Path) -> None:
+    """When RAG Fusion succeeds (rag_fusion_applied=True), expansion_used=True and expansion_warning=None."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=False)
+    app.state.pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(
+            results=[], acl_filtered=False, rag_fusion_applied=True, rag_fusion_queries_used=3, rag_fusion_warning=None
+        )
+    )
+    response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expansion_used"] is True
+    assert data["expansion_warning"] is None
+
+
+def test_search_response_expansion_warning_on_rag_fusion_generic_error(tmp_path: Path) -> None:
+    """When RAG Fusion failed with a non-timeout error, expansion_warning='RAG Fusion expansion failed'."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=False)
+    app.state.pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(
+            results=[], acl_filtered=False, rag_fusion_applied=False, rag_fusion_warning="RAG Fusion expansion failed"
+        )
+    )
+    response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expansion_used"] is False
+    assert data["expansion_warning"] == "RAG Fusion expansion failed"
+
+
+def test_search_multi_collection_expansion_used_true_on_hyde_success(tmp_path: Path) -> None:
+    """Multi-collection path: when HyDE succeeds, expansion_used=True and expansion_warning=null."""
+    import numpy as np
+
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+    fake_vector = np.ones(384, dtype=np.float32)
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=(fake_vector, True)),
+    ):
+        response = client.post("/search", json={"collections": ["a", "b"], "query": "q", "hyde": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expansion_used"] is True
+    assert data["expansion_warning"] is None
+
+
+def test_search_multi_collection_expansion_warning_on_hyde_failure(tmp_path: Path) -> None:
+    """Multi-collection path: when HyDE was requested but fails, expansion_warning='HyDE expansion failed'."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=(None, False)),
+    ):
+        response = client.post("/search", json={"collections": ["a", "b"], "query": "q", "hyde": True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expansion_used"] is False
+    assert data["expansion_warning"] == "HyDE expansion failed"

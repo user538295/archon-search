@@ -27,6 +27,8 @@ from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 # TODO: make configurable via config.py (see /route for parity)
 _SEARCH_TIMEOUT_SECONDS = 30.0
 
+_HYDE_EXPANSION_FAILED_WARNING = "HyDE expansion failed"
+
 _FANOUT_VALIDATION_LIMIT = 8  # Pydantic-layer cap; must match SearchConfig.max_fanout default. See B3 known limitations.
 
 logger = logging.getLogger(__name__)
@@ -133,6 +135,8 @@ class SearchResponse(BaseModel):
     rag_fusion_applied: bool = False
     rag_fusion_queries_used: int = 0
     rag_fusion_attempted: bool = False
+    expansion_used: bool = False
+    expansion_warning: str | None = None
 
 
 @router.post("/search", response_model=SearchResponse)
@@ -148,12 +152,15 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     rag_fusion_gen = getattr(request.app.state, "rag_fusion_generator", None)
     if body.rag_fusion:
         hyde_vector, hyde_applied = None, False
+        hyde_expansion_warning: str | None = None
     else:
         generator = getattr(request.app.state, "hyde_generator", None)
         try:
             hyde_vector, hyde_applied = await resolve_hyde_vector(body.query, body.hyde, generator, config.hyde)
         except RuntimeError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=422)
+        # HyDE failure: requested but returned no vector
+        hyde_expansion_warning = _HYDE_EXPANSION_FAILED_WARNING if (body.hyde and not hyde_applied) else None
 
     if body.collections is not None:
         try:
@@ -192,6 +199,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 )
             except Exception:
                 logger.warning("telemetry: search_multi entry enqueue failed", exc_info=True)
+        _multi_expansion_warning = hyde_expansion_warning or result.rag_fusion_warning
         return SearchResponse(
             results=schemas,
             acl_filtered=result.acl_filtered,
@@ -204,6 +212,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             rag_fusion_applied=result.rag_fusion_applied,
             rag_fusion_queries_used=result.rag_fusion_queries_used,
             rag_fusion_attempted=result.rag_fusion_attempted,
+            expansion_used=hyde_applied or result.rag_fusion_applied,
+            expansion_warning=_multi_expansion_warning,
         )
 
     try:
@@ -280,6 +290,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 except Exception:
                     logger.warning("telemetry: search entry enqueue failed", exc_info=True)
             _emit_timings()
+            _expansion_warning = hyde_expansion_warning or result.rag_fusion_warning
             return SearchResponse(
                 results=schemas,
                 acl_filtered=result.acl_filtered,
@@ -292,6 +303,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 rag_fusion_applied=result.rag_fusion_applied,
                 rag_fusion_queries_used=result.rag_fusion_queries_used,
                 rag_fusion_attempted=result.rag_fusion_attempted,
+                expansion_used=hyde_applied or result.rag_fusion_applied,
+                expansion_warning=_expansion_warning,
             )
         except RAGFusionDependencyError as exc:
             _emit_timings()

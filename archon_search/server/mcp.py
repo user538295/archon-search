@@ -40,7 +40,7 @@ from archon_search.server.routes_explain import (
     RoutingCandidate,
     RoutingExplain,
 )
-from archon_search.server.routes_search import _FANOUT_VALIDATION_LIMIT
+from archon_search.server.routes_search import _FANOUT_VALIDATION_LIMIT, _HYDE_EXPANSION_FAILED_WARNING
 from archon_search.store import StoreBusyError
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
@@ -265,6 +265,7 @@ def create_app(
             _rf_config = RAGFusionConfig()
         if rag_fusion:
             hyde_vector, hyde_applied = None, False
+            _search_hyde_expansion_warning: str | None = None
         else:
             _hyde_config = getattr(config, "hyde", None)
             if _hyde_config is None:
@@ -274,6 +275,8 @@ def create_app(
                 hyde_vector, hyde_applied = await resolve_hyde_vector(query, hyde, hyde_generator, _hyde_config)
             except RuntimeError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
+            # HyDE failure: requested but returned no vector
+            _search_hyde_expansion_warning = _HYDE_EXPANSION_FAILED_WARNING if (hyde and not hyde_applied) else None
 
         # Multi-collection fan-out path (B3). The single-collection path below is
         # unchanged; when neither field is set it falls back to default_collection.
@@ -348,6 +351,7 @@ def create_app(
                     if not include_metadata:
                         rs.metadata = {}
                     result_schemas.append(rs)
+                _multi_expansion_warning = _search_hyde_expansion_warning or result_obj.rag_fusion_warning
                 response = McpSearchResponse(
                     results=result_schemas,
                     acl_filtered=result_obj.acl_filtered,
@@ -356,6 +360,8 @@ def create_app(
                         for e in result_obj.excluded_collections
                     ],
                     hyde_applied=hyde_applied,
+                    expansion_used=hyde_applied or result_obj.rag_fusion_applied,
+                    expansion_warning=_multi_expansion_warning,
                 )
                 return response.model_dump(mode="json")
             except ValidationError as exc:
@@ -427,6 +433,7 @@ def create_app(
                     if not include_metadata:
                         rs.metadata = {}
                     result_schemas.append(rs)
+                _single_expansion_warning = _search_hyde_expansion_warning or result_obj.rag_fusion_warning
                 response = McpSearchResponse(
                     results=result_schemas,
                     acl_filtered=result_obj.acl_filtered,
@@ -435,6 +442,8 @@ def create_app(
                         for e in result_obj.excluded_collections
                     ],
                     hyde_applied=hyde_applied,
+                    expansion_used=hyde_applied or result_obj.rag_fusion_applied,
+                    expansion_warning=_single_expansion_warning,
                 )
                 return response.model_dump(mode="json")
             except ValidationError as exc:
@@ -475,8 +484,8 @@ def create_app(
     ) -> dict[str, Any]:
         """Search and return surrounding chunks for richer context.
 
-        Returns ``{"results": [...], "hyde_applied": bool, "rag_fusion_applied": bool,
-        "rag_fusion_queries_used": int, "rag_fusion_attempted": bool}``.
+        Returns ``{"results": [...], "hyde_applied": bool, "expansion_used": bool,
+        "expansion_warning": str | null}``.
         """
         _swc_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
@@ -489,6 +498,7 @@ def create_app(
             _swc_rf_config = RAGFusionConfig()
         if rag_fusion:
             swc_hyde_vector, swc_hyde_applied = None, False
+            _swc_hyde_expansion_warning: str | None = None
         else:
             _swc_hyde_config = getattr(config, "hyde", None)
             if _swc_hyde_config is None:
@@ -500,6 +510,8 @@ def create_app(
                 )
             except RuntimeError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
+            # HyDE failure: requested but returned no vector
+            _swc_hyde_expansion_warning = _HYDE_EXPANSION_FAILED_WARNING if (hyde and not swc_hyde_applied) else None
 
         try:
             try:
@@ -585,7 +597,13 @@ def create_app(
                             context_after=context_after,
                         )
                     )
-                response = SearchWithContextResponse(results=items, hyde_applied=swc_hyde_applied)
+                _swc_expansion_warning = _swc_hyde_expansion_warning or _swc_pipeline_result.rag_fusion_warning
+                response = SearchWithContextResponse(
+                    results=items,
+                    hyde_applied=swc_hyde_applied,
+                    expansion_used=swc_hyde_applied or _swc_pipeline_result.rag_fusion_applied,
+                    expansion_warning=_swc_expansion_warning,
+                )
                 return response.model_dump(mode="json")
             except ValidationError as exc:
                 return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)

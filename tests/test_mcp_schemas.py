@@ -104,6 +104,8 @@ def test_mcp_search_response_fields():
         "acl_filtered",
         "excluded_collections",
         "hyde_applied",
+        "expansion_used",
+        "expansion_warning",
     }
 
 
@@ -255,6 +257,8 @@ def test_search_with_context_response_fields():
     assert set(SearchWithContextResponse.model_fields.keys()) == {
         "results",
         "hyde_applied",
+        "expansion_used",
+        "expansion_warning",
     }
 
 

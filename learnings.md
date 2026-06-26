@@ -2,6 +2,16 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0b BE-2: Changing exception-swallowing to re-raise breaks existing tests that asserted the swallowed behavior**
+- Observation: `rag_fusion.generate_variants()` previously caught `asyncio.TimeoutError` and generic `Exception` and returned `[]`. Three existing tests (`test_generate_variants_timeout_fallback`, `test_generate_variants_api_error_fallback`, `test_fingerprint_no_raw_query_in_log`) all asserted `result == []` or called the function without `pytest.raises`. When BE-2 changed both handlers to `raise`, all three broke. Found immediately by running the rag_fusion test file before the full suite.
+- Action: When changing exception-swallowing code to re-raise, always grep for tests that call the function without `pytest.raises`. Run that file's tests before the full suite to catch failures fast.
+- Confidence: high
+
+**2026-06-26 — E0b BE-2: asyncio.TimeoutError IS a subclass of Exception in Python 3.12 — verify MRO before assuming handler ordering doesn't matter**
+- Observation: `asyncio.TimeoutError` inherits from `TimeoutError` → `OSError` → `Exception` → `BaseException`. The `except asyncio.TimeoutError` handler MUST come before `except Exception` to catch TimeoutErrors specifically. The implementation correctly ordered them, but this was verified empirically (`uv run python3 -c "print(issubclass(asyncio.TimeoutError, Exception))"` returned `True`).
+- Action: When writing `except asyncio.TimeoutError` followed by `except Exception`, always verify the ordering is correct. `asyncio.TimeoutError` is NOT a subclass of `BaseException` alone — it IS a subclass of `Exception`, so ordering matters.
+- Confidence: high
+
 **2026-06-26 — E0b BE-1: Default value changes have a blast radius — always grep all 5 artifact types before committing**
 - Observation: Raising `HyDEConfig.timeout_seconds` and `RAGFusionConfig.timeout_seconds` from 5.0 → 10.0 required updates across 6 files beyond `config.py`: `tests/test_config.py` (3 assertions), `tests/test_config_defaults.py` (snapshot dict), `archon-search.toml.example` (2 lines), `Documentation/UserManual/05_searching.md` (3 lines), `Documentation/UserManual/02_wizard.md` (2 lines). The initial diff only touched `config.py` and `test_config_defaults.py`. All 4 reviewers (3 DA + Brooks-Lint) caught the same omissions.
 - Action: When changing a default value, before committing, grep for the old value across: (1) test assertion files (`tests/test_config.py`), (2) example config files (`*.toml.example`), (3) user manual docs (`Documentation/UserManual/`), (4) architecture docs, (5) any other snapshot/expected-dict tests. The snapshot test in `test_config_defaults.py` is not sufficient alone — `test_config.py` has per-field assertions that must also be updated.

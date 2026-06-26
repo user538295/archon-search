@@ -681,8 +681,8 @@ def test_mcp_search_with_context_rag_fusion() -> None:
     result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True))
 
     assert isinstance(result, dict)
-    # SearchWithContextResponse only exposes results and hyde_applied
-    assert set(result.keys()) == {"results", "hyde_applied"}
+    # SearchWithContextResponse exposes results, hyde_applied, expansion_used, expansion_warning
+    assert set(result.keys()) == {"results", "hyde_applied", "expansion_used", "expansion_warning"}
     assert "rag_fusion_applied" not in result
     assert "rag_fusion_queries_used" not in result
     assert "rag_fusion_attempted" not in result
@@ -832,7 +832,7 @@ def test_search_returns_mcp_search_response_shape() -> None:
     result = asyncio.run(tool_fn(query="hello", collection="col1"))
 
     assert isinstance(result, dict)
-    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied"}
+    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied", "expansion_used", "expansion_warning"}
 
 
 def test_search_include_metadata_false_clears_metadata() -> None:
@@ -876,7 +876,7 @@ def test_search_multi_collection_returns_mcp_search_response_shape() -> None:
     result = asyncio.run(tool_fn(query="hello", collections=["col1", "col2"]))
 
     assert isinstance(result, dict)
-    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied"}
+    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied", "expansion_used", "expansion_warning"}
 
 
 def test_search_acl_filtered_with_excluded_collections() -> None:
