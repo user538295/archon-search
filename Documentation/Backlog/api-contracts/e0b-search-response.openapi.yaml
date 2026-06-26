@@ -1,0 +1,93 @@
+openapi: 3.0.0
+info:
+  title: Search API — expansion transparency (E0b L7)
+  version: 0.0.0
+tags: []
+paths:
+  /search:
+    post:
+      operationId: Search_search
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+components:
+  schemas:
+    SearchRequest:
+      type: object
+      required:
+        - query
+        - collection
+        - hyde
+        - rag_fusion
+      properties:
+        query:
+          type: string
+        collection:
+          type: string
+        hyde:
+          type: boolean
+        rag_fusion:
+          type: boolean
+    SearchResponse:
+      type: object
+      required:
+        - results
+        - acl_filtered
+        - embedding_model
+        - hyde_applied
+        - rag_fusion_applied
+        - rag_fusion_queries_used
+        - rag_fusion_attempted
+        - expansion_used
+        - expansion_warning
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        acl_filtered:
+          type: boolean
+        embedding_model:
+          type: string
+        hyde_applied:
+          type: boolean
+        rag_fusion_applied:
+          type: boolean
+        rag_fusion_queries_used:
+          type: integer
+          format: int32
+        rag_fusion_attempted:
+          type: boolean
+        expansion_used:
+          type: boolean
+          description: True when HyDE or RAG Fusion successfully contributed to the result set.
+        expansion_warning:
+          type: string
+          nullable: true
+          description: Non-null when expansion was requested but failed (timeout, missing key, API error).
+      description: SearchResponse shape after E0b L7. Additive — no existing fields removed.
+    SearchResult:
+      type: object
+      required:
+        - id
+        - score
+        - content
+      properties:
+        id:
+          type: string
+        score:
+          type: number
+          format: float
+        content:
+          type: string

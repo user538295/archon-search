@@ -1,0 +1,71 @@
+openapi: 3.0.0
+info:
+  title: Status API — expansion key availability (E0b L6)
+  version: 0.0.0
+tags: []
+paths:
+  /status:
+    get:
+      operationId: Status_status
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+components:
+  schemas:
+    HydeStatusDetail:
+      type: object
+      required:
+        - key_available
+      properties:
+        key_available:
+          type: boolean
+          description: True when ANTHROPIC_API_KEY is present in the server environment at startup.
+      description: 'L6: HyDE expansion availability detail nested under GET /status.'
+    RagFusionStatusDetail:
+      type: object
+      required:
+        - key_available
+      properties:
+        key_available:
+          type: boolean
+          description: True when ANTHROPIC_API_KEY is present in the server environment at startup.
+      description: 'L6: RAG Fusion expansion availability detail nested under GET /status.'
+    StatusResponse:
+      type: object
+      required:
+        - running
+        - pid
+        - version
+        - hyde
+        - rag_fusion
+        - failed_expired_ingest_count
+      properties:
+        running:
+          type: boolean
+        pid:
+          type: integer
+          format: int32
+        version:
+          type: string
+        hyde:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/HydeStatusDetail'
+          nullable: true
+          description: Null when [hyde] is not configured.
+        rag_fusion:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/RagFusionStatusDetail'
+          nullable: true
+          description: Null when [rag_fusion] is not configured.
+        failed_expired_ingest_count:
+          type: integer
+          format: int32
+          description: 'L10: count of IngestJobs that aged past retry_max_age_hours without completing.'
+      description: Partial StatusResponse showing only E0b L6 additions.

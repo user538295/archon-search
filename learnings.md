@@ -1,5 +1,42 @@
 # Learnings
 
+## What Has Worked
+
+**2026-06-26 — E0b iterative-review on team plan: route-level vs pipeline-level seam is a plan killer**
+- Observation: The initial E0b plan put `expansion_warning` on `SearchPipelineResult` (C4 contract). Three independent DA agents and Brooks-Lint all caught that HyDE runs at the ROUTE level before `pipeline.search()` is called — the pipeline never sees HyDE. The fix was to split: RAG Fusion warning on `SearchPipelineResult`, HyDE warning assembled at route level. A second subtlety: `resolve_hyde_vector()` returns `(None, False)` for ALL failure modes (timeout, API error, empty response, missing key) — you cannot distinguish them at call time. Fix: use a generic "HyDE expansion failed" message, not "HyDE timed out".
+- Action: Before putting any "failure signal" on a domain result type, verify WHERE the failing operation runs (route vs pipeline vs use-case). If it runs outside the pipeline, it cannot populate a pipeline-level field. Also: check whether exception types are distinguishable at the call site before naming a specific failure mode in a warning message.
+- Confidence: high
+
+**2026-06-26 — E0b iterative-review: _TERMINAL_STATUSES has 5 independent definitions — always enumerate all when adding a new terminal state**
+- Observation: Adding `FAILED_EXPIRED` to `JobStatus` enum would have been broken without updating `_TERMINAL_STATUSES` in all 5 places: `jobs/store.py:26`, `server/routes_jobs.py:28`, `cli/backup_cmd.py:31`, `cli/export_cmd.py:14`, `cli/collection.py:22`. Three use string literals, two use enum members. Missing even one causes purge bugs or infinite poll loops. The plan originally missed all five.
+- Action: When adding a new terminal `JobStatus` value, always grep for `_TERMINAL_STATUSES` and enumerate every occurrence in the task description. This is a known-fragile cross-cutting concern.
+- Confidence: high
+
+**2026-06-26 — E0b iterative-review: return type changes on internal functions require full call-chain enumeration**
+- Observation: `acl.read_acl_sidecar()` return type was changing but the plan only listed `pipeline.py` as a caller to update. The actual caller chain is `read_acl_sidecar → resolve_acl → pipeline.py`. `pipeline.py` never calls `read_acl_sidecar` directly — it calls `resolve_acl`. A tuple return from `read_acl_sidecar` would make `resolve_acl` return a tuple where callers expect `list[str] | None`, with no TypeError (tuples are truthy) — silent wrong behavior. Also: `resolve_acl` has a front-matter early-return path that bypasses `read_acl_sidecar` entirely and also needs updating.
+- Action: For any return-type change, grep ALL callers of the function, trace the full call chain, and check every branch within intermediate functions.
+- Confidence: high
+
+**2026-06-26 — E0b iterative-review: maintenance loop restructuring must respect variable ordering in the existing loop body**
+- Observation: The plan said to change the maintenance loop age filter from `continue` to a FAILED_EXPIRED transition. But `retry_key` (needed to identify and dedup the job) is computed AFTER the age filter in the current code. An implementer following the plan naively would transition to FAILED_EXPIRED with no dedup key and no retry count check. The plan needed an explicit implementation note: move `retry_key` computation BEFORE the age filter.
+- Action: When restructuring a loop that has ordering-dependent variable initialization, always read the existing code and note which variables must be computed before the new branch point.
+- Confidence: high
+
+**2026-06-26 — E0b plan-maker-for-team: inline investigation fallback when subagents don't self-report**
+- Observation: Six investigation subagents were launched in parallel. Two (contracts, architecture) self-reported rich findings. Four others (scenarios, backend, frontend, tester) went idle without reporting despite repeated nudges. Fell back to inline investigation (reading key files directly) and synthesised all four areas inline. Total additional time ~10 min; plan quality was not degraded.
+- Action: When a subagent sends only `idle_notification` without content after 2 nudges, stop waiting and do the investigation inline. `SendMessage` nudges are not guaranteed to elicit responses; treat 2 failed nudges as a fallback trigger.
+- Confidence: high
+
+**2026-06-26 — E0b plan-maker-for-team: telemetry truncation was already implemented (L11 scope reduction)**
+- Observation: The brief described L11 as "instead of dropping, truncate result_doc_ids." Investigation found `writer.py:_truncate_to_fit()` (lines 202–240) already does exactly this (implemented in D8). The actual work for L11 is smaller: add `truncated_count` to `TelemetryStatsResponse` and count in `reader.compute_stats()` — no writer changes needed.
+- Action: Before scoping any L# work item, grep the implementation area first — prior deliverables (D1–D9) often already address part of the brief. Never scope from the brief alone without codebase verification.
+- Confidence: high
+
+**2026-06-26 — E0a T-2 close-out: iterative-review caught a real accuracy issue in architecture docs**
+- Observation: The initial 110 catalog entry used "to plain text" which was inaccurate for docling's `export_to_markdown()` path. The iterative review with 3 DA agents + Brooks-Lint surfaced this as a Major issue and identified the fix: use "Extract text" (generic, accurate for all paths). The review also caught that exhaustive inline extension enumeration would drift — trimmed to the catalog's established abstraction level.
+- Action: When updating architecture catalog entries that enumerate format support, use verb "Extract text" not "plain text" or "Markdown" — both are path-specific and inaccurate in the general case. Keep catalog entries at the abstraction level of other entries in the same table (one row = purpose + key symbols, not routing implementation detail).
+- Confidence: high
+
 ## What Has Failed
 
 **2026-06-26 — implement-all T-1: subagent stops after review without committing or checking off plan**

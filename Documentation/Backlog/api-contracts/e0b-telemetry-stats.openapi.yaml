@@ -1,0 +1,44 @@
+openapi: 3.0.0
+info:
+  title: Telemetry Stats API — truncation count (E0b L11)
+  version: 0.0.0
+tags: []
+paths:
+  /telemetry/stats:
+    get:
+      operationId: TelemetryStats_stats
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsResponse'
+components:
+  schemas:
+    StatsResponse:
+      type: object
+      required:
+        - schema_version
+        - enabled
+        - total_queries
+        - skipped_lines
+        - truncated_count
+      properties:
+        schema_version:
+          type: integer
+          format: int32
+        enabled:
+          type: boolean
+        total_queries:
+          type: integer
+          format: int32
+        skipped_lines:
+          type: integer
+          format: int32
+        truncated_count:
+          type: integer
+          format: int32
+          description: 'L11: count of entries where result_doc_ids was truncated to fit MAX_ENTRY_BYTES.'
+      description: StatsResponse shape after E0b L11. Additive — no existing fields removed.

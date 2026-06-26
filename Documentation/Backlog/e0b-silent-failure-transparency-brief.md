@@ -52,7 +52,7 @@ Every silent failure surface emits an observable signal: a response field, a CLI
 
 ## In Scope
 - **L7**: Raise `HyDE.timeout_seconds` default from 5.0 → 10.0; same for `RAGFusionConfig.timeout_seconds`. Add `expansion_used: bool` and `expansion_warning: str | null` to `SearchResponse` in `schemas.py`. Populate in `pipeline.py` search path.
-- **L6**: Add `EnvironmentFile=~/.archon-search/.secrets.env` to macOS (`platform/macos.py`) and Linux (`platform/linux.py`) service templates. Wizard (`install.py`) creates the empty `.secrets.env` file (mode 600) when HyDE or RAG Fusion is selected. Add `hyde.key_available: bool` and `rag_fusion.key_available: bool` to `GET /status` response. `archon-search status` CLI warns when enabled but key unavailable.
+- **L6**: Add `EnvironmentFile=~/.archon-search/.secrets.env` to Linux (`platform/linux.py`) service template. For macOS (`platform/macos.py`), use a wrapper script that sources `.secrets.env` before exec (launchd does not support `EnvironmentFile` natively). Wizard (`install.py`) creates the empty `.secrets.env` file (mode 600) when HyDE or RAG Fusion is selected. Add `hyde.key_available: bool` and `rag_fusion.key_available: bool` to `GET /status` response. `archon-search status` CLI warns when enabled but key unavailable.
 - **L10**: Add `FAILED_EXPIRED` to `JobStatus` enum in `_types.py`. Maintenance loop transitions aged-out jobs to `FAILED_EXPIRED` instead of ignoring them. `GET /jobs` supports `?status=FAILED_EXPIRED`. `archon-search status` surfaces a count.
 - **L11**: Truncate `result_doc_ids` in telemetry writer when entry exceeds `MAX_ENTRY_BYTES`; set `truncated: true` on the entry. Add `truncated_count` to `GET /telemetry/stats` response.
 - **L14**: Add `warnings: list[str]` to `IngestResult` (or reuse an existing result field). Populate with ACL sidecar size warning when skipped. Surface in CLI ingest output.
@@ -72,12 +72,13 @@ Every silent failure surface emits an observable signal: a response field, a CLI
 ## Edge Cases & Constraints
 - **`expansion_warning` when both HyDE and RAG Fusion fail**: Only one can be active (they are mutually exclusive); single warning field is sufficient.
 - **`FAILED_EXPIRED` transition race**: The maintenance loop already holds a lock per collection during retry evaluation; the state transition is atomic within that lock.
-- **`.secrets.env` file absent after upgrade**: The `EnvironmentFile=` directive with a missing file causes systemd/launchd to fail service start. The template must use `EnvironmentFile=-~/.archon-search/.secrets.env` (note the leading `-` which makes the file optional in systemd) and launchd equivalent.
+- **`.secrets.env` file absent after upgrade**: systemd must use `EnvironmentFile=-~/.archon-search/.secrets.env` (leading `-` = optional). The macOS wrapper script must guard with `[ -f .secrets.env ] && source .secrets.env` so a missing file is a no-op, not a startup failure.
 - **Telemetry `truncated_count` backfill**: Only entries written after this change carry `truncated: true`; historical entries don't. Stats accumulate from deploy time — documented behaviour.
 - **`--wait` exit codes**: Current behaviour undocumented; making exit 2 = FAILED and exit 0 = success-or-timeout is a new contract. Document in CLI help text and `BREAKING.md` if the exit code was previously relied upon.
 
 ## Open Questions
-- **L6 — launchd `EnvironmentFile` equivalent**: launchd plist does not natively support `EnvironmentFile`. The standard workaround is a wrapper script that sources the file before exec. Confirm whether this is acceptable UX or whether the wizard should just write the key directly to the plist (with a security warning). Planning must decide.
+
+None — all resolved.
 
 ## Future Iterations
 - Push notifications (webhook / email) when `FAILED_EXPIRED` jobs accumulate — needs a notification channel abstraction.
