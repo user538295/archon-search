@@ -410,8 +410,38 @@ def test_ingest_result_schema_fields():
     from archon_search.server.mcp_schemas import IngestResultSchema
 
     actual = set(IngestResultSchema.model_fields.keys())
-    assert actual == {"doc_id", "chunks_created", "status", "error"}
+    assert actual == {"doc_id", "chunks_created", "status", "error", "warnings"}
     assert "needs_recompute" not in actual
+
+
+def test_mcp_ingest_result_schema_includes_warnings():
+    """IngestResultSchema.from_result() includes the warnings field."""
+    from archon_search._types import IngestResult
+    from archon_search.server.mcp_schemas import IngestResultSchema
+
+    r = IngestResult(
+        doc_id="d1",
+        chunks_created=3,
+        status="ok",
+        error=None,
+        needs_recompute=False,
+        warnings=["ACL sidecar /tmp/doc.md.acl exceeds 64 KB limit (70000 bytes); ACL not applied"],
+    )
+    schema = IngestResultSchema.from_result(r)
+    assert hasattr(schema, "warnings")
+    assert schema.warnings == r.warnings
+    assert len(schema.warnings) == 1
+    assert "64 KB" in schema.warnings[0]
+
+
+def test_mcp_ingest_result_schema_warnings_default_empty():
+    """IngestResultSchema.from_result() with no warnings produces empty list."""
+    from archon_search._types import IngestResult
+    from archon_search.server.mcp_schemas import IngestResultSchema
+
+    r = IngestResult(doc_id="d1", chunks_created=1, status="ok")
+    schema = IngestResultSchema.from_result(r)
+    assert schema.warnings == []
 
 
 def test_ingest_result_schema_from_result_excludes_needs_recompute():

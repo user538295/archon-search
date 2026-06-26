@@ -307,7 +307,7 @@ class SearchPipeline:
             _acl = None
 
         # Resolve effective ACL for this document
-        resolved_acl, _acl_warnings = resolve_acl(path, _acl)  # BE-7: wire _acl_warnings into IngestResult.warnings
+        resolved_acl, acl_warnings = resolve_acl(path, _acl)
 
         # Derive metadata fields at the call site (Task 3.3).
         file_type = path.suffix.lower().lstrip(".")
@@ -370,7 +370,7 @@ class SearchPipeline:
             language=lang,
         )
         if not records:
-            return IngestResult(doc_id=doc_id, chunks_created=0, status="ok")
+            return IngestResult(doc_id=doc_id, chunks_created=0, status="ok", warnings=acl_warnings)
 
         # C3a / C3b / C3c: enrich every chunk with symbol or heading/page metadata.
         for record in records:
@@ -403,7 +403,7 @@ class SearchPipeline:
             try:
                 await self.store.delete_document(collection, doc_id, namespace=namespace, skip_fts_optimize=True)
             except StoreBusyError:
-                return IngestResult(doc_id=doc_id, chunks_created=0, status="error")
+                return IngestResult(doc_id=doc_id, chunks_created=0, status="error", warnings=acl_warnings)
 
             chunks_created = 0
             needs_recompute = False
@@ -429,7 +429,7 @@ class SearchPipeline:
                     chunks_created += ingest_result.chunks_ingested
                     needs_recompute = needs_recompute or ingest_result.needs_recompute
             except StoreBusyError:
-                return IngestResult(doc_id=doc_id, chunks_created=0, status="error")
+                return IngestResult(doc_id=doc_id, chunks_created=0, status="error", warnings=acl_warnings)
 
             if rebuild_fts and needs_recompute:
                 await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
@@ -455,6 +455,7 @@ class SearchPipeline:
             chunks_created=chunks_created,
             status="ok",
             needs_recompute=needs_recompute,
+            warnings=acl_warnings,
         )
 
     async def ingest_directory(

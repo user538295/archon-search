@@ -101,6 +101,11 @@
 - Action: When using `with patch(...)` in synchronous TestClient tests, always place the HTTP request call AND all assertions inside the `with` block. There is no downside; it eliminates fragility and makes the scope of the mock explicit.
 - Confidence: high
 
+**2026-06-26 — E0b BE-6: Scope boundary — pipeline unpack-only change is intentional; mcp_schemas.py belongs to BE-7**
+- Observation: `read_acl_sidecar()` and `resolve_acl()` return type changed to `tuple`. `pipeline.py` was updated to unpack but discard `_acl_warnings` (prefixed with `_` to signal intent). All four reviewers (3 DA + Brooks-Lint) flagged this as Critical/Major, but these findings were out-of-scope for BE-6 — BE-7 explicitly owns the "collect into IngestResult.warnings" step and "update mcp_schemas.py". The only real actionable Moderate finding was a missing test: no test verified that `resolve_acl()` correctly propagates the warning from `read_acl_sidecar()` on the oversized path.
+- Action: When a tuple return change spans two tasks (entity-level signature in BE-6, use-case collection in BE-7), add a `# BE-N: wire X into Y` comment at the discard site and a test that verifies the tuple propagation through any intermediate function (here: `resolve_acl → read_acl_sidecar`). The test is cheap and catches future refactors that accidentally swallow the warning.
+- Confidence: high
+
 **2026-06-26 — E0a BE-3: Extras names vs transitive packages are different things — don't confuse them in docs**
 - Observation: The initial extras note said `(e.g. mammoth for .docx, openpyxl for .xlsx, olefile for .msg)` calling these "extras declared in pyproject.toml." A DA reviewer correctly flagged that `mammoth`, `openpyxl`, `olefile` are transitive packages, not the extra names. The actual extras in pyproject.toml are `[docx]`, `[xlsx]`, `[outlook]`. Users grepping pyproject.toml for `mammoth` would find nothing. The fix: name the actual extras spec (`markitdown[docx,pptx,xls,xlsx,outlook]`) and describe the transitive packages as "required backends... transitively installed."
 - Action: When documenting dependency extras, name the extra spec exactly as it appears in pyproject.toml, and separately describe transitive packages as "transitively installed by" those extras. Never call a transitive package an "extra."

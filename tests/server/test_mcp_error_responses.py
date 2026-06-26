@@ -278,7 +278,7 @@ async def test_mcp_ingest_file_accepts_legitimate_absolute_path() -> None:
     app = _make_app(pipeline)
     result = await app.tools["ingest_file"](path="/tmp/legit.md", collection=None)
     assert isinstance(result, dict)
-    assert result == {"doc_id": "doc1", "chunks_created": 3, "status": "ok", "error": None}
+    assert result == {"doc_id": "doc1", "chunks_created": 3, "status": "ok", "error": None, "warnings": []}
 
 
 # ---------------------------------------------------------------------------
@@ -333,4 +333,4 @@ async def test_mcp_ingest_directory_accepts_legitimate_absolute_path() -> None:
     app = _make_app(pipeline)
     result = await app.tools["ingest_directory"](path="/tmp/legitdir", collection=None)
     assert isinstance(result, list)
-    assert result == [{"doc_id": "d", "chunks_created": 1, "status": "ok", "error": None}]
+    assert result == [{"doc_id": "d", "chunks_created": 1, "status": "ok", "error": None, "warnings": []}]

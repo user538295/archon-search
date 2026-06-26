@@ -71,8 +71,11 @@ async def _dispatch_ingest(
     embedder_cache: "EmbedderCache",
     pipeline: Any,
     config: Any,
-) -> None:
-    """Resolve per-collection embedder and dispatch to pipeline.ingest_file / ingest_directory."""
+) -> list[str]:
+    """Resolve per-collection embedder and dispatch to pipeline.ingest_file / ingest_directory.
+
+    Returns a flat list of warning strings collected from all IngestResult objects.
+    """
     meta = await search_store.get_collection_meta(body.collection, namespace)
     active_model = (meta.active_embedding_model if meta else "") or config.embedding_model
     embedder = await embedder_cache.get_or_load(active_model)
@@ -80,13 +83,15 @@ async def _dispatch_ingest(
     if body.path is not None:
         p = Path(body.path)
         if p.is_file():
-            await pipeline.ingest_file(
+            result = await pipeline.ingest_file(
                 p, body.collection, embedder=embedder, namespace=namespace, ingested_by=body.ingested_by
             )
+            return list(result.warnings)
         elif p.is_dir():
-            await pipeline.ingest_directory(
+            results = await pipeline.ingest_directory(
                 p, body.collection, embedder=embedder, namespace=namespace, ingested_by=body.ingested_by
             )
+            return [w for r in results for w in r.warnings]
         else:
             raise FileNotFoundError(f"path does not exist or is not a file/directory: {body.path}")
     elif body.documents is not None:
@@ -96,6 +101,7 @@ async def _dispatch_ingest(
             )
         else:
             logger.warning("pipeline has no ingest_documents method; skipping documents ingest for collection %s", body.collection)
+    return []
 
 
 async def _default_ingest_task(
@@ -113,8 +119,9 @@ async def _default_ingest_task(
     """Lifecycle wrapper: PENDING → RUNNING → DONE/FAILED/CANCELLED."""
     try:
         store.update(job_id, status=JobStatus.RUNNING)
+        ingest_warnings: list[str] = []
         if pipeline_fn is None and search_store is not None and embedder_cache is not None and pipeline is not None and config is not None:
-            await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
+            ingest_warnings = await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
         else:
             await _run_pipeline(job_id, store, body, pipeline_fn, namespace=namespace)
         # Check for cancellation before marking DONE
@@ -122,7 +129,7 @@ async def _default_ingest_task(
         if job and job.status == JobStatus.CANCELLING:
             store.update(job_id, status=JobStatus.CANCELLED)
             return
-        store.update(job_id, status=JobStatus.DONE)
+        store.update(job_id, status=JobStatus.DONE, result={"warnings": ingest_warnings})
     except asyncio.CancelledError:
         try:
             store.update(job_id, status=JobStatus.CANCELLED)
@@ -157,13 +164,14 @@ async def _default_ingest_task_with_lock(
     """
     try:
         store.update(job_id, status=JobStatus.RUNNING)
+        ingest_warnings: list[str] = []
         if pipeline_fn is None and search_store is not None and embedder_cache is not None and pipeline is not None and config is not None:
             # Release the pre-acquired lock before dispatch: pipeline.ingest_file /
             # ingest_directory will acquire it internally. Holding it here would
             # deadlock since asyncio.Lock is not reentrant.
             if held_lock is not None and held_lock.locked():
                 held_lock.release()
-            await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
+            ingest_warnings = await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
         else:
             await _run_pipeline(
                 job_id, store, body, pipeline_fn, namespace=namespace, locked_by_caller=True
@@ -172,7 +180,7 @@ async def _default_ingest_task_with_lock(
         if job and job.status == JobStatus.CANCELLING:
             store.update(job_id, status=JobStatus.CANCELLED)
             return
-        store.update(job_id, status=JobStatus.DONE)
+        store.update(job_id, status=JobStatus.DONE, result={"warnings": ingest_warnings})
     except asyncio.CancelledError:
         try:
             store.update(job_id, status=JobStatus.CANCELLED)

@@ -12,7 +12,7 @@ drifting the MCP contract.
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from archon_search._types import (
@@ -279,6 +279,7 @@ class IngestResultSchema(BaseModel):
     chunks_created: int
     status: str
     error: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_result(cls, r: IngestResult) -> IngestResultSchema:
@@ -287,6 +288,7 @@ class IngestResultSchema(BaseModel):
             chunks_created=r.chunks_created,
             status=r.status,
             error=r.error,
+            warnings=r.warnings,
         )
 
 

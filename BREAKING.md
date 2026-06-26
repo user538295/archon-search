@@ -495,6 +495,19 @@ All changes are additive. Strict-schema clients will see new fields; tolerant cl
 
 ---
 
+### [next release] — E0b BE-7: ingest job `result` contract changes from `null` to `{"warnings": [...]}`
+
+**Surface**: `GET /jobs/{id}` REST response (`JobResponse.result`); `GET /jobs` list items.
+
+**Changes**:
+- `result: null | dict` — previously `null` for all ingest jobs (`FileIngestJob`, `DirectoryIngestJob`) after `DONE`. Now always `{"warnings": list[str]}` where `warnings` is the list of non-fatal warning strings collected during ingest (e.g. oversized ACL sidecar). An empty list (`[]`) means no warnings. **Breaking for strict consumers** that assert `result == null` after a completed ingest job.
+
+**Migration**: relax client checks from `result == null` to `result == null or isinstance(result, dict)`. Add `warnings: list[str]` to `JobResponse.result` type stubs. An empty list is the normal (no-warning) case.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — D5 maintenance jobs: `GET /status` gains `maintenance` field (BE-4, BE-8)
 
 **Surface**: `GET /status` REST response (`StatusResponse`).
