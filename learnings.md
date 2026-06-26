@@ -2,6 +2,16 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0b FE-4: Warning loop after if/else branch convergence is branch-agnostic — no separate test per branch needed**
+- Observation: The warning-printing loop in `cli/ingest.py` sits after the `if timings_enabled / else` block that both produce `results`. All 4 reviewers (3 DA + Brooks-Lint) flagged that only the `timings_enabled=False` branch was exercised by the test, but the loop is structurally outside both branches — it always runs. The finding was Minor in every reviewer's assessment; a second test would be defensive-only, not a real correctness gap.
+- Action: When new code sits after an if/else convergence point, document that position explicitly in the test or a comment. Reviewers will flag the untested branch; having a clear explanation ("loop is outside both branches at line X") stops the finding from being elevated to Moderate.
+- Confidence: high
+
+**2026-06-26 — E0b FE-4: `CliRunner()` does not accept `mix_stderr` in Click 8.3.3 — the kwarg was removed**
+- Observation: Attempting `CliRunner(mix_stderr=False)` raised `TypeError: CliRunner.__init__() got an unexpected keyword argument 'mix_stderr'`. The default `CliRunner()` in Click 8.3.3 already separates streams correctly — `result.stderr` works without any kwarg.
+- Action: Never pass `mix_stderr=False` to `CliRunner()`. The default runner is correct in Click 8.3.3. Verified by FE-3 and FE-4 independently.
+- Confidence: high
+
 **2026-06-26 — E0b FE-3: Click 8.3.3 default CliRunner() populates result.stderr separately — empirically verified**
 - Observation: DA1 and DA2 in Cycle 2 both flagged the default `CliRunner()` (which has `mix_stderr=True` in older Click) as Major/Critical, claiming `result.stderr` assertions would be vacuous. Empirical test proved them wrong: in Click 8.3.3, `result.stderr` correctly captures `click.echo(..., err=True)` output even with the default runner. `result.output` contains combined stdout+stderr; `result.stderr` contains stderr only. The "Major/Critical" finding was a false alarm based on outdated Click documentation.
 - Action: When a reviewer flags `result.stderr` assertions as vacuous under default `CliRunner()`, always verify empirically: `uv run python -c "from click.testing import CliRunner; r = CliRunner(); print(repr(r.mix_stderr))"` and run a smoke test. Do not trust DA claims about third-party library defaults without verification.
