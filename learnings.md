@@ -2,6 +2,11 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0b BE-5: Use `JobStore.transition()` not `update()` for state transitions in maintenance loops**
+- Observation: Initial BE-5 implementation called `job_store.update(job_id, status=FAILED_EXPIRED)` which raises `KeyError` if a job is evicted between `list()` and `update()` — this would abort all remaining jobs in the pass. `JobStore.transition(job_id, {FAILED}, FAILED_EXPIRED)` returns `None` instead of raising, preventing the abort. All 4 reviewers (3 DA + Brooks-Lint) independently caught this in Cycle 1.
+- Action: For any status transition in a batch loop, use `transition()` not `update()`. Check the return for `None` (evicted/already-changed) and log DEBUG. This is exactly why `transition()` exists. The `create()` call in the same loop was already guarded with try/except — always apply the same defensive pattern to sibling write operations.
+- Confidence: high
+
 **2026-06-26 — E0b BE-5 Cycle 2 Brooks-Lint: docstring step-list drifted from code after restructuring a numbered algorithm**
 - Observation: `_run_failed_ingest_retry`'s docstring (maintenance_loop.py:317-335) still lists "7. Increment retry_counts keyed ..." as an unconditional algorithm step, but after the FAILED_EXPIRED restructure the increment at line 500 only happens on the re-enqueue path — the two transition paths (aged-out, exhausted) `continue` before it. Step 5/6 were renumbered correctly but step 7's wording ("Increment retry_counts") reads as always-happens. Minor doc-accuracy drift, not a code bug. Also the new `test_maintenance_loop_invalid_created_at_skips_with_warning` asserts only `any(r.levelno >= WARNING)` — any incidental warning satisfies it rather than the specific unparseable-timestamp message; weak but the path is real (cutoff non-None → line 421 WARNING fires).
 - Action: When restructuring a numbered-step docstring where some steps become conditional (guarded by an early `continue`), re-read every remaining step number for accuracy, not just the ones you renumbered. For "WARNING is logged" tests, assert on `r.getMessage()` substring (e.g. "unparseable") not just `r.levelno >= WARNING`.
