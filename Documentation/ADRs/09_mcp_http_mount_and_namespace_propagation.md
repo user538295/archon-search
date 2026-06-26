@@ -395,7 +395,7 @@ completeness but is not used.
 
 ## References
 
-- D9 team plan: `Documentation/Backlog/mcp-wiring-team-plan.md`
+- D9 team plan: `Documentation/Completed/mcp-wiring-team-plan.md`
 - FastMCP ASGI docs: https://gofastmcp.com/deployment/asgi
 - `archon_search/server/mcp.py` — `create_mcp_http_app()` (line 1505)
 - `archon_search/server/app.py` — `create_app()` lifespan (line 154)

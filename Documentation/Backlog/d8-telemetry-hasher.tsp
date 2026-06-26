@@ -9,7 +9,13 @@ model SaltFile {
   content: bytes;
 }
 
-/** Result of the salt-load lifecycle operation. */
+/**
+ * DOCUMENTATION-ONLY view of the internal conditions the salt loader must react to.
+ * The actual Python function returns `bytes | None` (see SaltLifecycle.load below) —
+ * `generated` and `read_error` are NOT fields on a returned object; they are the
+ * branch conditions under which the loader logs a WARNING / ERROR before returning
+ * bytes or None. Do NOT build a SaltLoadResult dataclass; return `bytes | None`.
+ */
 model SaltLoadResult {
   /** Loaded salt bytes; null if load failed and server fell back to no-hashing. */
   salt: bytes | null;
@@ -35,11 +41,19 @@ model AppStateSalt {
 
 interface SaltLifecycle {
   /**
-   * Load (or generate) the salt at startup.
-   * - If hash_doc_ids=false: return AppStateSalt{salt_bytes=null} immediately.
-   * - If file missing: generate 32 random bytes, write with mode 0o600, log WARNING.
-   * - If file readable: load it.
-   * - If file unreadable: log ERROR, return AppStateSalt{salt_bytes=null} (no crash).
+   * Load (or generate) the salt at startup. Python signature: `load_or_create_salt(hash_doc_ids_enabled) -> bytes | None`.
+   * - If hash_doc_ids=false: return null immediately (AppStateSalt{salt_bytes=null}), no file touched.
+   * - If file missing: generate 32 random bytes (secrets.token_bytes(32)), write atomically via
+   *   `atomic_write_bytes` (from `_durable_io.py`) with mode 0o600 — NOT a naive write()+chmod(),
+   *   which would leave a window where the file is world-readable (same mechanism as key_manager.py).
+   *   Log WARNING (a new salt breaks metric continuity). Concurrent-start race (two processes against
+   *   the same data dir): handle the FileExistsError by re-reading the now-existing file, mirroring
+   *   key_manager.py's retry, rather than overwriting.
+   * - If file readable AND exactly 32 bytes: load it.
+   * - If file readable but NOT exactly 32 bytes (truncated/empty/corrupt): treat as a read error —
+   *   log ERROR, return null. HMAC accepts any-length key, so a short salt would silently produce
+   *   weak, non-secret output; it must be rejected.
+   * - If file unreadable (PermissionError etc.): log ERROR, return null (no crash).
    */
   load(hashDocIdsEnabled: boolean): AppStateSalt;
 }
