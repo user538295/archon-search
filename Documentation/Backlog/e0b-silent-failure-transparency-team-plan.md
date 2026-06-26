@@ -502,7 +502,7 @@ flowchart LR
         - #integration_test — `test_status_response_key_available_via_test_client` — TestClient GET /status with monkeypatched `os.environ` (key present); assert response includes `hyde` sub-object with `key_available=True`
         - #unit_test — `test_status_hyde_null_when_hyde_disabled` — `config.hyde.enabled=False`; GET /status; assert `response.hyde is None`
 
-- [ ] **BE-9** — Add `truncated_count: int = 0` to `StatsResponse` in `schemas_telemetry.py`; `reader.compute_stats()` counts entries where `truncated=True` in the JSONL read. Count logic must use `entry.truncated is True` (identity check) — `TelemetryEntry.truncated` defaults to `None` (not `False`); `None` is falsy but represents "not truncated." #backend-role
+- [x] **BE-9** — Add `truncated_count: int = 0` to `StatsResponse` in `schemas_telemetry.py`; `reader.compute_stats()` counts entries where `truncated=True` in the JSONL read. Count logic must use `entry.truncated is True` (identity check) — `TelemetryEntry.truncated` defaults to `None` (not `False`); `None` is falsy but represents "not truncated." #backend-role
     - Interface Adapters · 1.5h
     - needs K1 · completes C3, S16, S17
     - Tests

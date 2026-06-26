@@ -174,6 +174,10 @@ class TelemetryReader:
             if e.error_kind is not None:
                 error_breakdown[e.error_kind] += 1
 
+        # truncated_count: entries where truncated is True (identity check;
+        # TelemetryEntry.truncated defaults to None — None is falsy but not True)
+        truncated_count = sum(1 for e in entries if e.truncated is True)
+
         return {
             "schema_version": 1,
             "enabled": True,
@@ -186,6 +190,7 @@ class TelemetryReader:
             "by_endpoint": by_endpoint,
             "by_collection": by_collection,
             "error_breakdown": error_breakdown,
+            "truncated_count": truncated_count,
         }
 
     def filter_entries(

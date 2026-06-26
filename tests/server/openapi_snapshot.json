@@ -2683,6 +2683,11 @@
             "title": "Total Queries",
             "type": "integer"
           },
+          "truncated_count": {
+            "default": 0,
+            "title": "Truncated Count",
+            "type": "integer"
+          },
           "until": {
             "anyOf": [
               {

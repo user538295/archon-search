@@ -87,6 +87,7 @@ def test_stats_disabled_returns_enabled_false() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["enabled"] is False
+    assert "truncated_count" not in body
 
 
 def test_stats_no_files_returns_zeros(tmp_path: Path) -> None:
@@ -189,6 +190,38 @@ def test_stats_schema_version_is_1(tmp_path: Path) -> None:
     response = client.get("/telemetry/stats")
     assert response.status_code == 200
     assert response.json()["schema_version"] == 1
+
+
+def test_telemetry_stats_route_includes_truncated_count(tmp_path: Path) -> None:
+    """GET /telemetry/stats returns truncated_count field; truncated entries are counted."""
+    today_utc = datetime.now(UTC).date()
+    file_path = tmp_path / f"{today_utc.isoformat()}.jsonl"
+    truncated_entry = {
+        "query_id": "trunc-1",
+        "timestamp": "2026-05-14T12:00:00Z",
+        "endpoint": "search",
+        "latency_ms": 10.0,
+        "status": "ok",
+        "collection": "col_a",
+        "truncated": True,
+    }
+    normal_entry = {
+        "query_id": "norm-1",
+        "timestamp": "2026-05-14T12:00:00Z",
+        "endpoint": "search",
+        "latency_ms": 10.0,
+        "status": "ok",
+        "collection": "col_a",
+    }
+    _write_jsonl(file_path, [truncated_entry, normal_entry])
+
+    config = _make_config(enabled=True, log_dir=str(tmp_path))
+    client = TestClient(_make_test_app(config))
+    response = client.get("/telemetry/stats")
+    assert response.status_code == 200
+    body = response.json()
+    assert "truncated_count" in body, "truncated_count field must be present in /telemetry/stats"
+    assert body["truncated_count"] == 1
 
 
 def test_stats_uses_asyncio_to_thread(tmp_path: Path) -> None:

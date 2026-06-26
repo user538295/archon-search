@@ -50,6 +50,7 @@ class StatsResponse(BaseModel):
     by_endpoint: dict[str, EndpointStats] = Field(default_factory=dict)
     by_collection: dict[str, CollectionStats] = Field(default_factory=dict)
     error_breakdown: ErrorBreakdown = Field(default_factory=ErrorBreakdown)
+    truncated_count: int = 0
 
 
 class EntriesResponse(BaseModel):

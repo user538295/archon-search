@@ -711,6 +711,16 @@
 - Action: After adding keyword parameters to a method that is monkey-patched in tests, grep for all test overrides of that method and update their signatures.
 - Confidence: high
 
+**2026-06-26 — E0b BE-8: `with TestClient(app)` triggers lifespan; use bare TestClient when setting app.state manually**
+- Observation: `with TestClient(app) as client:` enters the lifespan, which calls `_run_startup_migrations()` (async) on whatever store is set on `app.state`. When `app.state.pipeline.store` is a `MagicMock()`, the async startup migration raises `TypeError: object MagicMock can't be used in 'await' expression`. Fix: use a bare `TestClient(app)` (no context manager) for tests that set `app.state` attributes manually and don't need the lifespan to run.
+- Action: For status/health route tests that build a minimal app with `create_app()` and manually set `app.state.*`, always use `client = TestClient(app)` without a `with` block. Reserve `with TestClient(app) as client:` for tests using `make_real_app` (which wires real stores that survive async startup).
+- Confidence: high
+
+**2026-06-26 — E0b BE-8: `is_key_available()` delegation pattern keeps env-var logic in Use Cases layer**
+- Observation: The initial implementation had `if not os.environ.get("ANTHROPIC_API_KEY"):` inline in `generate()` and `generate_variants()`. Extracting to `is_key_available()` (a) removes duplication, (b) lets the status route call `generator.is_key_available()` without importing `os` in the Interface Adapters layer, and (c) makes the method easily mockable in tests. The `_GUARD_PATTERN` regex in `test_anthropic_key_guards.py` needed extension to also match the `self.is_key_available()` form so the C18 guard test doesn't falsely fire after the DRY refactor.
+- Action: When an env-var check is needed both in the execution path (early-exit guard) and in a status/health endpoint, extract it to a method on the class (`is_key_available()`) and delegate the guard to it. Update any regex-based "guard existence" tests to accept the delegation form alongside the direct `os.environ.get()` form.
+- Confidence: high
+
 **2026-06-21 — asyncio.Event.set() from test thread is consumed by the running event loop before the route handler checks it**
 - Observation: In `test_trigger_while_busy_returns_202`, calling `maintenance_loop._trigger_event.set()` from the synchronous test thread caused the TestClient's background asyncio event loop to immediately wake up `_trigger_loop`, run `_run_one_pass`, and clear the event — all before the route handler ran. The test got `"triggered"` instead of `"already_triggered"` because by the time the route checked `is_set()`, the loop had already cleared it.
 - Action: When testing an "event already set" branch in a route, replace the actual `asyncio.Event` with a `MagicMock` whose `is_set()` always returns `True`. Do not set the real event from the sync test thread when an async loop is consuming it in the background.

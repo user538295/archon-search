@@ -105,6 +105,7 @@ Response (`StatsResponse`):
   "total_queries": 42,
   "success_rate": 0.95,
   "skipped_lines": 0,
+  "truncated_count": 0,
   "latency_ms": {"p50": 120.0, "p95": 380.0},
   "by_endpoint": {"search": {"total": 30, "ok": 29, "error": 1}},
   "by_collection": {"docs": {"total": 25, "ok": 25}},

@@ -431,6 +431,82 @@ def test_compute_stats_schema_keys() -> None:
     assert stats["since"] == "2026-05-01"
     assert stats["until"] == "2026-05-14"
     assert stats["skipped_lines"] == 3
+    assert "truncated_count" in stats
+
+
+def test_compute_stats_counts_truncated_entries() -> None:
+    """Entries with truncated=True are counted; truncated_count==2."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    truncated_entry = TelemetryEntry(
+        query_id="q1",
+        timestamp="2026-05-14T12:00:00Z",
+        endpoint="search",
+        latency_ms=10.0,
+        status="ok",
+        collection="col_a",
+        truncated=True,
+    )
+    normal_entry = _ok_search()  # truncated defaults to None
+
+    entries = [truncated_entry, truncated_entry, normal_entry]
+    stats = reader.compute_stats(entries, date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    assert stats["truncated_count"] == 2
+
+
+def test_compute_stats_truncated_count_zero_with_no_truncated() -> None:
+    """Entries with truncated=None (default) are NOT counted — identity check."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    entries = [_ok_search(), _ok_search(), _ok_search()]
+    # All have truncated=None (the real default) — falsy but not True
+    stats = reader.compute_stats(entries, date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    assert stats["truncated_count"] == 0
+
+
+def test_compute_stats_truncated_count_excludes_false_entries() -> None:
+    """Entries with explicit truncated=False are NOT counted — identity check excludes False."""
+    reader = TelemetryReader(Path("/nonexistent"), retention_days=30)
+    false_entry = TelemetryEntry(
+        query_id="q2",
+        timestamp="2026-05-14T12:00:00Z",
+        endpoint="search",
+        latency_ms=10.0,
+        status="ok",
+        collection="col_a",
+        truncated=False,
+    )
+    entries = [false_entry, false_entry, _ok_search()]  # _ok_search has truncated=None
+    stats = reader.compute_stats(entries, date(2026, 5, 14), date(2026, 5, 14), skipped_lines=0)
+
+    assert stats["truncated_count"] == 0
+
+
+def test_compute_stats_truncated_count_respects_date_window(tmp_path: Path) -> None:
+    """Only entries within the date window contribute to truncated_count.
+
+    Seeds 3 JSONL files on different dates with truncated entries.
+    read_entries + compute_stats for a single-day window yields truncated_count=1.
+    """
+    truncated_dict = {
+        "query_id": "trunc",
+        "timestamp": "2026-05-14T12:00:00Z",
+        "endpoint": "search",
+        "latency_ms": 10.0,
+        "status": "ok",
+        "collection": "col_a",
+        "truncated": True,
+    }
+
+    # Three files on different dates — only 2026-05-14 is inside the window
+    for stem in ("2026-05-10", "2026-05-14", "2026-05-20"):
+        _write_jsonl(tmp_path / f"{stem}.jsonl", [truncated_dict])
+
+    reader = TelemetryReader(tmp_path, retention_days=30)
+    entries, skipped = reader.read_entries(date(2026, 5, 14), date(2026, 5, 14))
+    stats = reader.compute_stats(entries, date(2026, 5, 14), date(2026, 5, 14), skipped_lines=skipped)
+
+    assert stats["truncated_count"] == 1
 
 
 # ---------------------------------------------------------------------------
