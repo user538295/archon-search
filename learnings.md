@@ -1,6 +1,33 @@
 # Learnings
 
+## What Has Failed
+
+**2026-06-26 — implement-all T-1: subagent stops after review without committing or checking off plan**
+- Observation: Two consecutive T-1 subagents ran iterative-review, stated "proceeding to Step 5 (commit) / Step 6 (plan checkoff)", then terminated without actually executing those steps. The checkbox remained `- [ ]` and no new commit appeared.
+- Action: Subagent prompt must require the agent to paste the output of `grep "\- \[x\]" <plan>` and `git log --oneline -1` as proof before declaring done. Stated intent is not execution.
+- Confidence: high
+
 ## What Has Worked
+
+**2026-06-26 — E0a T-1: Brooks-Lint review of office/tsv smoke test — verify docstring routing claims against parser.py before trusting them**
+- Observation: `test_e0a_office_tsv_smoke_t1.py`'s `.tsv` test docstring repeats the "already fell through to the else-branch, explicitness change only" framing that the logged learning (same date) records as flagged by all four prior reviewers. `parser.py:36` now lists `.tsv` explicitly in `_PLAIN_EXTENSIONS` with a clarifying comment — the docstring's causal/historical claim is the disputed one and outlives the code. Also: `_assert_ingest_completed_cleanly`'s `status == "DONE"` assertion is dead because `ingest_file_via_path` (conftest.py:167-172) already polls to DONE and `pytest.fail`s on FAILED before returning; only the `error`-field check is live. The `.eml`/`.epub` tests lack the backend guard (`importorskip`) the `.xlsx` test has, so a degraded markitdown backend could pass green (Coverage Illusion).
+- Action: When Brooks-reviewing a smoke/integration test, (1) cross-check any docstring claim about extension routing against `parser.py`'s actual `_PLAIN_EXTENSIONS`/`_OFFICE_EXTENSIONS` and the logged markitdown learnings — never trust the docstring's history; (2) check whether a re-fetch-and-assert-status helper is reachable given the conftest helper already gated on that status; (3) flag missing per-format backend guards as T5 when sibling tests guard symmetrically.
+- Confidence: high
+
+**2026-06-26 — E0a BE-3: Empirical markitdown testing is mandatory before documenting format support**
+- Observation: `.rtf` is in `_OFFICE_EXTENSIONS` (routes to markitdown), but empirical test showed markitdown returns raw RTF control codes (`{\rtf1\ansi...}`), not extracted text — useless for search. Static code review missed this entirely; three independent DA agents also missed it until a direct `MarkItDown().convert()` call was run. `.eml` also routes to markitdown but returns readable RFC 822 text (headers + body), which IS useful. `.svg` falls through to `_parse_plain` and produces readable XML, not garbled output — the source comment itself says "more appropriate". These three formats all needed different documentation despite similar routing paths.
+- Action: For any format listed in `_OFFICE_EXTENSIONS` or falling through to `_parse_plain`, always run `uv run python -c "from markitdown import MarkItDown; r = MarkItDown().convert(path); print(repr(r.text_content[:100]))"` before writing documentation claims about output quality. Never infer quality from extension-set membership alone.
+- Confidence: high
+
+**2026-06-26 — E0a BE-3: Extras names vs transitive packages are different things — don't confuse them in docs**
+- Observation: The initial extras note said `(e.g. mammoth for .docx, openpyxl for .xlsx, olefile for .msg)` calling these "extras declared in pyproject.toml." A DA reviewer correctly flagged that `mammoth`, `openpyxl`, `olefile` are transitive packages, not the extra names. The actual extras in pyproject.toml are `[docx]`, `[xlsx]`, `[outlook]`. Users grepping pyproject.toml for `mammoth` would find nothing. The fix: name the actual extras spec (`markitdown[docx,pptx,xls,xlsx,outlook]`) and describe the transitive packages as "required backends... transitively installed."
+- Action: When documenting dependency extras, name the extra spec exactly as it appears in pyproject.toml, and separately describe transitive packages as "transitively installed by" those extras. Never call a transitive package an "extra."
+- Confidence: high
+
+**2026-06-26 — E0a BE-3: doc/ppt/odt "fall through to plain-text fallback" is correct; "rather than an error" is wrong**
+- Observation: The `.doc`/`.ppt`/`.odt` note initially said "producing garbled binary output rather than an error." The source comment at `parser.py:43` says markitdown "raises UnsupportedFormatException" for these formats. The phrase "rather than an error" falsely implies markitdown wouldn't raise — these formats are excluded from `_OFFICE_EXTENSIONS` precisely to prevent that exception. The correct phrasing: "excluded from the Office handler (markitdown would raise `UnsupportedFormatException`)."
+- Action: When documenting why an extension was excluded from a handler set, cite what the underlying library would do (raise X) separately from what archon-search actually does (fall through to fallback). Never conflate the two.
+- Confidence: high
 
 **2026-06-26 — E0a BE-2: Declare markitdown extras explicitly — don't rely on transitive incidental coverage**
 - Observation: `.xlsx` and `.pptx` converters worked in the dev environment only because docling's transitive deps (openpyxl, python-pptx) happened to be installed. The markitdown dep had no `[xlsx]` or `[pptx]` extras declared. Brooks-Lint correctly identified this as a "works by accident" dependency. The fix was `markitdown[docx,pptx,xls,xlsx,outlook]` to make the dependency contract explicit.

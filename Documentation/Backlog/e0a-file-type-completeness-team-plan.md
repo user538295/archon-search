@@ -25,13 +25,13 @@ architecture: clean
 
 ## Background
 
-`archon_search/parser.py` advertises Office-format support in its module docstring and routes `.docx`/`.pptx`/`.xlsx` to `_parse_office`, which calls `markitdown`. However, `markitdown` is absent from `[project.dependencies]` in `pyproject.toml`, so `uv sync --dev` does not install it. Eight additional common Office and document formats (`.doc`, `.xls`, `.ppt`, `.odt`, `.rtf`, `.epub`, `.eml`, `.msg`) are absent from `_OFFICE_EXTENSIONS` entirely. When any of these files are ingested, a `ParseError` wrapping a `ModuleNotFoundError` is raised.
+`archon_search/parser.py` advertises Office-format support in its module docstring and routes `.docx`/`.pptx`/`.xlsx` to `_parse_office`, which calls `markitdown`. However, `markitdown` is absent from `[project.dependencies]` in `pyproject.toml`, so `uv sync --dev` does not install it. Several additional common Office and document formats (`.xls`, `.rtf`, `.epub`, `.eml`, `.msg`) are absent from `_OFFICE_EXTENSIONS` entirely. When any of these files are ingested, a `ParseError` wrapping a `ModuleNotFoundError` is raised. Note: `.doc`, `.ppt`, `.odt` were considered but excluded — markitdown raises `UnsupportedFormatException` for these formats.
 
 ---
 
 ## Goal
 
-Every common document format ingests successfully on a fresh `uv sync --dev` install with no extra steps. `archon-search ingest document.doc` returns indexed content, not an error.
+Every supported document format ingests successfully on a fresh `uv sync --dev` install with no extra steps. `archon-search ingest document.xlsx` (or `.xls`, `.rtf`, `.epub`, `.eml`, `.msg`) returns indexed content, not an error.
 
 ---
 
@@ -39,7 +39,7 @@ Every common document format ingests successfully on a fresh `uv sync --dev` ins
 
 ### In Scope
 - Add `markitdown` to `[project.dependencies]` in `pyproject.toml` (core, not optional).
-- Add to `_OFFICE_EXTENSIONS` in `archon_search/parser.py`: `.doc`, `.xls`, `.ppt`, `.odt`, `.rtf`, `.epub`, `.eml`, `.msg`.
+- Add to `_OFFICE_EXTENSIONS` in `archon_search/parser.py`: `.xls`, `.rtf`, `.epub`, `.eml`, `.msg` (5 formats). Note: `.doc`, `.ppt`, `.odt` are excluded — markitdown raises `UnsupportedFormatException` for these; they fall through to `_parse_plain` producing garbled output.
 - Add `.tsv` to `_PLAIN_EXTENSIONS` in `archon_search/parser.py`.
 - Replace the bare `except Exception` in `_parse_office` with an `ImportError` branch that surfaces a human-readable message before the generic `ParseError` fallback.
 - Add a `None` guard to `_parse_office`: return `MarkItDown().convert(str(path)).text_content or ""` so `None` from markitdown returns empty string rather than violating the `-> str` contract (mirrors the docling handler's pattern at `parser.py:109`).
@@ -55,7 +55,7 @@ Every common document format ingests successfully on a fresh `uv sync --dev` ins
 
 ## Acceptance criteria
 - `uv sync --dev` installs `markitdown` with no extra step; confirmed by `uv run python -c "import markitdown"` after a clean sync.
-- `archon-search ingest <file.doc>` (and each new extension) returns `Ingest complete: 1 ingested, 0 errors.`
+- `archon-search ingest <file.xls>` (and each of `.rtf`, `.epub`, `.eml`, `.msg`) returns `Ingest complete: 1 ingested, 0 errors.`
 - `archon-search ingest <file.tsv>` returns `Ingest complete: 1 ingested, 0 errors.`
 - Existing `.docx`/`.pptx`/`.xlsx` ingestion is unchanged.
 - If `markitdown` is somehow not installed, the `ParseError.cause` message contains "install markitdown".
@@ -113,9 +113,9 @@ flowchart TD
 | Frameworks & Drivers | Backend | `DocumentParser` (`parser.py:45-124`), `pyproject.toml` |
 
 **What changes**
-- `pyproject.toml:7-22` — add `markitdown>=0.1.0` to `[project.dependencies]`. (BE-1 must verify this floor covers all 8 new formats and that `extract-msg` is a hard transitive dep, not an optional extra. Adjust if markitdown's actual dep tree requires a higher floor.)
+- `pyproject.toml:7-22` — add `markitdown>=0.1.0` to `[project.dependencies]`. (BE-1 must verify this floor covers all 5 new formats and that `extract-msg` is a hard transitive dep, not an optional extra. Adjust if markitdown's actual dep tree requires a higher floor.)
 - `archon_search/parser.py:1-10` — module docstring: expand Office and add plain-text lists.
-- `archon_search/parser.py:33-39` — `_PLAIN_EXTENSIONS`: add `.tsv`; `_OFFICE_EXTENSIONS`: add 8 extensions.
+- `archon_search/parser.py:33-39` — `_PLAIN_EXTENSIONS`: add `.tsv`; `_OFFICE_EXTENSIONS`: add 5 extensions (`.xls`, `.rtf`, `.epub`, `.eml`, `.msg`); `.doc`, `.ppt`, `.odt` excluded (markitdown raises `UnsupportedFormatException`).
 - `archon_search/parser.py:119-124` — `_parse_office`: split into two try/except blocks — first block catches `ImportError` from the lazy import and raises `ParseError(path, ImportError("markitdown is not installed; run: pip install markitdown"))` from it; second block calls `MarkItDown().convert()` and catches generic `Exception`. This ordering is required — `except ImportError` must come before `except Exception` or it is dead code.
 - `Documentation/UserManual/04_ingestion_and_collections.md` — add supported-extension table.
 
@@ -134,7 +134,7 @@ flowchart TD
 `DocumentParser.parse(path)` returns extracted text (`str`) or raises `ParseError(path, cause)`. Callers (`pipeline.py:296`) need only handle `ParseError`. The expansion of `_OFFICE_EXTENSIONS` and `_PLAIN_EXTENSIONS` is internal to Frameworks & Drivers; the seam shape is unchanged.
 — see [`document-parser-contract.tsp`](document-parser-contract.tsp) (validated clean: `tsp compile document-parser-contract.tsp --no-emit`)
 
-- Realised by: BE-1, BE-2 · Verified by: BE-2 (unit tests), T-1 (manual)
+- Realised by: BE-1, BE-2 · Verified by: BE-2 (unit tests), T-1 (integration tests)
 
 ---
 
@@ -142,7 +142,7 @@ flowchart TD
 
 | id | Scenario (Given / When / Then) |
 |----|-------------------------------|
-| **S1** | **Given** a fresh `uv sync --dev` install · **When** the user runs `archon-search ingest document.doc` (or `.xls`, `.ppt`, `.odt`, `.rtf`, `.epub`, `.eml`, `.msg`) · **Then** the file is parsed, chunked, and indexed; ingest reports `1 ingested, 0 errors` |
+| **S1** | **Given** a fresh `uv sync --dev` install · **When** the user runs `archon-search ingest document.xls` (or `.rtf`, `.epub`, `.eml`, `.msg`) · **Then** the file is parsed, chunked, and indexed; ingest reports `1 ingested, 0 errors` |
 | **S2** | **Given** a `.tsv` file · **When** the user ingests it · **Then** it is routed to `_parse_plain` and its tab-separated content is indexed as plain text |
 | **S3** | **Given** a malformed Office file (e.g. a truncated `.doc`) · **When** the user ingests it · **Then** `ParseError` is raised with `path` and a conversion `cause`; no `ImportError` or `ModuleNotFoundError` surfaces |
 | **S4** | **Given** `markitdown` is somehow absent at runtime · **When** `_parse_office` is called · **Then** `ParseError.cause` contains the message "install markitdown" |
@@ -169,7 +169,7 @@ N/A — no frontend work for this feature. This project has no web UI; the CLI i
 
 **Done when**
 - [ ] `uv sync --dev` installs `markitdown` — S6
-- [ ] All 8 new Office extensions route to `_parse_office` — S1
+- [ ] All 5 new Office extensions route to `_parse_office` — S1
 - [ ] `.tsv` routes to `_parse_plain` — S2
 - [ ] `None` from markitdown `text_content` returns empty string — S7
 - [ ] `ImportError` branch fires with a helpful message — S4
@@ -180,17 +180,17 @@ N/A — no frontend work for this feature. This project has no web UI; the CLI i
 
 ## Tester #tester-role
 
-**Scope:** the tester owns **manual** smoke tests plus the project **close-out**. Unit and integration tests belong to the backend dev (BE-2).
+**Scope:** the tester owns **integration** smoke tests plus the project **close-out**. Unit tests belong to the backend dev (BE-2).
 
 **Tasks** *(checkable in the Task Breakdown)*
-- T-1 — Manual smoke: ingest real Office and TSV files against live server
+- T-1 — Integration smoke: ingest real Office and TSV files via `make_real_app` TestClient
 - T-2 — Close-out
 
 **Allocation** — each scenario at the cheapest level that proves it
 
 | Scenario | Cheapest level |
 |----------|----------------|
-| S1 — new Office extensions indexed | unit (routing only — mocked markitdown); real-conversion coverage deferred to T-1 manual |
+| S1 — new Office extensions indexed | unit (routing only — mocked markitdown); real-conversion coverage in T-1 integration tests for `.xlsx`, `.eml`, `.epub`, `.rtf`; `.xls` has a conditional integration test (requires xlwt — skips gracefully when absent); `.msg` remains mocked-only at unit level |
 | S2 — `.tsv` plain-text path | unit (confirms explicit routing; behavior already works via else-branch) |
 | S3 — malformed file → ParseError | unit |
 | S4 — ImportError → helpful message | unit |
@@ -239,7 +239,7 @@ flowchart LR
     BE1[BE-1 · markitdown dep]
     BE2[BE-2 · parser changes]
     BE3[BE-3 · UserManual]
-    T1[T-1 · manual smoke]
+    T1[T-1 · integration smoke]
   end
   T2([T-2 · close-out])
   K1 --> BE1
@@ -273,7 +273,7 @@ flowchart LR
     - Frameworks & Drivers · 2.0h
     - needs BE-1 · completes S1, S2, S3, S4, S5, S7
     - Tests
-        - #unit_test — `test_parser_office_new_extensions_routed` — parametrize `.doc`, `.xls`, `.ppt`, `.odt`, `.rtf`, `.epub`, `.eml`, `.msg`; mock `markitdown`; assert `_parse_office` called and returns content
+        - #unit_test — `test_parser_office_new_extensions_routed` — parametrize `.xls`, `.rtf`, `.epub`, `.eml`, `.msg`; mock `markitdown`; assert `_parse_office` called and returns content (`.doc`, `.ppt`, `.odt` excluded — markitdown raises `UnsupportedFormatException` for these)
         - #unit_test — `test_parser_tsv_routed_to_plain` — `.tsv` file routes to `_parse_plain`; assert content returned without markitdown mock
         - #unit_test — `test_parser_office_import_error_surfaces_message` — use `patch.dict("sys.modules", {"markitdown": None})` to force `ImportError` on import; assert `ParseError` raised and `str(exc.cause)` contains "markitdown"
         - #unit_test — `test_parser_office_malformed_file_raises_parse_error` — mock `MarkItDown().convert()` to raise `RuntimeError`; assert `ParseError` (not `ImportError`) with correct `path` and `cause`
@@ -284,12 +284,14 @@ flowchart LR
     - needs BE-2
     - Tests
 
-- [ ] **T-1** — Manual smoke: ingest a real `.doc` and a real `.tsv` against a live server #tester-role
+- [x] **T-1** — Integration smoke: ingest representative Office formats (`.xlsx`, `.eml`, `.epub`, `.rtf`) and a real `.tsv` via `make_real_app` TestClient integration tests #tester-role
     - — · 1.0h
     - needs BE-2 · completes S1, S2
     - Tests
-        - #manual_test — Office file round-trip — run `archon-search ingest --path <dir-with-doc>`, verify `1 ingested 0 errors`; search for a known phrase from the file
-        - #manual_test — TSV file round-trip — run `archon-search ingest --path <dir-with-tsv>`, verify `1 ingested 0 errors`; confirm plain content indexed
+        - #integration_test — Office file round-trip (`.xlsx`, `.eml`, `.epub`, `.rtf`) — exercised via `make_real_app` FastAPI TestClient (in-process, no real TCP); each format verifies `status=DONE`, `error=None`, and the known phrase is searchable with `doc_id` confirmed in results
+        - #integration_test — TSV file round-trip — exercised via `make_real_app` FastAPI TestClient; verifies `status=DONE`, `error=None`, and tab-separated content is searchable
+
+    > **Note on `.doc` / `.ppt` / `.odt`:** These extensions are intentionally excluded from `_OFFICE_EXTENSIONS` in `parser.py` (markitdown raises `UnsupportedFormatException` for them). They fall through to `_parse_plain`, which reads the binary content as UTF-8 with replacement characters — producing garbled but non-crashing output (`1 ingested, 0 errors`). Local CLI testing confirmed this fallthrough behaviour: `.doc` ingests without crashing but the indexed content is not meaningfully parsed. This is documented, expected behaviour — not a regression.
 
 ---
 
