@@ -675,12 +675,12 @@ The wizard enables/disables HyDE and RAG Fusion (via `--enable-hyde`/`--enable-r
 ```toml
 [hyde]
 model = "claude-haiku-4-5-20251001"
-timeout_seconds = 5.0
+timeout_seconds = 10.0
 max_requests_per_minute = 60
 
 [rag_fusion]
 model = "claude-haiku-4-5-20251001"
-timeout_seconds = 5.0
+timeout_seconds = 10.0
 max_requests_per_minute = 60
 num_queries = 2
 ```

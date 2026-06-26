@@ -187,7 +187,7 @@ enabled = false
 model = "claude-haiku-4-5-20251001"
 # Per-request timeout (seconds) for the Anthropic API call. On timeout, the server
 # falls back silently to the original query embedding (hyde_applied: false).
-timeout_seconds = 5.0
+timeout_seconds = 10.0
 # Per-process rate limit (requests per minute) for the Anthropic API. Requests that
 # exceed this limit are answered with the fallback embedding (hyde_applied: false).
 # In multi-worker deployments the effective rate is multiplied by worker count.
@@ -216,7 +216,7 @@ enabled = false
 model = "claude-haiku-4-5-20251001"
 # Per-request timeout (seconds) for the Anthropic API call. On timeout, the server
 # falls back silently to single-query search (rag_fusion_applied: false).
-timeout_seconds = 5.0
+timeout_seconds = 10.0
 # Per-process rate limit (requests per minute) for the Anthropic API. Requests that
 # exceed this limit fall back to single-query search (rag_fusion_applied: false).
 # In multi-worker deployments the effective rate is multiplied by worker count.

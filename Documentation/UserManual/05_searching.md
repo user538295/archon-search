@@ -203,7 +203,7 @@ Add or edit the `[hyde]` section in `~/.archon-search/archon-search.toml`:
 # WARNING: enabled = true sends query text to Anthropic's API.
 enabled = true
 model = "claude-haiku-4-5-20251001"
-timeout_seconds = 5.0
+timeout_seconds = 10.0
 max_requests_per_minute = 60
 ```
 
@@ -275,7 +275,7 @@ Add or edit the `[rag_fusion]` section in `~/.archon-search/archon-search.toml`:
 # WARNING: enabled = true sends query text to Anthropic's API.
 enabled = true
 model = "claude-haiku-4-5-20251001"
-timeout_seconds = 5.0
+timeout_seconds = 10.0
 max_requests_per_minute = 60
 num_queries = 2   # LLM-generated variants; total searches = num_queries + 1
 ```
@@ -284,7 +284,7 @@ num_queries = 2   # LLM-generated variants; total searches = num_queries + 1
 |---|---|---|---|---|
 | `enabled` | `bool` | `false` | — | Kill-switch. When `false`, `rag_fusion=true` in requests is silently ignored. |
 | `model` | `str` | `"claude-haiku-4-5-20251001"` | Non-empty | Claude model used for query variant generation. |
-| `timeout_seconds` | `float` | `5.0` | `> 0` | Per-request Anthropic API timeout. |
+| `timeout_seconds` | `float` | `10.0` | `> 0` | Per-request Anthropic API timeout. |
 | `max_requests_per_minute` | `int` | `60` | `>= 1` | Per-process token-bucket rate limit. |
 | `num_queries` | `int` | `2` | `1–5` | Number of LLM-generated variants (not counting original). `num_queries=1` logs a WARNING. |
 

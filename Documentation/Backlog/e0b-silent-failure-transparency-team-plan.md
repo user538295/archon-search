@@ -397,7 +397,7 @@ flowchart LR
 
 ### Phase 1 · Signal search expansion outcome *(walking skeleton: thinnest end-to-end — config → pipeline → schema → route)*
 
-- [ ] **BE-1** — Raise `HydeConfig.timeout_seconds` and `RAGFusionConfig.timeout_seconds` defaults from 5.0 → 10.0 in `config.py` #backend-role
+- [x] **BE-1** — Raise `HydeConfig.timeout_seconds` and `RAGFusionConfig.timeout_seconds` defaults from 5.0 → 10.0 in `config.py` #backend-role
     - Frameworks & Drivers · 1.0h
     - needs K1 · completes C4
     - Tests

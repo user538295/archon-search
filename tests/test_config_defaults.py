@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.config import SearchConfig, load_config
+from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig, load_config
 from archon_search.constants import DEFAULT_FAST_MODEL, DEFAULT_ROUTING_DESCRIPTION_WEIGHT
 from archon_search.paths import get_data_dir
 
@@ -152,14 +152,14 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "hyde": {
             "enabled": False,
             "model": DEFAULT_FAST_MODEL,
-            "timeout_seconds": 5.0,
+            "timeout_seconds": 10.0,
             "max_requests_per_minute": 60,
         },
         # [rag_fusion]
         "rag_fusion": {
             "enabled": False,
             "model": DEFAULT_FAST_MODEL,
-            "timeout_seconds": 5.0,
+            "timeout_seconds": 10.0,
             "max_requests_per_minute": 60,
             "num_queries": 2,
         },
@@ -203,3 +203,18 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
     # Value-level snapshot — fails when any default shifts.
     config = _default_config(tmp_path)
     assert dataclasses.asdict(config) == expected
+
+
+# ---------------------------------------------------------------------------
+# BE-1 — HyDE / RAG Fusion timeout-default tests (E0b)
+# ---------------------------------------------------------------------------
+
+
+def test_hyde_config_timeout_default_is_10() -> None:
+    """HyDEConfig.timeout_seconds must default to 10.0 (raised from 5.0 in E0b/BE-1)."""
+    assert HyDEConfig().timeout_seconds == 10.0
+
+
+def test_rag_fusion_config_timeout_default_is_10() -> None:
+    """RAGFusionConfig.timeout_seconds must default to 10.0 (raised from 5.0 in E0b/BE-1)."""
+    assert RAGFusionConfig().timeout_seconds == 10.0

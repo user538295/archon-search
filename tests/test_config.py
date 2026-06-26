@@ -997,7 +997,7 @@ def test_hyde_config_defaults(tmp_path: Path) -> None:
     assert isinstance(config.hyde, HyDEConfig)
     assert config.hyde.enabled is False
     assert config.hyde.model == DEFAULT_FAST_MODEL
-    assert config.hyde.timeout_seconds == 5.0
+    assert config.hyde.timeout_seconds == 10.0
     assert config.hyde.max_requests_per_minute == 60
 
 
@@ -1066,7 +1066,7 @@ def test_rag_fusion_config_defaults(tmp_path: Path) -> None:
     assert isinstance(config.rag_fusion, RAGFusionConfig)
     assert config.rag_fusion.enabled is False
     assert config.rag_fusion.model == DEFAULT_FAST_MODEL
-    assert config.rag_fusion.timeout_seconds == 5.0
+    assert config.rag_fusion.timeout_seconds == 10.0
     assert config.rag_fusion.max_requests_per_minute == 60
     assert config.rag_fusion.num_queries == 2
 
@@ -1096,7 +1096,7 @@ def test_rag_fusion_toml_partial_keys(tmp_path: Path) -> None:
     assert config.rag_fusion.num_queries == 3
     assert config.rag_fusion.enabled is False
     assert config.rag_fusion.model == DEFAULT_FAST_MODEL
-    assert config.rag_fusion.timeout_seconds == 5.0
+    assert config.rag_fusion.timeout_seconds == 10.0
     assert config.rag_fusion.max_requests_per_minute == 60
 
 

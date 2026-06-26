@@ -2,6 +2,21 @@
 
 ## What Has Worked
 
+**2026-06-26 — E0b BE-1: Default value changes have a blast radius — always grep all 5 artifact types before committing**
+- Observation: Raising `HyDEConfig.timeout_seconds` and `RAGFusionConfig.timeout_seconds` from 5.0 → 10.0 required updates across 6 files beyond `config.py`: `tests/test_config.py` (3 assertions), `tests/test_config_defaults.py` (snapshot dict), `archon-search.toml.example` (2 lines), `Documentation/UserManual/05_searching.md` (3 lines), `Documentation/UserManual/02_wizard.md` (2 lines). The initial diff only touched `config.py` and `test_config_defaults.py`. All 4 reviewers (3 DA + Brooks-Lint) caught the same omissions.
+- Action: When changing a default value, before committing, grep for the old value across: (1) test assertion files (`tests/test_config.py`), (2) example config files (`*.toml.example`), (3) user manual docs (`Documentation/UserManual/`), (4) architecture docs, (5) any other snapshot/expected-dict tests. The snapshot test in `test_config_defaults.py` is not sufficient alone — `test_config.py` has per-field assertions that must also be updated.
+- Confidence: high
+
+**2026-06-26 — E0b K1: `generate_variants()` swallows exceptions — verify propagation before spec-ing pipeline warning fields**
+- Observation: `rag_fusion.generate_variants()` catches BOTH `asyncio.TimeoutError` (line 162) AND generic `Exception` (line 169) internally and returns `[]`. The pipeline's outer `except Exception` block is dead code for all timeout and API-error cases. The C4 contract specifying distinct messages ("RAG Fusion timed out" vs "RAG Fusion expansion failed") is unimplementable without first changing `generate_variants()` to re-raise these exceptions. This was found during K1 contract review, not during implementation — catching it early prevents a wasted BE-2 implementation attempt.
+- Action: Before specifying a pipeline-level field that distinguishes failure modes of an external call, read the external call's source to verify which exceptions propagate out vs are swallowed internally. If the generator swallows them, the pipeline cannot distinguish — either change the generator's exception handling or use a different detection mechanism.
+- Confidence: high
+
+**2026-06-26 — E0b K1: TypeSpec delta-model naming — use *Extension for HTTP seams, *E0bDelta for internal seams**
+- Observation: Prior D-series contracts (D3, D8) used `*Extension` suffix for additive fields on existing HTTP responses (`StatusResponseSchemaExtension`, `StatusResponseExtension`). K1 introduced `*E0bDelta` for the internal-seam contracts (pipeline result, ingest result) and `*Extension` for HTTP seams (status, telemetry). This distinction (delta = internal no-emit, extension = HTTP emitted) is consistent and defensible.
+- Action: When authoring TypeSpec contracts for a feature: use `*E0bDelta` (or `*FeatureDelta`) for `--no-emit` internal-seam models showing only new fields; use `*Extension` for HTTP-seam models. Do not include pre-existing fields in partial models — they create a misleading completeness illusion.
+- Confidence: high
+
 **2026-06-26 — E0b iterative-review on team plan: route-level vs pipeline-level seam is a plan killer**
 - Observation: The initial E0b plan put `expansion_warning` on `SearchPipelineResult` (C4 contract). Three independent DA agents and Brooks-Lint all caught that HyDE runs at the ROUTE level before `pipeline.search()` is called — the pipeline never sees HyDE. The fix was to split: RAG Fusion warning on `SearchPipelineResult`, HyDE warning assembled at route level. A second subtlety: `resolve_hyde_vector()` returns `(None, False)` for ALL failure modes (timeout, API error, empty response, missing key) — you cannot distinguish them at call time. Fix: use a generic "HyDE expansion failed" message, not "HyDE timed out".
 - Action: Before putting any "failure signal" on a domain result type, verify WHERE the failing operation runs (route vs pipeline vs use-case). If it runs outside the pipeline, it cannot populate a pipeline-level field. Also: check whether exception types are distinguishable at the call site before naming a specific failure mode in a warning message.

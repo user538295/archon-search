@@ -25,7 +25,7 @@ class ConfigError(Exception):
 class HyDEConfig:
     enabled: bool = False
     model: str = field(default_factory=lambda: DEFAULT_FAST_MODEL)
-    timeout_seconds: float = 5.0
+    timeout_seconds: float = 10.0
     max_requests_per_minute: int = 60
 
 
@@ -33,7 +33,7 @@ class HyDEConfig:
 class RAGFusionConfig:
     enabled: bool = False
     model: str = field(default_factory=lambda: DEFAULT_FAST_MODEL)
-    timeout_seconds: float = 5.0
+    timeout_seconds: float = 10.0
     max_requests_per_minute: int = 60
     num_queries: int = 2
 
