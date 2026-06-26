@@ -579,7 +579,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_ingest_cli_prints_warnings_to_stderr` — Click test runner with mocked pipeline returning `IngestResult(warnings=["ACL ..."])`; assert stderr contains warning text
 
-- [ ] **T-4** — Verify end-to-end: CLI --timeout behavior, status warnings, ingest stderr; manual service template smoke test #tester-role
+- [x] **T-4** — Verify end-to-end: CLI --timeout behavior, status warnings, ingest stderr; manual service template smoke test #tester-role
     - — · 3.0h
     - needs BE-11, BE-12, FE-1, FE-2, FE-3, FE-4 · completes S8, S9, S10, S21, S22, S23, S24, S25
     - Tests
