@@ -1,0 +1,93 @@
+openapi: 3.0.0
+info:
+  title: Archon Search — Ingest Size Guard
+  version: 0.0.0
+tags: []
+paths:
+  /ingest:
+    post:
+      operationId: IngestRoute_ingest
+      description: Enqueue an ingest job. Returns 202 on success. Returns 413 when a single-file path exceeds [ingest].max_file_mb (skipped for directory paths and documents payload).
+      parameters: []
+      responses:
+        '202':
+          description: The request has been accepted for processing, but processing has not yet completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobResponse'
+        '400':
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '401':
+          description: Access is unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '413':
+          description: File exceeds [ingest].max_file_mb; body.detail names the file size, limit, and config key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '503':
+          description: Service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestRequest'
+components:
+  schemas:
+    ErrorDetail:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+    IngestRequest:
+      type: object
+      required:
+        - collection
+      properties:
+        path:
+          type: string
+        documents:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          description: Inline document list; when present, no filesystem path exists and the size guard is skipped.
+        collection:
+          type: string
+        ingested_by:
+          type: string
+    JobResponse:
+      type: object
+      required:
+        - job_id
+        - status
+        - kind
+        - created_at
+        - updated_at
+      properties:
+        job_id:
+          type: string
+        status:
+          type: string
+        kind:
+          type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string

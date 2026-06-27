@@ -15,9 +15,9 @@ PDF files of any practical size ingest successfully. A user who ingests a 50-pag
 
 ### Happy path — large PDF ingests successfully
 1. User runs `archon-search ingest /path/to/200-page-manual.pdf`.
-2. Parser opens the file. docling converts page-by-page, yielding text incrementally.
-3. Each yielded page batch is chunked and emitted to the store without holding the full document in memory.
-4. Ingest completes; CLI reports total pages and chunks indexed.
+2. `pipeline.ingest_file()` checks file size via `os.path.getsize()` — no limit configured, so it proceeds.
+3. docling `convert()` fully materialises the document internally (no page-by-page streaming API; memory reduction is D4's scope).
+4. Ingest completes; CLI reports chunks indexed.
 
 ### File exceeds configurable size guard
 1. Operator sets `[ingest].max_file_mb = 100` in `archon-search.toml`.
@@ -27,13 +27,13 @@ PDF files of any practical size ingest successfully. A user who ingests a 50-pag
 
 ### No size guard set (default)
 1. `[ingest].max_file_mb` defaults to `0` (disabled — no size guard).
-2. All file sizes accepted; memory usage is bounded by the streaming page-batch approach.
+2. All file sizes accepted. Memory during docling conversion is bounded by the document size (no streaming; see D4 for memory reduction).
 
 ## In Scope
-- **Streaming / incremental docling conversion**: Modify `_parse_pdf` in `parser.py` to yield text page-by-page (or in configurable page-batch sizes) rather than converting the full document to a string before returning. Coordinate with D4 (`streaming-incremental-chunking`) which already targets the same ingest pipeline path.
-- **`[ingest].max_file_mb` config field**: New field in `IngestConfig` (or a new `[ingest]` section). Default `0` = no limit. Applied at the start of `parse()` before docling is invoked. File size check is a single `os.path.getsize()` call.
+- **`[ingest].max_file_mb` config field**: New `[ingest]` TOML section with `max_file_mb: int` (default `0` = no limit). Guard applied via a shared `_file_exceeds_limit(path, max_file_mb) -> bool` helper at two levels: (1) `pipeline.ingest_file()` for universal coverage; (2) `POST /ingest` route handler as a synchronous pre-check before job creation for HTTP 413.
 - **413-equivalent error**: When the size guard triggers, return an `IngestError` with `code="file_too_large"` and a human-readable message that names both the file size and the configured limit and tells the user how to fix it.
-- **CLI message for page progress**: For large files (> 10 MB or > 50 pages), `archon-search ingest` emits progress: "Parsing page 45/200…" so the user knows the process is alive.
+- **CLI pre-parse large-file notice**: For files > 10 MB, print to stderr before calling `convert()`: "Parsing large file (X MB); this may take a while…". This replaces per-page progress reporting, which is infeasible with the installed docling (see Open Questions).
+- **CLI single-file ingest mode**: `--path` routing to a file → `pipeline.ingest_file()` (collection name = `Path(path).stem`).
 - **Update `Documentation/UserManual/`** to document the size guard config and remove the implicit 1 MB limitation.
 
 ## Out of Scope
@@ -45,19 +45,21 @@ PDF files of any practical size ingest successfully. A user who ingests a 50-pag
 
 ## Key Decisions
 - **Default `max_file_mb = 0` (no limit)**: The right default for a server tool is "accept what the operator's hardware can handle," not "silently cap at an arbitrary size." Operators on constrained hosts set the guard explicitly.
-- **Size guard at `parse()` entry, not at the route layer**: The check belongs at the parser boundary — it applies whether ingestion comes from REST, MCP, CLI, or the watcher. A route-layer check would miss the watcher and CLI paths.
-- **Coordinate with D4, not replace it**: D4 (`streaming-incremental-chunking`) targets the embed+write pipeline; E0d targets the parse stage. They are complementary. E0d's streaming parse feeds naturally into D4's streaming chunk emission. If D4 is not yet shipped, E0d can ship with a "parse fully, then stream chunks" approach as an intermediate step — the key fix is removing the memory materialisation of the raw text string before chunking starts.
+- **Dual-guard design — pipeline + route**: The guard lives at two levels. (1) `pipeline.ingest_file()` is the universal chokepoint — it returns an error `IngestResult` for REST job workers, MCP, CLI single-file, and watcher paths. (2) `POST /ingest` adds a synchronous pre-check before `job_store.create()` to return HTTP 413 immediately for single-file REST requests; the 413 is the semantically correct response and leaving no job in the store makes it predictable. A shared `_file_exceeds_limit()` helper ensures both sites use identical boundary semantics (strictly greater-than). Directory paths and `body.documents` payloads skip the route-level 413 check — oversized files in those paths surface as per-file error `IngestResult` inside the job.
+- **docling conversion is unchanged**: docling `convert()` fully materialises each document. E0d does not modify `parser.py` — the size guard fires before `convert()` is called, preventing OOM for guarded sizes. Memory reduction for unguarded large PDFs is D4's scope.
 - **`IngestError` with `code="file_too_large"`**: Consistent with the existing error taxonomy in `Architecture/140_error_handling_strategy.md`. Maps to HTTP 413 at the REST layer.
 
 ## Edge Cases & Constraints
-- **docling page-by-page API availability**: Verify that the installed `docling >= 2.80.0` version exposes a page-streaming or batch API. If not, the intermediate approach is: convert to markdown string (existing behaviour), then stream the string into the chunker in batches rather than holding chunked output in memory. The memory win is smaller but the fix is forward-compatible.
-- **`max_file_mb` check on symlinks**: Use `os.path.getsize()` which follows symlinks — correct behaviour (the actual file size is what matters).
-- **Watcher-triggered ingest**: The file-size guard must apply in `watcher.py`'s ingest dispatch path, not only in the REST/MCP handler. The guard lives in `pipeline.ingest_file()` to ensure universal application.
-- **Progress reporting for async jobs**: For REST/MCP ingest (async job model), page-level progress updates write to `job.progress` field. CLI `--wait` polls and displays the progress field. No new protocol needed.
-- **Very large PDFs (> 1 GB)**: The streaming approach keeps per-file memory proportional to a single page batch, not the file size. Test with a representative 500-page, 100 MB PDF as the acceptance benchmark.
+- **`max_file_mb` check on symlinks**: Use `os.path.getsize()` which follows symlinks — correct behaviour (the actual file size is what matters). Note: `ingest_directory()` skips symlinks before the guard is reached; symlink checking only applies to `ingest_file()` direct calls (REST single-file path, watcher events, CLI single-file mode).
+- **Watcher-triggered ingest**: The file-size guard applies automatically via `pipeline.ingest_file()` — `sync.py` calls it directly for file-changed/created events. No watcher code changes needed.
+- **Directory ingest with oversized files**: `ingest_directory()` continues processing other files; oversized files produce per-file `IngestResult(status="error", code="file_too_large")`. The batch job does not fail-fast.
+- **Very large PDFs (> 1 GB)**: Accept without error when `max_file_mb=0`. Memory during conversion is bounded by the document size (docling materialises fully). Test with a 500-page, ~100 MB PDF as the acceptance benchmark. Memory relief for very large PDFs is D4's scope.
 
 ## Open Questions
-- **docling streaming API**: Does `docling >= 2.80.0` expose an incremental page converter, or does it materialise the full document internally regardless? If the latter, the memory benefit of streaming at the `_parse_pdf` layer is limited; the real fix is in D4's chunker streaming. Planning must verify this against the installed docling version before deciding implementation strategy.
+
+_All resolved as of 2026-06-27._
+
+- **docling streaming API** ✅ Resolved (docling 2.102.2, verified 2026-06-27): docling does **not** expose a per-page streaming API. `convert()` materialises each document fully internally; `page_range` controls which pages are exported, not parsed. Implementation strategy: **Option B** — our own `os.path.getsize()` pre-check before invoking `convert()`, giving full control over the error message. Memory reduction for very large PDFs remains a D4 concern (chunker streaming). `convert()` natively accepts `max_file_size` but we own the guard for message quality.
 
 ## Future Iterations
 - **Per-collection `max_file_mb` override**: Allows a "large documents" collection to accept bigger files than the global guard.
