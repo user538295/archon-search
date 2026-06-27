@@ -108,5 +108,16 @@
       "suggestion": 2
     },
     "scope": "E0b T-close: docs (BREAKING/CLAUDE/110/600/UserManual) + 2 new e2e tests (S7b, S23)"
+  },
+  {
+    "date": "2026-06-27",
+    "mode": "PR Review",
+    "score": 94,
+    "findings": {
+      "critical": 0,
+      "warning": 1,
+      "suggestion": 1
+    },
+    "scope": "archon_search/pipeline.py, archon_search/server/app.py, tests/pipeline/test_pipeline_size_guard_be3.py"
   }
 ]

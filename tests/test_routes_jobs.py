@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, call
 import pytest
 from fastapi.testclient import TestClient
 
+from archon_search._types import IngestResult
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
@@ -1071,7 +1072,9 @@ def _make_ingest_mocks(
     embedder_cache.get_or_load = AsyncMock(return_value=fake_embedder)
 
     pipeline = MagicMock()
-    pipeline.ingest_file = AsyncMock(return_value=MagicMock())
+    pipeline.ingest_file = AsyncMock(
+        return_value=IngestResult(doc_id="test-doc-id", chunks_created=0, status="ok")
+    )
     pipeline.ingest_directory = AsyncMock(return_value=[])
 
     config = MagicMock()

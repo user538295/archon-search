@@ -383,7 +383,7 @@ flowchart LR
         - #integration_test — `test_size_check_boundary_consistent` — file exactly at max_file_mb bytes: route returns 202 (not 413) AND pipeline returns IngestResult(status="ok"); verifies both use strictly-greater-than
         - #unit_test — `test_ingest_route_413_symlink_follows_target_size` — symlink to oversized file → 413 (route pre-check follows symlink via os.path.getsize) (S6 at route level)
 
-- [ ] **T-1** — E2e: REST 413, CLI non-zero exit, directory mixed-size batch #tester-role
+- [x] **T-1** — E2e: REST 413, CLI non-zero exit, directory mixed-size batch #tester-role
     - — · 2.0h
     - needs BE-4, FE-1 · completes S2, S3, S10
     - Tests
@@ -412,7 +412,7 @@ flowchart LR
 
 ### Slice 3 · CLI shows large-file notice and supports single-file ingest
 
-- [ ] **FE-1** — CLI: `--path` file-vs-directory routing + large-file notice to stderr #frontend-role
+- [x] **FE-1** — CLI: `--path` file-vs-directory routing + large-file notice to stderr #frontend-role
     - Presentation · 3.0h
     - needs BE-3 · completes S3, S9
     - If `Path(path).is_file()` → `pipeline.ingest_file()`; else → existing `pipeline.ingest_directory()`. Collection-name for single-file mode: `Path(path).stem` (filename without extension). Update `--path` help text from "Directory to ingest" to "File or directory to ingest".

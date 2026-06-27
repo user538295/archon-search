@@ -75,10 +75,13 @@ async def _dispatch_ingest(
     embedder_cache: "EmbedderCache",
     pipeline: Any,
     config: Any,
-) -> list[str]:
+) -> tuple[list[str], list[dict]]:
     """Resolve per-collection embedder and dispatch to pipeline.ingest_file / ingest_directory.
 
-    Returns a flat list of warning strings collected from all IngestResult objects.
+    Returns a tuple of:
+    - warnings: flat list of warning strings from all IngestResult objects
+    - file_results: list of per-file dicts with ``doc_id``, ``status``, and optional ``code``
+      (non-empty only when at least one file has a non-None code, e.g. ``"file_too_large"``)
     """
     meta = await search_store.get_collection_meta(body.collection, namespace)
     active_model = (meta.active_embedding_model if meta else "") or config.embedding_model
@@ -90,12 +93,21 @@ async def _dispatch_ingest(
             result = await pipeline.ingest_file(
                 p, body.collection, embedder=embedder, namespace=namespace, ingested_by=body.ingested_by
             )
-            return list(result.warnings)
+            file_results = []
+            if result.code is not None:
+                file_results.append({"doc_id": result.doc_id, "status": result.status, "code": result.code})
+            return list(result.warnings), file_results
         elif p.is_dir():
             results = await pipeline.ingest_directory(
                 p, body.collection, embedder=embedder, namespace=namespace, ingested_by=body.ingested_by
             )
-            return [w for r in results for w in r.warnings]
+            warnings = [w for r in results for w in r.warnings]
+            file_results = [
+                {"doc_id": r.doc_id, "status": r.status, "code": r.code}
+                for r in results
+                if r.code is not None
+            ]
+            return warnings, file_results
         else:
             raise FileNotFoundError(f"path does not exist or is not a file/directory: {body.path}")
     elif body.documents is not None:
@@ -105,7 +117,7 @@ async def _dispatch_ingest(
             )
         else:
             logger.warning("pipeline has no ingest_documents method; skipping documents ingest for collection %s", body.collection)
-    return []
+    return [], []
 
 
 async def _default_ingest_task(
@@ -124,8 +136,9 @@ async def _default_ingest_task(
     try:
         store.update(job_id, status=JobStatus.RUNNING)
         ingest_warnings: list[str] = []
+        ingest_file_results: list[dict] = []
         if pipeline_fn is None and search_store is not None and embedder_cache is not None and pipeline is not None and config is not None:
-            ingest_warnings = await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
+            ingest_warnings, ingest_file_results = await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
         else:
             await _run_pipeline(job_id, store, body, pipeline_fn, namespace=namespace)
         # Check for cancellation before marking DONE
@@ -133,7 +146,10 @@ async def _default_ingest_task(
         if job and job.status == JobStatus.CANCELLING:
             store.update(job_id, status=JobStatus.CANCELLED)
             return
-        store.update(job_id, status=JobStatus.DONE, result={"warnings": ingest_warnings})
+        result_dict: dict = {"warnings": ingest_warnings}
+        if ingest_file_results:
+            result_dict["file_results"] = ingest_file_results
+        store.update(job_id, status=JobStatus.DONE, result=result_dict)
     except asyncio.CancelledError:
         try:
             store.update(job_id, status=JobStatus.CANCELLED)
@@ -169,13 +185,14 @@ async def _default_ingest_task_with_lock(
     try:
         store.update(job_id, status=JobStatus.RUNNING)
         ingest_warnings: list[str] = []
+        ingest_file_results: list[dict] = []
         if pipeline_fn is None and search_store is not None and embedder_cache is not None and pipeline is not None and config is not None:
             # Release the pre-acquired lock before dispatch: pipeline.ingest_file /
             # ingest_directory will acquire it internally. Holding it here would
             # deadlock since asyncio.Lock is not reentrant.
             if held_lock is not None and held_lock.locked():
                 held_lock.release()
-            ingest_warnings = await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
+            ingest_warnings, ingest_file_results = await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
         else:
             await _run_pipeline(
                 job_id, store, body, pipeline_fn, namespace=namespace, locked_by_caller=True
@@ -184,7 +201,10 @@ async def _default_ingest_task_with_lock(
         if job and job.status == JobStatus.CANCELLING:
             store.update(job_id, status=JobStatus.CANCELLED)
             return
-        store.update(job_id, status=JobStatus.DONE, result={"warnings": ingest_warnings})
+        result_dict: dict = {"warnings": ingest_warnings}
+        if ingest_file_results:
+            result_dict["file_results"] = ingest_file_results
+        store.update(job_id, status=JobStatus.DONE, result=result_dict)
     except asyncio.CancelledError:
         try:
             store.update(job_id, status=JobStatus.CANCELLED)
