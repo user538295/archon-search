@@ -2,6 +2,16 @@
 
 ## What Has Worked
 
+**2026-06-27 — E0c BE-3: moving Pydantic Field bounds to handler bodies changes 422 error shape — document in BREAKING.md**
+- Observation: Removing `le=100` from `SearchRequest.top_k` and moving the upper-bound check to the handler body changes the 422 detail from a Pydantic array `[{"loc":…,"msg":…}]` to a plain string `{"detail":"…"}`. Both shapes use status 422, but they are structurally incompatible for clients that parse validation-error lists. This is a wire-level breaking change that must be recorded in BREAKING.md.
+- Action: Whenever validation moves from Pydantic Field/model_validator to handler body (to get access to config), add a BREAKING.md entry noting the 422 envelope change. The T-3 close-out task owns BREAKING.md for E0c; do not let it slip to a surprise during T-close fact-checking.
+- Confidence: high
+
+**2026-06-27 — E0c BE-3: "not 422" test assertions are weaker than "== 404" for boundary-condition tests**
+- Observation: Tests like `test_fanout_respected_from_config_at_limit` initially used `assert resp.status_code != 422`. Since the collections don't exist, the real response is 404. The iterative review caught that `!= 422` is vacuously satisfied even if the entire validation block is deleted. `== 404` is stronger: it proves the request got past validation AND reached collection lookup.
+- Action: For "at-limit" boundary tests that use non-existent resources, always assert the specific downstream error code (404 for missing collection) rather than "not the rejection code". Reserve `!= 422` only when the response code is genuinely variable.
+- Confidence: high
+
 **2026-06-27 — E0c BE-2: path_home_allowlist.txt line numbers shift when dataclass lines are added — must update allowlist**
 - Observation: Adding 2 lines to the `SearchConfig` dataclass shifted `get_default_config_path()`'s `Path.home()` call from line 194 to 196. The `test_path_home_ratchet` test failed because the allowlist still had `config.py:194`. The hash was unchanged — only the line number needed updating.
 - Action: Whenever adding lines to `config.py` before `get_default_config_path()` (around line 190), update `tests/path_home_allowlist.txt` to reflect the new line number. Run `grep -n "Path.home" archon_search/config.py` to find the new line, then update the allowlist entry.
