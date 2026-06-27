@@ -377,7 +377,7 @@ flowchart LR
         - [x] #integration_test — `test_status_search_top_k_max_matches_config` — config top_k_max=200 → `status.search.top_k_max == 200`
         - [x] #integration_test — `test_status_search_defaults` — no TOML overrides → `max_fanout=8, top_k_max=100`
 
-- [ ] **T-1** — E2e tests for status search fields: verify TOML config flows end-to-end into `GET /status search.*` #tester-role
+- [x] **T-1** — E2e tests for status search fields: verify TOML config flows end-to-end into `GET /status search.*` #tester-role
     - — · 2.0h
     - needs BE-3, BE-4 · completes S10, S13
     - Tests
