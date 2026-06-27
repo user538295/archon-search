@@ -2,6 +2,21 @@
 
 ## What Has Worked
 
+**2026-06-27 — E0c T-1: make_real_app docstring misdescribed db_path env-override — always cite the correct field**
+- Observation: The new `toml_content` docstring said "env overrides (db_path via ARCHON_SEARCH_DATA_DIR) apply correctly," but `db_path` is unconditionally overridden by the helper after `load_config`. Brooks-Lint rated this Moderate. The env-before-load ordering matters for `ARCHON_SEARCH_API_KEY`, not `db_path`.
+- Action: When documenting env-var ordering in test helpers, verify which fields actually survive `load_config` and which are overridden afterward. Never cite a field in an env-override comment if it is subsequently overridden unconditionally.
+- Confidence: high
+
+**2026-06-27 — E0c T-1: test helper kwargs that overlap with TOML content need a mutual-exclusion guard**
+- Observation: `make_real_app` had both `max_fanout`/`top_k_max` int kwargs and the new `toml_content` param. Without a guard, both can be passed simultaneously; the kwargs silently win because they apply after `load_config`. This is a correctness trap for future test authors. DA1 and DA2 both flagged it as Moderate/Should-do.
+- Action: Whenever adding a "full-path" param (e.g., `toml_content`) to a test helper that already has fine-grained overrides for the same concepts, add a `ValueError` guard at the top of the helper. This is cheaper than a docstring note that will be ignored.
+- Confidence: high
+
+**2026-06-27 — E0c T-1: commit implementation + plan checkoff together — stage plan file before running commit-message skill**
+- Observation: The implementation was committed before the plan checkbox was toggled, resulting in two commits instead of one. The accept criteria required a single commit. `--amend` is forbidden, so a second commit was necessary.
+- Action: Before invoking the commit-message skill, toggle the plan checkbox first, then stage all files (implementation + plan file) in a single `git add`. This ensures the single-commit acceptance criterion is met without needing amend.
+- Confidence: high
+
 **2026-06-27 — E0c BE-3: moving Pydantic Field bounds to handler bodies changes 422 error shape — document in BREAKING.md**
 - Observation: Removing `le=100` from `SearchRequest.top_k` and moving the upper-bound check to the handler body changes the 422 detail from a Pydantic array `[{"loc":…,"msg":…}]` to a plain string `{"detail":"…"}`. Both shapes use status 422, but they are structurally incompatible for clients that parse validation-error lists. This is a wire-level breaking change that must be recorded in BREAKING.md.
 - Action: Whenever validation moves from Pydantic Field/model_validator to handler body (to get access to config), add a BREAKING.md entry noting the 422 envelope change. The T-3 close-out task owns BREAKING.md for E0c; do not let it slip to a surprise during T-close fact-checking.
