@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import os
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
@@ -11,6 +13,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
 from archon_search._path_safety import PathUnsafeError, validate_ingest_path
+from archon_search._types import IngestError, _file_exceeds_limit
+from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
@@ -350,6 +354,7 @@ _ERROR_400_401 = {
 _ERROR_400_401_503 = {
     400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
     401: {"model": ErrorDetail},
+    413: {"model": ErrorDetail, "description": "File size exceeds configured max_file_mb limit"},
     503: {"description": "Store busy — reindex in progress"},
 }
 
@@ -368,6 +373,26 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
         except PathUnsafeError as e:
             raise HTTPException(status_code=400, detail=f"path is unsafe: {e.reason}")
     ns = request.state.namespace
+
+    # Synchronous 413 pre-check — only for single-file paths, before job creation.
+    # Skipped for directory paths and `documents` payloads (no filesystem path).
+    if body.path is not None:
+        p = Path(body.path)
+        if p.is_file():
+            config: SearchConfig = request.app.state.config
+            max_file_mb: int = config.ingest.max_file_mb
+            try:
+                exceeds = _file_exceeds_limit(p, max_file_mb)
+            except OSError:
+                exceeds = False  # File disappeared between is_file() and _file_exceeds_limit(); let the job handle it.
+            if exceeds:
+                try:
+                    file_size_mb = math.ceil(os.path.getsize(p) / (1024 * 1024))
+                except OSError:
+                    file_size_mb = max_file_mb + 1  # File size unknown but known to exceed limit.
+                err = IngestError(file_size_mb=file_size_mb, limit_mb=max_file_mb)
+                raise HTTPException(status_code=413, detail=err.message)
+
     try:
         job = store.create(namespace=ns)
     except OSError:

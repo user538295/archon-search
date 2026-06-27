@@ -4135,6 +4135,16 @@
             },
             "description": "Unauthorized"
           },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "File size exceeds configured max_file_mb limit"
+          },
           "422": {
             "content": {
               "application/json": {

@@ -277,3 +277,13 @@
 - Observation: A plan-specified shared helper (`_file_exceeds_limit`) was implemented in BE-1 but the BE-3 implementor inlined the same logic instead of calling it. Iterative-review caught this as a Major finding. The `assert_not_called()` pattern on `os.path.getsize` (in the `max_file_mb=0` test) is the correct way to prove a guard path is truly skipped — a dead mock that never fails gives false confidence.
 - Action: After any implementation, grep for shared helpers named in the plan and verify they are actually called. Use `assert_not_called()` when proving a guard does not fire, not a mock that would silently pass even if the guard ran.
 - Confidence: high
+
+**[2026-06-27] — E0d BE-4 (Interface Adapters 413 route pre-check)**
+- Observation: A fix agent that addressed the "double getsize + floor rounding" Major finding resolved it by removing the shared helper call entirely and inlining `raw_size > max_file_mb * 1024 * 1024`. This reproduced the BE-3 anti-pattern one task later despite an explicit learnings entry. Cycle 2 review caught it again.
+- Action: When fixing a rounding/dual-stat issue that involves a shared helper, keep the helper call for the boolean check and add a second try/except for the display-only stat. Never remove the shared helper to fix an unrelated bug — the two concerns are independent.
+- Confidence: high
+
+**[2026-06-27] — E0d BE-4 (Interface Adapters 413 route pre-check)**
+- Observation: A `try/except OSError` correctly wrapped the `_file_exceeds_limit` call, but a second bare `os.path.getsize` for the human-readable error message was left unguarded — a second TOCTOU window. Pattern: every `os.path.getsize` call in a route handler that runs after the file was already stat'd needs its own guard. The fallback for the display-size case (`file_size_mb = max_file_mb + 1`) is a correct graceful degradation — the 413 is still returned with a slightly imprecise message.
+- Action: After adding any OSError guard in a handler, scan the same code block for additional filesystem calls that could raise and add defensive guards.
+- Confidence: high

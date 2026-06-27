@@ -368,7 +368,7 @@ flowchart LR
         - #integration_test — `test_pipeline_guard_directory_batch_continues` — ingest_directory with mixed sizes; oversized file errors; under-limit file succeeds (S10)
         - #integration_test — `test_pipeline_guard_watcher_path_continues` — simulate watcher call: pipeline.ingest_file() with oversized file; IngestResult(status="error", code="file_too_large") returned; no exception propagated (S11)
 
-- [ ] **BE-4** — Sync 413 pre-check in `POST /ingest` route + regenerate OpenAPI snapshot #backend-role
+- [x] **BE-4** — Sync 413 pre-check in `POST /ingest` route + regenerate OpenAPI snapshot #backend-role
     - Interface Adapters · 2.5h
     - needs BE-3 · completes S2, C3
     - Pre-check placement: `p = Path(body.path)` + `p.is_file()` check BEFORE `job_store.create()`; uses `_file_exceeds_limit` from `_types.py`.
