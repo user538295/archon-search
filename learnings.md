@@ -32,6 +32,16 @@
 - Action: Before invoking the commit-message skill, toggle the plan checkbox first, then stage all files (implementation + plan file) in a single `git add`. This ensures the single-commit acceptance criterion is met without needing amend.
 - Confidence: high
 
+**2026-06-27 — E0c T-2: page-count assertion must use math.ceil when n_docs is not a multiple of page_size**
+- Observation: Initial `test_e2e_list_documents_full_pagination_flow` used `n_docs=150` (exact multiple of `page_size=50`) and asserted `page_num == n_docs // page_size`. DA reviewers flagged two problems: (1) integer division gives the wrong count for non-multiples; (2) the test never exercised a partial last page, which is the more interesting boundary. Changed to 155 docs and `math.ceil(n_docs / page_size)`.
+- Action: When writing pagination e2e tests, always use a doc count that is NOT a multiple of the page size so the partial-last-page path is exercised. Use `math.ceil` for expected page count.
+- Confidence: high
+
+**2026-06-27 — E0c T-2: add cursor-past-all-docs test for S4 edge case — empty items + null next_cursor**
+- Observation: S4 specifies "if no documents fall after [the cursor position], returns empty items with next_cursor: null". The initial T-2 only tested the mid-list case. DA and correctness reviewers flagged the "beyond all docs" edge case as Moderate/missing. A synthetic cursor `"z" * 64` (sorts after all SHA-256 hex strings, which use [0-9a-f]) reliably exercises this branch.
+- Action: For cursor pagination tests, always include both (a) a deleted-cursor test where docs exist after the cursor, and (b) a cursor-past-all-docs test where the result is empty. Both are specified by S4.
+- Confidence: high
+
 **2026-06-27 — E0c BE-3: moving Pydantic Field bounds to handler bodies changes 422 error shape — document in BREAKING.md**
 - Observation: Removing `le=100` from `SearchRequest.top_k` and moving the upper-bound check to the handler body changes the 422 detail from a Pydantic array `[{"loc":…,"msg":…}]` to a plain string `{"detail":"…"}`. Both shapes use status 422, but they are structurally incompatible for clients that parse validation-error lists. This is a wire-level breaking change that must be recorded in BREAKING.md.
 - Action: Whenever validation moves from Pydantic Field/model_validator to handler body (to get access to config), add a BREAKING.md entry noting the 422 envelope change. The T-3 close-out task owns BREAKING.md for E0c; do not let it slip to a surprise during T-close fact-checking.
@@ -1528,4 +1538,14 @@
 **2026-06-27 — E0c BE-1 Cycle-2 Brooks-Lint review: in-process shuffle does not satisfy the L12 "unbiased draw" intent**
 - Observation: BE-1's brief (L12) asked for `ORDER BY RANDOM()` (or fallback shuffle) so the description-generation sample is "not biased to insertion order." The shipped code shuffles only the first `n` rows returned by `limit(n)` — i.e. it randomizes the *order* of an insertion-order-biased *window*, never the *membership*. For a 500-chunk collection with n=100, chunks 101-500 can never be sampled. The S16 integration test mocks `sample_chunk_texts` so it never exercises real selection bias, and the docstring/comment correctly disclose the limitation — so it is an intentional, documented scope cut, not a bug, but the brief's stated goal is only partially met.
 - Action: When a brief states an *intent* ("unbiased draw") and the impl delivers only the *fallback* mechanism (shuffle-the-window), flag the gap explicitly as Moderate even when tests pass and docs are honest — passing tests against a mock do not prove the intent is met. Also: `generate_description` does `random.sample` on top of the store's `random.shuffle`, so the shuffle in the store is redundant for that one caller (sample already randomizes order); the shuffle only matters for other/future callers.
+- Confidence: high
+
+**2026-06-27 — E0c T-3 close-out: BREAKING.md entries for 422 envelope shape change are the highest-risk undocumented gap**
+- Observation: The E0c T-3 fact-check found no code gaps (all 10 acceptance criteria verified against source). The one documentation gap that existed was BREAKING.md — no E0c entries had been added yet. The 422 envelope shape change (Pydantic list → handler string) for both fanout and top_k validation is a wire-level breaking change that clients parsing `response.json()["detail"]` as a list will encounter silently. The OpenAPI `maximum` annotation removal is a related client-facing change.
+- Action: Any task that moves validation from Pydantic `Field(le=…)` / `@model_validator` to a route handler body must add a BREAKING.md entry in the same commit (not deferred to T-close). The 422 envelope shape change is invisible to status-code-only callers but breaks clients that parse the detail structure.
+- Confidence: high
+
+**2026-06-27 — E0c T-3 close-out: Full test suite green at close-out — 5622 passed, 0 failed, 93.55% coverage**
+- Observation: Running `uv run pytest` at T-close produced 5622 passed, 13 skipped, 0 failures. Coverage 93.55% (above 85% gate). All E0c tests were integrated by their respective tasks (BE-1 through BE-6, T-1, T-2). No pre-existing failures needed fixing. The acceptance criteria fact-check confirmed all 10 criteria implemented: DocumentListResponse with cursor pagination in routes_collections.py, fanout validation from config.max_fanout in routes_search.py and routes_explain.py, top_k_max in routes_search.py handler and routes_explain.py handler, SearchStatusDetail in routes_status.py, sample_chunk_texts shuffle in store.py, MAX_SAMPLE_CHUNKS=100 in description_generator.py, MCP list_documents cursor in mcp.py, OpenAPI snapshot current.
+- Action: The pattern of running tests after each implementing task (not just at T-close) keeps the suite green at close-out. T-close suite run is a final gate, not a discovery mechanism.
 - Confidence: high

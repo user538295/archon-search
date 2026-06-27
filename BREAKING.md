@@ -8,6 +8,31 @@
 
 ## Changelog
 
+### [next release] — E0c: `top_k` OpenAPI schema change; 422 envelope change for fanout and top_k validation; additive `search` sub-object on `GET /status`; new `GET /collections/{name}/documents` endpoint
+
+**Surface**: `POST /search`, `POST /explain` request schemas; `GET /status` response; `GET /collections/{name}/documents` (new endpoint); MCP `list_documents` tool.
+
+**Breaking changes**:
+
+1. **`top_k` OpenAPI `maximum` constraint removed from the schema definition** — `SearchRequest.top_k` and `ExplainRequest.top_k` previously carried a static `le=100` Pydantic `Field` constraint that appeared in the generated OpenAPI schema as `"maximum": 100`. This constraint has been removed from the Pydantic model. The upper-bound check is now applied at runtime in the route handler body using `config.top_k_max` (default `100`). The schema in `GET /openapi.json` no longer carries `"maximum": 100` on the `top_k` field. Generated clients that relied on the static OpenAPI `maximum` annotation for client-side range validation must update their type stubs — the server still enforces the limit, but the schema no longer communicates it statically.
+
+2. **422 error envelope change for fanout and `top_k` bound violations** — previously, `len(collections) > max_fanout` and `top_k > 100` were caught by Pydantic `@model_validator` and `Field(le=…)` respectively, producing a standard Pydantic validation-error list `{"detail": [{"loc": [...], "msg": "...", "type": "..."}]}`. Both checks now run in the route handler body and return a `JSONResponse` with `status_code=422` and `{"detail": "..."}` body, producing a plain-string detail `{"detail": "collections length exceeds maximum of N"}` or `{"detail": "top_k N exceeds operator-configured maximum of M"}`. Clients that parse `response.json()["detail"]` as a list will see a different shape. Clients that only check `status_code == 422` and display the body verbatim are unaffected.
+
+**Additive changes** (non-breaking for tolerant JSON consumers; breaking for strict-schema validators):
+
+3. **`GET /status` gains `search: SearchStatusDetail | null`** — `StatusResponse` gains an optional `search` sub-object: `{"max_fanout": int, "top_k_max": int}`. Both fields always reflect the live `SearchConfig` values (TOML overrides or defaults). Strictly-validating clients with `extra="forbid"` must add `search` to their `StatusResponse` type stubs. Tolerant clients are unaffected.
+
+4. **New `GET /collections/{name}/documents` REST endpoint** — cursor-paginated document listing: `limit` (1–200, default 50), `cursor` (opaque, `None` to start from the beginning). Returns `{"items": [DocumentInfoItem…], "next_cursor": str | null, "total": int}`. Additive — no existing endpoints are modified. Clients that enumerate allowed routes must add this path.
+
+5. **MCP `list_documents` gains optional `cursor` parameter** — the tool now accepts `cursor: str | None = None` in addition to the existing `collection` and `limit` parameters. Additive — existing calls without `cursor` are unaffected.
+
+**Migration**:
+- For items 1 and 2: if your client-side schema set `maximum: 100` on `top_k` from the OpenAPI snapshot, remove that static constraint. For fanout (`len(collections)`) and `top_k` bound violations specifically, the 422 `detail` value changed from a Pydantic validation-error list to a plain string — update client code that parsed `detail` as a list for these specific errors. Other Pydantic validation errors (e.g. wrong field type for `top_k`) still produce the list shape. Alternatively, regenerate client types from the updated `GET /openapi.json` snapshot.
+- For item 3: regenerate client types from `GET /openapi.json` or add `search: { max_fanout: int, top_k_max: int } | null` to your `StatusResponse` type stubs.
+- For items 4 and 5: purely additive; no migration required.
+
+---
+
 ### [next release] — E0b: additive fields on SearchResponse, StatusResponse, StatsResponse; new FAILED_EXPIRED job status
 
 **Surface**: `POST /search`, `GET /status`, `GET /telemetry/stats` REST responses; MCP `search` and `search_with_context` tool returns; `JobStatus` enum.

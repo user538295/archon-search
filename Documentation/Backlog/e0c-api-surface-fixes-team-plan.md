@@ -255,14 +255,14 @@ N/A — no frontend work for this feature. This is a pure Python backend project
 
 ## Documentation update
 
-- [ ] `Documentation/Backlog/e0c-api-surface-fixes-brief.md` — no changes needed (source brief)
-- [ ] `Documentation/Backlog/e0c-api-surface-fixes-team-plan.md` — this file
-- [ ] `BREAKING.md` — three entries: (1) `top_k` OpenAPI schema changes from static `le=100` to dynamic `le=top_k_max`; (2) fanout + top_k 422 envelope changes from Pydantic detail-list to handler string `{"detail": "…"}`; (3) `GET /collections/{name}/documents` is new (additive, not breaking)
-- [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `GET /collections/{name}/documents` REST entry; update `POST /search` `top_k` constraint note; add `GET /status search` sub-object; add MCP `list_documents` cursor param
-- [ ] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — annotate `store.list_documents` (cursor, count_documents for total), `store.sample_chunk_texts` (shuffle), `description_generator._MAX_SAMPLE_CHUNKS`, `SearchConfig.top_k_max`, `routes_collections` (new endpoint), `routes_explain` (top_k cap change), `routes_status` (`_build_search_status`), `schemas.SearchStatusDetail`/`DocumentListResponse`, `app.py` (drift assertion removed)
-- [ ] `archon-search.toml.example` — add `# top_k_max = 100` comment under `[search]`
-- [ ] `CLAUDE.md` — update `routes_search.py` bullet (remove `_FANOUT_VALIDATION_LIMIT` mention; note handler-level validation), `routes_collections.py` bullet (new endpoint), `config.py` `SearchConfig` bullet (`top_k_max`), `routes_status.py` bullet (`search` sub-object), `store.py` bullet (`list_documents` cursor, `sample_chunk_texts` shuffle)
-- [ ] `learnings.md` — add E0c observations after T-3
+- [x] `Documentation/Backlog/e0c-api-surface-fixes-brief.md` — no changes needed (source brief)
+- [x] `Documentation/Backlog/e0c-api-surface-fixes-team-plan.md` — this file
+- [x] `BREAKING.md` — three entries: (1) `top_k` OpenAPI schema changes from static `le=100` to dynamic `le=top_k_max`; (2) fanout + top_k 422 envelope changes from Pydantic detail-list to handler string `{"detail": "…"}`; (3) `GET /collections/{name}/documents` is new (additive, not breaking)
+- [x] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `GET /collections/{name}/documents` REST entry; update `POST /search` `top_k` constraint note; add `GET /status search` sub-object; add MCP `list_documents` cursor param
+- [x] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — annotate `store.list_documents` (cursor, count_documents for total), `store.sample_chunk_texts` (shuffle), `description_generator._MAX_SAMPLE_CHUNKS`, `SearchConfig.top_k_max`, `routes_collections` (new endpoint), `routes_explain` (top_k cap change), `routes_status` (`_build_search_status`), `schemas.SearchStatusDetail`/`DocumentListResponse`, `app.py` (drift assertion removed)
+- [x] `archon-search.toml.example` — add `# top_k_max = 100` comment under `[search]`
+- [x] `CLAUDE.md` — update `routes_search.py` bullet (remove `_FANOUT_VALIDATION_LIMIT` mention; note handler-level validation), `routes_collections.py` bullet (new endpoint), `config.py` `SearchConfig` bullet (`top_k_max`), `routes_status.py` bullet (`search` sub-object), `store.py` bullet (`list_documents` cursor, `sample_chunk_texts` shuffle)
+- [x] `learnings.md` — add E0c observations after T-3
 
 ---
 
@@ -423,7 +423,7 @@ flowchart LR
 
 ### Phase N · Close-out
 
-- [ ] **T-3** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-3** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs BE-1, T-1, T-2 · completes (acceptance gate)
     - Tests
