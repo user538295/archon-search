@@ -2599,6 +2599,25 @@
         "title": "SearchResultSchema",
         "type": "object"
       },
+      "SearchStatusDetail": {
+        "description": "Search configuration status sub-object for GET /status (E0c BE-4 / C4).\n\nExposes the operator-configured search limits so clients can introspect\nthe active ceiling without reading TOML directly.  Both fields always\nreflect the live ``SearchConfig`` values \u2014 defaults or TOML overrides.",
+        "properties": {
+          "max_fanout": {
+            "title": "Max Fanout",
+            "type": "integer"
+          },
+          "top_k_max": {
+            "title": "Top K Max",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_fanout",
+          "top_k_max"
+        ],
+        "title": "SearchStatusDetail",
+        "type": "object"
+      },
       "SkippedItem": {
         "description": "One entry in BackupTriggerResponse.skipped \u2014 collection + machine-readable reason.",
         "properties": {
@@ -2902,6 +2921,16 @@
           "running": {
             "title": "Running",
             "type": "boolean"
+          },
+          "search": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "store_schema_version": {
             "default": 0,

@@ -205,6 +205,18 @@ class McpStatusDetail(BaseModel):
     )
 
 
+class SearchStatusDetail(BaseModel):
+    """Search configuration status sub-object for GET /status (E0c BE-4 / C4).
+
+    Exposes the operator-configured search limits so clients can introspect
+    the active ceiling without reading TOML directly.  Both fields always
+    reflect the live ``SearchConfig`` values — defaults or TOML overrides.
+    """
+
+    max_fanout: int
+    top_k_max: int
+
+
 class HydeStatusDetail(BaseModel):
     """HyDE feature status sub-object for GET /status (E0b BE-8 / C2).
 
@@ -249,6 +261,9 @@ class StatusResponse(BaseModel):
     telemetry: TelemetryStatusDetail | None = None
     # D9 BE-8 — MCP status field (additive, nullable)
     mcp: McpStatusDetail | None = None
+    # E0c BE-4 — search config limits; nullable for schema consistency with sibling sub-objects;
+    # the builder always populates it — never null in practice.
+    search: SearchStatusDetail | None = None
     # E0b BE-8 — HyDE key availability (additive, nullable); null when hyde.enabled=false
     hyde: HydeStatusDetail | None = None
     # E0b BE-8 — RAG Fusion key availability (additive, nullable); null when rag_fusion.enabled=false

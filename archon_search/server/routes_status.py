@@ -23,6 +23,7 @@ from archon_search.server.schemas import (
     McpStatusDetail,
     ModelValidationStatus,
     RagFusionStatusDetail,
+    SearchStatusDetail,
     StatusCollectionEntry,
     StatusResponse,
     TelemetryStatusDetail,
@@ -121,6 +122,7 @@ async def status(request: Request) -> StatusResponse:
     hyde_detail = _build_hyde_status(request, config)
     rag_fusion_detail = _build_rag_fusion_status(request, config)
     failed_expired_count = _count_failed_expired_ingest_jobs(request, ns)
+    search_detail = _build_search_status(config)
     return StatusResponse(
         running=True,
         pid=pid,
@@ -134,6 +136,7 @@ async def status(request: Request) -> StatusResponse:
         model_validation=model_validation,
         telemetry=telemetry_detail,
         mcp=mcp_detail,
+        search=search_detail,
         hyde=hyde_detail,
         rag_fusion=rag_fusion_detail,
         failed_expired_ingest_count=failed_expired_count,
@@ -160,6 +163,18 @@ def _count_failed_expired_ingest_jobs(request: Request, ns: str) -> int:
         if type(j) is IngestJob
         and j.status == JobStatus.FAILED_EXPIRED
         and j.namespace == ns
+    )
+
+
+def _build_search_status(config: SearchConfig) -> SearchStatusDetail:
+    """Return the search config status sub-object (E0c BE-4 / C4).
+
+    Always returns a non-null ``SearchStatusDetail`` populated from the live
+    ``SearchConfig`` values — either the TOML-configured values or defaults.
+    """
+    return SearchStatusDetail(
+        max_fanout=config.max_fanout,
+        top_k_max=config.top_k_max,
     )
 
 

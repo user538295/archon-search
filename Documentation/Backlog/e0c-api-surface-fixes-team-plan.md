@@ -369,13 +369,13 @@ flowchart LR
         - #integration_test — `test_mcp_explain_top_k_exceeded_returns_error` — config top_k_max=200, MCP explain tool with top_k=201 → error response
         - #integration_test — `test_mcp_explain_fanout_exceeded_returns_error` — config max_fanout=3, MCP explain tool with 4 collections → error response
 
-- [ ] **BE-4** — Add `SearchStatusDetail` model to `schemas.py`; add `search: SearchStatusDetail | None` to `StatusResponse`; add `_build_search_status` helper to `routes_status.py` #backend-role
+- [x] **BE-4** — Add `SearchStatusDetail` model to `schemas.py`; add `search: SearchStatusDetail | None` to `StatusResponse`; add `_build_search_status` helper to `routes_status.py` #backend-role
     - Interface Adapters (`schemas.py`, `routes_status.py`) · 1.5h
     - needs BE-2 · completes S10, S13, C4
     - Tests
-        - #integration_test — `test_status_search_max_fanout_matches_config` — config max_fanout=12 → `status.search.max_fanout == 12`
-        - #integration_test — `test_status_search_top_k_max_matches_config` — config top_k_max=200 → `status.search.top_k_max == 200`
-        - #integration_test — `test_status_search_defaults` — no TOML overrides → `max_fanout=8, top_k_max=100`
+        - [x] #integration_test — `test_status_search_max_fanout_matches_config` — config max_fanout=12 → `status.search.max_fanout == 12`
+        - [x] #integration_test — `test_status_search_top_k_max_matches_config` — config top_k_max=200 → `status.search.top_k_max == 200`
+        - [x] #integration_test — `test_status_search_defaults` — no TOML overrides → `max_fanout=8, top_k_max=100`
 
 - [ ] **T-1** — E2e tests for status search fields: verify TOML config flows end-to-end into `GET /status search.*` #tester-role
     - — · 2.0h
