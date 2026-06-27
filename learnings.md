@@ -189,6 +189,15 @@
 **`functools.partial` over closure factory for single-argument adaptation**
 - Action: `functools.partial(hash_doc_id, salt)` replaces a closure factory — fully typed, 4 fewer lines, no `noqa` suppression needed.
 
+**TypeSpec `@doc` on response body does not set OpenAPI response description — need a named model**
+- Action: `@doc` placed on a `@body body: ErrorDetail` field inside an anonymous inline union branch sets the schema description, not the HTTP response description. To get a meaningful description on a specific status code in OpenAPI, extract it into a named model with `@doc` on the model itself: `@doc("...") model FileTooLargeResponse { @statusCode statusCode: 413; @body body: ErrorDetail; }`. Then reference `| FileTooLargeResponse` in the union.
+
+**TypeSpec contracts must mirror actual route schemas — verify against real Pydantic models**
+- Action: Before finalising a contract TypeSpec, read the actual Pydantic model in `schemas.py` or the route file. The C3 contract omitted `documents?: Record<unknown>[]` from `IngestRequest`, which is load-bearing for the "guard skipped for documents payload" semantic. The fix is always to add the field — not to document the omission as acceptable.
+
+**Kickoff task "completes" field should say "agrees" — reserve "completes" for code deliverables**
+- Action: In the plan's Task Breakdown, a `completes` field traditionally means "makes this scenario/contract true in code." A kickoff/alignment task that only ratifies contracts on paper should use `agrees` or `ratifies` to distinguish paper agreement from code realization. Without this distinction, the task history is misleading about what actually landed in the codebase at each step.
+
 ### Documentation and close-out
 
 **Moving completed files to `Documentation/Completed/`**
