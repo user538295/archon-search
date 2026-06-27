@@ -411,7 +411,7 @@ flowchart LR
         - #integration_test — `test_list_documents_mcp_cursor_backward_compat` — MCP list_documents without cursor still works
         - #integration_test — `test_list_documents_mcp_cursor_returns_next_page` — ingest 60 docs, call MCP list_documents with limit=30 (no cursor), take next_cursor from result, call again with cursor → verify second 30 items are different from first 30
 
-- [ ] **T-2** — E2e tests for L4 pagination: full ingest-then-paginate flow and large-collection performance #tester-role
+- [x] **T-2** — E2e tests for L4 pagination: full ingest-then-paginate flow and large-collection performance #tester-role
     - — · 3.0h
     - needs BE-6 · completes S1, S2, S3, S4, S5, S6, S7, S17
     - Tests
