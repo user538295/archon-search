@@ -287,3 +287,18 @@
 - Observation: A `try/except OSError` correctly wrapped the `_file_exceeds_limit` call, but a second bare `os.path.getsize` for the human-readable error message was left unguarded — a second TOCTOU window. Pattern: every `os.path.getsize` call in a route handler that runs after the file was already stat'd needs its own guard. The fallback for the display-size case (`file_size_mb = max_file_mb + 1`) is a correct graceful degradation — the 413 is still returned with a slightly imprecise message.
 - Action: After adding any OSError guard in a handler, scan the same code block for additional filesystem calls that could raise and add defensive guards.
 - Confidence: high
+
+**[2026-06-27] — E0d T-1 (Tester role e2e tests)**
+- Observation: `with patch("os.path.getsize", ...)` exits before an `asyncio.create_task` background task runs in TestClient. The fake returns the real size, so the size guard never fires, and tests 3–4 passed vacuously. `monkeypatch.setattr("os.path.getsize", fn)` persists for the test function's full duration (same process, same thread), including background tasks — the correct fix.
+- Action: For any test that patches a built-in function AND spawns background tasks, use `monkeypatch.setattr` rather than `with patch(...)`. Verify the fix by asserting on the side-effect (e.g., `file_results` non-empty), not just the HTTP status code.
+- Confidence: high
+
+**[2026-06-27] — E0d T-1 (Tester role e2e tests)**
+- Observation: `MagicMock().code is not None` evaluates to `True` — the MagicMock attribute itself is not `None`. A mock returning `MagicMock()` for `pipeline.ingest_file` caused `_dispatch_ingest` to append the mock object to `file_results`, then `json.dump()` raised `TypeError: Object of type MagicMock is not JSON serializable`. The fix is to return a real `IngestResult` whenever the return value's attributes are inspected.
+- Action: When a function inspects `.code` or any attribute for business logic (not just calls a method), return a real dataclass instance from the mock, not `MagicMock()`. Type-check the test helper's return value before running the full suite.
+- Confidence: high
+
+**[2026-06-27] — E0d T-1 (Tester role e2e tests)**
+- Observation: A tautological `or len(results) > 0` fallback on a path assertion silently masks false positives — if ANY results exist, the assertion passes even if they are from the wrong file. DA review (C2-1) caught this in cycle 2.
+- Action: Never use `or len(collection) > 0` as a fallback on a membership assertion. Either the member check passes or the test fails. Drop the fallback unconditionally.
+- Confidence: high
