@@ -5,7 +5,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -21,7 +21,7 @@ from archon_search.model_validation import ModelValidationError, validate_embedd
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _reindex_task
-from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, ErrorDetail, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
+from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
 from archon_search.store import StoreBusyError
 from archon_search.sync import path_to_collection_name
 from archon_search.types import JobStatus, MigrationJob, MigrationKind, MigrationSpec
@@ -385,6 +385,48 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
         "acl_open_count": acl_open,
     }
     return CollectionDetail(**data)
+
+
+@router.get("/{name}/documents", response_model=DocumentListResponse, responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 422: {"model": ErrorDetail}})
+async def list_collection_documents(
+    name: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None),
+) -> DocumentListResponse:
+    """List documents in a collection with cursor-based pagination (E0c BE-6).
+
+    - ``limit``: 1–200, default 50.
+    - ``cursor``: opaque cursor from the previous response's ``next_cursor``.
+      A cursor referencing a deleted document silently resumes from the next
+      sort position — no 4xx is raised.
+    - Returns 404 when the collection does not exist in the caller's namespace.
+    - Returns 422 when ``limit`` is outside [1, 200].
+    """
+    ns: str = request.state.namespace
+    search_store = request.app.state.search_store
+
+    meta = await search_store.get_collection_meta(name, namespace=ns)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    pipeline = request.app.state.pipeline
+    items, next_cursor, total = await pipeline.list_documents(
+        name, limit, cursor=cursor, namespace=ns
+    )
+    return DocumentListResponse(
+        items=[
+            DocumentInfoItem(
+                doc_id=doc.doc_id,
+                source_path=doc.source_path,
+                chunk_count=doc.chunk_count,
+                indexed_at=doc.indexed_at,
+            )
+            for doc in items
+        ],
+        next_cursor=next_cursor,
+        total=total,
+    )
 
 
 _ERROR_401_404_409_422 = {

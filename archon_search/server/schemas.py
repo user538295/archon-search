@@ -217,6 +217,32 @@ class SearchStatusDetail(BaseModel):
     top_k_max: int
 
 
+class DocumentInfoItem(BaseModel):
+    """One document entry in a DocumentListResponse (E0c BE-6).
+
+    Mirrors the public fields of ``archon_search._types.DocumentInfo``.
+    """
+
+    doc_id: str
+    source_path: str
+    chunk_count: int
+    indexed_at: str
+
+
+class DocumentListResponse(BaseModel):
+    """Response for GET /collections/{name}/documents (E0c BE-6).
+
+    Mirrors the shape of ``JobListResponse`` — ``items`` contains the current
+    page, ``next_cursor`` is the opaque cursor for the next page (``None`` on
+    the last page), and ``total`` is the full document count for the collection
+    independent of pagination.
+    """
+
+    items: list[DocumentInfoItem]
+    next_cursor: str | None
+    total: int
+
+
 class HydeStatusDetail(BaseModel):
     """HyDE feature status sub-object for GET /status (E0b BE-8 / C2).
 

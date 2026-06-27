@@ -398,7 +398,7 @@ flowchart LR
         - [x] #unit_test — `test_list_documents_total_is_full_collection_count` — total reflects all docs, not just current page
         - [x] #integration_test — `test_pipeline_list_documents_cursor_passes_through` — pipeline delegates cursor to store unchanged
 
-- [ ] **BE-6** — Add `DocumentListResponse` to `schemas.py`; add `GET /collections/{name}/documents` to `routes_collections.py`; update MCP `list_documents` tool in `mcp.py` to accept optional `cursor` param (additive) #backend-role
+- [x] **BE-6** — Add `DocumentListResponse` to `schemas.py`; add `GET /collections/{name}/documents` to `routes_collections.py`; update MCP `list_documents` tool in `mcp.py` to accept optional `cursor` param (additive) #backend-role
     - Interface Adapters (`schemas.py`, `routes_collections.py`, `mcp.py:1043`) · 3.0h
     - needs BE-5 · completes S1, S2, S3, S4, S5, S6, S7, C1
     - Tests

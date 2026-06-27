@@ -1067,11 +1067,12 @@ def create_app(
     async def list_documents(
         collection: str | None = None,
         limit: int = 100,
+        cursor: str | None = None,
     ) -> list[dict[str, Any]]:
         """List documents in a collection."""
         try:
             items, _next_cursor, _total = await pipeline.list_documents(
-                collection or default_collection, limit, namespace=_get_request_namespace()
+                collection or default_collection, limit, cursor=cursor, namespace=_get_request_namespace()
             )
             try:
                 return [DocumentInfoSchema.from_result(r).model_dump(mode="json") for r in items]

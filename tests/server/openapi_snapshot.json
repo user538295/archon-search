@@ -420,6 +420,69 @@
         "title": "DisabledResponse",
         "type": "object"
       },
+      "DocumentInfoItem": {
+        "description": "One document entry in a DocumentListResponse (E0c BE-6).\n\nMirrors the public fields of ``archon_search._types.DocumentInfo``.",
+        "properties": {
+          "chunk_count": {
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "indexed_at": {
+            "title": "Indexed At",
+            "type": "string"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "source_path",
+          "chunk_count",
+          "indexed_at"
+        ],
+        "title": "DocumentInfoItem",
+        "type": "object"
+      },
+      "DocumentListResponse": {
+        "description": "Response for GET /collections/{name}/documents (E0c BE-6).\n\nMirrors the shape of ``JobListResponse`` \u2014 ``items`` contains the current\npage, ``next_cursor`` is the opaque cursor for the next page (``None`` on\nthe last page), and ``total`` is the full document count for the collection\nindependent of pagination.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentInfoItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "total"
+        ],
+        "title": "DocumentListResponse",
+        "type": "object"
+      },
       "EndpointKind": {
         "enum": [
           "search",
@@ -3421,6 +3484,99 @@
           }
         ],
         "summary": "Patch Collection"
+      }
+    },
+    "/collections/{name}/documents": {
+      "get": {
+        "description": "List documents in a collection with cursor-based pagination (E0c BE-6).\n\n- ``limit``: 1\u2013200, default 50.\n- ``cursor``: opaque cursor from the previous response's ``next_cursor``.\n  A cursor referencing a deleted document silently resumes from the next\n  sort position \u2014 no 4xx is raised.\n- Returns 404 when the collection does not exist in the caller's namespace.\n- Returns 422 when ``limit`` is outside [1, 200].",
+        "operationId": "list_collection_documents_collections__name__documents_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Collection Documents"
       }
     },
     "/collections/{name}/export": {
