@@ -453,6 +453,7 @@ def create_app(
         top_k_return=config.top_k_return,
         language_detector=_lang_detector,
         language_detection_confidence_threshold=config.language_detection_confidence_threshold,
+        max_file_mb=config.ingest.max_file_mb,
     )
     from archon_search.hyde import HyDEGenerator  # noqa: PLC0415
     app.state.hyde_generator = HyDEGenerator(embedder=app.state.embedder, config=config.hyde)

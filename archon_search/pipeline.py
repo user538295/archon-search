@@ -5,6 +5,8 @@ import asyncio
 import hashlib
 import inspect
 import logging
+import math
+import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._privacy import _query_fingerprint
-from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, FanoutTimings, IngestedBy, IngestResult, SearchResult
+from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, FanoutTimings, IngestedBy, IngestError, IngestResult, SearchResult, _file_exceeds_limit
 from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.observability import record_stage
 from archon_search.filters import SearchFilters
@@ -241,6 +243,7 @@ class SearchPipeline:
         fanout_timeout_seconds: float = 30.0,
         language_detector: LanguageDetector | None = None,
         language_detection_confidence_threshold: float = 0.7,
+        max_file_mb: int = 0,
     ) -> None:
         self.store = store
         self._global_embedder = embedder
@@ -254,6 +257,7 @@ class SearchPipeline:
         self._fanout_timeout_seconds = fanout_timeout_seconds
         self._language_detector = language_detector
         self._language_detection_confidence_threshold = language_detection_confidence_threshold
+        self._max_file_mb = max_file_mb
 
     # ------------------------------------------------------------------
     # Warm-status accessors (used by health/readiness route handlers)
@@ -290,6 +294,28 @@ class SearchPipeline:
         # Skip .acl sidecar files — they are metadata, not indexable content
         if path.suffix == ".acl" or path.name.endswith(".acl"):
             return IngestResult(doc_id=doc_id, chunks_created=0, status="ok")
+
+        # Size guard — checked before parse; max_file_mb=0 disables the check.
+        # Follows symlinks (os.path.getsize dereferences symlinks by design).
+        # Boundary: strictly greater-than (size > limit), so a file exactly at
+        # the limit is accepted.
+        if self._max_file_mb > 0:
+            try:
+                exceeds = _file_exceeds_limit(path, self._max_file_mb)
+                if exceeds:
+                    _size_bytes = os.path.getsize(path)  # for human-readable message
+            except OSError:
+                logger.warning("Cannot stat file for size guard: %s", path, exc_info=True)
+                return IngestResult(
+                    doc_id=doc_id, chunks_created=0, status="error",
+                    error=f"Cannot determine file size for {path.name}",
+                )
+            if exceeds:
+                err = IngestError(
+                    file_size_mb=math.ceil(_size_bytes / (1024 * 1024)),
+                    limit_mb=self._max_file_mb,
+                )
+                return IngestResult(doc_id=doc_id, chunks_created=0, status="error", error=err.message, code="file_too_large")
 
         # Parse
         try:
@@ -1605,4 +1631,5 @@ def create_pipeline(
         fanout_timeout_seconds=cfg.fanout_timeout_seconds,
         language_detector=language_detector,
         language_detection_confidence_threshold=cfg.language_detection_confidence_threshold,
+        max_file_mb=cfg.ingest.max_file_mb,
     )

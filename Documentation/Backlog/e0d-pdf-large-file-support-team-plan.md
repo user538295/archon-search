@@ -354,7 +354,7 @@ flowchart LR
         - #unit_test — `test_ingest_config_string_raises_config_error` — max_file_mb="50" (string) raises ConfigError
         - #integration_test — `test_ingest_config_round_trip_via_make_real_app` — toml_content with [ingest] produces correct SearchConfig.ingest values
 
-- [ ] **BE-3** — Size guard in `pipeline.ingest_file()`: call `_file_exceeds_limit`, return error `IngestResult` directly; wire `max_file_mb` into `SearchPipeline` #backend-role
+- [x] **BE-3** — Size guard in `pipeline.ingest_file()`: call `_file_exceeds_limit`, return error `IngestResult` directly; wire `max_file_mb` into `SearchPipeline` #backend-role
     - Use Cases · 3.5h
     - needs BE-1, BE-2 · completes S1, S5, S6, S10, S11
     - `SearchPipeline.__init__()` gains `max_file_mb: int = 0`; both `create_pipeline()` and `app.py`'s direct construction set it from `cfg.ingest.max_file_mb`. `ingest_file()` uses direct early return (no raise) when `_file_exceeds_limit` returns true.

@@ -267,3 +267,13 @@
 - Observation: `bool` is a subclass of `int` in Python, so `isinstance(True, int)` is `True`. Any config field using `_coerce_int` silently accepts `max_file_mb = true` as `1`. The explicit `isinstance(raw, bool)` guard is the correct defense; always test this branch when adding strict-integer validation that bypasses `_coerce_int`.
 - Action: When a config field must reject TOML booleans, add `isinstance(raw, bool)` check AND a `test_*_bool_raises_config_error` test. Without the test, the guard is invisible to regressions.
 - Confidence: high
+
+**[2026-06-27] — E0d BE-3 (Use Cases size guard in pipeline)**
+- Observation: `os.path` is a singleton module in Python — `import os; os.path.getsize` and `from archon_search._types import os; os.path.getsize` both resolve to the SAME function object. Patching `archon_search._types.os.path.getsize` and `archon_search.pipeline.os.path.getsize` in sequence creates two nested patches of the same slot; the inner patch overrides the outer one, making the outer mock's `assert_called_with` always fail. Patching `os.path.getsize` globally once is the correct approach when multiple modules share the same `os.path` reference.
+- Action: When multiple modules use `import os; os.path.getsize`, use a single `patch("os.path.getsize")`. Document explicitly that this is intentional because `os.path` is a singleton. Do not try to scope patches per-module — they share the same object.
+- Confidence: high
+
+**[2026-06-27] — E0d BE-3 (Use Cases size guard in pipeline)**
+- Observation: A plan-specified shared helper (`_file_exceeds_limit`) was implemented in BE-1 but the BE-3 implementor inlined the same logic instead of calling it. Iterative-review caught this as a Major finding. The `assert_not_called()` pattern on `os.path.getsize` (in the `max_file_mb=0` test) is the correct way to prove a guard path is truly skipped — a dead mock that never fails gives false confidence.
+- Action: After any implementation, grep for shared helpers named in the plan and verify they are actually called. Use `assert_not_called()` when proving a guard does not fire, not a mock that would silently pass even if the guard ran.
+- Confidence: high
