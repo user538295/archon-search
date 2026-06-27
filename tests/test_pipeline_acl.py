@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pyarrow as pa
 
+from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -419,6 +421,20 @@ async def test_ingest_file_front_matter_block_stripped_from_chunk_text(tmp_path)
 # ---------------------------------------------------------------------------
 
 
+def _chunk_to_candidate(chunk) -> "ScoredSearchCandidate":
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    return ScoredSearchCandidate(
+        doc_id=chunk.doc_id, chunk_id=chunk.chunk_id, text=chunk.text,
+        source_path=chunk.source_path,
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=None, vector_score=None, vector_score_kind=None,
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.9, reranker_score=None,
+        ),
+        collection="col", acl=chunk.acl,
+    )
+
+
 @pytest.mark.asyncio
 async def test_search_pipeline_search_acl_filter_applied(tmp_path):
     """SearchPipeline.search() with namespace='ns1' excludes chunks with acl=['ns2']."""
@@ -445,15 +461,15 @@ async def test_search_pipeline_search_acl_filter_applied(tmp_path):
         vector=[0.0] * 4, source_path="/g.md", indexed_at=now, acl=["ns2"],
     )
 
-    async def _hybrid_search(collection, vector, query, top_k, **kwargs):
-        return [chunk_allowed, chunk_denied]
+    async def _hybrid_search_with_trace(collection, vector, query, *, candidate_depth, **kwargs):
+        return [_chunk_to_candidate(chunk_allowed), _chunk_to_candidate(chunk_denied)]
 
-    store.hybrid_search = _hybrid_search
+    store.hybrid_search_with_trace = _hybrid_search_with_trace
 
-    async def _rerank(query, candidates, top_k):
-        return [SearchResult(doc_id=c.doc_id, chunk_id=c.chunk_id, text=c.text, score=1.0, source_path=c.source_path, acl=c.acl) for c in candidates]
+    async def _rerank_candidates(query, candidates, top_k):
+        return candidates[:top_k]
 
-    reranker.rerank = _rerank
+    reranker.rerank_candidates = _rerank_candidates
 
     pipeline = SearchPipeline(
         store=store, embedder=embedder, reranker=reranker,
@@ -493,15 +509,15 @@ async def test_search_pipeline_search_default_namespace_denies_protected(tmp_pat
         vector=[0.0] * 4, source_path="/b.md", indexed_at=now, acl=["tenantX"],
     )
 
-    async def _hybrid_search(collection, vector, query, top_k, **kwargs):
-        return [open_chunk, protected_chunk]
+    async def _hybrid_search_with_trace(collection, vector, query, *, candidate_depth, **kwargs):
+        return [_chunk_to_candidate(open_chunk), _chunk_to_candidate(protected_chunk)]
 
-    store.hybrid_search = _hybrid_search
+    store.hybrid_search_with_trace = _hybrid_search_with_trace
 
-    async def _rerank(query, candidates, top_k):
-        return [SearchResult(doc_id=c.doc_id, chunk_id=c.chunk_id, text=c.text, score=1.0, source_path=c.source_path, acl=c.acl) for c in candidates]
+    async def _rerank_candidates(query, candidates, top_k):
+        return candidates[:top_k]
 
-    reranker.rerank = _rerank
+    reranker.rerank_candidates = _rerank_candidates
 
     pipeline = SearchPipeline(
         store=store, embedder=embedder, reranker=reranker,
@@ -537,15 +553,15 @@ async def test_search_with_context_acl_filter_applied(tmp_path):
         vector=[0.0] * 4, source_path="/a.md", indexed_at=now, acl=["ns1"],
     )
 
-    async def _hybrid_search(collection, vector, query, top_k, **kwargs):
-        return [allowed]
+    async def _hybrid_search_with_trace(collection, vector, query, *, candidate_depth, **kwargs):
+        return [_chunk_to_candidate(allowed)]
 
-    store.hybrid_search = _hybrid_search
+    store.hybrid_search_with_trace = _hybrid_search_with_trace
 
-    async def _rerank(query, candidates, top_k):
-        return [SearchResult(doc_id=c.doc_id, chunk_id=c.chunk_id, text=c.text, score=1.0, source_path=c.source_path, acl=c.acl) for c in candidates]
+    async def _rerank_candidates(query, candidates, top_k):
+        return candidates[:top_k]
 
-    reranker.rerank = _rerank
+    reranker.rerank_candidates = _rerank_candidates
 
     # Adjacent chunk with different namespace
     adj_denied = ChunkRecord(
@@ -594,16 +610,10 @@ async def test_e2e_ingest_and_search_acl_enforcement(tmp_path):
     from archon_search.reranker import Reranker
 
     # Stub reranker to pass all candidates through
-    async def _passthrough_rerank(query, candidates, top_k):
-        return [
-            SearchResult(
-                doc_id=c.doc_id, chunk_id=c.chunk_id, text=c.text,
-                score=1.0, source_path=c.source_path, acl=c.acl,
-            )
-            for c in candidates[:top_k]
-        ]
+    async def _passthrough_rerank_candidates(query, candidates, top_k):
+        return candidates[:top_k]
 
-    pipeline._reranker.rerank = _passthrough_rerank
+    pipeline._reranker.rerank_candidates = _passthrough_rerank_candidates
 
     try:
         result = await pipeline.ingest_file(doc, collection, embedder=pipeline._global_embedder)
@@ -646,15 +656,15 @@ async def test_search_context_expansion_acl_filtered(tmp_path):
         vector=[0.0] * 4, source_path="/x.md", indexed_at=now, acl=None,
     )
 
-    async def _hybrid_search(collection, vector, query, top_k, **kwargs):
-        return [main_chunk]
+    async def _hybrid_search_with_trace(collection, vector, query, *, candidate_depth, **kwargs):
+        return [_chunk_to_candidate(main_chunk)]
 
-    store.hybrid_search = _hybrid_search
+    store.hybrid_search_with_trace = _hybrid_search_with_trace
 
-    async def _rerank(query, candidates, top_k):
-        return [SearchResult(doc_id=c.doc_id, chunk_id=c.chunk_id, text=c.text, score=1.0, source_path=c.source_path, acl=c.acl) for c in candidates]
+    async def _rerank_candidates(query, candidates, top_k):
+        return candidates[:top_k]
 
-    reranker.rerank = _rerank
+    reranker.rerank_candidates = _rerank_candidates
 
     # Before chunk: restricted to different namespace
     before_restricted = ChunkRecord(

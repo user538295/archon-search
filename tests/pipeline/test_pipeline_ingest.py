@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, IngestResult, SearchResult
 from archon_search.store import ChunkIngestResult
 from archon_search.embedder import Embedder
@@ -766,12 +767,17 @@ async def test_pipeline_noop_when_unbound(tmp_path):
     from archon_search.pipeline import SearchPipeline
     from archon_search.observability import _stage_recorder
 
-    search_result = SearchResult(
+    search_candidate = ScoredSearchCandidate(
         doc_id="b" * 64,
         chunk_id=("b" * 64) + "-000000",
         text="text",
-        score=0.5,
         source_path="/path",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=None, vector_score=None, vector_score_kind=None,
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.5, reranker_score=None,
+        ),
+        collection="col",
     )
 
     class StubStore:
@@ -779,8 +785,8 @@ async def test_pipeline_noop_when_unbound(tmp_path):
         def supports_incremental_fts_delete(self) -> bool:
             return True
 
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
-            return [search_result]
+        async def hybrid_search_with_trace(self, *a: Any, **kw: Any) -> list[ScoredSearchCandidate]:
+            return [search_candidate]
 
         async def fetch_adjacent_chunks(self, *a: Any, **kw: Any) -> list[ChunkRecord]:
             return []

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, DocumentInfo, SearchResult
 from archon_search.embedder import Embedder
 from archon_search.reranker import Reranker
@@ -132,17 +133,22 @@ async def test_search_with_context_records_context_stage(tmp_path):
     from archon_search.pipeline import SearchPipeline
     from archon_search.observability import bind_stage_recorder
 
-    search_result = SearchResult(
+    search_candidate = ScoredSearchCandidate(
         doc_id="a" * 64,
         chunk_id=("a" * 64) + "-000000",
         text="some text",
-        score=0.9,
         source_path="/some/path",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=None, vector_score=None, vector_score_kind=None,
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.9, reranker_score=None,
+        ),
+        collection="test-col",
     )
 
     class StubStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
-            return [search_result]
+        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
+            return [search_candidate]
 
         async def fetch_adjacent_chunks(self, *a: Any, **kw: Any) -> list[ChunkRecord]:
             return []
@@ -176,17 +182,22 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
-    malformed_result = SearchResult(
+    malformed_candidate = ScoredSearchCandidate(
         doc_id="a" * 64,
         chunk_id="bad-chunk-id",
         text="some text",
-        score=0.9,
         source_path="/some/path",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=None, vector_score=None, vector_score_kind=None,
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.9, reranker_score=None,
+        ),
+        collection="test-collection",
     )
 
     class MockStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
-            return [malformed_result]
+        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
+            return [malformed_candidate]
 
         async def fetch_adjacent_chunks(self, *a: Any, **kw: Any) -> list[ChunkRecord]:
             return []
@@ -210,7 +221,7 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
     from archon_search.pipeline import SearchWithContextResult
     assert isinstance(results, SearchWithContextResult)
     assert len(results.results) == 1
-    assert results.results[0]["result"] == malformed_result
+    assert results.results[0]["result"].chunk_id == "bad-chunk-id"
     assert results.results[0]["context_before"] == []
     assert results.results[0]["context_after"] == []
 
@@ -232,7 +243,7 @@ async def test_search_uses_provided_query_vector() -> None:
     captured_vector: list[list[float]] = []
 
     class StubStore:
-        async def hybrid_search(self, collection: str, vector: list[float], query: str, **kw: Any) -> list[SearchResult]:  # type: ignore[override]
+        async def hybrid_search_with_trace(self, collection: str, vector: list[float], query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
             captured_vector.append(list(vector))
             return []
 
@@ -272,7 +283,7 @@ async def test_search_embeds_when_no_query_vector() -> None:
     from archon_search.pipeline import SearchPipeline
 
     class StubStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[Any]:
+        async def hybrid_search_with_trace(self, *a: Any, **kw: Any) -> list[ScoredSearchCandidate]:
             return []
 
     pipeline = SearchPipeline(
@@ -332,16 +343,21 @@ async def test_pipeline_search_with_context_fetch_exception_propagates(tmp_path)
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
-    hit = SearchResult(
+    hit = ScoredSearchCandidate(
         doc_id="a" * 64,
         chunk_id=("a" * 64) + "-000001",
         text="some result text",
-        score=0.9,
         source_path="/some/path.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=None, vector_score=None, vector_score_kind=None,
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.9, reranker_score=None,
+        ),
+        collection="test-col",
     )
 
     class FailingFetchStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
             return [hit]
 
         async def fetch_adjacent_chunks(self, *a: Any, **kw: Any) -> list[Any]:
@@ -749,18 +765,23 @@ async def test_search_acl_filtered_true_when_chunks_filtered(tmp_path) -> None:
     from archon_search._types import ChunkRecord, SearchResult
 
     # A candidate with a restricted ACL (only "tenantX" allowed)
-    restricted_result = SearchResult(
+    restricted_candidate = ScoredSearchCandidate(
         doc_id="a" * 64,
         chunk_id=("a" * 64) + "-000000",
         text="secret content",
-        score=0.9,
         source_path="/secret.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=None, vector_score=None, vector_score_kind=None,
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.9, reranker_score=None,
+        ),
+        collection="test-col",
         acl=["tenantX"],  # not the default namespace
     )
 
     class AclFilterStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
-            return [restricted_result]
+        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
+            return [restricted_candidate]
 
     pipeline = SearchPipeline(
         store=AclFilterStore(),  # type: ignore[arg-type]
@@ -789,18 +810,23 @@ async def test_search_acl_filtered_false_when_all_pass(tmp_path) -> None:
     from archon_search.pipeline import SearchPipeline, SearchPipelineResult
 
     # A candidate with no ACL restriction (acl=None → open)
-    open_result = SearchResult(
+    open_candidate = ScoredSearchCandidate(
         doc_id="b" * 64,
         chunk_id=("b" * 64) + "-000000",
         text="open content",
-        score=0.9,
         source_path="/open.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=None, vector_score=None, vector_score_kind=None,
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.9, reranker_score=None,
+        ),
+        collection="test-col",
         acl=None,
     )
 
     class OpenAclStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
-            return [open_result]
+        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
+            return [open_candidate]
 
     pipeline = SearchPipeline(
         store=OpenAclStore(),  # type: ignore[arg-type]
@@ -1023,15 +1049,20 @@ async def test_delete_document_correct_namespace_succeeds() -> None:
 # ===========================================================================
 
 
-def _make_search_result(n: int, acl: list[str] | None = None) -> "SearchResult":
-    """Build a minimal SearchResult for filter/ACL tests."""
+def _make_search_result(n: int, acl: list[str] | None = None) -> "ScoredSearchCandidate":
+    """Build a minimal ScoredSearchCandidate for filter/ACL tests."""
     doc_id = f"{'a' * 63}{n % 10}"
-    return SearchResult(
+    return ScoredSearchCandidate(
         doc_id=doc_id,
         chunk_id=f"{doc_id}-000000",
         text=f"result {n}",
-        score=0.5,
         source_path=f"/path/{n}.md",
+        score_breakdown=SearchScoreBreakdown(
+            vector_rank=None, vector_score=None, vector_score_kind=None,
+            fts_rank=None, fts_score=None, fts_score_kind=None,
+            rrf_score=0.5, reranker_score=None,
+        ),
+        collection="col",
         acl=acl,
     )
 
@@ -1047,7 +1078,7 @@ async def test_pipeline_search_forwards_filters_to_store() -> None:
     from archon_search.pipeline import SearchPipeline
 
     store = MagicMock()
-    store.hybrid_search = AsyncMock(return_value=[])
+    store.hybrid_search_with_trace = AsyncMock(return_value=[])
 
     pipeline = SearchPipeline(
         store=store,
@@ -1063,8 +1094,8 @@ async def test_pipeline_search_forwards_filters_to_store() -> None:
     filters = SearchFilters(file_type="md")
     await pipeline.search("test query", "col", filters=filters, embedder=pipeline._global_embedder)
 
-    store.hybrid_search.assert_awaited_once()
-    call_kwargs = store.hybrid_search.call_args.kwargs
+    store.hybrid_search_with_trace.assert_awaited_once()
+    call_kwargs = store.hybrid_search_with_trace.call_args.kwargs
     assert call_kwargs.get("filters") is filters
 
 
@@ -1084,7 +1115,7 @@ async def test_pipeline_warns_on_filter_plus_acl_under_delivery(caplog) -> None:
     all_results = open_results + restricted_results  # 2 pass, 8 denied
 
     class StubStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+        async def hybrid_search_with_trace(self, *a: Any, **kw: Any) -> list[ScoredSearchCandidate]:
             return all_results
 
     pipeline = SearchPipeline(
@@ -1127,7 +1158,7 @@ async def test_pipeline_no_warning_when_no_filter_set(caplog) -> None:
     open_results = [_make_search_result(i + 100, acl=None) for i in range(2)]
 
     class StubStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+        async def hybrid_search_with_trace(self, *a: Any, **kw: Any) -> list[ScoredSearchCandidate]:
             return open_results + restricted_results
 
     pipeline = SearchPipeline(
@@ -1165,7 +1196,7 @@ async def test_pipeline_no_warning_when_pool_above_top_k(caplog) -> None:
     open_results = [_make_search_result(i, acl=None) for i in range(6)]
 
     class StubStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+        async def hybrid_search_with_trace(self, *a: Any, **kw: Any) -> list[ScoredSearchCandidate]:
             return open_results
 
     pipeline = SearchPipeline(
@@ -1201,7 +1232,7 @@ async def test_pipeline_search_with_context_forwards_filters_to_store() -> None:
     from archon_search.pipeline import SearchPipeline
 
     store = MagicMock()
-    store.hybrid_search = AsyncMock(return_value=[])
+    store.hybrid_search_with_trace = AsyncMock(return_value=[])
 
     pipeline = SearchPipeline(
         store=store,
@@ -1217,8 +1248,8 @@ async def test_pipeline_search_with_context_forwards_filters_to_store() -> None:
     filters = SearchFilters(file_type="md")
     await pipeline.search_with_context("test query", "col", embedder=pipeline._global_embedder, filters=filters)
 
-    store.hybrid_search.assert_awaited_once()
-    call_kwargs = store.hybrid_search.call_args.kwargs
+    store.hybrid_search_with_trace.assert_awaited_once()
+    call_kwargs = store.hybrid_search_with_trace.call_args.kwargs
     assert call_kwargs.get("filters") is filters, (
         f"Expected filters to be forwarded; got: {call_kwargs}"
     )
@@ -1238,7 +1269,7 @@ async def test_pipeline_warns_when_filter_alone_causes_under_delivery(caplog) ->
     open_results = [_make_search_result(i, acl=None) for i in range(3)]
 
     class StubStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+        async def hybrid_search_with_trace(self, *a: Any, **kw: Any) -> list[ScoredSearchCandidate]:
             return open_results  # only 3, all open
 
     pipeline = SearchPipeline(
@@ -1275,7 +1306,7 @@ async def test_pipeline_warns_when_store_returns_zero_results_with_filters(caplo
     from archon_search.pipeline import SearchPipeline
 
     class StubStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+        async def hybrid_search_with_trace(self, *a: Any, **kw: Any) -> list[ScoredSearchCandidate]:
             return []  # zero results — filter was very restrictive
 
     pipeline = SearchPipeline(
@@ -1318,7 +1349,7 @@ async def test_pipeline_search_filter_then_acl_order() -> None:
     filtered_results = [_make_search_result(i, acl=None) for i in range(3)]
 
     store = MagicMock()
-    store.hybrid_search = AsyncMock(return_value=filtered_results)
+    store.hybrid_search_with_trace = AsyncMock(return_value=filtered_results)
 
     acl_inputs: list[int] = []
 
@@ -1369,7 +1400,7 @@ async def test_pipeline_search_filter_then_reranker_order() -> None:
     restricted_results = [_make_search_result(i + 10, acl=["tenantX"]) for i in range(2)]
 
     store = MagicMock()
-    store.hybrid_search = AsyncMock(return_value=open_results + restricted_results)
+    store.hybrid_search_with_trace = AsyncMock(return_value=open_results + restricted_results)
 
     reranker_inputs: list[list] = []
 
@@ -1416,7 +1447,7 @@ async def test_pipeline_no_warning_when_filters_has_no_active_fields(caplog) -> 
     open_results = [_make_search_result(i + 100, acl=None) for i in range(2)]
 
     class StubStore:
-        async def hybrid_search(self, *a: Any, **kw: Any) -> list[SearchResult]:
+        async def hybrid_search_with_trace(self, *a: Any, **kw: Any) -> list[ScoredSearchCandidate]:
             return open_results + restricted
 
     pipeline = SearchPipeline(
@@ -1538,7 +1569,7 @@ async def test_search_with_context_forwards_query_vector() -> None:
     captured_vector: list[list[float]] = []
 
     class StubStore:
-        async def hybrid_search(self, collection: str, vector: list[float], query: str, **kw: Any) -> list[Any]:
+        async def hybrid_search_with_trace(self, collection: str, vector: list[float], query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
             captured_vector.append(list(vector))
             return []
 
@@ -1655,7 +1686,7 @@ async def test_search_with_context_uses_passed_embedder() -> None:
 
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=None)
-    store.hybrid_search = AsyncMock(return_value=[])
+    store.hybrid_search_with_trace = AsyncMock(return_value=[])
     store.fetch_adjacent_chunks = AsyncMock(return_value=[])
 
     global_embedder = make_embedder()

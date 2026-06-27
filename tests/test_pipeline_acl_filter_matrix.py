@@ -50,6 +50,9 @@ class _MockReranker:
     async def rerank(self, query: str, candidates: list, top_k: int) -> list:
         return candidates[:top_k]
 
+    async def rerank_candidates(self, query: str, candidates: list, top_k: int) -> list:
+        return candidates[:top_k]
+
 
 # ---------------------------------------------------------------------------
 # Corpus design

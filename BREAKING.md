@@ -8,6 +8,26 @@
 
 ## Changelog
 
+### [next release] — E0d: `POST /ingest` gains 413 response; `IngestResult.code` field added; MCP `IngestResultSchema` gains `code` field
+
+**Surface**: `POST /ingest` REST response; `IngestResult` domain dataclass; MCP `ingest_file` and `ingest_directory` tool return shapes (`IngestResultSchema`).
+
+**Breaking changes**:
+
+1. **`POST /ingest` now returns HTTP 413 when a single-file path exceeds `[ingest].max_file_mb`** — when `max_file_mb > 0` is configured and a single-file path in the request body exceeds the limit, the route returns `413 Request Entity Too Large` with `{"detail": "File size X MB exceeds the configured limit of Y MB (\`[ingest].max_file_mb\`). Raise the limit in \`archon-search.toml\` or split the file."}` BEFORE any job is created. Clients that assume `POST /ingest` always returns `202` or `400`/`503` must add handling for `413`. The 413 only fires when `max_file_mb > 0` (opt-in); the default (`max_file_mb = 0`) is unchanged — all ingest submissions return `202`. Directory paths and `documents`-payload requests are never checked at the route level (413 does not apply).
+
+**Additive changes** (non-breaking for tolerant JSON consumers; breaking for strict-schema validators with `extra="forbid"`):
+
+2. **`IngestResult` domain dataclass gains `code: Literal["file_too_large"] | None = None`** — `None` on success; `"file_too_large"` when the pipeline size guard fires. This field flows through `GET /jobs/{id}` result dicts (per-file results in directory ingest jobs) and the MCP tool return value. Clients that reconstruct `IngestResult` objects from raw dicts must add the `code` field or allow unknown fields.
+
+3. **MCP `IngestResultSchema` gains `code: Literal["file_too_large"] | None = None`** — mapped from `IngestResult.code` by `from_result()`. Strictly-validating MCP clients with `extra="forbid"` on the schema must add the `code` field. Tolerant clients are unaffected. MCP `ingest_file` tool returns `{status: "error", code: "file_too_large", error: "<message>"}` when the size guard fires.
+
+**Migration**:
+- Item 1: If your client checks `POST /ingest` response codes, add a `413` case. The response body `detail` is a plain string (same `ErrorDetail` envelope as `400`). No migration needed if `max_file_mb` remains `0` (the default).
+- Items 2 and 3: Purely additive if you tolerate unknown fields. For strict schemas, add `code: "file_too_large" | null` to your `IngestResult` / `IngestResultSchema` type stubs (`str | null` is acceptable for tolerant consumers).
+
+---
+
 ### [next release] — E0c: `top_k` OpenAPI schema change; 422 envelope change for fanout and top_k validation; additive `search` sub-object on `GET /status`; new `GET /collections/{name}/documents` endpoint
 
 **Surface**: `POST /search`, `POST /explain` request schemas; `GET /status` response; `GET /collections/{name}/documents` (new endpoint); MCP `list_documents` tool.

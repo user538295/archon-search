@@ -45,19 +45,28 @@ All `archon-search` ingestion commands accept `--config PATH` to point at a non-
 
 ### `archon-search ingest`
 
-One-shot ingest of a directory. Re-processes every file under `--path` on each run; this command is **not** incremental.
+One-shot ingest of a **file or directory**. Re-processes every file under `--path` on each run; this command is **not** incremental.
 
 ```bash
+# Ingest a directory
 archon-search ingest --path /Users/me/docs --collection docs
+
+# Ingest a single file (collection name defaults to the filename without extension)
+archon-search ingest --path /Users/me/report.pdf
 ```
 
 Flags (`archon_search/cli/ingest.py`):
 
 | Flag | Default | Effect |
 | --- | --- | --- |
-| `--path PATH` | `~/.archon-search/history/sessions` (re-rooted by `ARCHON_SEARCH_DATA_DIR` to `$DATA_DIR/history/sessions` when set) | Directory to ingest. When omitted, the CLI prints `No --path given, using default: <path>` to stdout before running. The default path is resolved lazily on every invocation via `get_data_dir()`. |
-| `--collection NAME` | Path basename | Override the collection name. |
+| `--path PATH` | `~/.archon-search/history/sessions` (re-rooted by `ARCHON_SEARCH_DATA_DIR` to `$DATA_DIR/history/sessions` when set) | File or directory to ingest. When omitted, the CLI prints `No --path given, using default: <path>` to stdout before running. The default path is resolved lazily on every invocation via `get_data_dir()`. When `--path` points to a single file, routes directly to `pipeline.ingest_file()`; when it points to a directory, routes to `pipeline.ingest_directory()`. |
+| `--collection NAME` | Directory mode: path basename. Single-file mode: `Path(path).stem` (filename without extension). | Override the collection name. |
 | `--config PATH` | default config path | Alternative config file. |
+
+**Large-file behaviour (E0d)**:
+- For any file > 10 MB, a pre-parse notice is printed to stderr before ingestion begins: `Parsing large file (X MB); this may take a while…`
+- When `[ingest].max_file_mb > 0` is set in TOML and the file exceeds the limit, the CLI prints the actionable error message to stderr and exits non-zero. No chunks are written.
+- Setting `max_file_mb = 0` (the default) disables the size guard — any file size is accepted.
 
 Output: `Ingest complete: <ok> ingested, <errors> errors.` (no per-file progress trail — that is `sync`'s job).
 

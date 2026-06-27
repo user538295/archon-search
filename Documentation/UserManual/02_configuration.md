@@ -106,6 +106,16 @@ Opt-in only. See [`06_telemetry.md`](./06_telemetry.md) for the full surface.
 
 Optional `string = string` mapping (`archon_search/config.py:225-233`). Entries must be string key / string value pairs or `ConfigError` is raised. See `Architecture/150_security_and_privacy_architecture.md` for namespace semantics.
 
+### `[ingest]`
+
+Controls ingest behaviour, including an optional file-size guard. **E0d.**
+
+| Key | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `max_file_mb` | int (>=0) | `0` | Maximum file size allowed for ingest operations. `0` (the default) disables the guard — any file size is accepted. When set to a positive integer, any single file whose size exceeds this limit is rejected with a clear error naming the file size, the limit, and the TOML key. Negative values raise `ConfigError` at server start. **Directory ingest**: oversized individual files produce per-file `IngestResult(code="file_too_large")` errors; the batch continues for all other files. The boundary is strictly greater-than (`size > limit`) — a file exactly equal to `max_file_mb` is accepted. |
+
+> **Note**: the guard operates on the actual file size (`os.path.getsize()`, which follows symlinks). It is a pre-parse check, not a parse-time check — memory reduction for very large files is not the goal of this guard; use it to protect memory-constrained hosts from unexpectedly large uploads.
+
 ### `[backup]`
 
 Scheduled backup of every collection in every namespace via the in-process `BackupLoop`. Disabled by default. When enabled, the server periodically exports each collection (excluded patterns aside) to a `.tar.gz` archive and rotates older archives. Backup jobs are queued behind any user-initiated export/import jobs.

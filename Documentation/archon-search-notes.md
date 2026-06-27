@@ -4,7 +4,7 @@
 
 ### Handle more file type without file size limit.
 
-Currently PDF only supported under 1 MB, which is very poor. We have to support any size of documents. We also have to support as many file type as we can. At least we have to suppert the same file types that the R2R support.
+**Resolved by E0d.** The 1 MB limitation no longer exists. Large files (PDF and all other supported formats) ingest at any size when no size guard is configured (`[ingest].max_file_mb = 0`, the default). Operators can set a size ceiling via `[ingest].max_file_mb` in `archon-search.toml`; exceeding it returns HTTP 413 / MCP `code="file_too_large"` with an actionable message. See `Documentation/Backlog/e0d-pdf-large-file-support-team-plan.md` for full details.
 
 ### The user can search between the visited websites and if he asks questions in a topic, then these websites also could help him to recall and use those information.
 

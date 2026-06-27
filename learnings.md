@@ -335,3 +335,23 @@
 - Observation: The `ingest_directory` list-return path (`mcp.py:1003`) uses the same `IngestResultSchema.from_result(r).model_dump()` pattern as `ingest_file`. A new field added to `IngestResultSchema` (like `code`) propagates automatically to both paths. But without an explicit `ingest_directory` test for the new field, this is invisible to regressions — a future refactor could filter error items out of the list.
 - Action: When adding a field to `IngestResultSchema`, add a unit test for the `ingest_directory` mixed-batch list return (one ok + one error result) to verify the field propagates in both list items, not just the single-result `ingest_file` path.
 - Confidence: high
+
+**[2026-06-27] — E0d T-4 (Project close-out)**
+- Observation: `archon-search.toml.example` was updated in the same commit as the implementation (BE-2), so the example was already correct at close-out. When the implementation task and the example update are in the same task, the close-out doc sweep must verify rather than re-apply the change.
+- Action: At close-out, grep `archon-search.toml.example` for the new TOML section key before editing — if it's already present, skip the edit and note it as already done.
+- Confidence: high
+
+**[2026-06-27] — E0d T-4 (Project close-out)**
+- Observation: The OpenAPI snapshot regeneration step (`uv run --python 3.12 pytest tests/server/test_openapi_snapshot.py --update-openapi-snapshot -n0 -x`) correctly requires Python 3.12 (matching CI). Running it with a single-test invocation produces a coverage failure (expected; only run the snapshot test file, not the full suite) — the 1 passed / coverage fail output is the expected correct outcome.
+- Action: Never interpret "FAIL Required test coverage not reached" from a single-test invocation as a test failure. Only "N passed" vs "N failed" matters for the snapshot update step.
+- Confidence: high
+
+**[2026-06-27] — E0d T-4 (Acceptance fact-check)**
+- Observation: At close-out, all 10 documentation files in the plan's "Documentation update" section were already correctly updated by the implementing tasks (140, 110, 600, UserManual, CLAUDE.md, toml.example, BREAKING.md, OpenAPI snapshot, learnings.md, plan file). The fact-check was a grep-and-verify pass, not an edit pass. 5679 tests passed with 93.55% coverage (above the 85% gate). All 10 acceptance criteria were confirmed by reading actual code — no assumptions.
+- Action: At close-out, do a grep-first pass across all listed doc files before editing. If every file is already updated, the close-out is a verify-only pass. Never re-apply changes that are already correct — it introduces noise.
+- Confidence: high
+
+**[2026-06-27] — E0d T-4 (Iterative review — pipeline bugs)**
+- Observation: The working tree bundled an unrelated `hybrid_search → hybrid_search_with_trace` pipeline refactor alongside the E0d docs close-out. Iterative review (Brooks-Lint C1-B-1) caught that both `_search_standard` and the `search()` RAG Fusion path were calling `hybrid_search_with_trace(candidate_depth=self._top_k_retrieve)` — a 3×–5× candidate fetch regression vs. all sibling call sites that use `max(self._top_k_retrieve * 3, 20)`. A second DA finding (C1-I-1) identified that `source_path_glob` post-filtering was applied only in `_search_standard` and silently omitted in the RAG Fusion fuse path.
+- Action: When committing a refactor that migrates a store-layer call to a new method, audit every call site's `candidate_depth` argument and compare to sibling call sites — silent under-fetch is the most common regression pattern in these migrations. Also verify that every post-filter applied in the old method is re-applied in the new caller.
+- Confidence: high

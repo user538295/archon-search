@@ -740,6 +740,7 @@ async def test_search_rag_fusion_disabled_config_skips() -> None:
 
     mock_store = MagicMock()
     mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
     mock_generator = MagicMock()
@@ -784,6 +785,7 @@ async def test_search_rag_fusion_no_generator_skips() -> None:
 
     mock_store = MagicMock()
     mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
 
     rag_config = RAGFusionConfig(enabled=True)
 
@@ -822,6 +824,7 @@ async def test_search_rag_fusion_fts_only_guard() -> None:
 
     mock_store = MagicMock()
     mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
     mock_store.has_vector_index = AsyncMock(return_value=False)
 
     mock_generator = MagicMock()
@@ -865,6 +868,7 @@ async def test_search_rag_fusion_false_no_overhead() -> None:
 
     mock_store = MagicMock()
     mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
 
     mock_generator = MagicMock()
     mock_generator.generate_variants = AsyncMock(return_value=["v1"])
@@ -892,7 +896,8 @@ async def test_search_rag_fusion_false_no_overhead() -> None:
     )
 
     mock_generator.generate_variants.assert_not_called()
-    assert not hasattr(mock_store, 'hybrid_search_with_trace') or mock_store.hybrid_search_with_trace.call_count == 0
+    # rag_fusion=False → standard path: hybrid_search_with_trace called once (standard search), not via RAG fusion
+    assert mock_store.hybrid_search_with_trace.call_count == 1
     assert result.rag_fusion_applied is False
     assert result.rag_fusion_attempted is False
 
@@ -1032,6 +1037,7 @@ async def test_search_rag_fusion_config_none_skips() -> None:
 
     mock_store = MagicMock()
     mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
 
     mock_generator = MagicMock()
     mock_generator.generate_variants = AsyncMock(return_value=["v1"])
@@ -1206,12 +1212,19 @@ async def test_search_rag_fusion_all_searches_fail() -> None:
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
-    async def _always_fail(*args, **kwargs):
-        raise RuntimeError("LanceDB error")
+    _call_count = 0
+
+    async def _fail_then_succeed(*args, **kwargs):
+        nonlocal _call_count
+        _call_count += 1
+        # RAG fusion calls (original + variants) fail; the _search_standard fallback succeeds
+        if _call_count <= 3:  # original + 2 variants
+            raise RuntimeError("LanceDB error")
+        return []
 
     mock_store = MagicMock()
     mock_store.hybrid_search = AsyncMock(return_value=[])
-    mock_store.hybrid_search_with_trace = _always_fail
+    mock_store.hybrid_search_with_trace = _fail_then_succeed
     mock_store.has_vector_index = AsyncMock(return_value=True)
 
     mock_generator = MagicMock()

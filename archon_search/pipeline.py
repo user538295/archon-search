@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import hashlib
 import inspect
 import logging
@@ -689,9 +690,10 @@ class SearchPipeline:
                 return fallback
 
             # 5. Parallel variant searches using hybrid_search_with_trace.
+            _rag_candidate_depth = max(self._top_k_retrieve * 3, 20)
             search_calls = [
                 self.store.hybrid_search_with_trace(
-                    collection, v, query, candidate_depth=self._top_k_retrieve, filters=filters
+                    collection, v, query, candidate_depth=_rag_candidate_depth, filters=filters
                 )
                 for v in vectors
             ]
@@ -725,6 +727,11 @@ class SearchPipeline:
 
             # 7. Fuse results.
             fused = _fuse_rag_fusion_results(successful_results)
+
+            # 7b. Apply source_path_glob post-filter (store.hybrid_search_with_trace does not filter).
+            if filters and filters.source_path_glob:
+                _glob = filters.source_path_glob
+                fused = [c for c in fused if fnmatch.fnmatchcase(c.source_path, _glob)]
 
             # 8. ACL filter on fused set.
             fused, acl_filtered = apply_acl_filter(fused, lambda c: c.acl, namespace)
@@ -768,9 +775,12 @@ class SearchPipeline:
     ) -> SearchPipelineResult:
         """Standard single-query search path (no RAG Fusion)."""
         vector = list(query_vector) if query_vector is not None else await embedder.embed_one(query)
-        candidates = await self.store.hybrid_search(
-            collection, vector, query, top_k=self._top_k_retrieve, filters=filters
+        candidates = await self.store.hybrid_search_with_trace(
+            collection, vector, query, candidate_depth=max(self._top_k_retrieve * 3, 20), filters=filters
         )
+        if filters and filters.source_path_glob:
+            glob_pattern = filters.source_path_glob
+            candidates = [c for c in candidates if fnmatch.fnmatchcase(c.source_path, glob_pattern)]
         candidates_before_acl = len(candidates)
         candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, namespace)
         acl_denied = candidates_before_acl - len(candidates)
@@ -790,7 +800,8 @@ class SearchPipeline:
                     acl_denied,
                 )
         if self._reranker is not None:
-            results = await self._reranker.rerank(query, candidates, top_k=self._top_k_return)
+            reranked = await self._reranker.rerank_candidates(query, candidates, top_k=self._top_k_return)
+            results = [self._candidate_to_search_result(c) for c in reranked]
         else:
             candidates = candidates[:self._top_k_return]
             results = [self._candidate_to_search_result(c) for c in candidates]
