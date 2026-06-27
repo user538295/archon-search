@@ -410,7 +410,7 @@ def test_ingest_result_schema_fields():
     from archon_search.server.mcp_schemas import IngestResultSchema
 
     actual = set(IngestResultSchema.model_fields.keys())
-    assert actual == {"doc_id", "chunks_created", "status", "error", "warnings"}
+    assert actual == {"doc_id", "chunks_created", "status", "error", "warnings", "code"}
     assert "needs_recompute" not in actual
 
 

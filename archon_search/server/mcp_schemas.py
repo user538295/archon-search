@@ -10,7 +10,7 @@ drifting the MCP contract.
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -280,6 +280,7 @@ class IngestResultSchema(BaseModel):
     status: str
     error: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    code: Literal["file_too_large"] | None = None
 
     @classmethod
     def from_result(cls, r: IngestResult) -> IngestResultSchema:
@@ -289,6 +290,7 @@ class IngestResultSchema(BaseModel):
             status=r.status,
             error=r.error,
             warnings=r.warnings,
+            code=r.code,
         )
 
 

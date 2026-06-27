@@ -395,7 +395,7 @@ flowchart LR
 
 ### Slice 2 · MCP tool surfaces the size guard
 
-- [ ] **BE-5** — MCP `ingest_file` error code propagation + `IngestResultSchema.code` field #backend-role
+- [x] **BE-5** — MCP `ingest_file` error code propagation + `IngestResultSchema.code` field #backend-role
     - Interface Adapters · 2.0h
     - needs BE-3 · completes S4
     - Update `IngestResultSchema.from_result()` in `mcp_schemas.py` to include the new `code` field.
