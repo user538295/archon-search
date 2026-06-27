@@ -183,7 +183,7 @@ async def test_list_documents_uses_resolved_namespace() -> None:
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
-    pipeline.list_documents = AsyncMock(return_value=[])
+    pipeline.list_documents = AsyncMock(return_value=([], None, 0))
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         app = mcp_module.create_app(pipeline, "default", writer=None)

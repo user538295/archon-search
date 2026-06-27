@@ -2025,15 +2025,37 @@ class SearchStore:
     # ------------------------------------------------------------------
 
     async def list_documents(
-        self, collection: str, limit: int = 100
-    ) -> list[DocumentInfo]:
+        self, collection: str, limit: int = 100, cursor: str | None = None
+    ) -> tuple[list[DocumentInfo], str | None, int]:
+        """List documents in a collection with stable cursor-based pagination.
+
+        Returns ``(items, next_cursor, total)`` where:
+
+        - *items* — up to *limit* documents sorted by ``doc_id`` ascending.
+        - *next_cursor* — the ``doc_id`` of the last item in this page, or
+          ``None`` if this is the last page.
+        - *total* — accurate total document count for the collection (via
+          :meth:`count_documents`), independent of the current page.
+
+        If *cursor* is provided the result starts from the first document whose
+        ``doc_id`` sorts strictly after the cursor value (lexicographic order).
+        A cursor that references a deleted document silently resumes from its
+        sort position; no error is raised.
+
+        .. note::
+            The store pre-fetches at most ``limit * 50`` raw chunk rows before
+            aggregating to distinct documents.  For collections where documents
+            average more than 50 chunks, some documents near the pre-fetch
+            boundary may not appear in any page.  This is an accepted v1
+            trade-off; see the project's known-limitations documentation.
+        """
         self._validate_collection(collection)
-        limit = min(limit, 1000)  # cap to prevent unbounded memory consumption
+        limit = max(0, min(limit, 1000))  # clamp: non-negative, at most 1000
         db = self._require_connected()
         try:
             table = await db.open_table(collection)
         except ValueError:
-            return []
+            return [], None, 0
 
         rows = (
             await table.query()
@@ -2054,16 +2076,36 @@ class SearchStore:
                 }
             docs[doc_id]["chunk_count"] += 1
 
-        result = [
+        # Sort by doc_id ascending for stable, cursor-compatible ordering
+        sorted_docs = sorted(docs.items(), key=lambda kv: kv[0])
+
+        # Apply cursor: skip to the first doc_id strictly after the cursor
+        if cursor is not None:
+            sorted_docs = [(doc_id, info) for doc_id, info in sorted_docs if doc_id > cursor]
+
+        # Determine next_cursor and the current page items
+        next_cursor: str | None
+        if len(sorted_docs) > limit:
+            page_docs = sorted_docs[:limit]
+            next_cursor = page_docs[-1][0] if page_docs else None
+        else:
+            page_docs = sorted_docs
+            next_cursor = None
+
+        items = [
             DocumentInfo(
                 doc_id=doc_id,
                 source_path=info["source_path"],
                 chunk_count=info["chunk_count"],
                 indexed_at=info["indexed_at"],
             )
-            for doc_id, info in docs.items()
+            for doc_id, info in page_docs
         ]
-        return result[:limit]
+
+        # Accurate total using count_documents (reads full collection)
+        total = await self.count_documents(collection)
+
+        return items, next_cursor, total
 
     # ------------------------------------------------------------------
     # Fetch adjacent chunks

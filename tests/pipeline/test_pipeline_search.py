@@ -88,7 +88,7 @@ async def test_pipeline_delete_document(connected_store, col_name, tmp_path):
     deleted = await pipeline.delete_document(result.doc_id, col_name)
     assert deleted > 0
 
-    docs = await pipeline.list_documents(col_name)
+    docs, _, _ = await pipeline.list_documents(col_name)
     doc_ids = [d.doc_id for d in docs]
     assert result.doc_id not in doc_ids
 
@@ -912,9 +912,11 @@ async def test_list_documents_wrong_namespace_returns_empty() -> None:
         top_k_return=5,
     )
 
-    result = await pipeline.list_documents("col-a", namespace="tenantB")
+    items, next_cursor, total = await pipeline.list_documents("col-a", namespace="tenantB")
 
-    assert result == []
+    assert items == []
+    assert next_cursor is None
+    assert total == 0
     store.get_collection_meta.assert_awaited_once_with("col-a", namespace="tenantB")
     store.list_documents.assert_not_awaited()
 
@@ -933,7 +935,7 @@ async def test_list_documents_correct_namespace_succeeds() -> None:
     doc = DocumentInfo(doc_id="a" * 64, source_path="/some/path.md", chunk_count=2, indexed_at="2026-01-01T00:00:00")
     store = MagicMock()
     store.get_collection_meta = AsyncMock(return_value=meta)
-    store.list_documents = AsyncMock(return_value=[doc])
+    store.list_documents = AsyncMock(return_value=([doc], None, 1))
 
     pipeline = SearchPipeline(
         store=store,
@@ -945,11 +947,13 @@ async def test_list_documents_correct_namespace_succeeds() -> None:
         top_k_return=5,
     )
 
-    result = await pipeline.list_documents("col-a", namespace="tenantA")
+    items, next_cursor, total = await pipeline.list_documents("col-a", namespace="tenantA")
 
-    assert result == [doc]
+    assert items == [doc]
+    assert next_cursor is None
+    assert total == 1
     store.get_collection_meta.assert_awaited_once_with("col-a", namespace="tenantA")
-    store.list_documents.assert_awaited_once_with("col-a", 100)
+    store.list_documents.assert_awaited_once_with("col-a", 100, cursor=None)
 
 
 @pytest.mark.asyncio

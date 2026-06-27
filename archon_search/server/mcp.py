@@ -1070,11 +1070,11 @@ def create_app(
     ) -> list[dict[str, Any]]:
         """List documents in a collection."""
         try:
-            results = await pipeline.list_documents(
+            items, _next_cursor, _total = await pipeline.list_documents(
                 collection or default_collection, limit, namespace=_get_request_namespace()
             )
             try:
-                return [DocumentInfoSchema.from_result(r).model_dump(mode="json") for r in results]
+                return [DocumentInfoSchema.from_result(r).model_dump(mode="json") for r in items]
             except ValidationError as exc:
                 return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except Exception as exc:

@@ -67,7 +67,7 @@ async def test_pipeline_ingest_is_idempotent(connected_store, col_name, tmp_path
     await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False)
     await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False)
 
-    docs = await pipeline.list_documents(col_name)
+    docs, _, _ = await pipeline.list_documents(col_name)
     assert len(docs) == 1
 
 
@@ -368,7 +368,7 @@ async def test_pipeline_ingest_file_parse_error_preserves_existing_chunks(connec
     assert second_result.status == "error"
 
     # Original doc should still be there
-    docs = await pipeline.list_documents(col_name)
+    docs, _, _ = await pipeline.list_documents(col_name)
     assert any(d.doc_id == first_result.doc_id for d in docs)
 
 
@@ -392,7 +392,7 @@ async def test_pipeline_ingest_file_empty_content_preserves_existing_chunks(conn
     assert second_result.chunks_created == 0
 
     # Original doc still in store (no delete on empty)
-    docs = await pipeline.list_documents(col_name)
+    docs, _, _ = await pipeline.list_documents(col_name)
     assert any(d.doc_id == first_result.doc_id for d in docs)
 
 
@@ -3504,3 +3504,45 @@ async def test_ingest_pdf_metadata_survives_store_roundtrip(connected_store, col
         assert "_page_start" in result.metadata, (
             f"_page_start must survive the LanceDB round-trip; metadata={result.metadata!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# BE-5: pipeline.list_documents cursor passthrough
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_list_documents_cursor_passes_through(connected_store, col_name, tmp_path) -> None:
+    """pipeline.list_documents delegates cursor unchanged to store and returns tuple."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search._types import DocumentInfo
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.chunker import DocumentChunker
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.embedder import Embedder
+    from archon_search.reranker import Reranker
+    from .conftest import make_embedder, make_reranker
+
+    doc = DocumentInfo(doc_id="a" * 64, source_path="/p.md", chunk_count=1, indexed_at="2026-01-01T00:00:00")
+    meta = CollectionMeta(name="col-x", namespace="default")
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=meta)
+    store.list_documents = AsyncMock(return_value=([doc], None, 1))
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    items, next_cursor, total = await pipeline.list_documents("col-x", limit=50, cursor="some-cursor")
+    assert items == [doc]
+    assert next_cursor is None
+    assert total == 1
+    store.list_documents.assert_awaited_once_with("col-x", 50, cursor="some-cursor")

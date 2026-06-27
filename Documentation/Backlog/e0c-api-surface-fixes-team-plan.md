@@ -388,15 +388,15 @@ flowchart LR
 
 ### Slice 3 · list_documents REST pagination *(clients can page through all documents in large collections)*
 
-- [ ] **BE-5** — Update `store.list_documents(collection, limit, cursor)`: add stable doc_id sort, post-aggregation cursor slicing, use `count_documents` (store.py:2134) for accurate `total`; update `pipeline.list_documents` to pass cursor through; return `(items, next_cursor|None, total)` #backend-role
+- [x] **BE-5** — Update `store.list_documents(collection, limit, cursor)`: add stable doc_id sort, post-aggregation cursor slicing, use `count_documents` (store.py:2134) for accurate `total`; update `pipeline.list_documents` to pass cursor through; return `(items, next_cursor|None, total)` #backend-role
     - Frameworks & Drivers (`store.py:2021–2060, 2134`) + Use Cases (`pipeline.py:1429`) · 3.0h
     - needs K1 · completes S1, S2, S3, S4, C2
     - Tests
-        - #unit_test — `test_list_documents_cursor_skips_to_next_page` — 10 docs, cursor=doc5.doc_id → returns docs 6-10
-        - #unit_test — `test_list_documents_last_page_next_cursor_none` — last page → next_cursor is None
-        - #unit_test — `test_list_documents_deleted_cursor_resumes_from_sort_position` — cursor doc_id not in aggregated result → resumes from first doc_id sorting after cursor value; if none, returns empty items and next_cursor=None; no error
-        - #unit_test — `test_list_documents_total_is_full_collection_count` — total reflects all docs, not just current page
-        - #integration_test — `test_pipeline_list_documents_cursor_passes_through` — pipeline delegates cursor to store unchanged
+        - [x] #unit_test — `test_list_documents_cursor_skips_to_next_page` — 10 docs, cursor=doc5.doc_id → returns docs 6-10
+        - [x] #unit_test — `test_list_documents_last_page_next_cursor_none` — last page → next_cursor is None
+        - [x] #unit_test — `test_list_documents_deleted_cursor_resumes_from_sort_position` — cursor doc_id not in aggregated result → resumes from first doc_id sorting after cursor value; if none, returns empty items and next_cursor=None; no error
+        - [x] #unit_test — `test_list_documents_total_is_full_collection_count` — total reflects all docs, not just current page
+        - [x] #integration_test — `test_pipeline_list_documents_cursor_passes_through` — pipeline delegates cursor to store unchanged
 
 - [ ] **BE-6** — Add `DocumentListResponse` to `schemas.py`; add `GET /collections/{name}/documents` to `routes_collections.py`; update MCP `list_documents` tool in `mcp.py` to accept optional `cursor` param (additive) #backend-role
     - Interface Adapters (`schemas.py`, `routes_collections.py`, `mcp.py:1043`) · 3.0h

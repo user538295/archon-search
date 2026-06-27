@@ -1426,11 +1426,24 @@ class SearchPipeline:
     async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> CollectionMeta | None:
         return await self.store.get_collection_meta(name, namespace=namespace)
 
-    async def list_documents(self, collection: str, limit: int = 100, namespace: str = DEFAULT_NAMESPACE) -> list[DocumentInfo]:
+    async def list_documents(
+        self,
+        collection: str,
+        limit: int = 100,
+        cursor: str | None = None,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> tuple[list[DocumentInfo], str | None, int]:
+        """List documents in a collection with cursor-based pagination.
+
+        Returns ``(items, next_cursor, total)`` — delegates directly to
+        :meth:`SearchStore.list_documents` after validating namespace access.
+        Returns ``([], None, 0)`` if the collection is not found in the given
+        namespace.
+        """
         meta = await self.store.get_collection_meta(collection, namespace=namespace)
         if meta is None:
-            return []
-        return await self.store.list_documents(collection, limit)
+            return [], None, 0
+        return await self.store.list_documents(collection, limit, cursor=cursor)
 
     async def recompute_collection_meta(
         self,

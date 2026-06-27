@@ -1763,7 +1763,7 @@ def _get_list_documents_tool_fn(doc_infos):
 
     importlib.reload(mcp_mod)
     pipeline = MagicMock()
-    pipeline.list_documents = AsyncMock(return_value=doc_infos)
+    pipeline.list_documents = AsyncMock(return_value=(doc_infos, None, len(doc_infos)))
     app = mcp_mod.create_app(pipeline, "col1")
     return app._tools["list_documents"]
 

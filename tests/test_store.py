@@ -246,10 +246,12 @@ async def test_store_ingest_and_list_documents(
     connected_store: SearchStore, col_name: str
 ) -> None:
     doc_id, _ = await _ingest_doc(connected_store, col_name, n_chunks=2)
-    docs = await connected_store.list_documents(col_name)
+    docs, next_cursor, total = await connected_store.list_documents(col_name)
     assert len(docs) == 1
     assert docs[0].doc_id == doc_id
     assert docs[0].chunk_count == 2
+    assert next_cursor is None
+    assert total == 1
 
 
 @pytest.mark.asyncio
@@ -281,7 +283,7 @@ async def test_store_delete_document_removes_chunks(
     doc_id, _ = await _ingest_doc(connected_store, col_name)
     count = await connected_store.delete_document(col_name, doc_id)
     assert count > 0
-    docs = await connected_store.list_documents(col_name)
+    docs, _, _ = await connected_store.list_documents(col_name)
     assert all(d.doc_id != doc_id for d in docs)
 
 
@@ -322,8 +324,10 @@ async def test_store_list_collections_empty_database_returns_empty(
 async def test_store_list_documents_nonexistent_collection_returns_empty(
     connected_store: SearchStore,
 ) -> None:
-    docs = await connected_store.list_documents("no-such-collection-xyz", limit=10)
-    assert docs == []
+    items, next_cursor, total = await connected_store.list_documents("no-such-collection-xyz", limit=10)
+    assert items == []
+    assert next_cursor is None
+    assert total == 0
 
 
 @pytest.mark.asyncio
@@ -334,7 +338,7 @@ async def test_store_delete_document_injection_safe(
     doc_b_id, _ = await _ingest_doc(connected_store, col_name)
     with pytest.raises(ValueError):
         await connected_store.delete_document(col_name, "' OR '1'='1")
-    docs = await connected_store.list_documents(col_name)
+    docs, _, _ = await connected_store.list_documents(col_name)
     assert any(d.doc_id == doc_b_id for d in docs)
 
 
@@ -399,8 +403,10 @@ async def test_store_list_documents_respects_limit(
         chunks = [_chunk(doc_id, 0)]
         await connected_store.ensure_collection(col_name, _DIM)
         await connected_store.ingest_chunks(col_name, chunks)
-    docs = await connected_store.list_documents(col_name, limit=1)
+    docs, next_cursor, total = await connected_store.list_documents(col_name, limit=1)
     assert len(docs) == 1
+    assert next_cursor is not None  # more docs remain
+    assert total == 3
 
 
 @pytest.mark.asyncio
@@ -539,8 +545,8 @@ async def test_store_list_documents_limit_capped_at_1000(
     """list_documents caps limit at 1000 — requesting more does not OOM."""
     await connected_store.ensure_collection(col_name, _DIM)
     # Should not raise even with unreasonable limit
-    docs = await connected_store.list_documents(col_name, limit=100_000)
-    assert isinstance(docs, list)
+    items, _next_cursor, total = await connected_store.list_documents(col_name, limit=100_000)
+    assert isinstance(items, list)
 
 
 # ---------------------------------------------------------------------------
@@ -2136,9 +2142,10 @@ async def test_P14_13_store_list_documents_limit_zero_returns_empty(
     await connected_store.ensure_collection(col_name, _DIM)
     await connected_store.ingest_chunks(col_name, chunks)
 
-    docs = await connected_store.list_documents(col_name, limit=0)
+    items, next_cursor, total = await connected_store.list_documents(col_name, limit=0)
     # limit=0 → min(0, 1000) = 0 → limit * 50 = 0 rows fetched → []
-    assert docs == []
+    assert items == []
+    assert next_cursor is None
 
 
 @pytest.mark.asyncio
@@ -4514,7 +4521,7 @@ async def test_delete_document_removes_all_chunks(connected_store: SearchStore, 
     deleted = await connected_store.delete_document(col_name, doc_id)
     assert deleted == 3, f"Expected 3 chunks deleted, got {deleted}"
 
-    docs = await connected_store.list_documents(col_name)
+    docs, _, _ = await connected_store.list_documents(col_name)
     assert all(d.doc_id != doc_id for d in docs), "doc must be absent after delete"
 
 
@@ -4980,7 +4987,7 @@ async def test_a5b_end_to_end_flow_unchanged(connected_store: SearchStore, col_n
     assert deleted > 0, "delete must report removed chunks"
 
     # After delete, the doc is no longer in the store
-    docs = await connected_store.list_documents(col_name)
+    docs, _, _ = await connected_store.list_documents(col_name)
     assert all(d.doc_id != doc_id for d in docs), "doc must be absent after delete"
 
 
@@ -7861,3 +7868,186 @@ async def test_apply_rewrite_real_store_with_dummy_transform(tmp_path) -> None:
 
     finally:
         await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# BE-5: list_documents cursor pagination tests
+# ---------------------------------------------------------------------------
+
+
+async def _ingest_n_docs(store: SearchStore, col_name: str, n: int) -> list[str]:
+    """Ingest n distinct documents (1 chunk each) and return their doc_ids sorted.
+
+    doc_ids are 64-char hex strings of the form f"{i:064x}", which sort
+    lexicographically in the same order as the integer index i.
+    """
+    await store.ensure_collection(col_name, _DIM)
+    doc_ids = []
+    for i in range(n):
+        doc_id = f"{i:064x}"
+        chunk = ChunkRecord(
+            doc_id=doc_id,
+            chunk_id=f"{doc_id}-000000",
+            text=f"chunk text {i}",
+            vector=[float(j % 8) / 8.0 for j in range(_DIM)],
+            source_path=f"/docs/file_{i}.md",
+            indexed_at="2026-01-01T00:00:00",
+            file_type="md",
+        )
+        await store.ingest_chunks(col_name, [chunk])
+        doc_ids.append(doc_id)
+    return sorted(doc_ids)
+
+
+@pytest.mark.asyncio
+async def test_list_documents_returns_tuple_with_items_cursor_total(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """list_documents returns (items, next_cursor|None, total) tuple."""
+    doc_ids = await _ingest_n_docs(connected_store, col_name, 3)
+    items, next_cursor, total = await connected_store.list_documents(col_name, limit=10)
+    assert isinstance(items, list)
+    assert total == 3
+    assert len(items) == 3
+    assert next_cursor is None  # all docs fit in one page
+
+
+@pytest.mark.asyncio
+async def test_list_documents_cursor_skips_to_next_page(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """10 docs, cursor=doc5.doc_id → items are the 5 docs with doc_id > doc5."""
+    doc_ids = await _ingest_n_docs(connected_store, col_name, 10)
+    # First page of 5
+    items_p1, next_cursor, total = await connected_store.list_documents(col_name, limit=5)
+    assert len(items_p1) == 5
+    assert next_cursor is not None
+    assert total == 10
+    # Cursor should be last doc_id in page 1
+    assert next_cursor == items_p1[-1].doc_id
+
+    # Second page using cursor
+    items_p2, next_cursor2, total2 = await connected_store.list_documents(col_name, limit=5, cursor=next_cursor)
+    assert len(items_p2) == 5
+    assert next_cursor2 is None  # no more pages
+    assert total2 == 10
+    # Page 2 docs must be strictly after page 1 docs
+    assert all(d.doc_id > items_p1[-1].doc_id for d in items_p2)
+    # No overlap between pages
+    p1_ids = {d.doc_id for d in items_p1}
+    p2_ids = {d.doc_id for d in items_p2}
+    assert p1_ids.isdisjoint(p2_ids)
+    # Union of both pages equals the full collection
+    assert p1_ids | p2_ids == set(doc_ids)
+
+
+@pytest.mark.asyncio
+async def test_list_documents_last_page_next_cursor_none(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Fetching exactly the last page returns next_cursor=None."""
+    doc_ids = await _ingest_n_docs(connected_store, col_name, 6)
+    # Page 1 of 3
+    items_p1, cursor1, _ = await connected_store.list_documents(col_name, limit=3)
+    assert len(items_p1) == 3
+    assert cursor1 is not None
+    # Page 2 of 3
+    items_p2, cursor2, _ = await connected_store.list_documents(col_name, limit=3, cursor=cursor1)
+    assert len(items_p2) == 3
+    assert cursor2 is None  # last page
+
+
+@pytest.mark.asyncio
+async def test_list_documents_deleted_cursor_resumes_from_sort_position(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Cursor doc_id not in aggregated result → resumes from first doc_id > cursor; no error."""
+    doc_ids = await _ingest_n_docs(connected_store, col_name, 10)
+    # Get first page to obtain a real cursor
+    items_p1, cursor, _ = await connected_store.list_documents(col_name, limit=5)
+    assert cursor is not None
+    # cursor is the 5th doc_id; now use a synthetic cursor that sorts between page1 and page2
+    # Use the real cursor but imagine it was "deleted" — behavior should be same as normal cursor
+    items_after, next_cursor, total = await connected_store.list_documents(col_name, limit=5, cursor=cursor)
+    assert len(items_after) == 5
+    assert all(d.doc_id > cursor for d in items_after)
+
+    # Delete the cursor doc_id and confirm pagination resumes from sort position
+    deleted_doc_id = cursor
+    await connected_store.delete_document(col_name, deleted_doc_id)
+    # After deletion there are 9 docs; page2 starts after deleted cursor, so 4 docs remain
+    items_after_delete, next_cursor_after_delete, total_after_delete = await connected_store.list_documents(
+        col_name, limit=5, cursor=deleted_doc_id
+    )
+    assert len(items_after_delete) == 5  # docs 5-9 follow cursor; deleting cursor doc (4) doesn't affect result
+    assert all(d.doc_id > deleted_doc_id for d in items_after_delete)
+    assert next_cursor_after_delete is None  # fewer than limit docs remain after cursor
+    assert total_after_delete == 9  # one doc was deleted
+
+    # Cursor that sorts after ALL docs → returns empty, no error
+    # f"{i:064x}" for i in 0..9 all start with 0; "f" * 64 sorts after all of them
+    beyond_cursor = "f" * 64
+    items_empty, next_cursor_empty, total_empty = await connected_store.list_documents(
+        col_name, limit=5, cursor=beyond_cursor
+    )
+    assert items_empty == []
+    assert next_cursor_empty is None
+    assert total_empty == 9  # total reflects the deletion
+
+
+@pytest.mark.asyncio
+async def test_list_documents_total_is_full_collection_count(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """total reflects all docs in the collection, not just current page."""
+    doc_ids = await _ingest_n_docs(connected_store, col_name, 15)
+    items, next_cursor, total = await connected_store.list_documents(col_name, limit=5)
+    assert len(items) == 5
+    assert next_cursor is not None
+    assert total == 15  # all 15 docs, even though only 5 returned
+
+
+@pytest.mark.asyncio
+async def test_list_documents_sorted_by_doc_id_ascending(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Items are returned in ascending doc_id order."""
+    await _ingest_n_docs(connected_store, col_name, 5)
+    items, _, _ = await connected_store.list_documents(col_name, limit=10)
+    doc_ids = [d.doc_id for d in items]
+    assert doc_ids == sorted(doc_ids)
+
+
+@pytest.mark.asyncio
+async def test_list_documents_cursor_with_multi_chunk_docs(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """Cursor pagination works when each doc has multiple chunks; chunk_count is aggregated."""
+    await connected_store.ensure_collection(col_name, _DIM)
+    doc_ids = []
+    for i in range(6):
+        doc_id = f"{i:064x}"
+        # Each doc gets 3 chunks
+        chunks = [_chunk(doc_id, idx) for idx in range(3)]
+        await connected_store.ingest_chunks(col_name, chunks)
+        doc_ids.append(doc_id)
+    doc_ids.sort()
+
+    items_p1, cursor, total = await connected_store.list_documents(col_name, limit=3)
+    assert len(items_p1) == 3
+    assert total == 6
+    assert cursor is not None
+    # chunk_count should be 3 for each doc
+    for item in items_p1:
+        assert item.chunk_count == 3
+
+    items_p2, cursor2, total2 = await connected_store.list_documents(col_name, limit=3, cursor=cursor)
+    assert len(items_p2) == 3
+    assert cursor2 is None
+    assert total2 == 6
+    for item in items_p2:
+        assert item.chunk_count == 3
+    # Union of both pages covers all docs
+    p1_ids = {d.doc_id for d in items_p1}
+    p2_ids = {d.doc_id for d in items_p2}
+    assert p1_ids | p2_ids == set(doc_ids)
