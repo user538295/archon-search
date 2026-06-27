@@ -1,0 +1,91 @@
+openapi: 3.0.0
+info:
+  title: Collection Documents API
+  version: 0.0.0
+tags: []
+paths:
+  /collections/{name}/documents:
+    get:
+      operationId: Documents_list
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 200
+            default: 50
+          explode: false
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentListResponse'
+        '401':
+          description: Access is unauthorized.
+        '404':
+          description: The server cannot find the requested resource.
+        '422':
+          description: Unprocessable Entity. Invalid limit value (must be 1–200).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+components:
+  schemas:
+    DocumentInfo:
+      type: object
+      required:
+        - doc_id
+        - source_path
+        - chunk_count
+        - indexed_at
+      properties:
+        doc_id:
+          type: string
+        source_path:
+          type: string
+        chunk_count:
+          type: integer
+          format: int32
+        indexed_at:
+          type: string
+    DocumentListResponse:
+      type: object
+      required:
+        - items
+        - next_cursor
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentInfo'
+        next_cursor:
+          type: string
+          nullable: true
+        total:
+          type: integer
+          format: int32
+    ValidationError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string

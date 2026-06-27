@@ -1,0 +1,40 @@
+openapi: 3.0.0
+info:
+  title: Search Status API (E0c additions)
+  version: 0.0.0
+tags: []
+paths:
+  /status:
+    get:
+      operationId: Status_get
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusSearchFragment'
+        '401':
+          description: Access is unauthorized.
+components:
+  schemas:
+    SearchStatusDetail:
+      type: object
+      required:
+        - max_fanout
+        - top_k_max
+      properties:
+        max_fanout:
+          type: integer
+          format: int32
+        top_k_max:
+          type: integer
+          format: int32
+    StatusSearchFragment:
+      type: object
+      properties:
+        search:
+          allOf:
+            - $ref: '#/components/schemas/SearchStatusDetail'
+          nullable: true
