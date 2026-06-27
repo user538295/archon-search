@@ -11,6 +11,8 @@ import os
 import sys
 import uuid
 from pathlib import Path
+from typing import Generator
+from unittest.mock import patch
 
 # Cap native-runtime thread counts BEFORE ML libs / Tokio runtimes initialize.
 # onnxruntime, OpenMP, OpenBLAS and LanceDB's Tokio runtime each default to
@@ -79,6 +81,54 @@ def _archon_worker_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     use tmp_path_factory.mktemp to give each worker a private scratch directory.
     """
     return tmp_path_factory.mktemp("archon-data")
+
+
+# ---------------------------------------------------------------------------
+# C18 Fix 2 — session-level Anthropic token-burn prevention
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _block_anthropic_key_at_session() -> None:
+    """Remove ANTHROPIC_API_KEY before any session-scoped fixture can fire.
+
+    The function-scoped autouse _archon_isolated_data_dir clears the key per
+    test body, but session fixtures run before it. A session fixture that calls
+    ingest_directory would see the key live unless this fixture removes it first.
+    Not restored after the session — tests that need the key use monkeypatch.setenv.
+    """
+    os.environ.pop("ANTHROPIC_API_KEY", None)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _block_anthropic_client() -> Generator[None, None, None]:
+    """Mock anthropic.Anthropic and anthropic.AsyncAnthropic to raise if instantiated.
+
+    Guards against token burns even when the env-var guard is bypassed — e.g. a
+    future code path that constructs the client without checking ANTHROPIC_API_KEY.
+    Only active when the `anthropic` package is installed (hyde/rag_fusion extras).
+    Existing tests that patch sys.modules["anthropic"] with a mock module are
+    unaffected: patch.dict replaces the module object entirely, so the lazy
+    `import anthropic` inside generators gets the mock, not the real module.
+    """
+    try:
+        import anthropic as _anthropic_mod  # noqa: PLC0415
+    except ImportError:
+        yield  # anthropic extra not installed — nothing to block
+        return
+
+    def _raise(*a: object, **kw: object) -> None:
+        raise RuntimeError(
+            "Test suite attempted to instantiate the Anthropic client — "
+            "this would burn real tokens. Add monkeypatch.setenv('ANTHROPIC_API_KEY', ...) "
+            "and patch the client in your test instead."
+        )
+
+    with (
+        patch.object(_anthropic_mod, "Anthropic", side_effect=_raise),
+        patch.object(_anthropic_mod, "AsyncAnthropic", side_effect=_raise),
+    ):
+        yield
 
 
 @pytest.fixture(autouse=True)

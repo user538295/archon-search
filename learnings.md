@@ -96,6 +96,24 @@
 **`None == None` is True — guard nullable-id lookups with explicit type check**
 - Action: Synthetic TOML records have `id=None`. Add `if not isinstance(key_id, str): raise KeyError(...)` at entry to any method matching against a nullable entity field.
 
+**[2026-06-27] — Test stub migration for store method rename**
+- Observation: When a store method is renamed (e.g., `hybrid_search` → `hybrid_search_with_trace`) and return type changes, all stubs must update both method name AND returned object type. ACL tests that built `SearchResult` inline from `ChunkRecord` need a `_chunk_to_candidate` helper for the new `ScoredSearchCandidate` type.
+- Observation: When the reranker method changes from `rerank` to `rerank_candidates`, `MagicMock` stubs set via `reranker.rerank = fn` silently succeed but the pipeline never calls that attribute — tests pass vacuously. Always verify the method name with `grep -n "self._reranker\." archon_search/pipeline.py` first.
+- Observation: Never use `git stash` as a baseline-test mechanism mid-session. A failed `git stash pop` (conflict) silently reverts files, requiring all edits to be redone.
+- Action: Before writing any stub, grep the production code to confirm exact method names called.
+- Confidence: high
+
+**[2026-06-27] — `#manual_test` tasks must not be automated by /implement-next**
+- Observation: `/implement-next` on a `#manual_test` task triggered a PDF size calibration loop (~10 script attempts), hit a pre-existing stub mismatch during benchmark verification, and spawned two unrelated fix agents (~70K output tokens). Total session cost: ~206K output tokens, 96M cache reads for a task estimated at 1.5h.
+- Action: When the plan task contains `#manual_test`, the implementing agent must NOT run the test or generate synthetic test data. It should write a checklist document and mark the task done — or the plan should be downscoped to a `#integration_test` before the agent touches it.
+- Confidence: high
+
+**[2026-06-27] — Session-scoped fixtures run before function-scoped autouse; close the gap with a session-scoped env clear**
+- Observation: The function-scoped autouse `_archon_isolated_data_dir` clears `ANTHROPIC_API_KEY` before each test body, but session-scoped fixtures run before any function-scoped fixture. A session fixture that calls `ingest_directory` would see the key live. Added `_block_anthropic_key_at_session` (session-scoped autouse, `os.environ.pop`) to clear it before any session fixture can fire.
+- Observation: `anthropic` is an optional extra (`hyde`/`rag_fusion` deps). Session-level `patch("anthropic.Anthropic", ...)` by string must be replaced with `patch.object(imported_mod, "Anthropic", ...)` and guarded by `try: import anthropic except ImportError: yield; return`. Tests that prove the mock must use `pytest.importorskip("anthropic")` so they skip gracefully when the extra is absent.
+- Action: When adding session-level env-var protection, always pair it with a session-scoped fixture to prevent the session-fixture timing gap. For optional-dep mocks, use `patch.object` with an ImportError guard.
+- Confidence: high
+
 ### Config and schema
 
 **Adding a `SearchConfig` field requires four coupled updates**
@@ -141,6 +159,11 @@
 
 **fastmcp stub contamination — lazy import in mcp.py**
 - Action: Move `fastmcp.server.dependencies` imports inside function body with `try/except ImportError`. Module-level imports fail in workers that stub `fastmcp` as a bare `ModuleType`.
+
+**2026-06-27 — Bug fix: `_search_standard` called `hybrid_search` (→ SearchResult) instead of `hybrid_search_with_trace` (→ ScoredSearchCandidate)**
+- Observation: `_search_standard` passed `SearchResult` objects to `_candidate_to_search_result` which expects `ScoredSearchCandidate`. The bug was latent because stubs returned empty lists. The reranker path also called `reranker.rerank()` (SearchResult) not `reranker.rerank_candidates()` (ScoredSearchCandidate).
+- Action: (1) Change `_search_standard` to call `hybrid_search_with_trace` with `candidate_depth=`. (2) Change reranker call to `rerank_candidates`. (3) Apply `source_path_glob` post-filter in `_search_standard` (not done by `_hybrid_search_with_trace`). (4) Update all test stubs to use `hybrid_search_with_trace` returning `ScoredSearchCandidate`. (5) Add `rerank_candidates` to mock rerankers.
+- Confidence: high
 
 **`app.user_middleware` to inspect FastMCP middleware (not `.middleware`)**
 - Action: `StarletteWithLifespan` does NOT expose `.middleware`. Use `app.user_middleware` — a list of `Middleware` namedtuples with `.cls` and `.kwargs`.

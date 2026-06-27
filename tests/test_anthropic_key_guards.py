@@ -162,3 +162,50 @@ def test_per_test_setenv_overrides_autouse_delenv(
     this mechanism."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-from-per-test-setenv")
     assert os.environ.get("ANTHROPIC_API_KEY") == "test-key-from-per-test-setenv"
+
+
+# ---------------------------------------------------------------------------
+# Session-level hardening tests (C18 Fix 2)
+# ---------------------------------------------------------------------------
+
+
+def test_session_key_block_fires_before_test_body() -> None:
+    """ANTHROPIC_API_KEY is absent at test-body time, proven by both the session
+    fixture (_block_anthropic_key_at_session) and the function-scoped autouse.
+
+    In CI (key never set) this passes vacuously. On a developer machine with the
+    key exported in the shell, both fixtures must co-operate to clear it before
+    this assertion runs — the session fixture clears it before any session-scoped
+    fixture can fire, and the function-scoped autouse clears it again before
+    every test body. Either one missing on a developer machine would let the key
+    leak into session fixtures that call ingest_directory."""
+    assert os.environ.get("ANTHROPIC_API_KEY") is None, (
+        "_block_anthropic_key_at_session or _archon_isolated_data_dir failed to "
+        f"clear ANTHROPIC_API_KEY; current value: {os.environ.get('ANTHROPIC_API_KEY')!r}"
+    )
+
+
+def test_anthropic_client_instantiation_raises_in_test_context() -> None:
+    """anthropic.Anthropic() raises RuntimeError in the test suite.
+
+    Proves the session fixture _block_anthropic_client is active and that no
+    code path can reach the Anthropic network during tests, even if the env-var
+    guard is bypassed or the API key leaks in via some other route.
+
+    Skipped when the `anthropic` package is not installed (hyde/rag_fusion extras
+    not active) — the mock is only needed when the package is present."""
+    anthropic = pytest.importorskip("anthropic", reason="anthropic extra not installed; mock not needed")
+
+    with pytest.raises(RuntimeError, match="Test suite attempted to instantiate the Anthropic client"):
+        anthropic.Anthropic()
+
+
+def test_async_anthropic_client_instantiation_raises_in_test_context() -> None:
+    """anthropic.AsyncAnthropic() raises RuntimeError in the test suite.
+
+    Same guarantee as the sync variant — proves the session mock covers both
+    client constructors. Skipped when `anthropic` is not installed."""
+    anthropic = pytest.importorskip("anthropic", reason="anthropic extra not installed; mock not needed")
+
+    with pytest.raises(RuntimeError, match="Test suite attempted to instantiate the Anthropic client"):
+        anthropic.AsyncAnthropic()
