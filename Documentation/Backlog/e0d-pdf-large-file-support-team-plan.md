@@ -404,7 +404,7 @@ flowchart LR
         - #unit_test — `test_mcp_ingest_result_schema_code_field_defaults_none` — IngestResultSchema.code is None when not set
         - #integration_test — `test_mcp_ingest_file_too_large_integration` — real MCP app + oversized file → error result with code field
 
-- [ ] **T-2** — E2e: MCP ingest_file returns file_too_large code #tester-role
+- [x] **T-2** — E2e: MCP ingest_file returns file_too_large code #tester-role
     - — · 1.0h
     - needs BE-5 · completes S4
     - Tests

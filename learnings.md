@@ -302,3 +302,13 @@
 - Observation: A tautological `or len(results) > 0` fallback on a path assertion silently masks false positives — if ANY results exist, the assertion passes even if they are from the wrong file. DA review (C2-1) caught this in cycle 2.
 - Action: Never use `or len(collection) > 0` as a fallback on a membership assertion. Either the member check passes or the test fails. Drop the fallback unconditionally.
 - Confidence: high
+
+**[2026-06-27] — E0d BE-5 (Interface Adapters MCP schema)**
+- Observation: `IngestResultSchema.code: str | None` is weaker than the domain type `Literal["file_too_large"] | None`. The plan explicitly stated "Using Literal rather than bare str enables exhaustive type-checking" — the first implementation widened to `str` and was caught by iterative review (C1-A-1). The fix is trivial but the Literal matters: it produces `{"const": "file_too_large"}` in JSON Schema (not `{"type": "string"}`), and Pydantic rejects unknown code values at the schema boundary instead of silently passing them through.
+- Action: At any MCP/REST schema boundary that maps a `Literal` domain field, use `Literal[...]` in the Pydantic schema too. `str` at the boundary defeats the contract signal and drops JSON Schema constraints for MCP clients.
+- Confidence: high
+
+**[2026-06-27] — E0d BE-5 (Interface Adapters MCP schema)**
+- Observation: The `ingest_directory` list-return path (`mcp.py:1003`) uses the same `IngestResultSchema.from_result(r).model_dump()` pattern as `ingest_file`. A new field added to `IngestResultSchema` (like `code`) propagates automatically to both paths. But without an explicit `ingest_directory` test for the new field, this is invisible to regressions — a future refactor could filter error items out of the list.
+- Action: When adding a field to `IngestResultSchema`, add a unit test for the `ingest_directory` mixed-batch list return (one ok + one error result) to verify the field propagates in both list items, not just the single-result `ingest_file` path.
+- Confidence: high
