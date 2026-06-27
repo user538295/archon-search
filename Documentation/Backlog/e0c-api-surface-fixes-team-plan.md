@@ -345,7 +345,7 @@ flowchart LR
 
 ### Slice 2 · Config-wired validation + status fields *(operators can raise limits; GET /status reports them)*
 
-- [ ] **BE-2** — Add `top_k_max: int = 100` to `SearchConfig`; wire `[search].top_k_max` into `config.py` loader; update `archon-search.toml.example` #backend-role
+- [x] **BE-2** — Add `top_k_max: int = 100` to `SearchConfig`; wire `[search].top_k_max` into `config.py` loader; update `archon-search.toml.example` #backend-role
     - Interface Adapters (`config.py:111–124`, loader `~355`) + Entities (`SearchConfig` dataclass) · 1.0h
     - needs K1 · completes C3 (partial), C4 (partial)
     - Tests

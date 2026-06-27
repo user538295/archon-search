@@ -111,6 +111,8 @@ class SearchConfig:
     max_fanout: int = 8
     fanout_leg_trim: int = 40
     fanout_timeout_seconds: float = 30.0
+    # [search] — E0c operator-configurable top_k ceiling
+    top_k_max: int = 100
     # [routing]
     routing_shortlist_size: int = 8
     routing_confidence_threshold: float = 0.30
@@ -371,6 +373,11 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
                 f"fanout_timeout_seconds must be > 0, got {fanout_timeout_seconds}"
             )
         config.fanout_timeout_seconds = fanout_timeout_seconds
+    if "top_k_max" in search:
+        top_k_max = _coerce_int(search["top_k_max"], "top_k_max")
+        if top_k_max <= 0:
+            raise ConfigError(f"top_k_max must be > 0, got {top_k_max}")
+        config.top_k_max = top_k_max
 
     routing = doc.get("routing", {})
     if "routing_shortlist_size" in routing:

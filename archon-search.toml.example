@@ -96,6 +96,10 @@ max_fanout = 8
 fanout_leg_trim = 40
 # Whole-fan-out timeout (seconds); exceeding it returns HTTP 504.
 fanout_timeout_seconds = 30.0
+# Operator ceiling on the top_k value accepted by POST /search and POST /explain.
+# Requests exceeding this limit are rejected, protecting the server from
+# expensive large-k reranking requests. Default: 100.
+# top_k_max = 100
 
 [routing]
 # Number of collections considered by the router before parallel search.
