@@ -195,6 +195,10 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "mcp": {
             "enabled": True,
         },
+        # [ingest]
+        "ingest": {
+            "max_file_mb": 0,
+        },
     }
 
     # Keyset guard — fails when a new top-level field is added to SearchConfig

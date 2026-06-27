@@ -92,6 +92,11 @@ class McpConfig:
 
 
 @dataclass
+class IngestConfig:
+    max_file_mb: int = 0
+
+
+@dataclass
 class SearchConfig:
     # [server]
     host: str = "127.0.0.1"
@@ -158,6 +163,8 @@ class SearchConfig:
     auth: AuthConfig = field(default_factory=AuthConfig)
     # [mcp]
     mcp: McpConfig = field(default_factory=McpConfig)
+    # [ingest]
+    ingest: IngestConfig = field(default_factory=IngestConfig)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -615,6 +622,23 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     if "enabled" in mcp_cfg:
         mcp.enabled = _coerce_bool(mcp_cfg["enabled"], "[mcp].enabled")
     config.mcp = mcp
+
+    ingest_cfg = doc.get("ingest", {})
+    ingest = IngestConfig()
+    if "max_file_mb" in ingest_cfg:
+        raw = ingest_cfg["max_file_mb"]
+        # _coerce_int not used here: int() silently coerces floats and strings,
+        # but the spec requires those to raise ConfigError for this field.
+        if not isinstance(raw, int) or isinstance(raw, bool):
+            raise ConfigError(
+                f"Expected integer for '[ingest].max_file_mb', got {type(raw).__name__}"
+            )
+        if raw < 0:
+            raise ConfigError(
+                f"[ingest].max_file_mb must be >= 0, got {raw}"
+            )
+        ingest.max_file_mb = raw
+    config.ingest = ingest
 
 
 def _post_process_maintenance(config: SearchConfig) -> None:

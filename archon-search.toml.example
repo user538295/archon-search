@@ -29,6 +29,15 @@ enabled = true
 # for an individual rotation call.
 # rotate_grace_seconds = 0
 
+[ingest]
+# Maximum file size allowed for ingest operations. 0 = no limit (default).
+# When set to a positive integer, any single file whose size exceeds this limit
+# is rejected with a clear error naming the file size, the limit, and this key.
+# Use this to protect memory-constrained hosts from unexpectedly large files.
+# Directory ingest: oversized files produce per-file errors; the batch continues.
+# Negative values are invalid and raise a ConfigError at server start.
+# max_file_mb = 0  # 0 = no limit
+
 [server]
 # Bind address and port for the HTTP API.
 host = "127.0.0.1"

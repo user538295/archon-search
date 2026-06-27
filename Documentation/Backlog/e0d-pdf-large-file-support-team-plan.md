@@ -342,7 +342,7 @@ flowchart LR
         - #unit_test — `test_ingest_result_code_set` — IngestResult.code="file_too_large" survives dataclass creation
         - #unit_test — `test_file_exceeds_limit_helper_boundary` — file exactly at max_file_mb returns False; one byte over returns True
 
-- [ ] **BE-2** — Add `IngestConfig` dataclass and `[ingest]` TOML section to `config.py` #backend-role
+- [x] **BE-2** — Add `IngestConfig` dataclass and `[ingest]` TOML section to `config.py` #backend-role
     - Frameworks & Drivers · 2.0h
     - needs K1 · completes C2, S7, S8
     - Tests

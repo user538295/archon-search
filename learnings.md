@@ -247,3 +247,13 @@
 
 **FastMCP API changed between versions — spike undeclared deps before writing ADRs**
 - Action: Before any ADR referencing a third-party API, (1) verify the package is in pyproject.toml, (2) verify method/class names by importing them. `streamable_http_app()` no longer exists in FastMCP 3.4+; use `http_app()`.
+
+**[2026-06-27] — E0d BE-1 (Entities layer additions)**
+- Observation: A 500 MB file write in a unit test for `_file_exceeds_limit(path, 0)` is wasteful — the implementation short-circuits before `os.path.getsize` when `max_file_mb <= 0`. Caught by iterative review (C1-T-4). The test only needs to prove the guard fires; a 1-byte file is sufficient.
+- Action: For unit tests of short-circuit logic, always use the smallest fixture that exercises the branch — never write large files to prove a path that skips reading the file.
+- Confidence: high
+
+**[2026-06-27] — E0d BE-1 (Entities layer additions)**
+- Observation: `pytest` unused import in a test file escalates to "Major" in review because it signals a `pytest.raises` test was intended but dropped — a coverage gap signal, not just style. Adding `test_ingest_error_is_exception` (with `pytest.raises`) resolved both the import warning and the missing Exception-base coverage.
+- Action: Treat an unused `pytest` import as a missing test hint, not a style nit. Add the corresponding `pytest.raises` test immediately.
+- Confidence: high
