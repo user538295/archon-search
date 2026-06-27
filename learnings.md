@@ -2,6 +2,21 @@
 
 ## What Has Worked
 
+**2026-06-27 — E0c BE-6: use asyncio.run() not get_event_loop().run_until_complete() in xdist-parallel integration tests**
+- Observation: `asyncio.get_event_loop().run_until_complete(...)` raises `RuntimeError: There is no current event loop` in xdist workers when another test has previously cleared the loop. Tests passed when run in isolation (`-n0` or isolated `-n4` file) but failed across the full suite. `asyncio.run()` (used by sibling tests in `test_collection_lifecycle_integration.py`) creates a fresh event loop each call and works correctly in all contexts.
+- Action: Always use `asyncio.run(coroutine)` for synchronous calls to async code in integration tests. Never use `asyncio.get_event_loop().run_until_complete()`.
+- Confidence: high
+
+**2026-06-27 — E0c BE-6: limit validation in route handlers should use FastAPI Query(ge=, le=) not manual if-check**
+- Observation: Initial implementation used `if limit < 1 or limit > 200: raise HTTPException(422, ...)` with three module-level constants. The DA and Brooks-Lint reviewers correctly flagged this as Major: (1) the manual check produces `{"detail": "string"}` 422 body instead of FastAPI's standard `{"detail": [{"loc":…}]}` error list, breaking clients that parse 422s consistently; (2) the OpenAPI schema misses `minimum`/`maximum` constraints for `limit`. The sibling `/jobs` endpoint at `routes_jobs.py:421` uses `Query(default=50, ge=1, le=200)`.
+- Action: For paginated list endpoints, always declare `limit: int = Query(default=50, ge=1, le=200)` and `cursor: str | None = Query(default=None)`. This matches the codebase pattern, produces correct OpenAPI, and gives the standard Pydantic 422 body shape.
+- Confidence: high
+
+**2026-06-27 — E0c BE-6: scenario header claims must match test content — false claim of S4 coverage caught in review**
+- Observation: The initial test file header listed "Scenarios covered: S1–S7" but had no test for S4 (deleted cursor resumes from sort position, no 4xx). The test coverage DA reviewer correctly flagged this as Critical. S4 was specified as a BE-6 integration test in the plan's allocation table.
+- Action: When writing a test file header claiming scenario coverage, cross-check each scenario ID against an actual test function before committing. For cursor pagination tests, S4 (stale/deleted cursor) is the most interesting behavioral guarantee and must not be omitted.
+- Confidence: high
+
 **2026-06-27 — E0c T-1: make_real_app docstring misdescribed db_path env-override — always cite the correct field**
 - Observation: The new `toml_content` docstring said "env overrides (db_path via ARCHON_SEARCH_DATA_DIR) apply correctly," but `db_path` is unconditionally overridden by the helper after `load_config`. Brooks-Lint rated this Moderate. The env-before-load ordering matters for `ARCHON_SEARCH_API_KEY`, not `db_path`.
 - Action: When documenting env-var ordering in test helpers, verify which fields actually survive `load_config` and which are overridden afterward. Never cite a field in an env-override comment if it is subsequently overridden unconditionally.
