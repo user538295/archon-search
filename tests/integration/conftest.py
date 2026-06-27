@@ -42,6 +42,7 @@ def make_real_app(
     rag_fusion_enabled: bool = False,
     max_fanout: int | None = None,
     top_k_max: int | None = None,
+    toml_content: str | None = None,
 ) -> Iterator[tuple[TestClient, Any, str]]:
     """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
 
@@ -56,20 +57,39 @@ def make_real_app(
     Pass ``namespaces={'key_hex': 'ns-name', ...}`` for multi-namespace tests.
     Pass ``hyde_enabled=True`` to enable HyDE in config (E0b / BE-8, T-3).
     Pass ``rag_fusion_enabled=True`` to enable RAG Fusion in config (E0b / BE-8, T-3).
+    Pass ``toml_content='[section]\\nkey = value\\n'`` to exercise the full TOML loading path
+    (write TOML → load_config(path) → create_app).  Env vars are set before load_config so
+    ARCHON_SEARCH_API_KEY is picked up by _apply_env_overrides.  Note: db_path and
+    telemetry.log_dir are always force-overridden after load_config by this helper so
+    test isolation is guaranteed regardless of what TOML specifies.
+    Cannot be combined with ``max_fanout`` / ``top_k_max`` kwargs; pass those values via
+    the TOML string instead.
     The TestClient lifespan (startup + shutdown) is managed by the context block.
     """
     import secrets
 
-    from archon_search.config import SearchConfig
+    from archon_search.config import SearchConfig, load_config
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
 
+    if toml_content is not None and (max_fanout is not None or top_k_max is not None):
+        raise ValueError(
+            "Pass toml_content OR max_fanout/top_k_max kwargs, not both. "
+            "Encode the values inside the TOML string instead."
+        )
+
     api_key = secrets.token_hex(32)
+    # Env vars must be set before load_config so _apply_env_overrides picks them up.
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", api_key)
 
-    cfg = SearchConfig()
+    if toml_content is not None:
+        toml_path = tmp_path / "archon-search.toml"
+        toml_path.write_text(toml_content, encoding="utf-8")
+        cfg = load_config(path=toml_path)
+    else:
+        cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "db")
     cfg.backup.interval_hours = 0  # disabled by default; trigger loop self-exits immediately
     # MCP is mounted only when explicitly requested; default off keeps unrelated
