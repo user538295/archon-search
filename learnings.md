@@ -257,3 +257,13 @@
 - Observation: `pytest` unused import in a test file escalates to "Major" in review because it signals a `pytest.raises` test was intended but dropped — a coverage gap signal, not just style. Adding `test_ingest_error_is_exception` (with `pytest.raises`) resolved both the import warning and the missing Exception-base coverage.
 - Action: Treat an unused `pytest` import as a missing test hint, not a style nit. Add the corresponding `pytest.raises` test immediately.
 - Confidence: high
+
+**[2026-06-27] — E0d BE-2 (Frameworks & Drivers config additions)**
+- Observation: When a new sub-config dataclass adds lines to `config.py`, the `path_home_allowlist.txt` ratchet test fails because line numbers shift. This is a forced side-effect of any config.py insertion — always update the allowlist after adding dataclasses.
+- Action: After adding any new dataclass or block to `config.py`, run `uv run pytest tests/test_no_hardcoded_path_home.py -n0 --no-cov` early to catch the line-number shift before the full suite.
+- Confidence: high
+
+**[2026-06-27] — E0d BE-2 (Frameworks & Drivers config additions)**
+- Observation: `bool` is a subclass of `int` in Python, so `isinstance(True, int)` is `True`. Any config field using `_coerce_int` silently accepts `max_file_mb = true` as `1`. The explicit `isinstance(raw, bool)` guard is the correct defense; always test this branch when adding strict-integer validation that bypasses `_coerce_int`.
+- Action: When a config field must reject TOML booleans, add `isinstance(raw, bool)` check AND a `test_*_bool_raises_config_error` test. Without the test, the guard is invisible to regressions.
+- Confidence: high
