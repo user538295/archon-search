@@ -714,7 +714,6 @@
           },
           "top_k": {
             "default": 5,
-            "maximum": 100.0,
             "minimum": 1.0,
             "title": "Top K",
             "type": "integer"
@@ -2436,7 +2435,6 @@
           },
           "top_k": {
             "default": 5,
-            "maximum": 100.0,
             "minimum": 1.0,
             "title": "Top K",
             "type": "integer"

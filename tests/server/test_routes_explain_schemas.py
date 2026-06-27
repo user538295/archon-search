@@ -64,7 +64,7 @@ def test_explain_request_rejects_empty_query(bad: str) -> None:
         ExplainRequest(query=bad)
 
 
-@pytest.mark.parametrize("bad", [0, 101, -1])
+@pytest.mark.parametrize("bad", [0, -1])
 def test_explain_request_rejects_top_k_out_of_range(bad: int) -> None:
     with pytest.raises(ValidationError):
         ExplainRequest(query="foo", top_k=bad)

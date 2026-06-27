@@ -355,6 +355,8 @@ def _make_config_with_hyde(enabled: bool = True):
     config.observability.stage_timings_enabled = False
     config.routing_shortlist_size = 5
     config.routing_confidence_threshold = 0.5
+    config.max_fanout = 8
+    config.top_k_max = 100
     return config
 
 
@@ -570,6 +572,8 @@ def _make_config_with_rag_fusion(enabled: bool = True):
     config.observability.stage_timings_enabled = False
     config.routing_shortlist_size = 5
     config.routing_confidence_threshold = 0.5
+    config.max_fanout = 8
+    config.top_k_max = 100
     return config
 
 

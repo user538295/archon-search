@@ -40,7 +40,7 @@ from archon_search.server.routes_explain import (
     RoutingCandidate,
     RoutingExplain,
 )
-from archon_search.server.routes_search import _FANOUT_VALIDATION_LIMIT, _HYDE_EXPANSION_FAILED_WARNING
+from archon_search.server.routes_search import _HYDE_EXPANSION_FAILED_WARNING
 from archon_search.store import StoreBusyError
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
@@ -302,9 +302,15 @@ def create_app(
                     )
                 if stripped not in deduped:
                     deduped.append(stripped)
-            if len(deduped) > _FANOUT_VALIDATION_LIMIT:
+            if config is not None:
+                _cfg = config
+            else:
+                from archon_search.config import SearchConfig as _SearchConfig  # noqa: PLC0415
+                _cfg = _SearchConfig()
+            _max_fanout = _cfg.max_fanout
+            if len(deduped) > _max_fanout:
                 return McpErrorResponse(
-                    error=f"collections length exceeds {_FANOUT_VALIDATION_LIMIT}",
+                    error=f"collections length exceeds maximum of {_max_fanout}",
                     code="validation_error",
                 )
             try:
@@ -642,6 +648,23 @@ def create_app(
         _explain_ns = _get_request_namespace()
         start = monotonic()
 
+        if config is not None:
+            _explain_cfg = config
+        else:
+            from archon_search.config import SearchConfig as _SearchConfig  # noqa: PLC0415
+            _explain_cfg = _SearchConfig()
+        _top_k_max = _explain_cfg.top_k_max
+        if top_k > _top_k_max:
+            return McpErrorResponse(
+                error=f"top_k {top_k} exceeds operator-configured maximum of {_top_k_max}",
+                code="validation_error",
+            )
+        if top_k < 1:
+            return McpErrorResponse(
+                error="top_k must be at least 1",
+                code="validation_error",
+            )
+
         # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
         _explain_rf_config = getattr(config, "rag_fusion", None)
         if _explain_rf_config is None:
@@ -679,9 +702,10 @@ def create_app(
                     )
                 if stripped not in deduped:
                     deduped.append(stripped)
-            if len(deduped) > _FANOUT_VALIDATION_LIMIT:
+            _explain_max_fanout = _explain_cfg.max_fanout
+            if len(deduped) > _explain_max_fanout:
                 return McpErrorResponse(
-                    error=f"collections length exceeds {_FANOUT_VALIDATION_LIMIT}",
+                    error=f"collections length exceeds maximum of {_explain_max_fanout}",
                     code="validation_error",
                 )
             if rerank is False and len(deduped) > 1:

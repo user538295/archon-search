@@ -2,6 +2,16 @@
 
 ## What Has Worked
 
+**2026-06-27 — E0c BE-2: path_home_allowlist.txt line numbers shift when dataclass lines are added — must update allowlist**
+- Observation: Adding 2 lines to the `SearchConfig` dataclass shifted `get_default_config_path()`'s `Path.home()` call from line 194 to 196. The `test_path_home_ratchet` test failed because the allowlist still had `config.py:194`. The hash was unchanged — only the line number needed updating.
+- Action: Whenever adding lines to `config.py` before `get_default_config_path()` (around line 190), update `tests/path_home_allowlist.txt` to reflect the new line number. Run `grep -n "Path.home" archon_search/config.py` to find the new line, then update the allowlist entry.
+- Confidence: high
+
+**2026-06-27 — E0c BE-2: All `[search]` config fields need both zero AND negative validation tests — not just zero**
+- Observation: DA reviewer found that every existing `[search]` field in `test_config.py` (`max_fanout`, `fanout_leg_trim`, `fanout_timeout_seconds`) has separate tests for zero and negative values. The initial BE-2 implementation only added a zero test, missing the established pattern. The plan spec listed 3 tests but the codebase convention required 5.
+- Action: When adding a new integer config field that uses `<= 0` / `> 0` validation, always add both a zero test and a negative test. Check `tests/test_config.py` for the sibling field pattern before writing tests.
+- Confidence: high
+
 **2026-06-27 — E0b T-close: All docs pre-updated during implementation tasks — T-close is a verification pass, not a documentation sprint**
 - Observation: All eleven documentation items in the "Documentation update" section of the E0b plan (600_api_reference, 110_component_catalog, UserManual/02, 05, 06, 07, BREAKING.md, CLAUDE.md, learnings.md) were fully updated during their respective implementation tasks (BE-*, FE-*, T-*). T-close found no documentation gaps requiring new edits. The OpenAPI snapshot was also already current (no diff after `--update-openapi-snapshot`). The only T-close action was the learnings.md entry itself and the plan checkbox.
 - Action: For future features, continue this pattern: each implementing task owns its documentation as part of "done". T-close is then a fact-check pass (grep for symbols, hit endpoints, read code) and a clean-up catch-all — not a bulk documentation sprint. This keeps documentation fresh and reduces T-close risk.

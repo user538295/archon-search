@@ -40,6 +40,8 @@ def make_real_app(
     namespaces: dict[str, str] | None = None,
     hyde_enabled: bool = False,
     rag_fusion_enabled: bool = False,
+    max_fanout: int | None = None,
+    top_k_max: int | None = None,
 ) -> Iterator[tuple[TestClient, Any, str]]:
     """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
 
@@ -96,6 +98,12 @@ def make_real_app(
 
     if rag_fusion_enabled:
         cfg.rag_fusion.enabled = True
+
+    if max_fanout is not None:
+        cfg.max_fanout = max_fanout
+
+    if top_k_max is not None:
+        cfg.top_k_max = top_k_max
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     scheduler = JobScheduler(

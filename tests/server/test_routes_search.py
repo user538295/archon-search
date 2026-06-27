@@ -764,7 +764,6 @@ from archon_search.pipeline import (
     MetadataLookupError,
 )
 from archon_search.server.routes_search import (
-    _FANOUT_VALIDATION_LIMIT,
     SearchRequest,
 )
 from archon_search.server.schemas import ExcludedCollectionSchema  # noqa: F401
@@ -788,9 +787,10 @@ def test_search_request_empty_collections_is_422() -> None:
         SearchRequest(collections=[], query="q")
 
 
-def test_search_request_over_max_fanout_is_422() -> None:
-    with pytest.raises(ValidationError):
-        SearchRequest(collections=[f"c{i}" for i in range(9)], query="q")
+def test_search_request_over_max_fanout_parses_ok() -> None:
+    # Fanout check moved to route handler (reads config.max_fanout); Pydantic no longer rejects.
+    req = SearchRequest(collections=[f"c{i}" for i in range(9)], query="q")
+    assert len(req.collections) == 9
 
 
 def test_search_request_whitespace_entry_is_422() -> None:
@@ -828,10 +828,6 @@ def test_search_request_single_item_collections_is_valid() -> None:
 def test_search_request_collections_with_filters_is_422() -> None:
     with pytest.raises(ValidationError, match="filters"):
         SearchRequest(collections=["x"], query="q", filters=SearchFilters(file_type="md"))
-
-
-def test_fanout_validation_limit_matches_config_default() -> None:
-    assert _FANOUT_VALIDATION_LIMIT == SearchConfig().max_fanout
 
 
 # --- handler integration tests ---------------------------------------------

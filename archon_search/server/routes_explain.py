@@ -33,7 +33,6 @@ from archon_search.pipeline import (
     MetadataLookupError,
 )
 from archon_search.router import MultiCollectionRouter
-from archon_search.server.routes_search import _FANOUT_VALIDATION_LIMIT
 from archon_search.server.schemas import ExcludedCollectionSchema
 from archon_search.telemetry.entry import TelemetryEntry
 
@@ -183,7 +182,7 @@ class ExplainRequest(BaseModel):
     query: str
     collection: str | None = None
     collections: list[str] | None = None
-    top_k: int = Field(default=5, ge=1, le=100)
+    top_k: int = Field(default=5, ge=1)
     rerank: bool = True
     hyde: bool = False
     rag_fusion: bool = False
@@ -220,10 +219,6 @@ class ExplainRequest(BaseModel):
                 raise ValueError("collection names must not be empty or whitespace")
             if stripped not in deduped:
                 deduped.append(stripped)
-        if len(deduped) > _FANOUT_VALIDATION_LIMIT:
-            raise ValueError(
-                f"collections length exceeds maximum of {_FANOUT_VALIDATION_LIMIT}"
-            )
         return deduped
 
     @model_validator(mode="after")
@@ -363,6 +358,18 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             )
         except Exception as tel_exc:
             logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+
+    # Config-wired fanout and top_k validation (moved from Pydantic layer).
+    if body.collections is not None and len(body.collections) > config.max_fanout:
+        return JSONResponse(
+            {"detail": f"collections length exceeds maximum of {config.max_fanout}"},
+            status_code=422,
+        )
+    if body.top_k > config.top_k_max:
+        return JSONResponse(
+            {"detail": f"top_k {body.top_k} exceeds operator-configured maximum of {config.top_k_max}"},
+            status_code=422,
+        )
 
     routing: RoutingExplain | None = None
     rag_fusion_gen = getattr(request.app.state, "rag_fusion_generator", None)

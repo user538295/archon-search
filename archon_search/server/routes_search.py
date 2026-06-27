@@ -29,8 +29,6 @@ _SEARCH_TIMEOUT_SECONDS = 30.0
 
 _HYDE_EXPANSION_FAILED_WARNING = "HyDE expansion failed"
 
-_FANOUT_VALIDATION_LIMIT = 8  # Pydantic-layer cap; must match SearchConfig.max_fanout default. See B3 known limitations.
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -40,7 +38,7 @@ class SearchRequest(BaseModel):
     collection: str | None = None
     collections: list[str] | None = None
     query: str
-    top_k: int = Field(default=5, ge=1, le=100)
+    top_k: int = Field(default=5, ge=1)
     filters: SearchFilters | None = None
     hyde: bool = False
     rag_fusion: bool = False
@@ -83,10 +81,6 @@ class SearchRequest(BaseModel):
                 if s not in deduped:
                     deduped.append(s)
             self.collections = deduped
-            if len(self.collections) > _FANOUT_VALIDATION_LIMIT:
-                raise ValueError(
-                    f"collections length exceeds maximum of {_FANOUT_VALIDATION_LIMIT}"
-                )
             if self.filters is not None:
                 raise ValueError("filters are not supported for multi-collection search in v1")
         return self
@@ -147,6 +141,18 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     config = request.app.state.config
     start = monotonic()
     timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
+
+    # Config-wired fanout and top_k validation (moved from Pydantic layer).
+    if body.collections is not None and len(body.collections) > config.max_fanout:
+        return JSONResponse(
+            {"detail": f"collections length exceeds maximum of {config.max_fanout}"},
+            status_code=422,
+        )
+    if body.top_k > config.top_k_max:
+        return JSONResponse(
+            {"detail": f"top_k {body.top_k} exceeds operator-configured maximum of {config.top_k_max}"},
+            status_code=422,
+        )
 
     # Resolve HyDE vector and RAG Fusion generator — mutual exclusion: rag_fusion wins
     rag_fusion_gen = getattr(request.app.state, "rag_fusion_generator", None)

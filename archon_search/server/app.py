@@ -206,16 +206,6 @@ def create_app(
         app.state._background_tasks.add(validation_task)
         validation_task.add_done_callback(app.state._background_tasks.discard)
 
-        # Startup: warn if the multi-collection fan-out validation cap is out of
-        # sync with the configured max_fanout.
-        from archon_search.server.routes_search import _FANOUT_VALIDATION_LIMIT
-        if config.max_fanout != _FANOUT_VALIDATION_LIMIT:
-            logger.warning(
-                "max_fanout config (%d) differs from _FANOUT_VALIDATION_LIMIT constant (%d) in routes_search.py; "
-                "update the constant or requests with >%d collections will be rejected",
-                config.max_fanout, _FANOUT_VALIDATION_LIMIT, _FANOUT_VALIDATION_LIMIT,
-            )
-
         # Startup: install the real export/import dispatch closure on the
         # scheduler and start it. The placeholder dispatch passed to
         # ``JobScheduler(...)`` in ``run_server()`` is replaced here, once

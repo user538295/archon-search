@@ -353,7 +353,7 @@ flowchart LR
         - #unit_test — `test_top_k_max_loaded_from_toml` — TOML `top_k_max = 200` → `config.top_k_max == 200`
         - #unit_test — `test_top_k_max_zero_raises_config_error` — `top_k_max = 0` raises `ConfigError`
 
-- [ ] **BE-3** — Remove `_FANOUT_VALIDATION_LIMIT` from `routes_search.py` + `mcp.py` + `app.py` + `routes_explain.py:36,223`; move fanout + top_k checks into route handler bodies; apply same top_k fix to `routes_explain.py:186`; wire `config.max_fanout` / `config.top_k_max` #backend-role
+- [x] **BE-3** — Remove `_FANOUT_VALIDATION_LIMIT` from `routes_search.py` + `mcp.py` + `app.py` + `routes_explain.py:36,223`; move fanout + top_k checks into route handler bodies; apply same top_k fix to `routes_explain.py:186`; wire `config.max_fanout` / `config.top_k_max` #backend-role
     - Interface Adapters (`routes_search.py:32,43,86`, `routes_explain.py:186`, `mcp.py:43,305,682`, `app.py:209-217`) · 3.5h
     - needs BE-2 · completes S8, S9, S11, S12, S14, C3
     - Tests

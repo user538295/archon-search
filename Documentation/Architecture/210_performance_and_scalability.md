@@ -115,7 +115,7 @@ Config knobs (all under `[search]` in `archon-search.toml`; parsed and validated
 
 | Knob | Type | Default | Effect |
 |---|---|---|---|
-| `max_fanout` | `int` | `8` | Maximum collections per fan-out request. Also enforced at the Pydantic/MCP validation layer via the `_FANOUT_VALIDATION_LIMIT = 8` constant in `routes_search.py`; raising `max_fanout` above 8 in config alone has no effect until that constant is also updated. |
+| `max_fanout` | `int` | `8` | Maximum collections per fan-out request. Enforced at request time in the route handler body and MCP tool body by reading `config.max_fanout` directly; raising `max_fanout` in TOML takes effect immediately with no code change required. |
 | `fanout_leg_trim` | `int` | `40` | Per-leg candidate cap fed into the merge + rerank pool — the hard recall ceiling above. |
 | `fanout_timeout_seconds` | `float` | `30.0` | Whole-fan-out wall-clock budget (`asyncio.timeout`). Exceeding it → HTTP 504. |
 
