@@ -24,7 +24,7 @@ def _get_env_lock() -> asyncio.Lock:
     return _ENV_LOCK
 
 _TIMEOUT_SECONDS = 30
-_MAX_SAMPLE_CHUNKS = 20
+MAX_SAMPLE_CHUNKS = 100
 
 _DESCRIPTION_PROMPT = """\
 You are generating a concise description for a document collection named "{name}".
@@ -59,7 +59,7 @@ def _should_regenerate(
 
 
 async def generate_description(chunks: list[str], collection_name: str) -> str | None:
-    """Sample up to 20 chunks, call Haiku via ClaudeSDKClient, return 2-3 sentence description.
+    """Use up to 100 chunks (shuffled by the store layer), call Haiku via ClaudeSDKClient, return 2-3 sentence description.
 
     Session lifecycle: creates a new ClaudeSDKClient with DEFAULT_FAST_MODEL (Haiku),
     permission_mode="bypassPermissions".  Sends a single query, reads response, disconnects.
@@ -77,7 +77,7 @@ async def generate_description(chunks: list[str], collection_name: str) -> str |
         logger.debug("ANTHROPIC_API_KEY not set; skipping description generation for %r", collection_name)
         return None
 
-    sample = random.sample(chunks, min(_MAX_SAMPLE_CHUNKS, len(chunks)))
+    sample = random.sample(chunks, min(MAX_SAMPLE_CHUNKS, len(chunks)))
     prompt = _DESCRIPTION_PROMPT.format(
         name=collection_name,
         samples="\n\n---\n\n".join(sample),

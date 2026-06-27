@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import math
+import random
 import re
 import time
 from collections.abc import AsyncIterator, Iterable
@@ -1613,7 +1614,7 @@ class SearchStore:
         namespace: str = DEFAULT_NAMESPACE,
         n: int = 100,
     ) -> list[str]:
-        """Return up to *n* chunk text strings from *collection*.
+        """Return up to *n* chunk text strings from *collection*, in shuffled order.
 
         Returns ``[]`` if the collection table does not exist or any error
         occurs.  Namespace is accepted for API symmetry but not filtered on —
@@ -1623,7 +1624,12 @@ class SearchStore:
             db = self._require_connected()
             table = await db.open_table(collection)
             rows = await table.query().select(["text"]).limit(n).to_list()
-            return [row["text"] for row in rows]
+            texts = [row["text"] for row in rows]
+            # LanceDB returns rows in insertion order; shuffle the fetched rows so
+            # the caller receives them in a non-deterministic order within the
+            # fetched window (selection is still insertion-order bounded by limit(n)).
+            random.shuffle(texts)
+            return texts
         except Exception as e:
             logger.debug("sample_chunk_texts failed for %r: %s", collection, e, exc_info=True)
             return []

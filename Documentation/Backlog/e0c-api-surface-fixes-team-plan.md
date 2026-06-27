@@ -332,7 +332,7 @@ flowchart LR
 
 ### Slice 1 · Fix description sampling *(walking skeleton: thinnest, self-contained, store-only fix)*
 
-- [ ] **BE-1** — Fix `store.sample_chunk_texts` to shuffle in-process; raise `_MAX_SAMPLE_CHUNKS` 20→100 in `description_generator.py` #backend-role
+- [x] **BE-1** — Fix `store.sample_chunk_texts` to shuffle in-process; raise `_MAX_SAMPLE_CHUNKS` 20→100 in `description_generator.py` #backend-role
     - Frameworks & Drivers (`store.py:1625`) + Use Cases (`description_generator.py:27`) · 2.0h
     - needs K1 · completes S15, S16
     - Tests

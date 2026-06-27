@@ -329,3 +329,6 @@ def test_e2e_maintenance_wait_exits_2_on_failed_pass(
         f"got {result.exit_code}. "
         f"Output:\n{result.output}\nStderr:\n{result.stderr}"
     )
+    assert "Maintenance pass completed with errors." in result.stderr, (
+        f"Expected has_errors stderr message not found.\nStderr:\n{result.stderr}"
+    )

@@ -19,7 +19,7 @@ from archon_search.observability import record_stage
 from archon_search.filters import SearchFilters
 from archon_search.constants import DEFAULT_NAMESPACE, _INGEST_CHUNK_BATCH_SIZE
 from archon_search.collection_meta import CollectionMeta
-from archon_search.description_generator import _should_regenerate, generate_description
+from archon_search.description_generator import MAX_SAMPLE_CHUNKS, _should_regenerate, generate_description
 from archon_search.chunker import DocumentChunker
 from archon_search.embedder import Embedder, EmbedderBackend, ModelEmbedder
 from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher
@@ -550,7 +550,7 @@ class SearchPipeline:
             batch_chunk_count = existing_meta.chunk_count if existing_meta else 0
 
             if force_regenerate_description or _should_regenerate(batch_doc_count, batch_chunk_count, described_at):
-                sample_texts = await self.store.sample_chunk_texts(collection, namespace, n=100)
+                sample_texts = await self.store.sample_chunk_texts(collection, namespace, n=MAX_SAMPLE_CHUNKS)
                 new_desc = await generate_description(sample_texts, collection)
                 if new_desc is not None:
                     description = new_desc
