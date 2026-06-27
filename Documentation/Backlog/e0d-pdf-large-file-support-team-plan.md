@@ -331,7 +331,7 @@ flowchart LR
 
 ### Slice 1 · Ingest subject to the configurable size guard *(walking skeleton: new types + guard + REST 413)*
 
-- [ ] **BE-1** — Add `IngestError` and `_file_exceeds_limit` helper to `_types.py`; add `code` field to `IngestResult` #backend-role
+- [x] **BE-1** — Add `IngestError` and `_file_exceeds_limit` helper to `_types.py`; add `code` field to `IngestResult` #backend-role
     - Entities · 2.0h
     - needs K1 · completes C1
     - `IngestError` lives in `_types.py` (note: `ParseError` lives in `parser.py`; `IngestError` is intentionally placed in `_types.py` at the Entities layer, not alongside `ParseError`). `_file_exceeds_limit(path: Path, max_file_mb: int) -> bool` is the shared size-check helper called by both the route pre-check and `ingest_file()`.

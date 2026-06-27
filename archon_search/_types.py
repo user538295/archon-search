@@ -1,5 +1,7 @@
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 from archon_search.constants import DEFAULT_NAMESPACE
@@ -139,3 +141,37 @@ class IngestResult:
     error: str | None = None
     needs_recompute: bool = False
     warnings: list[str] = field(default_factory=list)
+    code: Literal["file_too_large"] | None = None
+
+
+class IngestError(Exception):
+    """Raised (or used to construct messages) when an ingest pre-check rejects a file.
+
+    Currently the only code is ``"file_too_large"``.  ``pipeline.ingest_file()``
+    instantiates this to produce the human-readable message and returns an error
+    ``IngestResult`` directly — it does *not* raise ``IngestError``.
+    """
+
+    code: Literal["file_too_large"] = "file_too_large"
+
+    def __init__(self, *, file_size_mb: int, limit_mb: int) -> None:
+        self.message = (
+            f"File size {file_size_mb} MB exceeds the configured limit of {limit_mb} MB "
+            f"(`[ingest].max_file_mb`). Raise the limit in `archon-search.toml` or split the file."
+        )
+        super().__init__(self.message)
+
+
+def _file_exceeds_limit(path: Path, max_file_mb: int) -> bool:
+    """Return True if *path* is strictly larger than *max_file_mb* megabytes.
+
+    ``max_file_mb == 0`` means no limit — always returns False.
+    Follows symlinks (``os.path.getsize`` dereferences symlinks by design).
+    Boundary: strictly greater-than (``size > limit``), so a file exactly at
+    the limit is accepted.
+    """
+    if max_file_mb <= 0:
+        return False
+    size_bytes = os.path.getsize(path)
+    limit_bytes = max_file_mb * 1024 * 1024
+    return size_bytes > limit_bytes
