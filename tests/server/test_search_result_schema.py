@@ -11,6 +11,7 @@ import json
 import pytest
 
 from archon_search._types import SearchResult
+from archon_search.filters import SearchFilters
 from archon_search.server.routes_search import SearchResponse, SearchResultSchema
 
 
@@ -72,6 +73,30 @@ def test_search_result_schema_includes_metadata() -> None:
     )
     schema = SearchResultSchema.from_result(r)
     assert schema.metadata == {"k": "v"}
+
+
+def test_search_response_applied_filters_null_by_default() -> None:
+    """SearchResponse with no applied_filters serialises applied_filters as null."""
+    resp = SearchResponse(results=[], acl_filtered=False)
+    assert resp.applied_filters is None
+    payload = json.loads(resp.model_dump_json())
+    assert payload["applied_filters"] is None
+
+
+def test_search_response_applied_filters_echoes_filters() -> None:
+    """SearchResponse with applied_filters=SearchFilters round-trips cleanly."""
+    filters = SearchFilters(file_type="md")
+    resp = SearchResponse(results=[], acl_filtered=False, applied_filters=filters)
+    assert resp.applied_filters is not None
+    assert resp.applied_filters.file_type == "md"
+    payload = json.loads(resp.model_dump_json())
+    assert payload["applied_filters"] is not None
+    assert payload["applied_filters"]["file_type"] == "md"
+
+
+def test_search_filters_language_description_no_longer_says_single_collection() -> None:
+    """The language field description must not mention 'single-collection'."""
+    assert "single-collection" not in SearchFilters.model_fields["language"].description
 
 
 def test_search_result_schema_serializes_new_fields_to_json() -> None:

@@ -35,6 +35,7 @@ def test_search_response_schema_fields() -> None:
         "rag_fusion_attempted": False,
         "expansion_used": False,
         "expansion_warning": None,
+        "applied_filters": None,
     }
 
 

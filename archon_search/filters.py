@@ -27,7 +27,7 @@ class SearchFilters(BaseModel):
         default=None,
         description=(
             "ISO 639-1 / ISO 639-3 language code to filter by "
-            "(single-collection queries only; 'unknown' is a valid value)."
+            "('unknown' is a valid value)."
         ),
     )
     include_metadata: bool = False

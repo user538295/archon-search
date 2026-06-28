@@ -2416,7 +2416,7 @@
                 "type": "null"
               }
             ],
-            "description": "ISO 639-1 / ISO 639-3 language code to filter by (single-collection queries only; 'unknown' is a valid value).",
+            "description": "ISO 639-1 / ISO 639-3 language code to filter by ('unknown' is a valid value).",
             "title": "Language"
           },
           "source_path_glob": {
@@ -2514,6 +2514,16 @@
           "acl_filtered": {
             "title": "Acl Filtered",
             "type": "boolean"
+          },
+          "applied_filters": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchFilters"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "embedding_model": {
             "default": "",

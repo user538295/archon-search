@@ -131,6 +131,7 @@ class SearchResponse(BaseModel):
     rag_fusion_attempted: bool = False
     expansion_used: bool = False
     expansion_warning: str | None = None
+    applied_filters: SearchFilters | None = None
 
 
 @router.post("/search", response_model=SearchResponse)

@@ -315,7 +315,7 @@ flowchart LR
 
 ### Phase 1 · Filter multi-collection REST search *(walking skeleton: thinnest end-to-end path)*
 
-- [ ] **BE-1** — Add `applied_filters` to `SearchResponse` (Presentation schema only); update `SearchFilters.language` doc #backend-role
+- [x] **BE-1** — Add `applied_filters` to `SearchResponse` (Presentation schema only); update `SearchFilters.language` doc #backend-role
     - Entities · 1.0h
     - needs K1 · completes C1
     - Note: `SearchPipelineResult` does NOT get `applied_filters` — the Presentation layer constructs it from the incoming request (Option B, see "Known limitations").
