@@ -96,6 +96,16 @@ class IngestConfig:
     max_file_mb: int = 0
 
 
+_GRAPH_BACKEND_THRESHOLD_EDGES_DEFAULT: int = 10_000
+
+
+@dataclass
+class GraphConfig:
+    enabled: bool = False
+    extraction_model: str | None = None
+    backend_threshold_edges: int = _GRAPH_BACKEND_THRESHOLD_EDGES_DEFAULT
+
+
 @dataclass
 class SearchConfig:
     # [server]
@@ -165,6 +175,8 @@ class SearchConfig:
     mcp: McpConfig = field(default_factory=McpConfig)
     # [ingest]
     ingest: IngestConfig = field(default_factory=IngestConfig)
+    # [graph]
+    graph: GraphConfig = field(default_factory=GraphConfig)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -639,6 +651,31 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             )
         ingest.max_file_mb = raw
     config.ingest = ingest
+
+    graph_cfg = doc.get("graph", {})
+    graph = GraphConfig()
+    if "enabled" in graph_cfg:
+        graph.enabled = _coerce_bool(graph_cfg["enabled"], "[graph].enabled")
+    if "extraction_model" in graph_cfg:
+        extraction_model = _coerce_str(graph_cfg["extraction_model"], "[graph].extraction_model")
+        if not extraction_model:
+            raise ConfigError("[graph].extraction_model must be a non-empty string when set")
+        graph.extraction_model = extraction_model
+    if "backend_threshold_edges" in graph_cfg:
+        raw_threshold = graph_cfg["backend_threshold_edges"]
+        # Reject booleans and non-integers explicitly: bool is a subclass of int in Python,
+        # so isinstance alone is not enough. _coerce_int would silently truncate floats
+        # (10000.5 → 10000), so we guard with isinstance first (same pattern as max_file_mb).
+        if not isinstance(raw_threshold, int) or isinstance(raw_threshold, bool):
+            raise ConfigError(
+                f"Expected integer for '[graph].backend_threshold_edges', got {type(raw_threshold).__name__}"
+            )
+        if raw_threshold < 1:
+            raise ConfigError(
+                f"[graph].backend_threshold_edges must be >= 1, got {raw_threshold}"
+            )
+        graph.backend_threshold_edges = raw_threshold
+    config.graph = graph
 
 
 def _post_process_maintenance(config: SearchConfig) -> None:

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig, load_config
+from archon_search.config import GraphConfig, HyDEConfig, RAGFusionConfig, SearchConfig, load_config
 from archon_search.constants import DEFAULT_FAST_MODEL, DEFAULT_ROUTING_DESCRIPTION_WEIGHT
 from archon_search.paths import get_data_dir
 
@@ -198,6 +198,12 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         # [ingest]
         "ingest": {
             "max_file_mb": 0,
+        },
+        # [graph]
+        "graph": {
+            "enabled": False,
+            "extraction_model": None,
+            "backend_threshold_edges": 10_000,
         },
     }
 

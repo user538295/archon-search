@@ -297,6 +297,52 @@ num_queries = 2
 # exclude = []
 # exclude = ["scratch", "tenants/staging"]
 
+[graph]
+# GraphRAG entity extraction and naive query expansion (E1a).
+# Disabled by default. Requires the optional graph extras:
+#   uv pip install 'archon-search[graph]'
+# or:
+#   pip install 'archon-search[graph]'
+#
+# NOTE (E1a/BE-1): The [graph] section is parsed at startup but the extraction
+# runtime (GraphExtractor, GraphStore, pipeline hooks) ships in later BE tasks.
+# Setting enabled = true before those tasks are deployed is a safe no-op:
+# the flag is read, but no extraction occurs and no error is raised.
+#
+# When the full E1a slice is deployed: enabling and re-ingesting causes each
+# ingested document's chunks to be entity-extracted into
+# per-collection _archon_graph_{col}_nodes / _archon_graph_{col}_edges LanceDB tables.
+# Adding graph_mode=naive to POST /search or the MCP search tool expands queries
+# with first-degree graph-neighbour entity names before the normal hybrid search pipeline runs.
+#
+# IMPORTANT: enabling graph and then re-ingesting is required to populate graph tables.
+# Existing chunks already stored before enabling graph will NOT be auto-extracted.
+# Set enabled = true, then re-ingest all collections whose graph you want built.
+#
+# MULTI-NAMESPACE WARNING: graph table names are _archon_graph_{collection}_nodes —
+# they do NOT include the namespace. Two collections with the same name in different
+# namespaces share graph tables. Operators running multi-namespace deployments must NOT
+# enable graph until E1b, which adds namespace-scoped table names.
+#
+# enabled = false
+
+# Optional: Claude model used for LLM-based typed relationship extraction.
+# When set, each ingest call attempts a typed extraction pass (USES, IMPLEMENTS, etc.)
+# before falling back to spaCy co-occurrence edges on failure.
+# NOTE: LLM extraction is a config-guarded stub in E1a — setting this key logs a WARNING
+# and proceeds with spaCy-only extraction. Full LLM extraction is deferred to E1b.
+# Requires ANTHROPIC_API_KEY in the server environment.
+# extraction_model = "claude-haiku-4-5-20251001"
+
+# Rough empirical edge-count threshold (integer, default 10,000) above which NetworkX
+# in-memory graph traversal (full LanceDB scan per expansion call) becomes latency-noticeable
+# (~100–500ms). When the edge count of a collection crosses this value during ingest,
+# archon-search logs a WARNING and adds a migration hint to IngestResult.warnings.
+# No automatic migration is performed in E1a; Kuzu backend migration is deferred to E1b.
+# Adjust down if GET /status latency matters more than simplicity. Adjust up for large
+# corpora where the latency is acceptable.
+# backend_threshold_edges = 10000
+
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #
