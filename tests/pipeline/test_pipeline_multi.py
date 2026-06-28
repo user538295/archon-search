@@ -70,7 +70,7 @@ def _search_many_pipeline(
     store = MagicMock()
     leg_map = leg_map or {}
 
-    async def _hybrid(collection, vector, query_text, candidate_depth):
+    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None):
         return list(leg_map.get(collection, []))
 
     store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid)
@@ -215,7 +215,7 @@ async def test_search_many_model_mismatch_excludes_and_reports() -> None:
 async def test_search_many_leg_failure_cancels_siblings_and_raises() -> None:
     cancelled = asyncio.Event()
 
-    async def _hybrid(collection, vector, query_text, candidate_depth):
+    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None):
         if collection == "A":
             raise RuntimeError("leg failed")
         try:
@@ -255,7 +255,7 @@ async def test_search_many_timeout_raises_fanout_timeout_error() -> None:
 
     from archon_search.pipeline import FanoutTimeoutError
 
-    async def _hybrid(collection, vector, query_text, candidate_depth):
+    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None):
         await asyncio.sleep(999)
         return []
 
@@ -466,7 +466,7 @@ async def test_explain_multi_collection_no_embedding_model_attribute_error() -> 
         meta_list=[_meta(c) for c in cols],
     )
 
-    async def _hybrid_explain(collection, vector, query_text, candidate_depth):
+    async def _hybrid_explain(collection, vector, query_text, candidate_depth, filters=None):
         return list(leg_map.get(collection, []))
 
     store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid_explain)

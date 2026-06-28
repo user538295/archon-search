@@ -30,6 +30,7 @@ from archon_search.enricher import MarkdownEnricher, is_docling_source, source_s
 from archon_search.parser import DocumentParser, ParseError
 from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
 from archon_search.store import SearchStore, StoreBusyError, elementwise_sum
+from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
 
 if TYPE_CHECKING:
     from archon_search.config import RAGFusionConfig, SearchConfig
@@ -1100,6 +1101,7 @@ class SearchPipeline:
         rag_fusion: bool = False,
         rag_fusion_generator: "RAGFusionGenerator | None" = None,
         rag_fusion_config: "RAGFusionConfig | None" = None,
+        filters: SearchFilters | None = None,
     ) -> SearchPipelineResult:
         """Embed the query once, fan out hybrid retrieval across ``collections`` in
         parallel, merge with provenance, run a single global rerank pass, and return a
@@ -1142,6 +1144,8 @@ class SearchPipeline:
             from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
 
             candidate_depth = max(self._top_k_retrieve * 3, 20)
+            if filters and filters.source_path_glob:
+                candidate_depth = max(candidate_depth * GLOB_OVERFETCH_FACTOR, 60)
 
             # Step A: Generate variants once (single LLM call, not per-collection).
             _rag_fusion_warning: str | None = None
@@ -1181,7 +1185,7 @@ class SearchPipeline:
                 # Explicit fallback: run standard fan-out with rag_fusion_attempted preserved.
                 std_vector = await self._global_embedder.embed_one(query)
                 std_merged, std_acl_filtered, std_leg_times = await self._fanout_merge_acl(
-                    query, std_vector, collections_in_scope, namespace, candidate_depth
+                    query, std_vector, collections_in_scope, namespace, candidate_depth, filters=filters
                 )
                 if self._reranker is not None:
                     t0 = monotonic()
@@ -1216,7 +1220,7 @@ class SearchPipeline:
                     coll_raw = await asyncio.gather(
                         *[
                             self.store.hybrid_search_with_trace(
-                                coll, v, query, candidate_depth=candidate_depth
+                                coll, v, query, candidate_depth=candidate_depth, filters=filters
                             )
                             for v in all_vectors
                         ],
@@ -1235,9 +1239,14 @@ class SearchPipeline:
                 else:
                     # FTS-only collection: single search with original query only.
                     fts_result = await self.store.hybrid_search_with_trace(
-                        coll, all_vectors[0], query, candidate_depth=candidate_depth
+                        coll, all_vectors[0], query, candidate_depth=candidate_depth, filters=filters
                     )
                     fused_coll = list(fts_result)
+
+                # Apply source_path_glob post-filter per-collection before trim.
+                if filters and filters.source_path_glob:
+                    _glob = filters.source_path_glob
+                    fused_coll = [c for c in fused_coll if fnmatch.fnmatchcase(c.source_path, _glob)]
 
                 fused_sorted = sorted(
                     fused_coll, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
@@ -1286,8 +1295,10 @@ class SearchPipeline:
 
         # Step 3: fan-out + per-leg trim + merge + ACL.
         candidate_depth = max(self._top_k_retrieve * 3, 20)
+        if filters and filters.source_path_glob:
+            candidate_depth = max(candidate_depth * GLOB_OVERFETCH_FACTOR, 60)
         merged, acl_filtered, leg_times = await self._fanout_merge_acl(
-            query, vector, collections_in_scope, namespace, candidate_depth
+            query, vector, collections_in_scope, namespace, candidate_depth, filters=filters
         )
 
         # Step 7: single global rerank pass.
@@ -1318,11 +1329,12 @@ class SearchPipeline:
         collections_in_scope: list[str],
         namespace: str,
         candidate_depth: int,
+        filters: SearchFilters | None = None,
     ) -> tuple[list[ScoredSearchCandidate], bool, dict[str, float]]:
         async def _leg(coll: str):  # type: ignore[no-untyped-def]
             t0 = monotonic()
             cands = await self.store.hybrid_search_with_trace(
-                coll, vector, query, candidate_depth=candidate_depth
+                coll, vector, query, candidate_depth=candidate_depth, filters=filters
             )
             return coll, cands, (monotonic() - t0) * 1000.0
 
@@ -1348,6 +1360,10 @@ class SearchPipeline:
         trimmed: dict[str, list[ScoredSearchCandidate]] = {}
         leg_times: dict[str, float] = {}
         for coll, cands, leg_ms in leg_results:
+            # Apply source_path_glob post-filter per-leg before trim.
+            if filters and filters.source_path_glob:
+                _glob = filters.source_path_glob
+                cands = [c for c in cands if fnmatch.fnmatchcase(c.source_path, _glob)]
             cands_sorted = sorted(
                 cands, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
             )

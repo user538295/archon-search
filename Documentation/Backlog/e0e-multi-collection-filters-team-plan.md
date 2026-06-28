@@ -323,7 +323,7 @@ flowchart LR
         - #unit_test — `test_search_response_applied_filters_null_by_default` — `SearchResponse` with no `applied_filters` serialises as null
         - #unit_test — `test_search_response_applied_filters_echoes_filters` — `SearchResponse` with `applied_filters=SearchFilters(file_type="md")` round-trips cleanly
 
-- [ ] **BE-2** — Add `filters` param to `search_many()` and thread through ALL call sites; add glob post-filter per-leg #backend-role
+- [x] **BE-2** — Add `filters` param to `search_many()` and thread through ALL call sites; add glob post-filter per-leg #backend-role
     - Use Cases · 3.0h
     - needs K1 · completes C2
     - **All 4 `hybrid_search_with_trace()` call sites in `search_many()` must receive `filters=`:**

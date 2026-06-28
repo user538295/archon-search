@@ -507,7 +507,7 @@ def _explain_multi_pipeline(
     store = MagicMock()
     leg_map = leg_map or {}
 
-    async def _hybrid(collection, vector, query_text, candidate_depth):
+    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None):
         return list(leg_map.get(collection, []))
 
     store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid)
