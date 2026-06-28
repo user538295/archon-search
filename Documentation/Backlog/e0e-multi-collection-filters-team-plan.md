@@ -361,7 +361,7 @@ flowchart LR
         - #integration_test — `test_post_search_applied_filters_datetime_serialization` — send `filters: {indexed_after: "2024-01-15"}`, assert the exact JSON shape of `applied_filters.indexed_after` in the response body
         - #unit_test — `test_post_search_single_collection_with_filter_applied_filters_echoed` — single-collection search with `filters={language: "en"}` returns `applied_filters.language = "en"` in response (not null)
 
-- [ ] **T-1** — Integration e2e: REST filter + multi-collection search via TestClient #tester-role
+- [x] **T-1** — Integration e2e: REST filter + multi-collection search via TestClient #tester-role
     - — · 2.0h
     - needs BE-3 · completes S1, S2, S4, S5, S6, S10, S11
     - Tests
