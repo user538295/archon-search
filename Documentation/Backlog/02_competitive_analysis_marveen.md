@@ -429,7 +429,7 @@ Server tests live under `tests/server/` and `tests/test_app.py` (no monolithic `
 
 **Weaknesses:**
 - Single-server architecture limits horizontal scaling
-- No streaming ingest — entire directory still loaded before processing begins
+- No streaming ingest — entire directory still loaded before processing begins (per-file streaming chunking shipped in D4; directory-level batch loading still processes full file list before per-file dispatch — intra-file is streaming, inter-file batch is not)
 
 **Score: 8/10**
 
@@ -521,13 +521,13 @@ Server tests live under `tests/server/` and `tests/test_app.py` (no monolithic `
 | Test Coverage & Code Quality | **9** | 3 |
 | Performance / Scalability | **8** | 3 |
 | Unique Features / Innovations | **9** | 9 |
-| **Total** | **88/100** | **46/100** |
+| **Total** | **87/100** | **46/100** |
 
 ---
 
 ## Verdict
 
-**Archon's search subsystem is a production-grade RAG system. Marveen's is a lightweight memory store.** The score gap (88 vs 46) reflects that difference — it is not a fair head-to-head fight on document search.
+**Archon's search subsystem is a production-grade RAG system. Marveen's is a lightweight memory store.** The score gap (87 vs 46) reflects that difference — it is not a fair head-to-head fight on document search.
 
 ---
 
