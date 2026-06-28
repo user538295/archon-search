@@ -19,6 +19,31 @@
 
 ## What Has Worked
 
+**[2026-06-28] — E0e T-2: language filter e2e is a smoke test — document it clearly in the docstring**
+- Observation: The S8 language filter e2e test cannot distinguish "filter applied, no matches" from "filter silently ignored" because the language detector stub assigns `language=""` to all chunks. DA agents flagged this as Critical/Major. The correct resolution is to document the limitation in a NOTE block in the docstring and cross-reference the BE-4 unit test that proves filter forwarding — not to add stub machinery.
+- Action: When a tester-role e2e test for a language filter has empty expected results due to a stub, always add a `NOTE:` paragraph explicitly calling it a smoke test and pointing to the unit test that covers filter-forwarding behavior. This is the established T-1 REST pattern.
+- Confidence: high
+
+**[2026-06-28] — E0e T-2: multi-collection filter e2e must assert results span BOTH collections**
+- Observation: S9 (file_type filter) initially only checked that all results had `file_type=="py"` but never verified results came from both collections. The DA review flagged this as Major. It is cheap to fix: `{r.get("collection") for r in results}` + two membership assertions.
+- Action: Any multi-collection filter test that asserts on result properties MUST also assert that results span all expected legs. One-sided fan-out (only one collection contributing) is indistinguishable without the `collection` field check.
+- Confidence: high
+
+**[2026-06-28] — E0e T-2: string multiplication `"text\n" * N` only repeats the last literal in implicit concatenation**
+- Observation: `"line1\n" "line2\n" "line3\n" * 4` repeats only `"line3\n"` four times. This creates a truncated fixture that can produce wrong results if content volume matters. The fix is `("line1\n" "line2\n" "line3\n") * 4` (wrap in parentheses before `* N`).
+- Action: Whenever using `* N` on a multi-line implicit string concatenation, always wrap the entire block in `()` first. Apply this check to all fixtures in a new test file before the first review cycle.
+- Confidence: high
+
+**[2026-06-28] — E0e BE-5: vacuous glob test — always assert non-empty before a for loop over results**
+- Observation: The glob test in BE-5 initially had no `assert result.results` guard. If no results were returned (possible with constant stub embedder), the `for r in result.results:` loop would never execute, making the test pass vacuously while proving nothing about the filter.
+- Action: Any test that iterates `for r in result.results:` and asserts properties of each result MUST first assert `result.results` is non-empty with a descriptive message. Missing this means the test cannot fail in its most important failure mode.
+- Confidence: high
+
+**[2026-06-28] — E0e BE-5: avoid duplicate test function names across integration test files**
+- Observation: `test_search_many_filter_glob_real_pipeline` was already present in `test_e0e_be2_search_many_filters.py` (added during BE-2). When BE-5 added a test with the same name, it caused pytest ambiguity (`-k` filter selects both). Fixed by renaming the BE-5 variant.
+- Action: Before naming a test function, grep the tests/ directory for the intended name to avoid silent duplicate function names across files.
+- Confidence: high
+
 **[2026-06-28] — E0e T-1: excluded_collections is list[dict], not list[str]**
 - Observation: `assert col_b not in excluded_collections` where `excluded_collections` is `list[dict]` always returns True. String membership in list[dict] never matches.
 - Action: Always assert `excluded == []` for zero-result leg assertions. Never use `name not in list_of_dicts`.
@@ -431,4 +456,14 @@
 **[2026-06-28] — E0e BE-2 (mock signature breakage in sibling test files)**
 - Observation: Adding `filters: SearchFilters | None = None` to `search_many()` and `_fanout_merge_acl()` broke 12 mock helpers in 3 sibling test files (`test_pipeline_multi.py`, `test_pipeline_explain.py`, `tests/eval/test_multi_collection_merge.py`). Each file had a local `_hybrid()` stub that didn't accept `filters`. The failures appeared across non-obvious filenames (eval harness, explain tests) that are not in the same directory as the changed code.
 - Action: After changing a method signature, grep all test files for the method name AND for local stub functions (`def _hybrid`, `def _search`) that shadow it. Run `grep -rn "def _hybrid\|async def _hybrid" tests/` before committing.
+- Confidence: high
+
+**[2026-06-28] — E0e T-3 (close-out: REST-only feature in "equivalent surfaces" manual)**
+- Observation: The user manual declared "REST and MCP are equivalent surfaces" on line 4, then introduced `applied_filters` (REST-only, MCP deferred) in the same doc. Iterative review C1-I-1 (Major) caught the contradiction. The fix was a single bullet "REST only — MCP `search` tool does not include `applied_filters`" in the subsection, plus a matching E0e note in the 600 doc's MCP search return column following the existing RAG Fusion narrower-schema pattern.
+- Action: Whenever a close-out adds a REST-only response field to a user manual that declares REST/MCP parity, always add an explicit "REST only" note in the new field's docs AND in the 600 doc's MCP tool return column. The "equivalent surfaces" heuristic breaks for deferred MCP features.
+- Confidence: high
+
+**[2026-06-28] — E0e T-3 (close-out: pinning test already existed)**
+- Observation: C1-T-1 (Moderate) recommended adding a test pinning `applied_filters` absence from `McpSearchResponse`. On investigation, `test_mcp_search_response_fields` in `tests/test_mcp_schemas.py` already asserts the exact set of 6 field names and would fail if `applied_filters` were added. No new test needed.
+- Action: Before adding a pinning test for a schema field's absence, always grep `tests/` for the schema class name — an exact-field-set test is likely already in `test_mcp_schemas.py` or `test_routes_search.py`.
 - Confidence: high

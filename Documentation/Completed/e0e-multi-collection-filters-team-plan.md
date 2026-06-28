@@ -4,7 +4,7 @@ feature: Multi-Collection Filter Support
 brief: e0e-multi-collection-filters-brief.md
 purpose: Clients can send POST /search with both a collections list and a filters object; filters are applied per-leg in the multi-collection fan-out and applied_filters is echoed in the response.
 audience: Backend developers and testers working on the archon-search retrieval pipeline
-status: planned
+status: done
 roles: [frontend, backend, tester]
 architecture: clean
 ---
@@ -201,13 +201,13 @@ Behavioural only. Happy, unhappy, edge, and non-functional paths.
 - Frameworks & Drivers: BE-5 — Add integration tests for filter + multi-collection with real pipeline
 
 **Done when**
-- [ ] `POST /search` with `collections` + `filters` returns 200 — S1, S2, S4, S5, S6
-- [ ] `applied_filters` is null when no filters submitted — S3, S11
-- [ ] MCP `search` with `collections` + `language` succeeds — S8
-- [ ] MCP `search` with `collections` + `file_type` succeeds — S9
-- [ ] Single-collection + filter requests unchanged — S10
-- [ ] Multi-collection no-filter requests unchanged — S11
-- [ ] Integration tests for filter + multi-collection added and suite passes
+- [x] `POST /search` with `collections` + `filters` returns 200 — S1, S2, S4, S5, S6
+- [x] `applied_filters` is null when no filters submitted — S3, S11
+- [x] MCP `search` with `collections` + `language` succeeds — S8
+- [x] MCP `search` with `collections` + `file_type` succeeds — S9
+- [x] Single-collection + filter requests unchanged — S10
+- [x] Multi-collection no-filter requests unchanged — S11
+- [x] Integration tests for filter + multi-collection added and suite passes
 
 ---
 
@@ -243,15 +243,15 @@ Behavioural only. Happy, unhappy, edge, and non-functional paths.
 
 Docs the feature touches — the close-out task works through this list.
 
-- [ ] `Documentation/Backlog/e0e-multi-collection-filters-brief.md` — no changes needed (source brief)
-- [ ] `Documentation/Backlog/e0e-multi-collection-filters-team-plan.md` — this file; mark `status: done` on close-out
-- [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — remove line 145 restriction row; update `SearchResponse` to list `applied_filters`; update MCP `search` tool row (remove "single-collection only" from `language`); update filters table (line 172, `language` row)
-- [ ] `Documentation/UserManual/05_searching.md` — update filter docs to remove multi-collection restriction note; document `applied_filters` in response
-- [ ] `archon_search/filters.py` — `SearchFilters.language` field `description=` string: remove "single-collection queries only" caveat
-- [ ] `BREAKING.md` — add E0e note: lifting the v1 filter+collections restriction is a relaxation (previously-rejected requests now succeed); note `applied_filters` additive field in `SearchResponse`
-- [ ] `CLAUDE.md` (project) — no changes needed (no new conventions)
-- [ ] Regenerate OpenAPI snapshot: `uv run python -m archon_search.server.snapshot` (or equivalent) — `GET /openapi.json` schema must reflect `applied_filters` in `SearchResponse`
-- [ ] `Documentation/UserManual/05_searching.md` — document `include_metadata` appearing in `applied_filters` response field (informational; v1 trade-off)
+- [x] `Documentation/Backlog/e0e-multi-collection-filters-brief.md` — no changes needed (source brief)
+- [x] `Documentation/Backlog/e0e-multi-collection-filters-team-plan.md` — this file; mark `status: done` on close-out
+- [x] `Documentation/Architecture/600_api_reference_or_public_interface.md` — remove line 145 restriction row; update `SearchResponse` to list `applied_filters`; update MCP `search` tool row (remove "single-collection only" from `language`); update filters table (line 172, `language` row)
+- [x] `Documentation/UserManual/05_searching.md` — update filter docs to remove multi-collection restriction note; document `applied_filters` in response
+- [x] `archon_search/filters.py` — `SearchFilters.language` field `description=` string: remove "single-collection queries only" caveat
+- [x] `BREAKING.md` — add E0e note: lifting the v1 filter+collections restriction is a relaxation (previously-rejected requests now succeed); note `applied_filters` additive field in `SearchResponse`
+- [x] `CLAUDE.md` (project) — no changes needed (no new conventions)
+- [x] Regenerate OpenAPI snapshot: `uv run python -m archon_search.server.snapshot` (or equivalent) — `GET /openapi.json` schema must reflect `applied_filters` in `SearchResponse`
+- [x] `Documentation/UserManual/05_searching.md` — document `include_metadata` appearing in `applied_filters` response field (informational; v1 trade-off)
 
 ---
 
@@ -410,7 +410,7 @@ flowchart LR
 
 ### Phase 3 · Close-out
 
-- [ ] **T-3** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-3** — Project close-out & acceptance fact-check #tester-role
     - — · 3.0h
     - needs T-1, T-2, BE-5
     - Tests

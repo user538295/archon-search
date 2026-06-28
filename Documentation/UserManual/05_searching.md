@@ -169,8 +169,33 @@ The MCP endpoint is `POST /mcp` (streamable HTTP transport, mounted by `mcp.crea
 | `source_path_glob` | `string \| null` | Python `fnmatch` glob on the source path (Python-side post-filter). |
 | `indexed_after` | `datetime \| null` | Include only chunks indexed after this timestamp. |
 | `indexed_before` | `datetime \| null` | Include only chunks indexed before this timestamp. |
-| `language` | `string \| null` | ISO 639-1 or ISO 639-3 language code, or `"unknown"`. **Single-collection only** — rejected with 422 on multi-collection fan-out. |
+| `language` | `string \| null` | ISO 639-1 or ISO 639-3 language code, or `"unknown"`. **E0e**: usable with multi-collection fan-out (REST and MCP). |
 | `include_metadata` | `bool` | When `true`, return the stored metadata dict; default `false`. |
+
+### Applied filters echo (`applied_filters`)
+
+**E0e** — `SearchResponse` includes an `applied_filters` field that echoes the parsed, normalised `SearchFilters` submitted with the request:
+
+```json
+{
+  "results": [...],
+  "applied_filters": {
+    "file_type": "md",
+    "language": null,
+    "source_path_prefix": null,
+    "source_path_glob": null,
+    "indexed_after": null,
+    "indexed_before": null,
+    "include_metadata": false
+  }
+}
+```
+
+- `applied_filters` is `null` when no `filters` field was sent in the request.
+- Values are normalised: `file_type: ".md"` in the request becomes `"md"` in `applied_filters` (leading dot stripped, lowercased).
+- `include_metadata` appears in `applied_filters` since `SearchFilters` is used directly as the response type; treat it as informational (v1 trade-off — `include_metadata` is not enforced on the multi-collection path).
+- Present on both single-collection and multi-collection responses.
+- **REST only** — the MCP `search` tool does not include `applied_filters` in its response (MCP response echoing is deferred beyond E0e). MCP consumers must track filters client-side.
 
 ### Language filter (C2)
 
