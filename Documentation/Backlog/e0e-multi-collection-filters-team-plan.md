@@ -399,7 +399,7 @@ flowchart LR
         - #integration_test — `test_search_many_filter_multi_collection_real_pipeline` — runs `search_many()` with real LanceDB store, two collections, `file_type` filter; asserts results from matching leg only; placed in `tests/integration/`
         - #integration_test — `test_search_many_filter_glob_real_pipeline` — runs `search_many()` with real store, `source_path_glob` filter; asserts glob post-filter removes non-matching paths from results; placed in `tests/integration/`
 
-- [ ] **T-2** — Integration e2e: MCP search tool with filters + collections via JSON-RPC TestClient #tester-role
+- [x] **T-2** — Integration e2e: MCP search tool with filters + collections via JSON-RPC TestClient #tester-role
     - — · 1.5h
     - needs BE-4 · completes S8, S9
     - Tests
