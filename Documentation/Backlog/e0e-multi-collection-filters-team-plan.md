@@ -391,7 +391,7 @@ flowchart LR
         - #unit_test — `test_mcp_search_multi_collection_all_filter_params_forwarded` — mock pipeline, all 6 filter params set in the tool call (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`), assert `search_many()` receives a `SearchFilters` with all 6 fields populated
         - #integration_test — `test_mcp_search_tool_multi_collection_with_language_filter` — MCP JSON-RPC via TestClient: `collections` + `language` returns valid non-error response
 
-- [ ] **BE-5** — Add integration test exercising filter + multi-collection search with real pipeline #backend-role
+- [x] **BE-5** — Add integration test exercising filter + multi-collection search with real pipeline #backend-role
     - Frameworks & Drivers · 1.5h
     - needs BE-2 · completes (integration coverage)
     - Note: Extending the eval harness (`EvalQuery`, `eval/runner.py`) to support `collections` and `filters` fields is a separate task, deferred beyond E0e. This task adds a direct integration test using the real pipeline instead.
