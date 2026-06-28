@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — E0e: `POST /search` multi-collection + filters now supported; `SearchResponse` gains `applied_filters`
+
+**Surface**: `POST /search` REST endpoint.
+
+**Behaviour change** (previously-rejected requests now succeed — non-breaking for well-behaved clients):
+- `POST /search` with both `collections` and `filters` no longer returns `422 "filters are not supported for multi-collection search in v1"`. The filters are applied per-leg to the multi-collection fan-out. Clients that relied on this 422 as a guard must update their error-handling logic.
+
+**Additive change** (non-breaking for tolerant JSON consumers):
+- `SearchResponse` gains `applied_filters: SearchFilters | null` — echoes the parsed, normalised filters from the request; `null` when no filters were submitted. Present on both single-collection and multi-collection response paths. Strict-validating clients must add this nullable field to their response schemas.
+
+---
+
 ### [next release] — E0d: `POST /ingest` gains 413 response; `IngestResult.code` field added; MCP `IngestResultSchema` gains `code` field
 
 **Surface**: `POST /ingest` REST response; `IngestResult` domain dataclass; MCP `ingest_file` and `ingest_directory` tool return shapes (`IngestResultSchema`).

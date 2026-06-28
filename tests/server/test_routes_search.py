@@ -825,9 +825,8 @@ def test_search_request_single_item_collections_is_valid() -> None:
     assert len(req.collections) == 1
 
 
-def test_search_request_collections_with_filters_is_422() -> None:
-    with pytest.raises(ValidationError, match="filters"):
-        SearchRequest(collections=["x"], query="q", filters=SearchFilters(file_type="md"))
+# NOTE: test_search_request_collections_with_filters_now_valid covers this invariant in
+# tests/server/test_e0e_be3_search_filters.py (E0e BE-3).
 
 
 # --- handler integration tests ---------------------------------------------

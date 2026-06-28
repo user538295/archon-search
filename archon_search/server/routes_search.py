@@ -81,8 +81,6 @@ class SearchRequest(BaseModel):
                 if s not in deduped:
                     deduped.append(s)
             self.collections = deduped
-            if self.filters is not None:
-                raise ValueError("filters are not supported for multi-collection search in v1")
         return self
 
 
@@ -179,6 +177,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 rag_fusion=body.rag_fusion,
                 rag_fusion_generator=rag_fusion_gen,
                 rag_fusion_config=config.rag_fusion,
+                filters=body.filters,
             )
         except RAGFusionDependencyError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=422)
@@ -221,6 +220,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             rag_fusion_attempted=result.rag_fusion_attempted,
             expansion_used=hyde_applied or result.rag_fusion_applied,
             expansion_warning=_multi_expansion_warning,
+            applied_filters=body.filters,
         )
 
     try:
@@ -312,6 +312,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 rag_fusion_attempted=result.rag_fusion_attempted,
                 expansion_used=hyde_applied or result.rag_fusion_applied,
                 expansion_warning=_expansion_warning,
+                applied_filters=body.filters,
             )
         except RAGFusionDependencyError as exc:
             _emit_timings()

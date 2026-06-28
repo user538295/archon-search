@@ -348,7 +348,7 @@ flowchart LR
         - #unit_test — `test_search_many_glob_candidate_depth_uses_overfetch_factor` — when `filters.source_path_glob` is set, assert that `hybrid_search_with_trace` is called with `candidate_depth >= top_k * GLOB_OVERFETCH_FACTOR`; this ensures headroom is applied before both the standard fanout path and RAG Fusion per-collection loop
         - #integration_test — `test_search_many_file_type_filter_applied_per_leg` — real pipeline + real store: two collections, only one has matching file type; results from correct leg only
 
-- [ ] **BE-3** — Remove `SearchRequest` v1 restriction; wire `filters` + `applied_filters` through the `POST /search` handler #backend-role
+- [x] **BE-3** — Remove `SearchRequest` v1 restriction; wire `filters` + `applied_filters` through the `POST /search` handler #backend-role
     - Presentation · 1.0h
     - needs BE-1, BE-2 · completes S1, S3, S4, S5, S7, S10, S11 · enables S2, S6 (verified by T-1)
     - Note: `applied_filters=body.filters` is set directly in the handler (Presentation layer), NOT from `result.applied_filters`.
