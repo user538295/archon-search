@@ -1,7 +1,7 @@
 **Purpose**: Comparative analysis of `archon-search` versus Marveen's memory/search subsystem to extract transferable ideas and gaps.
 **Audience**: Maintainers planning future Search architecture and roadmap work.
 **Status**: Draft
-**Last reviewed**: 2026-04-30 / **Next review**: 2026-10-30
+**Last reviewed**: 2026-06-28 / **Next review**: 2026-12-28
 
 # Search System Comparison: Archon vs. Marveen
 
@@ -59,20 +59,22 @@ This comparison therefore has two layers:
 ## Dimension 2 — Indexing / Ingestion Pipeline
 
 ### Archon
-**What it does:** Full document ingestion: file discovery (multi-format, ~40 binary extensions excluded via `_BINARY_EXTENSIONS` in `pipeline.py`, symlink-skipping, hidden-file filtering) → format-specific parsing (trafilatura/docling/markitdown) → Chonkie RecursiveChunker (GPT-2 tokenizer; chunk size from `SearchConfig.chunk_size`, default 512) → fastembed embedding → LanceDB persist → FTS rebuild. SHA256 content addressing gives idempotent re-ingest. Declarative sync with file change detection and crash-recovery state machine.
+**What it does:** Full document ingestion: file discovery (multi-format, ~40 binary extensions excluded via `_BINARY_EXTENSIONS` in `pipeline.py`, symlink-skipping, hidden-file filtering) → format-specific parsing (trafilatura/docling/markitdown) → Chonkie RecursiveChunker (GPT-2 tokenizer; chunk size from `SearchConfig.chunk_size`, default 512) → fastembed embedding → LanceDB persist → incremental FTS update (C6; O(delta), not full rebuild). SHA256 content addressing gives idempotent re-ingest. Declarative sync with file change detection and crash-recovery state machine.
 
 **Strengths:**
 - Parses HTML, PDF (with OCR), Office docs, images via trafilatura/docling/markitdown #Unverified (exact format count not enforced in source)
+- 8 new file formats shipped (E0a): .doc, .xls, .ppt, .odt, .rtf, .epub, .eml, .msg via markitdown as a core dependency
 - Idempotent: re-ingesting the same file is safe (delete-then-insert by doc_id)
 - Crash recovery: IN_PROGRESS → PENDING on restart
-- Auto description generation via Haiku (20% doc change threshold)
+- Auto description generation via Haiku (20% doc change threshold; MAX_SAMPLE_CHUNKS raised to 100)
 - Filesystem watcher for live synchronization
+- Streaming/incremental chunking of large files (D4)
+- File size guard with clean rejection before parse step (E0d): `[ingest].max_file_mb`; REST 413, MCP `code="file_too_large"`, CLI non-zero exit
 
 **Weaknesses:**
-- FTS index is rebuilt in full on every `ingest_directory()` call — potential bottleneck for large collections
+- FTS index was rebuilt in full on every `ingest_directory()` call — shipped incremental FTS maintenance (C6), replacing O(collection) with O(delta) rebuild; single-file ingest was already incremental
 - `DocumentParser` thread-safety is not explicitly documented in `parser.py` #Unverified
-- No support for streaming/incremental chunking of very large files
-- Collection-level embedding model selection not supported
+- No web connectors (GitHub, YouTube, web crawl) — every byte must arrive via file ingest or CLI
 
 **Score: 9/10**
 
@@ -98,7 +100,7 @@ This comparison therefore has two layers:
 ## Dimension 3 — Search Quality
 
 ### Archon
-**Pipeline:** embed query → hybrid search (vector + FTS via LanceDB) → RRF fusion (k=60) → cross-encoder reranking (default `Xenova/ms-marco-MiniLM-L-6-v2`, configurable) → context-window enrichment (adjacent chunk fetch).
+**Pipeline:** [HyDE or RAG Fusion query expansion (optional, requires Anthropic API key)] → embed query → hybrid search (vector + FTS via LanceDB) → RRF fusion (k=60) → cross-encoder reranking (default `Xenova/ms-marco-MiniLM-L-6-v2`, configurable) → context-window enrichment (adjacent chunk fetch).
 
 **Strengths:**
 - Cross-encoder reranking is state-of-the-art for precision (query-document pair scoring vs. bi-encoder approximation)
@@ -106,12 +108,20 @@ This comparison therefore has two layers:
 - Multi-collection routing: centroid pre-ranking with confidence gating eliminates irrelevant collections before reranking
 - Adaptive fetch size: `max(top_k * 3, 20)` ensures reranker has enough candidates
 - FTS graceful degradation (vector-only if FTS index missing)
+- HyDE query expansion (C4): `hyde=true` generates a hypothetical answer → embeds it → searches with that vector; silent fallback if Anthropic key absent
+- RAG Fusion (C5): `rag_fusion=true` decomposes query into N variants, runs parallel searches, applies second-pass RRF; mutually exclusive with HyDE
+- Multilingual retrieval (C2): fasttext `lid.176.ftz` language detection at ingest; `language=<code>` filter; language-aware FTS tokenization
+- Metadata filters (A2): source-path prefix/glob, `indexed_after`/`indexed_before`, file-type on `/search`, MCP search, `/explain`
+- Explain endpoint (A4): `POST /explain` + `explain` MCP tool; returns vector rank, FTS rank, RRF score, reranker score, routing path, stage timings
+- Stage-level latency tracing (B1)
+- Chunk-level enrichment (C3): heading/section path for .md/.txt/.rst/.html; page numbers for PDF; code-symbol context (`_symbol_type`, `_containing_function`, `_containing_class`, `_module_path`) for .py/.ts/.js/.go/.rs/.java/.sh via tree-sitter
 
 **Weaknesses:**
 - No BM25 score normalization before RRF — vector and FTS ranks are assumed comparable
 - Centroid representation may be a weak proxy for semantic coverage in heterogeneous collections
-- No query expansion or synonyms
-- No metadata filters (can't filter by file type, date, source path)
+- HyDE and RAG Fusion require a paid Anthropic API key — not zero-dependency
+- Multi-collection metadata filtering (E0e) not yet shipped — metadata filters only on single-collection search
+- No GraphRAG
 
 **Score: 9/10**
 
@@ -150,13 +160,14 @@ This comparison therefore has two layers:
 - GPU acceleration works out-of-the-box on CUDA and Apple Silicon
 - fastembed uses ONNX Runtime — no Python-only dependency, fast inference
 - Reranker is a proper cross-encoder (not bi-encoder approximation)
+- Per-collection embedding model support (C1): `CollectionMeta.active_embedding_model` fully wired; model mismatch raises `ModelValidationError` at ingest time — the previously documented gap is closed
+- Tiered install profiles (C0): minimal/balanced/max; operators can ship a smaller footprint
 
 **Weaknesses:**
-- All collections share the same embedding model — changing the model invalidates all indexed data
-- No multi-lingual model configured by default
+- No multi-lingual model configured by default (multilingual retrieval uses fasttext for language detection, but the embedding model itself is still a single-language model by default)
 - No sentence transformer models (only fastembed-supported models available)
 
-**Score: 8/10**
+**Score: 9/10**
 
 ### Marveen
 - **Model:** `nomic-embed-text` (768-dim) — hardcoded constant in `db.ts`
@@ -230,24 +241,29 @@ This comparison therefore has two layers:
 ## Dimension 6 — API / Integration Surface
 
 ### Archon
-- **FastMCP server:** 9 tools (`search`, `search_with_context`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document`)
-- **FastAPI REST surface:** full REST API alongside MCP (`routes_health.py`, `routes_state.py`, `routes_status.py`, `routes_search.py`, `routes_route.py`, `routes_collections.py`, `routes_jobs.py`, `routes_telemetry.py`); `GET /openapi.json` is authoritative
-- **CLI:** `archon-search <subcommand>` — 9 subcommands: `start`, `stop`, `status`, `install`, `uninstall`, `ingest`, `sync`, `collection`, `config`
-- **Health endpoint:** `GET /health` on the FastAPI app (FastAPI + FastMCP run side-by-side)
-- **Authentication:** Bearer-token auth via `APIKeyMiddleware` (`server/middleware_auth.py`); keys auto-generated by `key_manager.py`. All endpoints except `GET /health` require a Bearer token.
+- **FastMCP server:** 17 tools: `search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory`, `list_collections`, `get_collections_meta`, `get_collection_meta`, `list_documents`, `delete_document`, `update_collection`, `export_collection`, `import_collection`, `create_key`, `list_keys`, `revoke_key`, `rotate_key`
+- **FastAPI REST surface:** full REST API alongside MCP (`routes_health.py`, `routes_state.py`, `routes_status.py`, `routes_search.py`, `routes_route.py`, `routes_collections.py`, `routes_jobs.py`, `routes_export.py`, `routes_backup.py`, `routes_telemetry.py`, `routes_explain.py`, `routes_maintenance.py`, `routes_keys.py`); `GET /openapi.json` is authoritative
+- **Key management REST:** `POST /keys`, `GET /keys`, `DELETE /keys/{id}`, `POST /keys/rotate`
+- **Cursor-paginated document listing (E0c):** `GET /collections/{name}/documents` with `limit` and `cursor` params; `top_k_max` ceiling and `max_fanout` config reads from live `SearchConfig` at request time
+- **MCP mounted on REST port (D9):** `/mcp` shares the same port and lifespan as REST; no second process or port; `app.state.mcp_bound` tracks successful mount
+- **CLI:** `archon-search <subcommand>` — subcommands: `start`, `stop`, `status`, `serve`, `install`, `uninstall`, `ingest`, `sync`, `collection`, `config`, `export`, `import`, `backup`, `maintenance`, `key`
+- **Health endpoint:** `GET /health`, `GET /ready` on the FastAPI app
+- **Authentication:** Bearer-token auth via `APIKeyMiddleware`; keys managed by `KeyStore` (D7) with create/revoke/list/rotate; TOML namespace tokens authenticate against MCP (namespace auth parity with REST). All endpoints except `GET /health` and `GET /ready` require a Bearer token.
 
 **Strengths:**
-- MCP integration means Claude can directly query and manage search from within a session
+- 17 MCP tools cover the full surface: search, explain, ingest, collection management, export/import, and key lifecycle — Claude can administer the server entirely via MCP
 - Full REST API enables integration with any HTTP client, not just Claude
-- `/health` endpoint enables external monitoring / liveness probes
-- CLI gives operators full control without needing Claude
-- Shared Bearer auth across REST and MCP
+- `/health` and `/ready` endpoints enable external monitoring / liveness probes
+- CLI gives operators full control without needing Claude, including key rotation and maintenance
+- Shared Bearer auth across REST and MCP; TOML namespace tokens authenticated against MCP
+- Key rotation with grace period (D7): `POST /keys/rotate`; `grace_seconds` overrides TOML default per call; raw bearer tokens never stored — SHA-256 hex digest only
 
 **Weaknesses:**
 - No streaming search results
-- No query explain/debug endpoint
+- No Python or TypeScript SDK — every integration must speak raw HTTP or MCP
+- No admin/debug UI
 
-**Score: 7/10**
+**Score: 8/10**
 
 ### Marveen
 - **REST API:** 50+ endpoints covering memories, agents, team, scheduling, vault, connectors, kanban, daily logs
@@ -275,25 +291,38 @@ This comparison therefore has two layers:
 ## Dimension 7 — Operational Concerns
 
 ### Archon
-- **Install:** `SearchInstaller` wizard with GPU detection, provider setup, config write-back
-- **Config:** TOML with `[server]`, `[database]`, `[routing]`, `[collections]`, `[logging]`, `[telemetry]`, `[namespaces]` sections (`config.py`), all validated at load time, full annotated example
+- **Install:** `SearchInstaller` wizard with GPU detection, provider setup, config write-back; tiered install profiles (C0): minimal/balanced/max
+- **Config:** TOML with `[server]`, `[database]`, `[routing]`, `[collections]`, `[logging]`, `[telemetry]`, `[namespaces]`, `[jobs]`, `[backup]`, `[maintenance]`, `[auth]`, `[mcp]`, `[search]`, `[ingest]` sections (`config.py`), all validated at load time, full annotated example
 - **State recovery:** `IN_PROGRESS → PENDING` on restart (explicit crash recovery)
-- **Health checks:** `GET /health` HTTP endpoint
+- **Health checks:** `GET /health`, `GET /ready` HTTP endpoints
 - **Filesystem watching:** Optional `watch = true` config; debounced per-collection triggers
 - **Service management:** macOS launchd / Linux systemd / Windows via `PlatformService` ABC (`platform/macos.py`, `linux.py`, `windows.py`)
+- **Scheduled backup (D2):** `[backup]` TOML section; `BackupLoop` enqueues `ExportJob`s at interval; archive rotation (keep N); namespace/collection exclusion patterns; manual backup behind user-priority queue
+- **Schema migration tooling (D3):** `STORE_SCHEMA_VERSION`, `MigrationSpec`, documented rollback rules; migration runs at startup
+- **Maintenance loop (D5):** `MaintenanceLoop` with TOML `[maintenance]` config; FTS optimization, orphan chunk cleanup, failed-ingest retry with `FAILED_EXPIRED` terminal state; `POST /maintenance/trigger` for on-demand pass
+- **Key rotation (D7):** `KeyRecord`/`KeyStore`; create/revoke/list/rotate; `rotate_grace_seconds` in `[auth]` TOML; raw bearer tokens never stored (SHA-256 only)
+- **Background provider validation (D6):** `validate_models_async()` runs at startup as a non-blocking task; result surfaces in `GET /status` and `GET /ready`; timeout configurable via `[database].validation_timeout_seconds`
+- **Container support (C9):** Docker + GHCR; CPU and GPU images; `ARCHON_SEARCH_DATA_DIR` relocates entire runtime tree; `ARCHON_SEARCH_CONTAINER=1` attaches stderr handler for `docker logs`
+- **Hashed telemetry doc_ids (D8):** `[telemetry].hash_doc_ids = true`; HMAC-SHA256 on `result_doc_ids` before JSONL write; 32-byte salt at `.telemetry-salt`
+- **Real-model latency benchmark (C16):** `tests/eval/live_benchmark/`; p50/p95 regression guard
 
 **Strengths:**
 - Crash recovery is explicit and tested
 - Platform-agnostic service management via strategy pattern, including Windows support
-- Bearer-token auth and key auto-generation on first start
+- Multi-key auth with rotation; raw tokens never persisted
+- Scheduled backup with rotation and namespace/collection exclusion
+- Maintenance loop handles FTS optimization, orphan cleanup, and failed-ingest retry — zero manual index maintenance required
+- Schema migration ensures upgrades are non-destructive and auditable
+- Background provider validation catches model misconfiguration before the first query fails
+- Container-ready: single env var relocates entire runtime tree; stderr logging for `docker logs`
+- Telemetry doc_id hashing allows log sharing without exposing filesystem paths
 
 **Weaknesses:**
-- No dedicated CLI health-check / doctor subcommand
+- No dedicated CLI health-check / doctor subcommand (though `GET /status` and `GET /ready` exist)
 - No log rotation for the search server itself
-- No alerting on embedding model mismatch after upgrade
 - Background sync (`sync_timeout_seconds = 0`) means startup appears healthy before data is ready
 
-**Score: 8/10**
+**Score: 9/10**
 
 ### Marveen
 - **Install:** `install.sh` interactive wizard; `install-windows.ps1` for Windows via WSL
@@ -389,7 +418,7 @@ Server tests live under `tests/server/` and `tests/test_app.py` (no monolithic `
 | Memory per chunk | ~1.5 KB (384-dim float32) #Unverified |
 | Max parallel collections | 3 (configurable) |
 | Async throughout | Yes (`asyncio.to_thread` for CPU-bound ops) |
-| FTS rebuild | Full rebuild per `ingest_directory()` call |
+| FTS rebuild | Incremental O(delta) since C6; was full O(collection) |
 | Fetch size | `max(top_k * 3, 20)` adaptive |
 
 **Strengths:**
@@ -399,9 +428,8 @@ Server tests live under `tests/server/` and `tests/test_app.py` (no monolithic `
 - Adaptive fetch sizing balances recall vs. speed
 
 **Weaknesses:**
-- Full FTS rebuild on every `ingest_directory()` is O(n) over the entire collection
-- No streaming ingest — entire directory loaded before FTS rebuild
 - Single-server architecture limits horizontal scaling
+- No streaming ingest — entire directory still loaded before processing begins
 
 **Score: 8/10**
 
@@ -438,14 +466,29 @@ Server tests live under `tests/server/` and `tests/test_app.py` (no monolithic `
 | Feature | Description |
 |---------|-------------|
 | Multi-collection routing | Centroid pre-ranking → confidence gating → Decomposer routing; 3-tier strategy based on collection count |
-| Auto-description generation | Haiku samples 20 random chunks → generates collection description; re-runs on 20%+ doc change |
+| Auto-description generation | Haiku samples up to 100 random chunks → generates collection description; re-runs on 20%+ doc change |
 | Crash-recovery state machine | Per-collection state: PENDING → IN_PROGRESS → DONE/FAILED; resets stale IN_PROGRESS on restart |
 | Context-window enrichment | `search_with_context()` fetches adjacent chunks by sequential chunk_id to recover sentence/paragraph context |
 | Filesystem watcher | watchdog-based live sync with per-collection debounce (5s) |
 | Pinned collections | Always searched regardless of routing decision |
 | Auto-reindex on chunk size change | Detects `chunk_size` config change and triggers re-ingest |
+| HyDE query expansion (C4) | `hyde=true` generates hypothetical answer → embeds it → searches with that vector; silent fallback; requires Anthropic API key |
+| RAG Fusion (C5) | `rag_fusion=true` decomposes query into N variants, parallel search, second-pass RRF; mutually exclusive with HyDE; requires Anthropic API key |
+| Multilingual retrieval (C2) | fasttext `lid.176.ftz` language detection at ingest; `language=<code>` filter on search; language-aware FTS tokenization |
+| Per-collection embedding model (C1) | `CollectionMeta.active_embedding_model`; model mismatch raises `ModelValidationError` at ingest time |
+| Code-symbol context via tree-sitter (C3c) | `_symbol_type`, `_containing_function`, `_containing_class`, `_module_path` injected for .py/.ts/.js/.go/.rs/.java/.sh |
+| Heading/section extraction (C3a) | `_heading`, `_section_path` for .md/.txt/.rst/.html |
+| Page-number extraction (C3b) | `_page_start`, `_page_end` for PDF chunks |
+| Cursor-paginated document listing (E0c) | `GET /collections/{name}/documents` with opaque `cursor`; sorted by `doc_id`; missing cursor silently resumes from next position |
+| Key rotation with grace period (D7) | `POST /keys/rotate`; old key expires after configurable grace seconds; SHA-256 token hashing; `FAILED_EXPIRED` terminal state for exhausted retries |
+| Maintenance job loop (D5) | FTS optimization, orphan cleanup, failed-ingest retry with configurable age/attempt limits; on-demand via `POST /maintenance/trigger` |
+| Scheduled backup with rotation (D2) | `[backup]` TOML; `BackupLoop`; archive rotation (keep N); exclusion patterns; user jobs always prioritized over backup jobs |
+| Schema migration tooling (D3) | `STORE_SCHEMA_VERSION`, `MigrationSpec`, documented rollback rules; runs at startup |
+| Container support CPU+GPU (C9) | Docker + GHCR; CPU and GPU images; single `ARCHON_SEARCH_DATA_DIR` env var relocates full runtime tree |
+| Tiered install profiles (C0) | minimal/balanced/max; operators can ship a smaller dependency footprint |
+| Real-model latency benchmark (C16) | `tests/eval/live_benchmark/`; p50/p95 regression guard against real fastembed model weights |
 
-**Score: 8/10**
+**Score: 9/10**
 
 ### Marveen
 
@@ -471,20 +514,20 @@ Server tests live under `tests/server/` and `tests/test_app.py` (no monolithic `
 | Architecture & Design | **8** | 5 |
 | Indexing / Ingestion Pipeline | **9** | 2 |
 | Search Quality | **9** | 4 |
-| Embedding Model Choices | **8** | 3 |
+| Embedding Model Choices | **9** | 3 |
 | Storage Backend | **9** | 5 |
-| API / Integration Surface | **7** | **7** |
-| Operational Concerns | **8** | 5 |
+| API / Integration Surface | **8** | 7 |
+| Operational Concerns | **9** | 5 |
 | Test Coverage & Code Quality | **9** | 3 |
 | Performance / Scalability | **8** | 3 |
-| Unique Features / Innovations | 8 | **9** |
-| **Total** | **83/100** | **46/100** |
+| Unique Features / Innovations | **9** | 9 |
+| **Total** | **88/100** | **46/100** |
 
 ---
 
 ## Verdict
 
-**Archon's search subsystem is a production-grade RAG system. Marveen's is a lightweight memory store.** The score gap (83 vs 46) reflects that difference — it is not a fair head-to-head fight on document search.
+**Archon's search subsystem is a production-grade RAG system. Marveen's is a lightweight memory store.** The score gap (88 vs 46) reflects that difference — it is not a fair head-to-head fight on document search.
 
 ---
 
@@ -498,20 +541,20 @@ Marveen's hot/warm/cold/shared tiers + access-boost decay model is simple and po
 ### 2. Semantic Memory Tiers
 Marveen distinguishes `semantic` vs `episodic` memory sectors. Archon treats all chunks identically. Introducing a metadata tag (`recent_session`, `permanent_knowledge`, `pinned`) and weighting tier in the final ranking formula would let users control what always surfaces vs. what fades.
 
-### 3. Metadata Filters at Search Time
-Neither system has metadata filters at query time. The highest-value missing feature in Archon is `filter_by={"source_path": "*.py", "indexed_after": "2026-01-01"}` on `hybrid_search()`. LanceDB supports predicate pushdown natively.
+### 3. Metadata Filters at Search Time ✓ SHIPPED (A2)
+Metadata filters are live: source-path prefix/glob, `indexed_after`/`indexed_before`, file-type on `/search`, MCP search, `/explain`. LanceDB predicate pushdown is used. **Remaining gap:** multi-collection metadata filtering (E0e) is not yet shipped — filters only apply within a single collection.
 
 ### 4. Replace the O(n) Vector Scan with sqlite-vec (for Marveen)
 If Marveen wants better vector search without migrating to LanceDB, the `sqlite-vec` extension (pure C, no dependency) gives ANN inside SQLite with minimal code change.
 
-### 5. Per-Collection Embedding Models
-Archon should support a per-collection `embedding_model` config override. Multi-domain collections (code vs. prose vs. images) benefit from domain-specific models. The `embedding_model` field already exists in `CollectionMeta` — wire it into the ingest and validation paths.
+### 5. Per-Collection Embedding Models ✓ SHIPPED (C1)
+`CollectionMeta.active_embedding_model` is fully wired; model mismatch raises `ModelValidationError` at ingest time. The gap documented in the original review is closed.
 
-### 6. Query Expansion / HyDE
-Neither system does Hypothetical Document Embedding (HyDE): generate a hypothetical answer to the query → embed the answer → search with that vector. This is a well-proven technique for improving recall when user queries are short and under-specified. Add an optional `query_expansion=True` flag to `Pipeline.search()`.
+### 6. Query Expansion / HyDE ✓ SHIPPED (C4, C5)
+HyDE (`hyde=true`) and RAG Fusion (`rag_fusion=true`) are live. Both require the `archon-search[hyde]`/`archon-search[rag_fusion]` extra and a paid Anthropic API key. Silent fallback when the key is absent. They are mutually exclusive.
 
-### 7. Incremental FTS Rebuild
-Archon currently does a full FTS rebuild on every `ingest_directory()` call. Switch to incremental FTS updates: LanceDB's `table.create_index(..., replace=False)` is reportedly additive #Unverified (LanceDB API semantics should be confirmed against current LanceDB docs before acting). The bottleneck is only in bulk directory ingestion — individual `ingest_file()` already skips the rebuild.
+### 7. Incremental FTS Rebuild ✓ SHIPPED (C6)
+Incremental FTS maintenance is live: O(delta) replaces O(collection) full rebuild for `ingest_directory()`. Individual `ingest_file()` was already incremental.
 
 ### 8. Chunk-Level Access Logging for Feedback Loop
 Marveen's salience decay requires knowing which memories were accessed. Add an access-log table to Archon's LanceDB (`chunk_id`, `accessed_at`, `query`) and use access frequency to re-weight RRF scores. This turns Archon's search into a learning system.

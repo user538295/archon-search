@@ -2,6 +2,11 @@
 
 ## What Has Failed
 
+**[2026-06-28] — Roadmap expansion: agents hitting session limit make zero edits — respawn with identical prompt**
+- Observation: Agent spawned to write Phase G to the roadmap hit the user's session token limit before making any edits. Zero changes landed. Respawning with the identical detailed prompt on the next session completed the task fully in one shot.
+- Action: When an agent returns with "session limit" and zero tool uses, respawn immediately with the same prompt — no simplification needed. The work was well-specified; the only failure was wall-clock timing.
+- Confidence: high
+
 **[2026-06-28] — Competitive analysis update: agents need full Phase A-E context, not just recent weeks**
 - Observation: When told "three recent weeks," the agent prompt omitted Phase A/B features (hybrid routing B4, server-side multi-collection B3, explain endpoint A4, metadata filters A2) that were shipped months ago but still absent from the comparison doc.
 - Action: When briefing agents on competitive analysis updates, scope the task as "all phases since the document's last-reviewed date" and verify which roadmap phases are fully checked off. A git log range like `git log --since=<last-reviewed>` is more reliable than a wall-clock window.
@@ -13,6 +18,21 @@
 - Action: Subagent prompt must require `grep "\- \[x\]" <plan>` and `git log --oneline -1` as proof before declaring done. Stated intent is not execution.
 
 ## What Has Worked
+
+**[2026-06-28] — E0e T-1: excluded_collections is list[dict], not list[str]**
+- Observation: `assert col_b not in excluded_collections` where `excluded_collections` is `list[dict]` always returns True. String membership in list[dict] never matches.
+- Action: Always assert `excluded == []` for zero-result leg assertions. Never use `name not in list_of_dicts`.
+- Confidence: high
+
+**[2026-06-28] — E0e T-1: tester-role e2e tests for language filter must use language filter (not file_type)**
+- Observation: S10 regression scenario specified `language: "en"` but the test was written with `file_type: ".md"`. The language filter is the one whose restriction was lifted by E0e; using a different filter doesn't guard the correct regression.
+- Action: Match the exact filter type stated in the scenario. Language stub returns `language=""` so results are empty, but 200 still proves the path wasn't broken.
+- Confidence: high
+
+**[2026-06-28] — E0e T-1: coverage illusion from missing result assertion**
+- Observation: An S2 test that asserts only `status=200` and `applied_filters echo` but never checks `data["results"]` passes whether the filter works or is silently ignored. Reviewers flagged this as a coverage illusion.
+- Action: Always add `assert data["results"] == []` when the expected result is empty, with a comment explaining why. This eliminates ambiguity between "filter returns empty" and "filter silently dropped".
+- Confidence: high
 
 ### Testing patterns
 
@@ -376,4 +396,39 @@
 **[2026-06-28] — E0e K1 (Contract/kickoff task: RAG Fusion coverage gap)**
 - Observation: The E0e plan's S1-S11 scenario table had zero coverage for the RAG Fusion + multi-collection + filters combination, despite the plan's BE-2 task explicitly identifying 4 separate RAG Fusion call sites that must all receive `filters=`. The tester role allocations table (cheapest-level) for S12 was also absent, leaving testers without guidance. Both gaps were caught only by iterative review.
 - Action: When writing scenarios for any multi-collection feature, always include at least one RAG Fusion scenario (even if unit-level). RAG Fusion has structurally independent code paths that can silently miss parameters even when the standard path is correct. Add the scenario to both the table AND the cheapest-level allocation table before declaring the plan ready.
+- Confidence: high
+
+**[2026-06-28] — E0e BE-1 (Entities schema — `applied_filters` + language doc)**
+- Observation: Adding `applied_filters: SearchFilters | None = None` to `SearchResponse` broke one existing test (`test_search_response_schema_fields` in `test_routes_search_acl.py`) that used an exact-match dict assertion. The full suite caught it; the task-scoped pre-commit run did not (only the new tests were run pre-commit).
+- Action: When adding a new optional field to a Pydantic response model, grep for exact-match `model_dump()` assertions across the entire test suite (`grep -rn "model_dump\|== {" tests/`). Update them in the same change. Do not rely on the task-scoped test run to catch these — they sit in sibling files.
+- Confidence: high
+
+**[2026-06-28] — E0e BE-1 (doc-ahead-of-code for entity-level descriptions)**
+- Observation: Removing a restriction caveat from the entity model's `Field.description` (e.g., "single-collection queries only" from `SearchFilters.language`) while the Presentation-layer restriction still exists is correct for the entity layer — the entity IS capable after E0e. It is distinct from MCP tool `_LanguageParam*` description strings, which should only be updated when the runtime restriction is removed (BE-4). Brooks-Lint (C1-B-1) flagged the entity-level change as "doc ahead of implementation" — but the entity capability is real; only the route handler hasn't threaded it through yet.
+- Action: Distinguish entity-level field descriptions (document the entity's true capability) from presentation-layer tool descriptions (document the tool's current runtime behavior). Don't update presentation-layer descriptions until the runtime supports them.
+- Confidence: high
+
+**[2026-06-28] — E0e BE-2 (Use Cases: `search_many` filters threading)**
+- Observation: `search_many()` had 4 distinct `hybrid_search_with_trace()` call sites (RAG Fusion per-collection vector, RAG Fusion FTS-only fallback, embedding-failure fallback via `_fanout_merge_acl()`, standard path via `_fanout_merge_acl()`). The initial implementation missed the FTS-only fallback and the embedding-failure fallback. Iterative review exposed that the embedding-failure test was vacuously passing (the mock always succeeded on the fallback embed). Fix: use `call_count == 2` to fail only the variant embed (call 2), allowing the fallback single-query re-embed (call 3) to succeed.
+- Action: When threading a new parameter through a fan-out method, enumerate ALL call sites by grepping for the callee name, including fallback branches inside try/except blocks. The fan-out path often has 2× as many call sites as the happy path alone.
+- Confidence: high
+
+**[2026-06-28] — E0e BE-2 (glob post-filter placement in RAG Fusion path)**
+- Observation: The first implementation placed the glob post-filter after cross-collection merge ("Step D.5"), while `_fanout_merge_acl()` applied it per-leg before trim. In the RAG Fusion path, non-matching candidates consumed `fanout_leg_trim` slots before being filtered, silently degrading recall when trim was tight. Iterative review caught this asymmetry.
+- Action: For any post-filter that is per-leg in one code path (`_fanout_merge_acl`), it must also be per-leg in the sibling path (RAG Fusion per-collection loop). Never apply a per-result filter after a cross-collection merge — it allows non-matching candidates to consume trim budget.
+- Confidence: high
+
+**[2026-06-28] — E0e BE-3 (pre-existing implementation and duplicate test files)**
+- Observation: When the BE-3 task was picked up, the Presentation-layer implementation (`routes_search.py`) was already in place — the restriction had been removed and `applied_filters` wired in both handler paths. A previous implement-next run had also created `tests/server/test_e0e_be3_search_filters.py` (untracked). Writing a new `tests/test_e0e_be3_search_route_filters.py` without checking existing untracked files duplicated 3 tests and created a maintenance trap. Iterative review flagged the redundancy.
+- Action: Before writing new test files, always run `git status --short` and read any existing untracked test files that look related. An untracked file is often work already done by a prior session. Delete the redundant file immediately rather than waiting for the review cycle.
+- Confidence: high
+
+**[2026-06-28] — E0e BE-3 (applied_filters echo not the same as filter forwarding)**
+- Observation: The single-collection test `test_post_search_single_collection_with_filter_applied_filters_echoed` initially only checked `response["applied_filters"]["language"] == "en"`. This only proves the echo works; it does NOT prove the filter was forwarded to `pipeline.search()`. Since `applied_filters=body.filters` is set directly from the request (Option B), the handler could theoretically echo filters without passing them down. The iterative review caught this gap and added a `pipeline.search.call_args.kwargs["filters"]` assertion.
+- Action: For echo-field tests, always add a second assertion verifying the value was also forwarded to the downstream call — echo correctness and forwarding correctness are distinct. Check `mock.call_args.kwargs["param"]` in addition to the response body.
+- Confidence: high
+
+**[2026-06-28] — E0e BE-2 (mock signature breakage in sibling test files)**
+- Observation: Adding `filters: SearchFilters | None = None` to `search_many()` and `_fanout_merge_acl()` broke 12 mock helpers in 3 sibling test files (`test_pipeline_multi.py`, `test_pipeline_explain.py`, `tests/eval/test_multi_collection_merge.py`). Each file had a local `_hybrid()` stub that didn't accept `filters`. The failures appeared across non-obvious filenames (eval harness, explain tests) that are not in the same directory as the changed code.
+- Action: After changing a method signature, grep all test files for the method name AND for local stub functions (`def _hybrid`, `def _search`) that shadow it. Run `grep -rn "def _hybrid\|async def _hybrid" tests/` before committing.
 - Confidence: high
