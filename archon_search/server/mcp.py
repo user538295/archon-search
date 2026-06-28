@@ -83,15 +83,15 @@ logger = logging.getLogger(__name__)
 # This is an accepted limitation: cross-surface concurrent rotation is unsupported.
 _mcp_rotate_lock = asyncio.Lock()
 
-# Language filter parameter for the ``search`` tool (single-collection path).
+# Language filter parameter for the ``search`` tool.
 # Defined at module level so FastMCP can resolve the Annotated type inside closures.
 _LanguageParamSearch = Annotated[
     str | None,
     Field(
         description=(
             "ISO 639-1 or ISO 639-3 language code to filter results (e.g. 'fr', 'de', 'unknown'). "
-            "Single-collection queries only — multi-collection fan-out (collections parameter) "
-            "rejects this filter with a validation error."
+            "Applied per-leg in multi-collection fan-out (collections parameter) "
+            "and as a direct filter in single-collection search."
         ),
         default=None,
     ),
@@ -288,11 +288,6 @@ def create_app(
         if collections is not None:
             if len(collections) == 0:
                 return McpErrorResponse(error="collections must not be empty", code="validation_error")
-            if language is not None:
-                return McpErrorResponse(
-                    error="language filter is not supported for multi-collection search in v1",
-                    code="validation_error",
-                )
             deduped: list[str] = []
             for name in collections:
                 stripped = name.strip()
@@ -313,12 +308,37 @@ def create_app(
                     error=f"collections length exceeds maximum of {_max_fanout}",
                     code="validation_error",
                 )
+            # Build SearchFilters for multi-collection path (mirrors single-collection path
+            # below). Pass filters=None when all filter args are None to preserve the
+            # None-vs-all-defaults distinction required by the search_many() contract.
+            _any_filter = any(
+                v is not None
+                for v in (
+                    file_type, source_path_prefix, source_path_glob,
+                    indexed_after, indexed_before, language,
+                )
+            )
+            if _any_filter:
+                try:
+                    _multi_filters: SearchFilters | None = SearchFilters(
+                        file_type=file_type,
+                        source_path_prefix=source_path_prefix,
+                        source_path_glob=source_path_glob,
+                        indexed_after=indexed_after,
+                        indexed_before=indexed_before,
+                        language=language,
+                    )
+                except ValidationError as exc:
+                    return McpErrorResponse(error=str(exc), code="validation_error")
+            else:
+                _multi_filters = None
             try:
                 result_obj = await pipeline.search_many(
                     query, deduped, namespace=ns, query_vector=hyde_vector,
                     rag_fusion=rag_fusion,
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_rf_config,
+                    filters=_multi_filters,
                 )
             except RAGFusionDependencyError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")

@@ -378,7 +378,7 @@ flowchart LR
 
 ### Phase 2 · Filter multi-collection MCP search
 
-- [ ] **BE-4** — Remove MCP language restriction; build `SearchFilters` for multi-collection path; pass to `search_many()` #backend-role
+- [x] **BE-4** — Remove MCP language restriction; build `SearchFilters` for multi-collection path; pass to `search_many()` #backend-role
     - Presentation · 1.5h
     - needs BE-2 · completes S8, S9, C3
     - **Note: BE-4 fixes a broader silent data loss bug.** The current MCP multi-collection path (`mcp.py:316-322`) passes NO filter params to `search_many()` at all — `file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before` are all silently dropped. The language restriction (lines 291-295) is an explicit block on top of this silent drop. This is a behaviour fix, not just a restriction removal. ALL 6 filter types must be forwarded.

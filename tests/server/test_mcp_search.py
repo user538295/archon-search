@@ -548,9 +548,12 @@ async def test_mcp_search_invalid_language_returns_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_search_language_with_collections_returns_validation_error() -> None:
-    """MCP search tool must reject language filter when multi-collection fan-out
-    (collections) is used — matches REST API behavior."""
+async def test_mcp_search_language_with_collections_is_now_accepted() -> None:
+    """MCP search tool must ACCEPT language filter with multi-collection fan-out (BE-4).
+
+    Pre-BE-4 the tool returned validation_error. After BE-4 the restriction is lifted:
+    the language filter is forwarded to search_many() per-leg.
+    """
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
@@ -562,11 +565,13 @@ async def test_mcp_search_language_with_collections_returns_validation_error() -
         result = await fn(query="hello", collections=["col1", "col2"], language="fr")
 
     assert isinstance(result, dict)
-    assert result.get("code") == "validation_error", (
-        f"Expected validation_error for language+collections, got {result!r}"
+    # Must NOT be a validation_error after BE-4
+    assert result.get("code") != "validation_error", (
+        f"Expected language filter to be accepted in multi-collection search (BE-4), "
+        f"but got validation_error: {result!r}"
     )
-    # Must not have called search_many — rejected before fanout
-    pipeline.search_many.assert_not_awaited()
+    # search_many must have been called with the language filter forwarded
+    pipeline.search_many.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
