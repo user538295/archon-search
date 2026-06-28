@@ -8,7 +8,7 @@ enum EntityType { person, concept, system, event, code_symbol }
 enum RelationshipType { uses, implements, depends_on, related_to }
 
 model GraphNode {
-  id: string;              // SHA-256 hex of "{entity_type}:{entity_name.strip().lower()}" (byte-encoded via make_stable_entity_id)
+  id: string;              // SHA-256 hex of "{entity_type.strip().lower()}:{entity_name.strip().lower()}" (byte-encoded via make_stable_entity_id)
   entityName: string;
   entityType: EntityType;
   entitySubtype?: string;  // optional sub-label for code_symbol entities (from _symbol_subtype)
@@ -17,7 +17,7 @@ model GraphNode {
 }
 
 model GraphEdge {
-  id: string;              // SHA-256 hex of "{sourceNodeId}:{targetNodeId}:{relationshipType}" (byte-encoded via make_stable_edge_id)
+  id: string;              // SHA-256 hex of "{sourceNodeId}:{targetNodeId}:{relationshipType.strip().lower()}" (byte-encoded via make_stable_edge_id)
   sourceNodeId: string;
   targetNodeId: string;
   relationshipType: RelationshipType;
