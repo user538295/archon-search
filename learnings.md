@@ -2,6 +2,13 @@
 
 ## What Has Failed
 
+**[2026-06-28] — Competitive analysis update: agents need full Phase A-E context, not just recent weeks**
+- Observation: When told "three recent weeks," the agent prompt omitted Phase A/B features (hybrid routing B4, server-side multi-collection B3, explain endpoint A4, metadata filters A2) that were shipped months ago but still absent from the comparison doc.
+- Action: When briefing agents on competitive analysis updates, scope the task as "all phases since the document's last-reviewed date" and verify which roadmap phases are fully checked off. A git log range like `git log --since=<last-reviewed>` is more reliable than a wall-clock window.
+- Confidence: high
+
+
+
 **implement-all T-1: subagent stops after review without committing or checking off plan**
 - Action: Subagent prompt must require `grep "\- \[x\]" <plan>` and `git log --oneline -1` as proof before declaring done. Stated intent is not execution.
 
@@ -354,4 +361,19 @@
 **[2026-06-27] — E0d T-4 (Iterative review — pipeline bugs)**
 - Observation: The working tree bundled an unrelated `hybrid_search → hybrid_search_with_trace` pipeline refactor alongside the E0d docs close-out. Iterative review (Brooks-Lint C1-B-1) caught that both `_search_standard` and the `search()` RAG Fusion path were calling `hybrid_search_with_trace(candidate_depth=self._top_k_retrieve)` — a 3×–5× candidate fetch regression vs. all sibling call sites that use `max(self._top_k_retrieve * 3, 20)`. A second DA finding (C1-I-1) identified that `source_path_glob` post-filtering was applied only in `_search_standard` and silently omitted in the RAG Fusion fuse path.
 - Action: When committing a refactor that migrates a store-layer call to a new method, audit every call site's `candidate_depth` argument and compare to sibling call sites — silent under-fetch is the most common regression pattern in these migrations. Also verify that every post-filter applied in the old method is re-applied in the new caller.
+- Confidence: high
+
+**[2026-06-28] — E0e K1 (Contract/kickoff task: TypeSpec contract review)**
+- Observation: A contract TypeSpec stub that added `ExcludedCollection` used field name `collection` instead of the real schema's `name` field (from `schemas.py ExcludedCollectionSchema`). The error was caught by iterative review (Cycle 2 DA + Brooks-Lint). Contract fidelity defects — especially wrong field names — are invisible until a client implements against them.
+- Action: When adding a new model to a TypeSpec contract that represents an existing Python schema, always grep the actual Pydantic/dataclass field names first (`grep -n "class ExcludedCollection\|name\|reason" archon_search/`). Never guess field names from the model's concept name.
+- Confidence: high
+
+**[2026-06-28] — E0e K1 (Contract/kickoff task: seam file design)**
+- Observation: TypeSpec seam files that are partial views (showing only E0e-delta fields, not the full type) must be explicitly labeled as partial or readers assume they are complete. Without a "E0e delta view — missing fields: results, excluded_collections, fanout_timings" comment, reviewers and implementers treated `SearchPipelineResult` as complete and flagged it as wrong.
+- Action: Any TypeSpec seam file that intentionally omits fields must carry a top-level docstring listing the omitted fields and pointing to the source of truth (e.g., `pipeline.py:43-51`). The pattern "Stub — see X for full shape" is acceptable for the HTTP API stubs but more detail is needed for internal seam files.
+- Confidence: high
+
+**[2026-06-28] — E0e K1 (Contract/kickoff task: RAG Fusion coverage gap)**
+- Observation: The E0e plan's S1-S11 scenario table had zero coverage for the RAG Fusion + multi-collection + filters combination, despite the plan's BE-2 task explicitly identifying 4 separate RAG Fusion call sites that must all receive `filters=`. The tester role allocations table (cheapest-level) for S12 was also absent, leaving testers without guidance. Both gaps were caught only by iterative review.
+- Action: When writing scenarios for any multi-collection feature, always include at least one RAG Fusion scenario (even if unit-level). RAG Fusion has structurally independent code paths that can silently miss parameters even when the standard path is correct. Add the scenario to both the table AND the cheapest-level allocation table before declaring the plan ready.
 - Confidence: high

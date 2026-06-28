@@ -1,0 +1,128 @@
+openapi: 3.0.0
+info:
+  title: Search API — multi-collection filter support (E0e)
+  version: 0.0.0
+tags: []
+paths:
+  /search:
+    post:
+      operationId: Search_search
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+components:
+  schemas:
+    SearchFilters:
+      type: object
+      properties:
+        file_type:
+          type: string
+        source_path_prefix:
+          type: string
+        source_path_glob:
+          type: string
+        indexed_after:
+          type: string
+        indexed_before:
+          type: string
+        language:
+          type: string
+        include_metadata:
+          type: boolean
+      description: Filters applied to search results. All fields optional; null applied_filters means no filters were submitted.
+    SearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+        collection:
+          type: string
+        collections:
+          type: array
+          items:
+            type: string
+          description: When provided, filters are applied to every leg independently.
+        filters:
+          allOf:
+            - $ref: '#/components/schemas/SearchFilters'
+          description: Accepted in both single- and multi-collection mode after E0e.
+        top_k:
+          type: integer
+          format: int32
+        hyde:
+          type: boolean
+        rag_fusion:
+          type: boolean
+    SearchResponse:
+      type: object
+      required:
+        - results
+        - acl_filtered
+        - embedding_model
+        - hyde_applied
+        - rag_fusion_applied
+        - rag_fusion_queries_used
+        - rag_fusion_attempted
+        - expansion_used
+        - expansion_warning
+        - applied_filters
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        acl_filtered:
+          type: boolean
+        embedding_model:
+          type: string
+        hyde_applied:
+          type: boolean
+        rag_fusion_applied:
+          type: boolean
+        rag_fusion_queries_used:
+          type: integer
+          format: int32
+        rag_fusion_attempted:
+          type: boolean
+        expansion_used:
+          type: boolean
+        expansion_warning:
+          type: string
+          nullable: true
+        applied_filters:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/SearchFilters'
+          nullable: true
+      description: |-
+        SearchResponse after E0e. Additive — applied_filters is the only new field.
+        applied_filters echoes the filters from the request body; null when no filters were provided.
+        Lifting the v1 restriction means collections + filters can now coexist.
+    SearchResult:
+      type: object
+      required:
+        - id
+        - score
+        - content
+      properties:
+        id:
+          type: string
+        score:
+          type: number
+          format: float
+        content:
+          type: string
+      description: Stub — see archon_search/server/routes_search.py SearchResultSchema for full 12-field shape.
