@@ -1,8 +1,9 @@
-"""GraphStore — LanceDB-backed graph node and edge storage for GraphRAG (E1a).
+"""GraphStore — LanceDB-backed graph node and edge storage for GraphRAG (E1a/E1b).
 
-Wraps two per-collection LanceDB tables:
+Wraps per-collection LanceDB tables:
   _archon_graph_{collection}_nodes
   _archon_graph_{collection}_edges
+  _archon_graph_{collection}_communities   (E1b)
 
 All SQL predicates MUST go through ``_where_eq`` / ``_where_in`` helpers
 (from ``archon_search.store_filters``), never f-strings passed directly to
@@ -16,11 +17,12 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from archon_search.graph_types import EntityType, GraphEdge, GraphNode, RelationshipType
+from archon_search.graph_types import Community, EntityType, GraphEdge, GraphNode, RelationshipType
 from archon_search.store_filters import _sql_quote_str
 
 if TYPE_CHECKING:
     import lancedb
+    from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +102,9 @@ class GraphStore:
     def _edges_table_name(self, collection: str) -> str:
         return _ARCHON_PREFIX + "graph_" + collection + "_edges"
 
+    def _communities_table_name(self, collection: str) -> str:
+        return _ARCHON_PREFIX + "graph_" + collection + "_communities"
+
     @staticmethod
     def _nodes_schema():  # type: ignore[return]
         """Return the PyArrow schema for the nodes table."""
@@ -125,6 +130,25 @@ class GraphStore:
             pa.field("target_node_id", pa.utf8()),
             pa.field("relationship_type", pa.utf8()),
             pa.field("source_doc_id", pa.utf8()),
+        ])
+
+    @staticmethod
+    def _communities_schema():  # type: ignore[return]
+        """Return the PyArrow schema for the communities table (E1b).
+
+        ``entity_ids`` and ``representative_chunk_ids`` are ``list_(utf8)`` columns.
+        ``summary_text`` is nullable utf8 — null when no LLM summary was generated.
+        ``built_at`` is stored as ISO 8601 UTC string (same convention as the rest of
+        the codebase; no timezone coercion enforced at the storage layer).
+        """
+        import pyarrow as pa  # noqa: PLC0415
+
+        return pa.schema([
+            pa.field("community_id", pa.utf8()),
+            pa.field("entity_ids", pa.list_(pa.utf8())),
+            pa.field("representative_chunk_ids", pa.list_(pa.utf8())),
+            pa.field("summary_text", pa.utf8(), nullable=True),
+            pa.field("built_at", pa.utf8()),
         ])
 
     # ------------------------------------------------------------------
@@ -308,8 +332,183 @@ class GraphStore:
         return self._arrow_to_nodes(nodes_arrow)
 
     # ------------------------------------------------------------------
+    # Communities table (E1b)
+    # ------------------------------------------------------------------
+
+    async def ensure_communities_table(self, collection: str) -> None:
+        """Create the communities table for *collection* if it doesn't already exist.
+
+        Idempotent — safe to call multiple times.
+        """
+        self._validate_collection(collection)
+        db = self._require_db()
+        await db.create_table(
+            self._communities_table_name(collection),
+            schema=self._communities_schema(),
+            exist_ok=True,
+        )
+
+    async def write_communities(
+        self,
+        collection: str,
+        communities: list[Community],
+    ) -> None:
+        """Persist *communities* for *collection*, replacing any existing data.
+
+        Deletes all existing rows first, then inserts the new set.  This makes the
+        operation idempotent — a second call to ``build-communities`` fully replaces
+        the previous run without duplication.
+
+        Note: The delete + add sequence is not atomic. A concurrent reader between
+        the two operations will see zero communities for this collection. This is
+        acceptable because ``write_communities`` is called exclusively from the
+        ``build-communities`` CLI batch operation, and communities are derived
+        (rebuildable) data. The failure mode is: re-run ``build-communities``.
+        """
+        import pyarrow as pa  # noqa: PLC0415
+
+        self._validate_collection(collection)
+        db = self._require_db()
+        await self.ensure_communities_table(collection)
+        table = await db.open_table(self._communities_table_name(collection))
+
+        # Clear existing communities before inserting the new set
+        await table.delete("1=1")
+
+        if not communities:
+            return
+
+        data = pa.table(
+            {
+                "community_id": [c.community_id for c in communities],
+                "entity_ids": [c.entity_ids for c in communities],
+                "representative_chunk_ids": [c.representative_chunk_ids for c in communities],
+                "summary_text": [c.summary_text for c in communities],
+                "built_at": [c.built_at.isoformat() for c in communities],
+            },
+            schema=self._communities_schema(),
+        )
+        await table.add(data)
+
+    # ponytail: LanceDB's _where_in helper generates simple equality predicates and cannot filter
+    # list-typed columns. This method performs a full table scan and applies the intersection
+    # filter in-process. Acceptable for < 1000 communities per collection; revisit if community
+    # counts grow significantly.
+    async def get_communities_for_entities(
+        self,
+        collection: str,
+        entity_ids: list[str],
+    ) -> list[Community]:
+        """Return all communities whose ``entity_ids`` list intersects *entity_ids*."""
+        if not entity_ids:
+            return []
+
+        self._validate_collection(collection)
+        db = self._require_db()
+
+        try:
+            table = await db.open_table(self._communities_table_name(collection))
+        except (FileNotFoundError, ValueError):
+            return []
+
+        rows = await table.query().to_list()
+        entity_id_set = set(entity_ids)
+        return [
+            self._row_to_community(row)
+            for row in rows
+            if any(eid in entity_id_set for eid in (row.get("entity_ids") or []))
+        ]
+
+    async def list_community_representatives(
+        self,
+        collection: str,
+    ) -> list[Community]:
+        """Return all communities stored for *collection*.
+
+        Returns an empty list if the communities table has not been created yet.
+        All returned ``Community`` objects have ``representative_chunk_ids`` populated.
+        """
+        self._validate_collection(collection)
+        db = self._require_db()
+
+        try:
+            table = await db.open_table(self._communities_table_name(collection))
+        except (FileNotFoundError, ValueError):
+            return []
+
+        rows = await table.query().to_list()
+        return [self._row_to_community(row) for row in rows]
+
+    async def get_community_stats(
+        self,
+        collection: str,
+    ) -> tuple[int, "datetime | None"]:
+        """Return ``(community_count, last_built_at)`` for *collection*.
+
+        Returns ``(0, None)`` when the communities table has not been created or is
+        empty.  ``last_built_at`` is the maximum ``built_at`` across all communities,
+        returned as a :class:`datetime` (UTC).
+        """
+        from datetime import datetime  # noqa: PLC0415
+
+        self._validate_collection(collection)
+        db = self._require_db()
+
+        try:
+            table = await db.open_table(self._communities_table_name(collection))
+        except (FileNotFoundError, ValueError):
+            return 0, None
+
+        rows = await table.query().select(["built_at"]).to_list()
+        if not rows:
+            return 0, None
+
+        count = len(rows)
+        # Find the most-recent built_at across all communities
+        max_ts: datetime | None = None
+        for row in rows:
+            raw = row.get("built_at")
+            if not raw:
+                continue
+            try:
+                ts = datetime.fromisoformat(raw)
+            except (ValueError, TypeError):
+                logger.warning(
+                    "get_community_stats: unparseable built_at %r; skipping for max calculation", raw
+                )
+                continue
+            if max_ts is None or ts > max_ts:
+                max_ts = ts
+
+        return count, max_ts
+
+    # ------------------------------------------------------------------
     # Internal conversion helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _row_to_community(row: dict) -> Community:
+        """Convert a raw LanceDB row dict to a :class:`Community` dataclass."""
+        from datetime import datetime, timezone  # noqa: PLC0415
+
+        raw_ts = row.get("built_at") or ""
+        try:
+            built_at = datetime.fromisoformat(raw_ts)
+        except (ValueError, TypeError):
+            logger.warning("_row_to_community: unparseable built_at %r; using epoch sentinel", raw_ts)
+            built_at = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+        entity_ids = list(row.get("entity_ids") or [])
+        representative_chunk_ids = list(row.get("representative_chunk_ids") or [])
+        summary_text = row.get("summary_text") or None  # coerce empty string → None
+
+        return Community(
+            community_id=row["community_id"],
+            entity_ids=entity_ids,
+            representative_chunk_ids=representative_chunk_ids,
+            built_at=built_at,
+            summary_text=summary_text,
+        )
 
     @staticmethod
     def _arrow_to_nodes(arrow_table) -> list[GraphNode]:  # type: ignore[return]

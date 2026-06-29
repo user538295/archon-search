@@ -2164,6 +2164,64 @@ class SearchStore:
         result.sort(key=lambda c: c.chunk_id)
         return result
 
+    async def get_chunks_by_ids(
+        self,
+        collection: str,
+        chunk_ids: list[str],
+    ) -> list[dict]:
+        """Batch-fetch chunk rows by *chunk_ids*; silently skip missing IDs.
+
+        Returns a list of raw row dicts for all *chunk_ids* that exist in
+        *collection*.  IDs that have been deleted or were never inserted are
+        omitted without error.  Returns ``[]`` for an empty *chunk_ids* list
+        without making any DB call.
+
+        Used by ``CommunityBuilder`` and ``SearchPipeline._search_graph_mode()``
+        to materialise representative chunks from stored community data.
+        Both callers must treat the result as unordered — LanceDB does not
+        guarantee insertion-order recall.
+
+        SQL predicates use ``_where_in`` from ``store_filters`` — never f-strings.
+        """
+        if not chunk_ids:
+            return []
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except (ValueError, FileNotFoundError):
+            return []
+        # chunk_ids are supplied by the caller (community store); _where_in is defense-in-depth
+        rows = await table.query().where(_where_in("chunk_id", chunk_ids)).to_list()
+        return list(rows)
+
+    async def get_chunks_for_doc(
+        self,
+        collection: str,
+        doc_id: str,
+    ) -> list[dict]:
+        """Return all chunk rows for *doc_id* in *collection*.
+
+        Used by ``CommunityBuilder`` to build the MMR candidate pool for a
+        community — ``GraphNode.source_doc_id`` is the only doc reference stored
+        on a node, so fetching all chunks for that document is the only way to
+        discover candidate chunks when no direct chunk_id mapping exists.
+
+        Returns ``[]`` if the collection does not exist or has no chunks for
+        *doc_id*.  Never raises for a missing collection.
+
+        SQL predicate uses ``_where_eq`` from ``store_filters`` — never f-strings.
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except (ValueError, FileNotFoundError):
+            return []
+        # doc_id is a caller-supplied value; _where_eq is defense-in-depth
+        rows = await table.query().where(_where_eq("doc_id", doc_id)).to_list()
+        return list(rows)
+
     async def get_all_vectors(self, collection: str) -> list[list[float]]:
         """Return all embedding vectors stored in the collection.
 
