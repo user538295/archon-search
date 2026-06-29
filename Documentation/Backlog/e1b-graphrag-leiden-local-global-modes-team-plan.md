@@ -496,15 +496,15 @@ flowchart LR
         - [x] #integration_test — `test_get_status_includes_community_count` — real app + built communities; GET /status → collection entry has community_count >= 1 and last_built_at non-null (S4)
         - [x] #integration_test — `test_status_last_built_at_shows_before_reingest` — build communities; ingest new doc; GET /status → last_built_at unchanged (stale detection) (S14)
 
-- [ ] **BE-9** — Extend MCP `search` tool in `mcp.py`: add `graph_mode: str | None = None` parameter; validate allowed values; thread to `pipeline.search()` with same error handling as REST route (catch `GraphCommunitiesNotBuiltError` → MCP error dict with code); update MCP tool docstring. Also verify that the existing `search_with_context` MCP tool guard covers `local` and `global` modes — it currently returns `{'error': 'graph_mode on search_with_context is deferred to E1c', 'code': 'graph_mode_not_supported'}` for any non-null graph_mode. No logic change needed; the guard is already mode-value-agnostic. Update the error string to list all three modes: `'graph_mode (naive, local, global) on search_with_context is not supported; use the search tool instead'`. #backend-role
+- [x] **BE-9** — Extend MCP `search` tool in `mcp.py`: add `graph_mode: str | None = None` parameter; validate allowed values; thread to `pipeline.search()` with same error handling as REST route (catch `GraphCommunitiesNotBuiltError` → MCP error dict with code); update MCP tool docstring. Also verify that the existing `search_with_context` MCP tool guard covers `local` and `global` modes — it currently returns `{'error': 'graph_mode on search_with_context is deferred to E1c', 'code': 'graph_mode_not_supported'}` for any non-null graph_mode. No logic change needed; the guard is already mode-value-agnostic. Update the error string to list all three modes: `'graph_mode (naive, local, global) on search_with_context is not supported; use the search tool instead'`. #backend-role
     - Presentation · 1.5h
     - needs T-1 · completes C1, S5
     - Tests
-        - #unit_test — `test_mcp_search_global_mode_calls_pipeline` — mock pipeline.search; MCP search(graph_mode="global") → pipeline called with graph_mode="global"
-        - #unit_test — `test_mcp_search_invalid_graph_mode_returns_error` — MCP search(graph_mode="bad") → error dict with validation_error code
-        - #unit_test — `test_mcp_search_with_context_local_global_deferred` — MCP search_with_context(graph_mode="local") and search_with_context(graph_mode="global") both return `code="graph_mode_not_supported"` error dict
-        - #integration_test — `test_mcp_search_global_mode_real` — real app + communities; MCP search with graph_mode=global → result dict with results list (S5)
-        - #integration_test — `test_mcp_search_local_mode_real` — real app + communities; MCP search with graph_mode=local and entity-matching query → result dict with results list; verifies local mode parameter threading through MCP (S5)
+        - [x] #unit_test — `test_mcp_search_global_mode_calls_pipeline` — mock pipeline.search; MCP search(graph_mode="global") → pipeline called with graph_mode="global"
+        - [x] #unit_test — `test_mcp_search_invalid_graph_mode_returns_error` — MCP search(graph_mode="bad") → error dict with validation_error code
+        - [x] #unit_test — `test_mcp_search_with_context_local_global_deferred` — MCP search_with_context(graph_mode="local") and search_with_context(graph_mode="global") both return `code="graph_mode_not_supported"` error dict
+        - [x] #integration_test — `test_mcp_search_global_mode_real` — real app + communities; MCP search with graph_mode=global → result dict with results list (S5)
+        - [x] #integration_test — `test_mcp_search_local_mode_real` — real app + communities; MCP search with graph_mode=local and entity-matching query → result dict with results list; verifies local mode parameter threading through MCP (S5)
 
 - [ ] **T-3** — e2e: (a) `GET /status` after `build-communities` shows correct `community_count` and `last_built_at` for the collection; (b) MCP `search` tool with `graph_mode=global` returns results; (c) MCP `search` tool with `graph_mode=local` returns results #tester-role
     - — · 2.0h

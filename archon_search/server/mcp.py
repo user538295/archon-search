@@ -28,6 +28,7 @@ from archon_search.pipeline import (
     ExplainMultiCollectionNoRerankError,
     ExplainStageError,
     FanoutTimeoutError,
+    GraphCommunitiesNotBuiltError,
     MetadataLookupError,
     SearchPipeline,
 )
@@ -117,6 +118,7 @@ class McpErrorResponse(TypedDict):
 
 
 _ERR_SCHEMA = "schema_validation_error"
+_VALID_GRAPH_MODES: tuple[None | str, ...] = (None, "naive", "local", "global")
 
 
 _PATH_UNSAFE_MESSAGES: dict[str, str] = {
@@ -254,13 +256,19 @@ def create_app(
         rag_fusion: bool = False,
         graph_mode: str | None = None,
     ) -> dict[str, Any]:
-        """Search for relevant document chunks using hybrid vector + FTS search."""
+        """Search for relevant document chunks using hybrid vector + FTS search.
+
+        ``graph_mode`` controls graph-aware retrieval:
+        - ``"naive"`` — entity n-gram expansion (E1a).
+        - ``"local"`` — community-scoped retrieval for the matched community (E1b).
+        - ``"global"`` — corpus-wide synthesis over all community representatives (E1b).
+        Requires ``[graph] enabled = true`` in the server config.
+        """
         ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
 
-        # graph_mode validation — must be None or "naive" (other modes deferred to E1b/E1c).
-        _VALID_GRAPH_MODES = (None, "naive")
+        # graph_mode validation — must be None, "naive", "local", or "global".
         if graph_mode not in _VALID_GRAPH_MODES:
             return McpErrorResponse(error=f"graph_mode must be one of {list(m for m in _VALID_GRAPH_MODES if m is not None)!r}", code="invalid_graph_mode")
         _graph_config = getattr(config, "graph", None)
@@ -353,6 +361,8 @@ def create_app(
                 )
             except RAGFusionDependencyError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
+            except GraphCommunitiesNotBuiltError as exc:
+                return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
             except CollectionNotFoundError:
                 return McpErrorResponse(error="collection not found", code="not_found")
             except FanoutTimeoutError:
@@ -492,6 +502,8 @@ def create_app(
                 return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except RAGFusionDependencyError as exc:
             return McpErrorResponse(error=str(exc), code="validation_error")
+        except GraphCommunitiesNotBuiltError as exc:
+            return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
         except Exception as exc:
             if writer is not None:
                 try:
@@ -530,9 +542,12 @@ def create_app(
         Returns ``{"results": [...], "hyde_applied": bool, "expansion_used": bool,
         "expansion_warning": str | null}``.
         """
-        # graph_mode on search_with_context is deferred to E1c.
+        # graph_mode on search_with_context is not supported; use the search tool instead.
         if graph_mode is not None:
-            return McpErrorResponse(error="graph_mode on search_with_context is deferred to E1c", code="graph_mode_not_supported")
+            return McpErrorResponse(
+                error="graph_mode (naive, local, global) on search_with_context is not supported; use the search tool instead",
+                code="graph_mode_not_supported",
+            )
 
         _swc_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)

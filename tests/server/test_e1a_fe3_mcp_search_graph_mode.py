@@ -249,15 +249,17 @@ async def test_mcp_search_graph_mode_unknown_value_returns_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_search_graph_mode_local_value_returns_error() -> None:
-    """graph_mode='local' → code='invalid_graph_mode' (deferred to E1b)."""
+async def test_mcp_search_graph_mode_local_value_accepted() -> None:
+    """graph_mode='local' is now accepted (implemented in E1b / BE-9); no invalid_graph_mode error."""
     pipeline = _make_pipeline()
     app = _make_mcp_app(pipeline, graph_enabled=True)
     search_fn = app.tools["search"]  # type: ignore[union-attr]
 
     result = await search_fn(query="hello", collection="col", graph_mode="local")
 
-    assert result.get("code") == "invalid_graph_mode", f"Expected code='invalid_graph_mode', got: {result}"
+    assert result.get("code") != "invalid_graph_mode", (
+        f"graph_mode='local' must not return invalid_graph_mode after E1b; got: {result}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -277,8 +279,8 @@ async def test_mcp_search_with_context_graph_mode_returns_error() -> None:
     assert result.get("code") == "graph_mode_not_supported", (
         f"Expected code='graph_mode_not_supported', got: {result}"
     )
-    assert "deferred" in result.get("error", "").lower() or "E1c" in result.get("error", ""), (
-        f"Expected error to mention deferral, got: {result.get('error', '')!r}"
+    assert "not supported" in result.get("error", "").lower() or "use the search tool" in result.get("error", "").lower(), (
+        f"Expected error to mention 'not supported'; got: {result.get('error', '')!r}"
     )
     # Guard must fire BEFORE calling the pipeline's search_with_context method.
     pipeline.search_with_context.assert_not_called()
