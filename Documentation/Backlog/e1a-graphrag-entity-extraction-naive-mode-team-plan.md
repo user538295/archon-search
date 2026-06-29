@@ -530,14 +530,14 @@ flowchart LR
         - [x] #e2e_test — `test_e2e_graph_naive_single_collection_recall` — ingest fixture with AuthService→TokenValidator relationship; search `"AuthService"` with `graph_mode="naive"`; assert results contain TokenValidator chunk
         - [x] #e2e_test — `test_e2e_graph_naive_fanout_per_collection` — two collections with separate graphs; fanout search; verify expansion used per-collection independently; `graph_expansion_applied=True`
 
-- [ ] **T-3** — e2e: graph disabled + `graph_mode=naive` → 422; `graph_mode=naive` + empty graph → no-op (200, `graph_expansion_applied=False`); MCP `graph_mode=naive` roundtrip (graph enabled) #tester-role
+- [x] **T-3** — e2e: graph disabled + `graph_mode=naive` → 422; `graph_mode=naive` + empty graph → no-op (200, `graph_expansion_applied=False`); MCP `graph_mode=naive` roundtrip (graph enabled) #tester-role
     - — · 2.0h
     - needs FE-2, FE-3 · completes S5, S6, S8
     - Tests
-        - #e2e_test — `test_e2e_graph_mode_422_when_disabled` — graph disabled; POST with `graph_mode="naive"`; assert 422
-        - #e2e_test — `test_e2e_graph_mode_noop_empty_graph` — graph enabled but zero nodes; `graph_mode="naive"`; assert 200, `graph_expansion_applied=False`
-        - #e2e_test — `test_e2e_mcp_search_graph_mode` — MCP roundtrip with `graph_mode="naive"`; assert response well-formed
-        - #e2e_test — `test_e2e_mcp_search_with_context_graph_mode` — MCP `search_with_context` with `graph_mode="naive"`; assert error code returned, not exception
+        - [x] #e2e_test — `test_e2e_graph_mode_422_when_disabled` — graph disabled; POST with `graph_mode="naive"`; assert 422
+        - [x] #e2e_test — `test_e2e_graph_mode_noop_empty_graph` — graph enabled but zero nodes; `graph_mode="naive"`; assert 200, `graph_expansion_applied=False`
+        - [x] #e2e_test — `test_e2e_mcp_search_graph_mode` — MCP roundtrip with `graph_mode="naive"`; assert response well-formed
+        - [x] #e2e_test — `test_e2e_mcp_search_with_context_graph_mode` — MCP `search_with_context` with `graph_mode="naive"`; assert error code returned, not exception
 
 ---
 
