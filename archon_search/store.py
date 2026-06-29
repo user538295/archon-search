@@ -245,7 +245,7 @@ def parse_metadata(raw: str) -> dict[str, str]:
         return {}
 
 
-def _normalize_ingested_by(value: "str | None") -> str:
+def normalize_ingested_by(value: "str | None") -> str:
     """Normalize a stored ``ingested_by`` value at the read boundary.
 
     None / empty / legacy ``"archon-search-cli"`` → ``"cli"``.
@@ -1654,7 +1654,7 @@ class SearchStore:
         - Legacy ``ingested_by == "archon-search-cli"`` is rewritten to
           ``"reindex"``. Canonical members are preserved.
 
-        Reads RAW LanceDB rows — does NOT route through ``_normalize_ingested_by``
+        Reads RAW LanceDB rows — does NOT route through ``normalize_ingested_by``
         (Task 6.2 requirement), so legacy values are visible and rewriteable.
 
         Holds the per-collection lock for the full duration (no timeout — the
@@ -1862,7 +1862,7 @@ class SearchStore:
                     language=row.get("language") or "",
                     indexed_at=indexed_at,
                     updated_at=row.get("updated_at") or indexed_at,
-                    ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
+                    ingested_by=normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
                     metadata=parse_metadata(row.get("metadata") or "{}"),
                     acl=row_acl,
                     collection=collection,
@@ -2155,7 +2155,7 @@ class SearchStore:
                 language=r.get("language") or "",
                 metadata=parse_metadata(r.get("metadata") or "{}"),
                 custom_score=r.get("custom_score"),
-                ingested_by=_normalize_ingested_by(r.get("ingested_by")),
+                ingested_by=normalize_ingested_by(r.get("ingested_by")),
                 updated_at=r.get("updated_at") or r["indexed_at"],
                 acl=list(r.get("acl")) if isinstance(r.get("acl"), list) else None,
             )
@@ -2551,7 +2551,7 @@ async def _hybrid_search_with_trace(
                     file_type=row.get("file_type") or "",
                     indexed_at=indexed_at,
                     updated_at=row.get("updated_at") or indexed_at,
-                    ingested_by=_normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
+                    ingested_by=normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
                     language=row.get("language") or "",
                     metadata=parse_metadata(row.get("metadata") or "{}"),
                 )

@@ -726,3 +726,18 @@
 - Observation: Tests using `asyncio.get_event_loop().run_until_complete()` pass when run in isolation (`-n0`) but fail under xdist parallel execution (the default) because xdist workers have no current event loop.
 - Action: Always use `@pytest.mark.asyncio` with `async def` for async unit tests. Never use `asyncio.get_event_loop().run_until_complete()` in test bodies — it is broken in xdist and triggers a DeprecationWarning in Python 3.12+.
 - Confidence: high
+
+**[2026-06-29] — E1b BE-4: CliRunner merges stderr into output by default**
+- Observation: Click's `CliRunner` uses `mix_stderr=True` by default, so `click.echo(..., err=True)` output appears in `result.output`, not a separate stderr stream. Tests asserting on error messages must inspect `result.output`.
+- Action: Always assert error messages on `result.output` in CliRunner tests; assert `exit_code == 1` (exact) for specific failure scenarios, not `!= 0`.
+- Confidence: high
+
+**[2026-06-29] — E1b BE-4: Community.built_at is non-nullable — never pass None**
+- Observation: `Community.built_at` is typed `datetime` (non-optional). Creating `Community(built_at=None)` raises a runtime error. The iterative-review caught this as C1-T-1 Critical.
+- Action: Always use a concrete `datetime` value (e.g. `datetime(2026, 1, 1, tzinfo=timezone.utc)`) in test fixtures; grep the dataclass definition before constructing it to check nullability.
+- Confidence: high
+
+**[2026-06-29] — E1b BE-4: Place store connect() calls inside the try block**
+- Observation: If `connect()` is placed before the `try` block, a connection failure bypasses the except handler. Both `GraphStore.disconnect()` and `SearchStore.disconnect()` guard with `if self._db is not None`, so calling them in `finally` is always safe — but errors during `connect()` should still be caught by the handler.
+- Action: Always place `await store.connect()` inside the try block so connection failures are caught and the finally cleanup runs unconditionally.
+- Confidence: high

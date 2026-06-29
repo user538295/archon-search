@@ -14,7 +14,7 @@ from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from archon_search._diagnostics import ScoredSearchCandidate
+from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._privacy import _query_fingerprint
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, FanoutTimings, IngestedBy, IngestError, IngestResult, SearchResult, _file_exceeds_limit
 from archon_search.acl import apply_acl_filter, resolve_acl
@@ -29,7 +29,7 @@ from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher
 from archon_search.enricher import MarkdownEnricher, is_docling_source, source_subtype_for
 from archon_search.parser import DocumentParser, ParseError
 from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
-from archon_search.store import SearchStore, StoreBusyError, elementwise_sum
+from archon_search.store import SearchStore, StoreBusyError, elementwise_sum, parse_metadata, normalize_ingested_by
 from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
 from archon_search.graph_types import ChunkInput
 
@@ -129,6 +129,45 @@ class ExplainStageError(Exception):
         self.stage = stage
         self.original = original
         super().__init__(f"{stage} error: {original}")
+
+
+class GraphCommunitiesNotBuiltError(Exception):
+    """Raised when global graph mode is requested but no communities have been built."""
+
+    def __init__(self, collection: str) -> None:
+        self.collection = collection
+        super().__init__(
+            f"No community representatives found for collection {collection!r}. "
+            "Run community detection first."
+        )
+
+
+def _row_to_community_candidate(row: dict, collection: str) -> ScoredSearchCandidate:
+    """Convert a raw LanceDB chunk row dict to a ScoredSearchCandidate for global community ranking."""
+    metadata = parse_metadata(row.get("metadata", "{}"))
+    ingested_by = normalize_ingested_by(row.get("ingested_by", ""))
+    raw_acl = row.get("acl")
+    acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
+    breakdown = SearchScoreBreakdown(
+        vector_rank=None, vector_score=None, vector_score_kind=None,
+        fts_rank=None, fts_score=None, fts_score_kind=None,
+        rrf_score=1.0, reranker_score=None,
+    )
+    return ScoredSearchCandidate(
+        chunk_id=row.get("chunk_id", ""),
+        source_path=row.get("source_path", ""),
+        text=row.get("text", ""),
+        collection=collection,
+        doc_id=row.get("doc_id", ""),
+        language=row.get("language", ""),
+        file_type=row.get("file_type", ""),
+        indexed_at=row.get("indexed_at", ""),
+        updated_at=row.get("updated_at", ""),
+        acl=acl,
+        metadata=metadata,
+        ingested_by=ingested_by,  # type: ignore[arg-type]
+        score_breakdown=breakdown,
+    )
 
 
 _BINARY_EXTENSIONS = frozenset(
@@ -706,11 +745,16 @@ class SearchPipeline:
         # is active the expanded text is used for both FTS and vector embedding.
         effective_query = query
         graph_expansion_applied = False
+        if graph_mode in ("local", "global"):
+            return await self._search_graph_mode(  # type: ignore[return-value]
+                graph_mode, collection, query, namespace,
+                filters=filters,
+            )
         if graph_mode == "naive" and self._graph_expander is not None:
-            expanded = await self._graph_expander.expand(query, collection)
-            if expanded.expansion_applied:
-                effective_query = expanded.expanded_text
+            expanded_text = await self._search_graph_mode("naive", collection, query, namespace)
+            if isinstance(expanded_text, str) and expanded_text != query:
                 graph_expansion_applied = True
+                effective_query = expanded_text
 
         # --- RAG Fusion path ---
         if (
@@ -870,6 +914,95 @@ class SearchPipeline:
         )
         result.graph_expansion_applied = graph_expansion_applied
         return result
+
+    async def _search_graph_mode(
+        self,
+        graph_mode: str,
+        collection: str,
+        query: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        *,
+        filters: "SearchFilters | None" = None,
+    ) -> "SearchPipelineResult | str":
+        """Dispatch for graph retrieval modes.
+
+        Returns:
+        - ``SearchPipelineResult`` for 'local' and 'global' modes.
+        - ``str`` (expanded query text) for 'naive' mode.
+        """
+        if graph_mode == "naive":
+            if self._graph_expander is None:
+                return query
+            expanded = await self._graph_expander.expand(query, collection)
+            return expanded.expanded_text if expanded.expansion_applied else query
+
+        if graph_mode == "local":
+            # BE-7a placeholder: fall back to standard hybrid search
+            logger.warning(
+                "_search_graph_mode: graph_mode='local' not yet implemented; "
+                "falling back to standard search (collection=%r)", collection,
+            )
+            return await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+
+        if graph_mode == "global":
+            if self._graph_store is None:
+                logger.warning(
+                    "_search_graph_mode: graph_mode='global' but no graph_store; "
+                    "falling back to standard search (collection=%r)", collection,
+                )
+                return await self._search_standard(
+                    query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                )
+            communities = await self._graph_store.list_community_representatives(collection)
+            if not communities:
+                raise GraphCommunitiesNotBuiltError(collection)
+
+            chunk_ids: list[str] = []
+            for comm in communities:
+                chunk_ids.extend(comm.representative_chunk_ids)
+            max_cands = self._graph_config.max_global_candidates if self._graph_config else 100
+            chunk_ids = chunk_ids[:max_cands]
+
+            rows = await self.store.get_chunks_by_ids(collection, chunk_ids)
+            if not rows:
+                logger.warning(
+                    "_search_graph_mode global: no chunks found for collection %r; "
+                    "falling back to standard search", collection,
+                )
+                return await self._search_standard(
+                    query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                )
+
+            candidates = [_row_to_community_candidate(r, collection) for r in rows]
+            candidates, acl_filtered = apply_acl_filter(candidates, lambda c: c.acl, namespace)
+
+            if not candidates:
+                logger.warning(
+                    "_search_graph_mode global: all candidates filtered by ACL for collection %r; "
+                    "falling back to standard search", collection,
+                )
+                return await self._search_standard(
+                    query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                )
+
+            if self._reranker is not None:
+                candidates = await self._reranker.rerank_candidates(query, candidates, top_k=self._top_k_return)
+            else:
+                candidates = sorted(candidates, key=lambda c: c.score_breakdown.rrf_score or 0.0, reverse=True)[:self._top_k_return]
+
+            return SearchPipelineResult(
+                results=[self._candidate_to_search_result(c) for c in candidates],
+                acl_filtered=acl_filtered,
+                graph_expansion_applied=True,
+            )
+
+        # Unknown mode — log and fall through to standard
+        logger.warning("_search_graph_mode: unknown graph_mode=%r; falling back", graph_mode)
+        return await self._search_standard(
+            query, collection, namespace, embedder=self._global_embedder, filters=filters,
+        )
 
     async def _search_standard(
         self,
@@ -1479,6 +1612,52 @@ class SearchPipeline:
                 excluded_collections=excluded_collections,
                 fanout_timings=FanoutTimings(leg_times=leg_times, rerank_time_ms=rerank_time_ms),
                 graph_expansion_applied=graph_expansion_applied,
+            )
+
+        # --- Global graph mode ---
+        if graph_mode == "global" and self._graph_store is not None:
+            acl_filtered: bool = False
+            all_candidates: list[ScoredSearchCandidate] = []
+            for coll in collections_in_scope:
+                communities = await self._graph_store.list_community_representatives(coll)
+                if not communities:
+                    raise GraphCommunitiesNotBuiltError(coll)
+                coll_chunk_ids: list[str] = []
+                for comm in communities:
+                    coll_chunk_ids.extend(comm.representative_chunk_ids)
+                max_cands = self._graph_config.max_global_candidates if self._graph_config else 100
+                coll_chunk_ids = coll_chunk_ids[:max_cands]
+                rows = await self.store.get_chunks_by_ids(coll, coll_chunk_ids)
+                if not rows:
+                    logger.warning(
+                        "search_many global mode: no chunks found for collection %r, skipping", coll
+                    )
+                    continue
+                all_candidates.extend(_row_to_community_candidate(r, coll) for r in rows)
+
+            if all_candidates:
+                all_candidates, acl_filtered = apply_acl_filter(all_candidates, lambda c: c.acl, namespace)
+
+            if not all_candidates:
+                logger.warning(
+                    "search_many global mode: all candidates empty/filtered; falling through to standard path"
+                )
+            else:
+                if self._reranker is not None:
+                    all_candidates = await self._reranker.rerank_candidates(query, all_candidates, top_k=self._top_k_return)
+                else:
+                    all_candidates = sorted(all_candidates, key=lambda c: c.score_breakdown.rrf_score or 0.0, reverse=True)[:self._top_k_return]
+                return SearchPipelineResult(
+                    results=[self._candidate_to_search_result(c) for c in all_candidates],
+                    acl_filtered=acl_filtered,
+                    graph_expansion_applied=True,
+                    excluded_collections=excluded_collections,
+                )
+
+        if graph_mode == "local":
+            logger.warning(
+                "search_many: graph_mode='local' not yet implemented; "
+                "falling back to standard search"
             )
 
         # --- Standard path ---
