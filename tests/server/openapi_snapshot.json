@@ -2887,6 +2887,11 @@
             "title": "Chunk Count",
             "type": "integer"
           },
+          "community_count": {
+            "default": 0,
+            "title": "Community Count",
+            "type": "integer"
+          },
           "doc_count": {
             "default": 0,
             "title": "Doc Count",
@@ -2918,6 +2923,17 @@
               }
             ],
             "title": "Eta Seconds"
+          },
+          "last_built_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Built At"
           },
           "name": {
             "title": "Name",

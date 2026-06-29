@@ -488,13 +488,13 @@ flowchart LR
 
 ### Phase 3 · Surface community intelligence to operators and MCP clients
 
-- [ ] **BE-8** — Extend `schemas.py`: add `community_count: int = 0` and `last_built_at: str | None = None` to `StatusCollectionEntry`; extend `routes_status.py` status builder to call `store.get_community_stats(collection)` per collection and populate fields #backend-role
+- [x] **BE-8** — Extend `schemas.py`: add `community_count: int = 0` and `last_built_at: str | None = None` to `StatusCollectionEntry`; extend `routes_status.py` status builder to call `store.get_community_stats(collection)` per collection and populate fields #backend-role
     - Presentation · 2.0h
     - needs BE-2, T-1 · completes C2, S4, S14
     - Tests
-        - #unit_test — `test_status_collection_entry_community_fields_default` — community_count=0, last_built_at=None when no communities
-        - #integration_test — `test_get_status_includes_community_count` — real app + built communities; GET /status → collection entry has community_count >= 1 and last_built_at non-null (S4)
-        - #integration_test — `test_status_last_built_at_shows_before_reingest` — build communities; ingest new doc; GET /status → last_built_at unchanged (stale detection) (S14)
+        - [x] #unit_test — `test_status_collection_entry_community_fields_default` — community_count=0, last_built_at=None when no communities
+        - [x] #integration_test — `test_get_status_includes_community_count` — real app + built communities; GET /status → collection entry has community_count >= 1 and last_built_at non-null (S4)
+        - [x] #integration_test — `test_status_last_built_at_shows_before_reingest` — build communities; ingest new doc; GET /status → last_built_at unchanged (stale detection) (S14)
 
 - [ ] **BE-9** — Extend MCP `search` tool in `mcp.py`: add `graph_mode: str | None = None` parameter; validate allowed values; thread to `pipeline.search()` with same error handling as REST route (catch `GraphCommunitiesNotBuiltError` → MCP error dict with code); update MCP tool docstring. Also verify that the existing `search_with_context` MCP tool guard covers `local` and `global` modes — it currently returns `{'error': 'graph_mode on search_with_context is deferred to E1c', 'code': 'graph_mode_not_supported'}` for any non-null graph_mode. No logic change needed; the guard is already mode-value-agnostic. Update the error string to list all three modes: `'graph_mode (naive, local, global) on search_with_context is not supported; use the search tool instead'`. #backend-role
     - Presentation · 1.5h

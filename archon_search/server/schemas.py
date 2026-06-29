@@ -99,6 +99,9 @@ class StatusCollectionEntry(BaseModel):
     error_count: int = 0
     needs_reindex: bool = False
     warning: str | None = None
+    # E1b BE-8 — community stats (populated when graph.enabled=true and communities built)
+    community_count: int = 0
+    last_built_at: str | None = None
 
 
 class CollectionBackupStatus(BaseModel):

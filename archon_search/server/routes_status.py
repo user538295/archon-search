@@ -78,6 +78,9 @@ async def status(request: Request) -> StatusResponse:
     # Config/pinned paths without a store meta row are not yet indexed and won't appear here.
     all_names: set[str] = ns_names
 
+    # E1b BE-8 — fetch graph_store once; used per-collection inside the loop below.
+    graph_store = getattr(request.app.state, "graph_store", None)
+
     collection_entries: list[StatusCollectionEntry] = []
     for name in sorted(all_names):
         progress = collections_progress.get(name)
@@ -90,6 +93,22 @@ async def status(request: Request) -> StatusResponse:
             untagged = await search_store.count_untagged_language_chunks(name)
             if untagged > 0:
                 warning = "multilingual=true but collection contains untagged chunks; re-ingest required"
+
+        # E1b BE-8 — community stats per collection (C2, S4, S14)
+        community_count = 0
+        last_built_at: str | None = None
+        if config.graph.enabled and graph_store is not None:
+            try:
+                count, built_at_dt = await graph_store.get_community_stats(name)
+                community_count = count
+                if built_at_dt is not None:
+                    last_built_at = built_at_dt.isoformat()
+            except Exception:
+                logger.warning(
+                    "community stats unavailable for collection %r; using defaults",
+                    name,
+                    exc_info=True,
+                )
 
         collection_entries.append(
             StatusCollectionEntry(
@@ -106,6 +125,8 @@ async def status(request: Request) -> StatusResponse:
                 error_count=progress["error_count"] if progress else 0,
                 needs_reindex=col_meta.needs_reindex if col_meta else False,
                 warning=warning,
+                community_count=community_count,
+                last_built_at=last_built_at,
             )
         )
 
