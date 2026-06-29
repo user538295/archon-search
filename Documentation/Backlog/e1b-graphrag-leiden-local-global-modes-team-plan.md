@@ -440,7 +440,7 @@ flowchart LR
         - #integration_test — `test_global_mode_acl_filters_community_chunks_integration` — real app + communities built; community representative chunks include docs from namespace B; global mode search from namespace A returns no namespace B content (S15 global-mode path)
         - #integration_test — `test_post_search_graph_mode_disabled_422` — graph.enabled=False; any graph_mode (naive, local, global) → 422
 
-- [ ] **T-1** — e2e: (a) `build-communities` CLI via CliRunner on a real collection with fixture graph data; verify communities in store + exit 0 + summary output; (b) `POST /search` with `graph_mode=global` returns 200 + results from community representatives; (c) `POST /search` with `graph_mode=global` and no communities → 422 `graph_communities_not_built` #tester-role
+- [x] **T-1** — e2e: (a) `build-communities` CLI via CliRunner on a real collection with fixture graph data; verify communities in store + exit 0 + summary output; (b) `POST /search` with `graph_mode=global` returns 200 + results from community representatives; (c) `POST /search` with `graph_mode=global` and no communities → 422 `graph_communities_not_built` #tester-role
     - — · 3.0h
     - needs BE-4, BE-6 · completes S1, S2, S11
     - Tests
