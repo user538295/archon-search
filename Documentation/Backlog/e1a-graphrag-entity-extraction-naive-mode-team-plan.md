@@ -463,11 +463,11 @@ flowchart LR
         - [x] #unit_test — `test_status_response_graph_field_present` — `StatusResponse` has `graph: GraphStatusDetail | None`
         - [x] #integration_test — `test_get_status_graph_subobject` — `TestClient` against app with graph enabled; `GET /status` response includes `graph` with `enabled:true`
 
-- [ ] **T-1** — e2e: configure graph, ingest doc with entities, verify `GET /status` shows `node_count > 0` per collection #tester-role
+- [x] **T-1** — e2e: configure graph, ingest doc with entities, verify `GET /status` shows `node_count > 0` per collection #tester-role
     - — · 3.0h
     - needs BE-5, FE-1 · completes S3
     - Tests
-        - #e2e_test — `test_e2e_ingest_and_graph_status` — `make_real_app(graph_enabled=True)`, ingest fixture doc with entity-rich text, `GET /status`, assert collection entry has `node_count > 0` and `backend == "networkx"`
+        - [x] #e2e_test — `test_e2e_ingest_and_graph_status` — `make_real_app(graph_enabled=True)`, ingest fixture doc with entity-rich text, `GET /status`, assert collection entry has `node_count > 0` and `backend == "networkx"`
 
 ---
 

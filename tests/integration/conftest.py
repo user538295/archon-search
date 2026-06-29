@@ -43,6 +43,7 @@ def make_real_app(
     max_fanout: int | None = None,
     top_k_max: int | None = None,
     toml_content: str | None = None,
+    graph_enabled: bool = False,
 ) -> Iterator[tuple[TestClient, Any, str]]:
     """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
 
@@ -64,6 +65,9 @@ def make_real_app(
     test isolation is guaranteed regardless of what TOML specifies.
     Cannot be combined with ``max_fanout`` / ``top_k_max`` kwargs; pass those values via
     the TOML string instead.
+    Pass ``graph_enabled=True`` to enable the graph feature (``config.graph.enabled=True``).
+    Callers must patch spaCy in sys.modules BEFORE entering the context manager (create_app
+    calls _check_graph_deps which imports spacy synchronously).
     The TestClient lifespan (startup + shutdown) is managed by the context block.
     """
     import secrets
@@ -124,6 +128,9 @@ def make_real_app(
 
     if top_k_max is not None:
         cfg.top_k_max = top_k_max
+
+    if graph_enabled:
+        cfg.graph.enabled = True
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     scheduler = JobScheduler(
