@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
     from archon_search.config import GraphConfig
     from archon_search.graph_store import GraphStore
     from archon_search.graph_types import Community, GraphEdge, GraphNode
+    from archon_search.store import SearchStore
 
 _logger = logging.getLogger(__name__)
 
@@ -37,6 +39,76 @@ _LEIDENALG_INSTALL_HINT = (
     "leidenalg is required for community detection. "
     "Install it with: pip install archon-search[graph]"
 )
+
+
+# ---------------------------------------------------------------------------
+# MMR helpers
+# ---------------------------------------------------------------------------
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors. Returns 0.0 for zero vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _mmr_select(chunks: list[dict], k: int) -> list[str]:
+    """Greedy MMR diversity selection. Returns up to *k* chunk_id strings.
+
+    Filters to chunks with a non-None, non-empty ``vector`` field. Picks the
+    chunk closest to the centroid of all valid vectors as the first
+    representative, then iteratively picks the chunk with the minimum
+    max-cosine-similarity to already-selected chunks.
+
+    Returns ``[]`` when *chunks* is empty or no chunks have valid vectors.
+
+    Note: This is diversity-only selection — there is no relevance/λ trade-off term.
+    The centroid serves as a weak relevance anchor (most "central" chunk is picked
+    first), but subsequent picks maximise diversity only (λ=0 in classical MMR).
+    """
+    valid_chunks = [c for c in chunks if c.get("vector")]
+    if not valid_chunks:
+        return []
+    k = min(k, len(valid_chunks))
+    if k <= 0:
+        return []
+
+    dim = len(valid_chunks[0]["vector"])
+    centroid = [0.0] * dim
+    for c in valid_chunks:
+        for i, v in enumerate(c["vector"]):
+            centroid[i] += v
+    n = len(valid_chunks)
+    centroid = [v / n for v in centroid]
+
+    selected_ids: list[str] = []
+    selected_vectors: list[list[float]] = []
+    remaining = list(valid_chunks)
+
+    # First pick: chunk closest to centroid
+    best_idx = max(range(len(remaining)), key=lambda i: _cosine_similarity(remaining[i]["vector"], centroid))
+    chosen = remaining.pop(best_idx)
+    selected_ids.append(str(chosen["chunk_id"]))
+    selected_vectors.append(chosen["vector"])
+
+    # Subsequent picks: minimum max-similarity to already selected
+    while len(selected_ids) < k and remaining:
+        best_score = float("inf")
+        best_idx = 0
+        for i, candidate in enumerate(remaining):
+            max_sim = max(_cosine_similarity(candidate["vector"], sv) for sv in selected_vectors)
+            if max_sim < best_score:
+                best_score = max_sim
+                best_idx = i
+        chosen = remaining.pop(best_idx)
+        selected_ids.append(str(chosen["chunk_id"]))
+        selected_vectors.append(chosen["vector"])
+
+    return selected_ids
 
 
 # ---------------------------------------------------------------------------
@@ -237,18 +309,83 @@ class CommunityBuilder:
     2. Short-circuit to a single community when fewer than 2 nodes exist.
     3. Load all edges from ``GraphStore.get_all_edges``.
     4. Run ``_cluster_with_size_limit`` via ``asyncio.to_thread``.
-    5. Return one ``Community`` per group with a fresh UUID.
+    5. Fill representative_chunk_ids via MMR (when search_store is provided).
+    6. Optionally generate LLM summary (stub; falls back to None on failure).
+    7. Persist communities via ``GraphStore.write_communities``.
+    8. Return one ``Community`` per group with a fresh UUID.
     """
 
-    def __init__(self, graph_store: "GraphStore", config: "GraphConfig") -> None:
+    def __init__(
+        self,
+        graph_store: "GraphStore",
+        config: "GraphConfig",
+        *,
+        search_store: "SearchStore | None" = None,
+    ) -> None:
         self._store = graph_store
         self._config = config
+        self._search_store = search_store
+
+    async def _generate_llm_summary(
+        self, community_id: str, chunk_texts: list[str]
+    ) -> str:
+        """LLM summarisation stub — not yet implemented (E1b scope).
+
+        When extraction_model is set, a WARNING is logged here and
+        NotImplementedError is raised so that build() falls back to MMR.
+        """
+        raise NotImplementedError(
+            f"LLM community summary for extraction_model={self._config.extraction_model!r} "
+            "is not yet implemented"
+        )
+
+    async def _select_representative_chunk_ids(
+        self,
+        collection: str,
+        entity_ids: list[str],
+        nodes_by_id: "dict[str, GraphNode]",
+    ) -> tuple[list[str], list[dict]]:
+        """Select representative chunk IDs for a community via MMR.
+
+        When search_store is None, returns ([], []) (no MMR candidates available).
+        Gathers all candidate chunks for entities in this community (deduplicated
+        by source_doc_id to avoid redundant store queries), then runs MMR to
+        select up to ``config.community_summary_chunks`` diverse IDs.
+
+        Returns:
+            (selected_chunk_ids, all_candidate_chunks)
+        """
+        if self._search_store is None:
+            return [], []
+
+        seen_chunk_ids: set[str] = set()
+        candidate_chunks: list[dict] = []
+
+        # Deduplicate source_doc_ids to avoid redundant store queries
+        unique_doc_ids: set[str] = set()
+        for eid in entity_ids:
+            node = nodes_by_id.get(eid)
+            if node is not None:
+                unique_doc_ids.add(node.source_doc_id)
+
+        for doc_id in unique_doc_ids:
+            doc_chunks = await self._search_store.get_chunks_for_doc(collection, doc_id)
+            for chunk in doc_chunks:
+                cid = chunk.get("chunk_id")
+                if cid and cid not in seen_chunk_ids:
+                    seen_chunk_ids.add(cid)
+                    candidate_chunks.append(chunk)
+
+        return _mmr_select(candidate_chunks, self._config.community_summary_chunks), candidate_chunks
 
     async def build(self, collection: str) -> list["Community"]:
         """Build Leiden communities for *collection*.
 
-        ``representative_chunk_ids`` is empty on all returned communities;
-        BE-3b extends this method to fill them via MMR and persist results.
+        Fills ``representative_chunk_ids`` via MMR when a ``search_store`` is
+        provided. Attempts optional LLM summarisation when
+        ``config.extraction_model`` is set; falls back to ``summary_text=None``
+        on any exception. Persists results via ``GraphStore.write_communities``
+        before returning.
 
         Args:
             collection: Name of the collection whose entity graph to cluster.
@@ -275,6 +412,7 @@ class CommunityBuilder:
             )
 
         now = datetime.now(tz=timezone.utc)
+        nodes_by_id = {n.id: n for n in nodes}
 
         if len(nodes) < 2:
             _logger.warning(
@@ -283,15 +421,21 @@ class CommunityBuilder:
                 collection,
                 len(nodes),
             )
-            return [
+            entity_ids = [n.id for n in nodes]
+            rep_chunk_ids, _ = await self._select_representative_chunk_ids(
+                collection, entity_ids, nodes_by_id
+            )
+            result = [
                 Community(
                     community_id=str(uuid.uuid4()),
-                    entity_ids=[n.id for n in nodes],
-                    representative_chunk_ids=[],
+                    entity_ids=entity_ids,
+                    representative_chunk_ids=rep_chunk_ids,
                     built_at=now,
                     summary_text=None,
                 )
             ]
+            await self._store.write_communities(collection, result)
+            return result
 
         edges = await self._store.get_all_edges(collection)
 
@@ -302,13 +446,47 @@ class CommunityBuilder:
             _cluster_with_size_limit, nodes, edges, resolution, max_size
         )
 
-        return [
-            Community(
-                community_id=str(uuid.uuid4()),
-                entity_ids=group,
-                representative_chunk_ids=[],
-                built_at=now,
-                summary_text=None,
+        final_communities: list[Community] = []
+        for group in groups:
+            community_id = str(uuid.uuid4())
+
+            rep_chunk_ids, candidate_chunks = await self._select_representative_chunk_ids(
+                collection, group, nodes_by_id
             )
-            for group in groups
-        ]
+
+            summary_text: str | None = None
+            if self._config.extraction_model is not None:
+                chunk_texts: list[str] = []
+                if rep_chunk_ids:
+                    rep_ids_set = set(rep_chunk_ids)
+                    for chunk in candidate_chunks:
+                        cid = chunk.get("chunk_id")
+                        if cid in rep_ids_set:
+                            text = chunk.get("text") or ""
+                            if text:
+                                chunk_texts.append(text)
+
+                try:
+                    summary_text = await self._generate_llm_summary(community_id, chunk_texts)
+                except Exception as exc:
+                    _logger.warning(
+                        "community_builder: LLM summary failed for community %s "
+                        "(extraction_model=%r): %s; falling back to MMR representatives only",
+                        community_id,
+                        self._config.extraction_model,
+                        exc,
+                    )
+                    summary_text = None
+
+            final_communities.append(
+                Community(
+                    community_id=community_id,
+                    entity_ids=group,
+                    representative_chunk_ids=rep_chunk_ids,
+                    built_at=now,
+                    summary_text=summary_text,
+                )
+            )
+
+        await self._store.write_communities(collection, final_communities)
+        return final_communities

@@ -57,6 +57,7 @@ def make_mock_store(nodes: list[GraphNode], edges: list[GraphEdge]) -> MagicMock
     store = MagicMock()
     store.get_all_nodes = AsyncMock(return_value=nodes)
     store.get_all_edges = AsyncMock(return_value=edges)
+    store.write_communities = AsyncMock(return_value=None)
     return store
 
 
