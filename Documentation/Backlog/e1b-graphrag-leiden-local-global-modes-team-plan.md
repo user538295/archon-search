@@ -403,7 +403,7 @@ flowchart LR
         - #integration_test — `test_llm_failure_community_still_written` — real store; CommunityBuilder.build() with mocked LLM that raises; all communities written with MMR representatives (no LLM summaries); no exception escapes build() (S12)
         - #integration_test — `test_build_communities_idempotent` — run build() twice on same collection; second run overwrites first; community count matches single-run count (no duplication)
 
-- [ ] **BE-4** — Create `archon_search/cli/graph_cmd.py` with `graph` Click group and `build-communities <collection>` subcommand; load config → connect store → call CommunityBuilder.build() → write_communities → print summary; wire into `archon_search/cli/main.py` #backend-role
+- [x] **BE-4** — Create `archon_search/cli/graph_cmd.py` with `graph` Click group and `build-communities <collection>` subcommand; load config → connect store → call CommunityBuilder.build() → write_communities → print summary; wire into `archon_search/cli/main.py` #backend-role
     - Frameworks & Drivers · 2.0h
     - needs BE-3b · completes S1, S6, S13
     - Tests
