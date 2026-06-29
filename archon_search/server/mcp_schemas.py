@@ -87,6 +87,7 @@ class McpSearchResponse(BaseModel):
     hyde_applied: bool = False
     expansion_used: bool = False
     expansion_warning: str | None = None
+    graph_expansion_applied: bool = False
 
 
 # ---------------------------------------------------------------------------

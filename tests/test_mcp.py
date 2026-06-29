@@ -836,7 +836,7 @@ def test_search_returns_mcp_search_response_shape() -> None:
     result = asyncio.run(tool_fn(query="hello", collection="col1"))
 
     assert isinstance(result, dict)
-    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied", "expansion_used", "expansion_warning"}
+    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied", "expansion_used", "expansion_warning", "graph_expansion_applied"}
 
 
 def test_search_include_metadata_false_clears_metadata() -> None:
@@ -880,7 +880,7 @@ def test_search_multi_collection_returns_mcp_search_response_shape() -> None:
     result = asyncio.run(tool_fn(query="hello", collections=["col1", "col2"]))
 
     assert isinstance(result, dict)
-    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied", "expansion_used", "expansion_warning"}
+    assert set(result.keys()) == {"results", "acl_filtered", "excluded_collections", "hyde_applied", "expansion_used", "expansion_warning", "graph_expansion_applied"}
 
 
 def test_search_acl_filtered_with_excluded_collections() -> None:

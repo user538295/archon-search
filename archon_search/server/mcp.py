@@ -252,11 +252,21 @@ def create_app(
         language: _LanguageParamSearch = None,
         hyde: bool = False,
         rag_fusion: bool = False,
+        graph_mode: str | None = None,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search."""
         ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
+
+        # graph_mode validation — must be None or "naive" (other modes deferred to E1b/E1c).
+        _VALID_GRAPH_MODES = (None, "naive")
+        if graph_mode not in _VALID_GRAPH_MODES:
+            return McpErrorResponse(error=f"graph_mode must be one of {list(m for m in _VALID_GRAPH_MODES if m is not None)!r}", code="invalid_graph_mode")
+        _graph_config = getattr(config, "graph", None)
+        _graph_enabled = getattr(_graph_config, "enabled", False) if _graph_config is not None else False
+        if graph_mode is not None and not _graph_enabled:
+            return McpErrorResponse(error="graph_mode requires [graph] enabled=true", code="graph_disabled")
 
         # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
         _rf_config = getattr(config, "rag_fusion", None)
@@ -339,6 +349,7 @@ def create_app(
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_rf_config,
                     filters=_multi_filters,
+                    graph_mode=graph_mode,
                 )
             except RAGFusionDependencyError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
@@ -378,6 +389,7 @@ def create_app(
                         rs.metadata = {}
                     result_schemas.append(rs)
                 _multi_expansion_warning = _search_hyde_expansion_warning or result_obj.rag_fusion_warning
+                _multi_graph_expansion_applied = result_obj.graph_expansion_applied
                 response = McpSearchResponse(
                     results=result_schemas,
                     acl_filtered=result_obj.acl_filtered,
@@ -386,8 +398,9 @@ def create_app(
                         for e in result_obj.excluded_collections
                     ],
                     hyde_applied=hyde_applied,
-                    expansion_used=hyde_applied or result_obj.rag_fusion_applied,
+                    expansion_used=hyde_applied or result_obj.rag_fusion_applied or _multi_graph_expansion_applied,
                     expansion_warning=_multi_expansion_warning,
+                    graph_expansion_applied=_multi_graph_expansion_applied,
                 )
                 return response.model_dump(mode="json")
             except ValidationError as exc:
@@ -422,6 +435,7 @@ def create_app(
                     rag_fusion=rag_fusion,
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_rf_config,
+                    graph_mode=graph_mode,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -460,6 +474,7 @@ def create_app(
                         rs.metadata = {}
                     result_schemas.append(rs)
                 _single_expansion_warning = _search_hyde_expansion_warning or result_obj.rag_fusion_warning
+                _single_graph_expansion_applied = result_obj.graph_expansion_applied
                 response = McpSearchResponse(
                     results=result_schemas,
                     acl_filtered=result_obj.acl_filtered,
@@ -468,8 +483,9 @@ def create_app(
                         for e in result_obj.excluded_collections
                     ],
                     hyde_applied=hyde_applied,
-                    expansion_used=hyde_applied or result_obj.rag_fusion_applied,
+                    expansion_used=hyde_applied or result_obj.rag_fusion_applied or _single_graph_expansion_applied,
                     expansion_warning=_single_expansion_warning,
+                    graph_expansion_applied=_single_graph_expansion_applied,
                 )
                 return response.model_dump(mode="json")
             except ValidationError as exc:
@@ -507,12 +523,17 @@ def create_app(
         language: _LanguageParamSearchWithContext = None,
         hyde: bool = False,
         rag_fusion: bool = False,
+        graph_mode: str | None = None,
     ) -> dict[str, Any]:
         """Search and return surrounding chunks for richer context.
 
         Returns ``{"results": [...], "hyde_applied": bool, "expansion_used": bool,
         "expansion_warning": str | null}``.
         """
+        # graph_mode on search_with_context is deferred to E1c.
+        if graph_mode is not None:
+            return McpErrorResponse(error="graph_mode on search_with_context is deferred to E1c", code="graph_mode_not_supported")
+
         _swc_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
@@ -624,10 +645,11 @@ def create_app(
                         )
                     )
                 _swc_expansion_warning = _swc_hyde_expansion_warning or _swc_pipeline_result.rag_fusion_warning
+                _swc_graph_expansion_applied = _swc_pipeline_result.graph_expansion_applied
                 response = SearchWithContextResponse(
                     results=items,
                     hyde_applied=swc_hyde_applied,
-                    expansion_used=swc_hyde_applied or _swc_pipeline_result.rag_fusion_applied,
+                    expansion_used=swc_hyde_applied or _swc_pipeline_result.rag_fusion_applied or _swc_graph_expansion_applied,
                     expansion_warning=_swc_expansion_warning,
                 )
                 return response.model_dump(mode="json")

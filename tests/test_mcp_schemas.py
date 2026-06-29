@@ -106,6 +106,7 @@ def test_mcp_search_response_fields():
         "hyde_applied",
         "expansion_used",
         "expansion_warning",
+        "graph_expansion_applied",
     }
 
 

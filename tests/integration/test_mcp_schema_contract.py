@@ -120,6 +120,7 @@ _SEARCH_RESPONSE_PUBLIC_FIELDS = {
     "hyde_applied",
     "expansion_used",
     "expansion_warning",
+    "graph_expansion_applied",
 }
 
 _COLLECTION_LIST_PUBLIC_FIELDS = {
