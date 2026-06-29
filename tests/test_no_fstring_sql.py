@@ -86,6 +86,25 @@ def test_guard_ignores_helper_internals() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_no_fstring_sql_in_graph_store() -> None:
+    """graph_store.py must contain zero f-string-wrapped .where/.delete/.count_rows calls."""
+    graph_store_path = Path(__file__).parent.parent / "archon_search" / "graph_store.py"
+    source = graph_store_path.read_text(encoding="utf-8")
+
+    violations: list[str] = []
+    for pat in _PATTERNS:
+        for m in pat.finditer(source):
+            lineno = source.count("\n", 0, m.start()) + 1
+            snippet = source.splitlines()[lineno - 1].strip()
+            violations.append(f"  line {lineno}: {snippet}")
+
+    assert not violations, (
+        "F-string SQL violations found in archon_search/graph_store.py:\n"
+        + "\n".join(violations)
+        + "\nReplace with _where_eq / _where_in helpers."
+    )
+
+
 def test_no_fstring_sql_in_store() -> None:
     """store.py must contain zero f-string-wrapped .where/.delete/.count_rows calls.
 
