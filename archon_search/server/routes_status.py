@@ -18,6 +18,8 @@ from archon_search.server.schemas import (
     CollectionBackupStatus,
     CollectionHealthEntry,
     ErrorDetail,
+    GraphCollectionStats,
+    GraphStatusDetail,
     HydeStatusDetail,
     MaintenanceStatusDetail,
     McpStatusDetail,
@@ -123,6 +125,7 @@ async def status(request: Request) -> StatusResponse:
     rag_fusion_detail = _build_rag_fusion_status(request, config)
     failed_expired_count = _count_failed_expired_ingest_jobs(request, ns)
     search_detail = _build_search_status(config)
+    graph_detail = await _build_graph_status(request, config, sorted(ns_names))
     return StatusResponse(
         running=True,
         pid=pid,
@@ -140,6 +143,7 @@ async def status(request: Request) -> StatusResponse:
         hyde=hyde_detail,
         rag_fusion=rag_fusion_detail,
         failed_expired_ingest_count=failed_expired_count,
+        graph=graph_detail,
     )
 
 
@@ -301,6 +305,42 @@ def _build_backup_status(
         next_run_at=next_run_at,
         collections_excluded=list(config.backup.exclude),
         collection_status=collection_status,
+    )
+
+
+async def _build_graph_status(
+    request: Request, config: SearchConfig, ns_collection_names: list[str]
+) -> GraphStatusDetail | None:
+    """Return the graph status sub-object when ``graph.enabled = true``, or ``None`` otherwise (E1a FE-1 / C2).
+
+    Reads live node/edge counts from ``GraphStore`` per collection per call;
+    no server-side caching in E1a (see Q7 in the team plan).  Returns ``None``
+    when graph is disabled **or** when no ``GraphStore`` is wired on
+    ``app.state`` — the latter keeps the endpoint resilient to alternative app
+    factories used in tests.
+    """
+    if not config.graph.enabled:
+        return None
+    graph_store = getattr(request.app.state, "graph_store", None)
+    if graph_store is None:
+        return None
+
+    collection_stats: list[GraphCollectionStats] = []
+    for col in ns_collection_names:
+        node_count = await graph_store.node_count(col)
+        edge_count = await graph_store.edge_count(col)
+        collection_stats.append(
+            GraphCollectionStats(
+                collection=col,
+                node_count=node_count,
+                edge_count=edge_count,
+            )
+        )
+
+    return GraphStatusDetail(
+        enabled=True,
+        backend_threshold_edges=config.graph.backend_threshold_edges,
+        collections=collection_stats,
     )
 
 

@@ -269,6 +269,34 @@ class RagFusionStatusDetail(BaseModel):
     key_available: bool
 
 
+class GraphCollectionStats(BaseModel):
+    """Per-collection graph statistics (E1a FE-1 / C2).
+
+    Each entry reports the number of nodes and edges in the collection's
+    ``_archon_graph_{col}_nodes`` / ``_archon_graph_{col}_edges`` tables.
+    """
+
+    collection: str
+    node_count: int = Field(ge=0)
+    edge_count: int = Field(ge=0)
+
+
+class GraphStatusDetail(BaseModel):
+    """Graph feature status sub-object for GET /status (E1a FE-1 / C2).
+
+    Present when ``[graph] enabled = true``; the parent ``graph`` field
+    being ``null`` signals that graph is disabled.
+
+    ``backend_threshold_edges`` mirrors the configured operator threshold
+    for the NetworkX backend — above this count a WARNING is emitted on
+    ingest and the hint to migrate to Kuzu (E1b) is surfaced.
+    """
+
+    enabled: bool
+    backend_threshold_edges: int
+    collections: list[GraphCollectionStats] = []
+
+
 class StatusResponse(BaseModel):
     running: bool
     pid: int
@@ -296,6 +324,8 @@ class StatusResponse(BaseModel):
     rag_fusion: RagFusionStatusDetail | None = None
     # E0b BE-10 — count of FAILED_EXPIRED IngestJob instances in the caller's namespace
     failed_expired_ingest_count: int = 0
+    # E1a FE-1 — graph feature status (additive, nullable); null when graph.enabled=false
+    graph: GraphStatusDetail | None = None
 
 
 class IndexingStateCollectionEntry(BaseModel):

@@ -1114,6 +1114,59 @@
         "title": "ExportRequest",
         "type": "object"
       },
+      "GraphCollectionStats": {
+        "description": "Per-collection graph statistics (E1a FE-1 / C2).\n\nEach entry reports the number of nodes and edges in the collection's\n``_archon_graph_{col}_nodes`` / ``_archon_graph_{col}_edges`` tables.",
+        "properties": {
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "edge_count": {
+            "minimum": 0.0,
+            "title": "Edge Count",
+            "type": "integer"
+          },
+          "node_count": {
+            "minimum": 0.0,
+            "title": "Node Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collection",
+          "node_count",
+          "edge_count"
+        ],
+        "title": "GraphCollectionStats",
+        "type": "object"
+      },
+      "GraphStatusDetail": {
+        "description": "Graph feature status sub-object for GET /status (E1a FE-1 / C2).\n\nPresent when ``[graph] enabled = true``; the parent ``graph`` field\nbeing ``null`` signals that graph is disabled.\n\n``backend_threshold_edges`` mirrors the configured operator threshold\nfor the NetworkX backend \u2014 above this count a WARNING is emitted on\ningest and the hint to migrate to Kuzu (E1b) is surfaced.",
+        "properties": {
+          "backend_threshold_edges": {
+            "title": "Backend Threshold Edges",
+            "type": "integer"
+          },
+          "collections": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/GraphCollectionStats"
+            },
+            "title": "Collections",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "backend_threshold_edges"
+        ],
+        "title": "GraphStatusDetail",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -2926,6 +2979,16 @@
             "default": 0,
             "title": "Failed Expired Ingest Count",
             "type": "integer"
+          },
+          "graph": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "hyde": {
             "anyOf": [

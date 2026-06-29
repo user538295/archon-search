@@ -454,14 +454,14 @@ flowchart LR
         - [x] #integration_test — `test_ingest_after_graph_disable_skips_extraction_preserves_tables` — ingest with graph enabled; disable graph (reconfigure); ingest again; assert (a) extractor not called on second ingest, (b) original graph tables still exist in LanceDB; (c) `GET /status graph:null` deferred to FE-1
         - [x] #integration_test — `test_ingest_two_docs_merges_graph` — ingest doc1 (AuthService+TokenValidator); ingest doc2 (AuthService+UserStore); assert 3 unique nodes, 2 edges; AuthService neighbours include both TokenValidator and UserStore (verified via `get_neighbours`)
 
-- [ ] **FE-1** — Add `GraphStatusDetail` + `GraphCollectionStats` to `schemas.py`; `StatusResponse.graph` field; `_build_graph_status()` builder in `routes_status.py`; regenerate OpenAPI snapshot #frontend-role
+- [x] **FE-1** — Add `GraphStatusDetail` + `GraphCollectionStats` to `schemas.py`; `StatusResponse.graph` field; `_build_graph_status()` builder in `routes_status.py`; regenerate OpenAPI snapshot #frontend-role
     - Presentation · 3.0h
     - needs BE-3 · completes C2, S3, S15
     - Tests
-        - #unit_test — `test_build_graph_status_returns_none_when_disabled` — `config.graph.enabled=False` → `None`
-        - #unit_test — `test_build_graph_status_includes_collection_stats` — stub GraphStore returns known counts; assert detail object fields
-        - #unit_test — `test_status_response_graph_field_present` — `StatusResponse` has `graph: GraphStatusDetail | None`
-        - #integration_test — `test_get_status_graph_subobject` — `TestClient` against app with graph enabled; `GET /status` response includes `graph` with `enabled:true`
+        - [x] #unit_test — `test_build_graph_status_returns_none_when_disabled` — `config.graph.enabled=False` → `None`
+        - [x] #unit_test — `test_build_graph_status_includes_collection_stats` — stub GraphStore returns known counts; assert detail object fields
+        - [x] #unit_test — `test_status_response_graph_field_present` — `StatusResponse` has `graph: GraphStatusDetail | None`
+        - [x] #integration_test — `test_get_status_graph_subobject` — `TestClient` against app with graph enabled; `GET /status` response includes `graph` with `enabled:true`
 
 - [ ] **T-1** — e2e: configure graph, ingest doc with entities, verify `GET /status` shows `node_count > 0` per collection #tester-role
     - — · 3.0h
