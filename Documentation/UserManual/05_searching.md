@@ -103,8 +103,8 @@ A typical workflow is: call `/route`, then call `/search` once per name in `pinn
 
 | Tool | Inputs | Output |
 | --- | --- | --- |
-| `search` | `query`, `collection?` | `{"results":[…], "acl_filtered":bool, "excluded_collections":[…], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null}` (**E0b**: gains `expansion_used` and `expansion_warning`) |
-| `search_with_context` | `query`, `collection?`, `context_window=1` | `{"results":[{result, context_before, context_after}, …], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null}` (**E0b**: gains `expansion_used` and `expansion_warning`) |
+| `search` | `query`, `collection?`, `graph_mode: str\|null = null` (**E1a**) | `{"results":[…], "acl_filtered":bool, "excluded_collections":[…], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null, "graph_expansion_applied":bool}` (**E0b**: gains `expansion_used`, `expansion_warning`; **E1a**: gains `graph_expansion_applied`) |
+| `search_with_context` | `query`, `collection?`, `context_window=1`, `graph_mode: str\|null = null` (**E1a** — returns `{"error":…,"code":"graph_mode_not_supported"}` when non-null) | `{"results":[{result, context_before, context_after}, …], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null}` (**E0b**: gains `expansion_used` and `expansion_warning`) |
 | `explain` | `query`, `collection?`, `top_k=5`, `rerank=true` | Per-stage retrieval/reranking trace plus routing decision (mirrors `POST /explain`) |
 | `ingest_file` | `path`, `collection?` | Per-file ingest result dict (gains `warnings: list[str]` in **E0b** for ACL sidecar issues) |
 | `ingest_directory` | `path`, `glob_pattern="**/*"`, `collection?` | List of ingest results; reports MCP progress |
@@ -271,7 +271,7 @@ The response includes `hyde_applied: true` when HyDE was used, or `hyde_applied:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `expansion_used` | `bool` | `true` when either `hyde_applied` or `rag_fusion_applied` is `true`. Convenience field; equivalent to `hyde_applied OR rag_fusion_applied`. |
+| `expansion_used` | `bool` | `true` when `hyde_applied`, `rag_fusion_applied`, or `graph_expansion_applied` is `true`. Convenience field; equivalent to `hyde_applied OR rag_fusion_applied OR graph_expansion_applied`. |
 | `expansion_warning` | `str \| null` | Non-null when query expansion was requested but failed and fell back to the original query embedding. For HyDE: always `'HyDE expansion failed'` (all failure modes are indistinguishable at the route level). For RAG Fusion: `'RAG Fusion timed out'` (timeout) or `'RAG Fusion expansion failed'` (other errors). `null` when expansion succeeded or was not requested. |
 
 A non-null `expansion_warning` means search results were computed from the original query embedding only — the response is valid but may have lower recall than expected.
@@ -394,6 +394,68 @@ When the generator returns no variants (all failure paths), the original query i
 - **Shared API key with HyDE**: both features use `ANTHROPIC_API_KEY`. Tune both `max_requests_per_minute` values together to stay within your account limit.
 - **FTS-only collections**: `rag_fusion=true` is silently ignored (`rag_fusion_applied: false`) for collections without a vector index.
 - **`rag_fusion_queries_used` semantics**: counts only successful LLM-generated variant searches — does not count the original query search. The `rag_fusion_sub_queries` list (in `/explain` responses) will have `rag_fusion_queries_used + 1` entries.
+
+## Graph-mode search — `graph_mode=naive` (E1a)
+
+Graph-mode search expands the query with first-degree graph-neighbour entity names before the normal hybrid search pipeline runs. This improves recall on relationship-dense corpora (codebases, API docs, research papers) where the query names an entity that has known relationships to other entities.
+
+### Prerequisites
+
+1. Install the `archon-search[graph]` optional extras:
+
+   ```bash
+   pip install archon-search[graph]
+   ```
+
+2. Enable graph extraction in `~/.archon-search/archon-search.toml`:
+
+   ```toml
+   [graph]
+   enabled = true
+   # backend_threshold_edges = 10000  # warning threshold for large graphs
+   ```
+
+3. Re-ingest all collections whose graphs you want built. Graph tables are populated at ingest time — existing chunks are not automatically extracted.
+
+   ```bash
+   archon-search ingest --path /path/to/corpus --collection docs
+   ```
+
+   After ingest, `GET /status` will include a `graph` sub-object with `node_count` and `edge_count` per collection.
+
+### Usage
+
+Pass `graph_mode: "naive"` on any `/search` request:
+
+```bash
+source ~/.archon-search/.search.env
+
+curl -s -X POST http://127.0.0.1:8765/search \
+  -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"docs","query":"AuthService","graph_mode":"naive"}'
+```
+
+When the query contains tokens that match entity names in the graph, the expander appends neighbour entity names to the query before embedding. The response includes `graph_expansion_applied: true` when at least one neighbour was added.
+
+**MCP**: the `search` tool accepts `graph_mode: "naive"` with the same semantics.
+
+### Error cases
+
+| Condition | Result |
+|---|---|
+| `graph_mode="naive"` and `[graph] enabled = false` | HTTP 422 with actionable message |
+| `archon-search[graph]` not installed and `[graph] enabled = true` | `ConfigError` at server startup (server does not start) |
+| Edge count ≥ `backend_threshold_edges` (default 10 000) on ingest | WARNING logged + hint in `IngestResult.warnings`; ingest completes normally |
+| Query contains no tokens matching graph entities | 200 with `graph_expansion_applied: false`; normal search result returned |
+| `graph_mode` on `POST /explain` | 422 (extra field rejected by Pydantic `extra="forbid"`) |
+| MCP `search_with_context` + `graph_mode` | Error dict `code="graph_mode_not_supported"` (deferred to E1c) |
+
+### Known limitations
+
+- Graph tables are namespace-unscoped in E1a: two collections with the same name in different namespaces share graph tables. Multi-namespace operators must NOT enable graph until E1b (which adds namespace-scoped table names).
+- Stale edges from deleted documents are not pruned in E1a. Re-ingesting removes old nodes/edges for a given document (upsert by stable ID), but manually deleted documents leave orphan edges.
+- Query-time entity matching is exact (case-insensitive string match), not NER — entities not mentioned verbatim in the query will not trigger expansion.
 
 ## Related documents
 

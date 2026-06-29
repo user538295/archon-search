@@ -359,3 +359,32 @@ async def test_search_pipeline_result_has_graph_expansion_applied_field():
     result = SearchPipelineResult(results=[], acl_filtered=False)
     assert hasattr(result, "graph_expansion_applied")
     assert result.graph_expansion_applied is False
+
+
+@pytest.mark.asyncio
+async def test_search_graph_mode_naive_with_none_expander_is_noop(connected_store, col_name):
+    """graph_mode='naive' with graph_expander=None → graph_expansion_applied=False, no exception.
+
+    Covers the defensive guard at pipeline.py:709 — when graph_expander is None
+    (e.g. graph.enabled=False at runtime but graph_mode slips through), the
+    pipeline skips expansion silently.
+    """
+    pipeline = _make_pipeline(
+        connected_store,
+        graph_expander=None,  # not wired
+        graph_config=None,
+    )
+
+    dummy_result = SearchPipelineResult(results=[], acl_filtered=False)
+    with patch.object(
+        pipeline,
+        "_search_standard",
+        new=AsyncMock(return_value=dummy_result),
+    ):
+        result = await pipeline.search(
+            "AuthService",
+            col_name,
+            embedder=pipeline._global_embedder,
+            graph_mode="naive",
+        )
+    assert result.graph_expansion_applied is False

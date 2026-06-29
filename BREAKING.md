@@ -8,6 +8,28 @@
 
 ## Changelog
 
+### [next release] — E1a: graph tables, `SearchRequest.graph_mode`, `SearchResponse.graph_expansion_applied` (all additive)
+
+**Surface**: LanceDB auxiliary tables (internal); `POST /search` request and response; `GET /status` response; MCP `search` and `search_with_context` tools.
+
+**Additive changes** (non-breaking for tolerant JSON consumers; breaking for strict-schema validators with `extra="forbid"`):
+
+1. **Auxiliary LanceDB graph tables** — when `[graph] enabled = true`, two new LanceDB tables are created per collection after ingest: `_archon_graph_{col}_nodes` and `_archon_graph_{col}_edges`. These are auxiliary to the main chunk table and are never exposed via REST or MCP pagination. Deployments that do not set `[graph] enabled = true` are completely unaffected — no tables are created and no startup overhead occurs.
+
+2. **`SearchRequest` gains `graph_mode: "naive" | null = null`** — additive optional field. Existing clients that omit the field continue to receive unmodified behaviour. Strict-schema validators that use `extra="forbid"` on `SearchRequest` must add this nullable field. When `"naive"` is supplied and `[graph] enabled = false`, the server returns `422`; callers that always omit `graph_mode` are unaffected.
+
+3. **`SearchResponse` gains `graph_expansion_applied: bool`** — always present (default `false`). Strict-schema validators must add this boolean field to their `SearchResponse` type stubs. Tolerant clients are unaffected.
+
+4. **`GET /status` gains `graph: GraphStatusDetail | null`** — `null` when `[graph] enabled = false`. When the graph is enabled, the field contains `{enabled: true, node_count: int, edge_count: int, collections: [{collection, node_count, edge_count}]}`. Strict-validating clients must add `graph` to their `StatusResponse` type stubs.
+
+5. **MCP `search` tool gains `graph_mode: str | null = null`** — additive optional parameter. Existing callers are unaffected.
+
+6. **MCP `search_with_context` returns `{error, code: "graph_mode_not_supported"}` when `graph_mode` is non-null** — guard behaviour; callers that do not pass `graph_mode` are unaffected.
+
+**Migration**: no action required for tolerant JSON consumers or existing deployments without `[graph] enabled = true`. To opt in: install `archon-search[graph]`, set `[graph] enabled = true` in TOML, and re-ingest collections. Strict-schema validators should add `graph_mode: "naive" | null` to `SearchRequest`, `graph_expansion_applied: bool` to `SearchResponse`, and `graph: GraphStatusDetail | null` to `StatusResponse` type stubs; regenerate from `GET /openapi.json`.
+
+---
+
 ### [next release] — E0e: `POST /search` multi-collection + filters now supported; `SearchResponse` gains `applied_filters`
 
 **Surface**: `POST /search` REST endpoint.

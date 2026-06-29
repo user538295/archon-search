@@ -19,6 +19,26 @@
 
 ## What Has Worked
 
+**[2026-06-28] — E2a plan-maker-for-team: `namespace` is a reserved keyword in TypeSpec**
+- Observation: Using `namespace: string` as a parameter name in a core-construct TypeSpec `.tsp` op causes "multiple-blockless-namespace" parse errors. The fix is to rename the parameter (e.g., `ns: string`).
+- Action: Never use `namespace` as a parameter name in TypeSpec `.tsp` files. Use `ns` or `collection_ns` instead.
+- Confidence: high
+
+**[2026-06-28] — E2a plan-maker-for-team: tsp compile --emit outputs to @typespec/openapi3/openapi.yaml, not the source file name**
+- Observation: Running `tsp compile file.tsp --emit @typespec/openapi3 --output-dir .` produces `@typespec/openapi3/openapi.yaml` regardless of the source filename. Sequential compilation of multiple files overwrites the same file. Solution: compile each file individually and `cp @typespec/openapi3/openapi.yaml <named>.openapi.yaml` immediately after each compile.
+- Action: When compiling multiple HTTP seam TypeSpec files in one session, always copy the generated openapi.yaml to a named file (e.g., `cp @typespec/openapi3/openapi.yaml e2a-ingest.openapi.yaml`) right after each compile step, before running the next compile.
+- Confidence: high
+
+**[2026-06-28] — E2a plan-maker-for-team: `expired_chunk_count` belongs in MaintenanceStatusDetail (global), not CollectionHealthEntry (per-collection)**
+- Observation: The brief explicitly states `expired_chunk_count` is "aggregated across all collections" at GET /status call time — not per-collection. Both architecture and scenarios agents initially considered per-collection placement. Resolved by reading the brief's Key Decisions section.
+- Action: For any status field that the brief calls "aggregated across all collections," place it in the top-level status sub-object, not in the per-collection health entry. Always verify with the brief's Key Decisions section before choosing placement.
+- Confidence: high
+
+**[2026-06-28] — E2a plan-maker-for-team: scope_filter is a sibling parameter, not added to SearchFilters**
+- Observation: `scope_filter` has wildcard post-filter logic (Python-side on top-k set after LanceDB retrieval) that is architecturally different from the `SearchFilters` predicate-builder path. Adding it to `SearchFilters` would mix two different evaluation strategies. The correct design is a sibling parameter to `hybrid_search_with_trace` and pipeline methods.
+- Action: When a filter parameter has different evaluation semantics (pre-retrieval predicate vs. post-retrieval Python filter) from existing `SearchFilters` fields, pass it as a sibling parameter rather than extending the SearchFilters class. Document the distinction explicitly in the internal seam contract.
+- Confidence: high
+
 **[2026-06-28] — E0e T-2: language filter e2e is a smoke test — document it clearly in the docstring**
 - Observation: The S8 language filter e2e test cannot distinguish "filter applied, no matches" from "filter silently ignored" because the language detector stub assigns `language=""` to all chunks. DA agents flagged this as Critical/Major. The correct resolution is to document the limitation in a NOTE block in the docstring and cross-reference the BE-4 unit test that proves filter forwarding — not to add stub machinery.
 - Action: When a tester-role e2e test for a language filter has empty expected results due to a stub, always add a `NOTE:` paragraph explicitly calling it a smoke test and pointing to the unit test that covers filter-forwarding behavior. This is the established T-1 REST pattern.
@@ -47,6 +67,15 @@
 **[2026-06-28] — E0e T-1: excluded_collections is list[dict], not list[str]**
 - Observation: `assert col_b not in excluded_collections` where `excluded_collections` is `list[dict]` always returns True. String membership in list[dict] never matches.
 - Action: Always assert `excluded == []` for zero-result leg assertions. Never use `name not in list_of_dicts`.
+
+**[2026-06-29] — E1a T-2: RRF interleaving requires asymmetric doc sizes and disabled reranker for fanout tests**
+- Observation: With uniform zero-vector stubs, RRF ranks documents by insertion order (vector rank) + BM25 FTS. Equal-sized docs (10 chunks each) create symmetric RRF scores (both ≈ 0.031), and the stub reranker's stable sort on 0.5 scores preserves the col1-first input order in fanout all_cands. col2 candidates never reach top_k_return=5.
+- Action: For fanout e2e tests that must surface results from BOTH collections: (1) make each "target" doc very short (single chunk, ingested first for low vector rank), (2) make each "source" doc long (20+ reps), (3) set `reranker_model = ""` in TOML to disable the reranker and enable global RRF sort across all collections. Without all three changes, col2 candidates cannot reliably appear in top 5.
+- Confidence: high
+
+**[2026-06-29] — E1a T-2: FTS BM25 IDF breaks symmetry only when one doc is much rarer than the other**
+- Observation: When two docs have equal chunk counts (10 each), BM25 IDF for each term is log(1 + 10.5/10.5) ≈ log(2) ≈ 0.693 — the same for both. Expansion adds a term to the query but both docs still get similar RRF scores. Making the target doc very short (1 chunk vs 10) gives its unique term IDF = log(1 + 10.5/1.5) ≈ 2.08, making it rank #0 in FTS for the expanded query.
+- Action: When testing that expansion surfaces a target doc, make that doc short (1 chunk) and the source doc long. This is the only reliable way to create large IDF asymmetry that guarantees target rises above baseline threshold.
 - Confidence: high
 
 **[2026-06-28] — E0e T-1: tester-role e2e tests for language filter must use language filter (not file_type)**
@@ -57,6 +86,96 @@
 **[2026-06-28] — E0e T-1: coverage illusion from missing result assertion**
 - Observation: An S2 test that asserts only `status=200` and `applied_filters echo` but never checks `data["results"]` passes whether the filter works or is silently ignored. Reviewers flagged this as a coverage illusion.
 - Action: Always add `assert data["results"] == []` when the expected result is empty, with a comment explaining why. This eliminates ambiguity between "filter returns empty" and "filter silently dropped".
+
+**[2026-06-29] — E1a BE-5: post-persist auxiliary writes must be wrapped in try/except**
+- Observation: The graph write block (ensure_graph_tables, write_graph, edge_count) runs AFTER chunks are committed to LanceDB. Without try/except, any I/O error there raises instead of returning a graceful IngestResult — breaking the watcher's "always returns, never raises" contract. DA/Brooks reviewers flagged this as Critical.
+- Action: Whenever wiring an auxiliary (non-primary) write step AFTER the main persist in ingest_file, always wrap the block in try/except, log a WARNING, and return status="ok" with a warning appended to IngestResult.warnings. Never let auxiliary failures propagate as exceptions after persist commits.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-5: factory function must be updated when new optional dependencies are added to SearchPipeline.__init__**
+- Observation: create_pipeline() is used by all CLI callers (ingest, sync, collection subcommands). Adding graph_extractor/graph_store/graph_config only to the direct SearchPipeline() call in app.py silently left CLI paths with graph.enabled=True but no extraction. Reviewers flagged as Critical.
+- Action: Whenever adding new optional dependencies to SearchPipeline.__init__, check immediately whether create_pipeline() also needs updating. The factory is the canonical non-server construction path.
+- Confidence: high
+
+**[2026-06-29] — implement-all: subagents produce commit message draft instead of executing commit**
+- Observation: Task 4.2 (T-5) subagent completed all implementation, ran review, passed tests, checked off the plan, but ended its turn by emitting a `git commit -F-` draft block for the user to run manually instead of committing. Recovery: parent agent detected missing commit via git log, verified the test passes, staged exact files, and committed manually.
+- Action: Subagent prompt must include an explicit instruction: "After acceptance criteria A–F, invoke commit-message skill with `commit` argument (commit mode), NOT draft mode. The commit MUST land in git history before you end your turn." Recovery check must verify `git log --oneline -1` contains a new SHA, not just that the plan checkbox is ticked.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-5: fatal_error path must have an explicit test — otherwise the early-return logic is invisible**
+- Observation: The extraction fatal_error path (early return before persist) was the most critical error path in BE-5 but had zero test coverage in the initial implementation. DA review flagged it as Critical. The fix was a single additional unit test.
+- Action: Every early-return in ingest_file (i.e., every non-happy-path that returns before chunks are written) must have at least one unit test verifying (a) status="error", (b) chunks_created=0, and (c) no downstream write methods called.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-5: spaCy model wheel version must match spaCy minor version range**
+- Observation: Adding `en_core_web_sm-3.8.0` wheel URL with `spacy>=3.7,<4` allows spaCy 3.7.x which is incompatible with the 3.8.0 model (spaCy model versions are minor-version-locked). DA review caught this as Major. Fix: tighten to `spacy>=3.8,<3.9`.
+- Action: When adding a pinned spaCy model wheel URL to optional extras, always match the spaCy version range to the model's minor version. Use `spacy>=X.Y,<X.(Y+1)` and `en_core_web_sm-X.Y.Z` with matching major.minor.
+- Confidence: high
+
+**[2026-06-29] — E1a FE-2: graph_mode enabled flag check needs spaCy stub to construct app in tests**
+- Observation: `create_app()` raises `ConfigError` when `config.graph.enabled=True` but spaCy is not installed (the `archon-search[graph]` extras are absent in CI and local dev by default). Any test that constructs an app with `graph_enabled=True` must inject a stub `types.ModuleType("spacy")` into `sys.modules["spacy"]` around the `create_app()` call, then restore the original (or remove it) in a `finally` block.
+- Action: Pattern for graph-enabled app in tests: inject spacy stub before `create_app`, restore in `finally`. The stub only needs to exist in `sys.modules` — no attributes needed for the startup check.
+- Confidence: high
+
+**[2026-06-29] — E1a FE-2: adding new response field breaks exact-dict snapshot tests**
+- Observation: `test_search_response_schema_fields` in `test_routes_search_acl.py` did an exact `model_dump()` dict comparison. Adding `graph_expansion_applied: bool = False` to `SearchResponse` caused an `AssertionError: Left contains 1 more item`. Fix: add the new field to the expected dict.
+- Action: After adding any field to a Pydantic response model, grep for exact `model_dump()` dict comparisons in the test suite and update them. These snapshot-style tests are intentional regression guards — update them, don't weaken them.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-1: path_home_allowlist.txt line numbers shift when new code is added above the callsite**
+- Observation: Adding 12 lines (GraphConfig dataclass) above `get_default_config_path()` in `config.py` shifted the `Path.home()` callsite from line 203 to line 215, causing `test_path_home_ratchet` to fail with "new unallowlisted callsite." The allowlist is line-number-sensitive.
+- Action: After adding code to any file in `archon_search/` that contains allowlisted `Path.home()` callsites, always check and update `tests/path_home_allowlist.txt` line numbers before running the test suite. Run `grep -n "Path.home()" archon_search/config.py` to find the new line numbers.
+- Confidence: high
+
+**[2026-06-29] — E1a FE-3: assert_not_called() in search_with_context guard tests must target the correct pipeline method**
+- Observation: `test_mcp_search_with_context_graph_mode_returns_error` called `pipeline.search.assert_not_called()` but the `search_with_context` tool invokes `pipeline.search_with_context()` — a different method. The assertion passed even before the guard because `pipeline.search` is never called on the `search_with_context` path at all. DA Cycle 2 flagged this as Major.
+- Action: When testing an early-return guard in a tool function, always assert `not_called()` on the exact pipeline method that the guarded code path would have called — not a sibling method. For `search_with_context`, assert `pipeline.search_with_context.assert_not_called()`.
+- Confidence: high
+
+**[2026-06-29] — E1a FE-3: MCP error returns must use McpErrorResponse, not ad-hoc plain dicts**
+- Observation: The first implementation returned `{"code": ..., "message": ...}` for the new graph_mode guards. Every other error in `mcp.py` (60+ occurrences) uses `McpErrorResponse(error=..., code=...)`. DA Cycle 1 flagged this inconsistency as Major. Any MCP client checking for `response.get("error")` to detect failures gets None from the new shape and treats the error as success.
+- Action: All MCP tool early-return errors must use `McpErrorResponse(error=..., code=...)`. Never return a custom dict shape from a tool error path in `mcp.py`.
+- Confidence: high
+
+**[2026-06-28] — E1a iterative-review: TypeSpec contracts must be updated in lockstep with plan prose**
+- Observation: After Cycle 1 changed the entity stable ID formula and added `entitySubtype`, the .tsp contract files still had the old formula and missing field. The plan said "fix before implementation" but the files weren't actually updated. Cycle 3 reviewers flagged all four .tsp discrepancies as Major issues.
+- Action: When a plan change affects a contract seam, update the .tsp file in the SAME edit session as the plan prose. Never defer contract file fixes with a "fix before implementation" note — the files are the contract.
+- Confidence: high
+
+**[2026-06-28] — E1a iterative-review: query-time expansion cannot call make_stable_entity_id (unknown entity_type)**
+- Observation: The plan initially said GraphExpander calls `make_stable_entity_id` to look up nodes. But `make_stable_entity_id` requires `entity_type` which is unknown at query time. The correct approach is a `findNodesByName` lookup (by entity_name, case-insensitive) — name-based, not ID-based.
+- Action: At query time, always use name-based lookup (findNodesByName / exact case-insensitive match) against graph node tables, not stable ID computation. Stable IDs are an ingest-time concern; query expansion is a runtime name-matching concern.
+- Confidence: high
+
+**[2026-06-28] — E1a iterative-review: edge creation in spaCy-only mode must be explicitly specified**
+- Observation: The plan listed typed relationship enums (USES, IMPLEMENTS, etc.) and deferred LLM extraction, but never said how edges are created without LLM. Three review cycles passed before someone asked: who creates the edges? The answer (co-occurrence within same chunk → RELATED_TO) is obvious but must be written down or the feature ships with nodes-only and graph expansion is a no-op.
+- Action: Any plan that defers relationship extraction must explicitly document the fallback edge-creation heuristic. "Edges deferred" means the feature is a no-op; that must be stated explicitly if intentional.
+- Confidence: high
+- Confidence: high
+
+**[2026-06-29] — E1a T-2: fanout e2e tests must verify result collection provenance, not just content**
+- Observation: The initial T-2 fanout test asserted `any("RS256" in t)` and `any("LRU" in t)` in merged results. DA review flagged that a global-expansion implementation (expanding once and broadcasting to all legs) would also pass, since both terms would still appear. The correct fix is asserting `result["collection"]` membership: `{r["collection"] for r in data["results"]}` must include both col1 and col2.
+- Action: Any fanout e2e test asserting on per-collection content MUST also assert `{r["collection"] for r in results}` includes every expected collection. Content-only assertions cannot prove per-leg independence.
+- Confidence: high
+
+**[2026-06-29] — E1a T-2: negative baseline assertions must guard against empty results**
+- Observation: `not any("RS256" in t for t in baseline_texts)` trivially passes when baseline_texts is empty (e.g., collection empty, ingest failed). The test would then pass even if the graph infrastructure was broken. Fix: add `assert len(baseline_texts) > 0` before the `not any(...)` check.
+- Action: Always guard negative baseline assertions with `assert len(results) > 0` before the negative content check. An empty list makes `not any(...)` vacuously true.
+- Confidence: high
+
+**[2026-06-29] — E1a T-3: assertion ordering — presence check before value check**
+- Observation: In `test_e2e_graph_mode_noop_empty_graph`, the initial version asserted `data.get("graph_expansion_applied") is False` before asserting `"graph_expansion_applied" in data`. If the field is absent, `.get()` returns `None`, `None is False` is `False`, and the first assertion fails with a confusing type mismatch message. The presence check is then unreachable dead code.
+- Action: In any test checking both presence and value of a response field, always assert presence first (`assert "field" in data`), then use direct indexing (`data["field"]`) for the value check. The ordering matters for diagnostic clarity.
+- Confidence: high
+
+**[2026-06-29] — E1a T-3: MCP test xdist_group("mcp") must be on ALL files with MCP tests — even when mixed with non-MCP tests**
+- Observation: test_e1a_t3 had two REST-only tests and two MCP tests, all under `pytestmark = pytest.mark.integration`. Missing `xdist_group("mcp")` means the MCP tests could run in parallel with other MCP tests across files, causing session/port conflicts. The convention across 17+ MCP integration test files is to always include `xdist_group("mcp")`.
+- Action: Any test file that contains even one MCP test must include `xdist_group("mcp")` in its `pytestmark`. Applies at module level even if only some tests in the file use MCP.
+- Confidence: high
+
+**[2026-06-29] — E1a T-3: positive-path MCP graph_mode test must assert graph_expansion_applied=True, not just isinstance(bool)**
+- Observation: `test_e2e_mcp_search_graph_mode` initially only asserted `isinstance(parsed["graph_expansion_applied"], bool)`. This passes even if graph expansion is permanently broken (always returns False). S8 requires proving expansion actually ran.
+- Action: Any MCP test for a feature that should produce `expansion_applied=True` must assert the value, not just the type. Set up conditions that guarantee expansion (entity in graph matches query token) and assert the exact bool value.
 - Confidence: high
 
 ### Testing patterns
@@ -118,6 +237,16 @@
 **Dead module-level constants must be deleted, not commented as legacy**
 - Action: When replacing a constant with a parameter-derived value, delete it and update all test patches to use the actual controlling input (e.g., `--timeout N` CLI arg).
 
+**[2026-06-28] — plan-maker-for-team: E1B GraphRAG Leiden + Local/Global Modes**
+- Observation: When E1a is a hard prerequisite but not yet implemented, the team plan must explicitly state it as a prerequisite (not just allude to it), name the exact artefacts E1b assumes exist (GraphConfig, graph tables, entity resolver, graph_mode=naive route), and add an open question to confirm the entity resolver symbol before BE-7 starts.
+- Action: For any feature with a hard prerequisite feature that is itself in-progress: name the prerequisite in a bold "Prerequisite:" block at the top; list each assumed artefact by symbol name; add a Q# asking to confirm resolver symbol once E1a lands.
+- Confidence: high
+
+**[2026-06-28] — plan-maker-for-team: E1B TypeSpec union vs enum for string literals**
+- Observation: TypeSpec `enum GraphMode { naive: "naive", local: "local", global: "global" }` compiles, but `union GraphMode { naive: "naive", local: "local", global: "global" }` also compiles and generates a cleaner oneOf in OpenAPI 3. Use `union` for string literal sets in TypeSpec HTTP contracts.
+- Action: In TypeSpec HTTP service contracts, use `union` (not `enum`) for string literal discriminators — e.g. `union GraphMode { naive: "naive", local: "local", global: "global" }`. Both compile; union produces cleaner OpenAPI output.
+- Confidence: high
+
 **Pre-seeding JobStore before `make_real_app` via the same file path**
 - Action: Create `JobStore(path=tmp_path / "jobs.json")` before entering `make_real_app`, seed it — `make_real_app` reads the same file on init via `_load()`. No need to expose the store.
 
@@ -126,6 +255,31 @@
 
 **Hint-line count assertions need full surrounding phrase, not just a digit**
 - Action: Never assert `str(N) in result.output`. Assert the full specific substring (e.g., `"2 revoked key(s) hidden" in result.output`).
+
+**[2026-06-28] — E1a plan-maker-for-team: TypeSpec HTTP seams can fall back to core-construct when npm install is blocked**
+- Observation: `tsp compile --no-emit` succeeded for all 6 contracts, but `npm install @typespec/openapi3` was blocked by the auto-mode classifier. All HTTP/API seams were authored as core-construct `.tsp` files (no HTTP decorators, no openapi.yaml emitted). The plan noted the fallback explicitly; no value was lost for the planning purpose.
+- Action: When npm install is blocked for TypeSpec emitters, write core-construct `.tsp` for all seam types and note the fallback in the plan's "How to read this file" block. Do not retry npm install; the fallback is sufficient for contract agreement purposes.
+- Confidence: high
+
+**[2026-06-28] — E1a plan-maker-for-team: context compaction mid-session does not lose investigation findings if summary is accurate**
+- Observation: Context compacted between TypeSpec validation and plan file writing. All 6 subagent findings, all 6 `.tsp` files, and the full task/scenario/contract design were preserved in the summary. Plan file was written cleanly from the compacted context.
+- Action: For plan-maker sessions that spawn 6 subagents + write multiple contract files, compaction mid-way is normal and safe. Trust the summary for design decisions; re-read `.tsp` files only if specific content is needed.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-9: always read all sections of a large file before coding — the implementation may already be there**
+- Observation: runner.py (1410 lines) and backends.py (168 lines) had all the graph_mrr code already in place (`StubGraphExpander`, `EVAL_GRAPH_ENTITY_MAP`, `_execute_graph_retrieval_query`, `graph_mrr=graph_mrr` in EvalMetrics). My initial read stopped at line 116 of backends.py (only 116 of 168 lines) and missed the entire StubGraphExpander class. The test file passed on first run in green.
+- Action: When reading a key file for a task, always check `wc -l` first, then read in pages if needed. Never assume a file ends where your read window ends.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-9: adding eval corpus documents shifts routing_mrr scores via centroid change**
+- Observation: Adding 2 graph documents to documents.jsonl + corpus/ caused `routing_mrr_centroid/hybrid` to drop from 0.75 to 0.7361 (delta -0.0139). The graph queries were properly excluded from `retrieval_traces` (recall/ndcg unchanged), but the corpus centroid shift affected the routing strategy evaluation of non-graph collections. The fix is to update the thresholds.toml floors to the new baseline and regenerate baseline.json twice (once after corpus change, once after thresholds change).
+- Action: After adding any new documents to the eval corpus, always check whether routing_mrr values in the baseline changed. If the delta is within max_floor_drop_without_waiver (0.05), update the floors and regenerate the baseline again.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-9: graph collection must NOT be added to routing/collections.jsonl**
+- Observation: Adding `{"name": "graph", ...}` to routing/collections.jsonl introduced a new routing centroid that shifted routing MRR scores. Graph-mode queries are retrieval-scope only (no routing queries), so the graph collection has no business being in the routing manifest.
+- Action: Only add a collection to routing/collections.jsonl if there are routing-scope queries targeting it. Retrieval-only collections do not belong in the routing manifest.
+- Confidence: high
 
 **`JobStore.transition()` not `update()` for state transitions in batch loops**
 - Action: `transition()` returns `None` on eviction/already-changed instead of raising KeyError. Using `update()` in a batch loop aborts all remaining jobs on race conditions.
@@ -466,4 +620,84 @@
 **[2026-06-28] — E0e T-3 (close-out: pinning test already existed)**
 - Observation: C1-T-1 (Moderate) recommended adding a test pinning `applied_filters` absence from `McpSearchResponse`. On investigation, `test_mcp_search_response_fields` in `tests/test_mcp_schemas.py` already asserts the exact set of 6 field names and would fail if `applied_filters` were added. No new test needed.
 - Action: Before adding a pinning test for a schema field's absence, always grep `tests/` for the schema class name — an exact-field-set test is likely already in `test_mcp_schemas.py` or `test_routes_search.py`.
+- Confidence: high
+
+**[2026-06-28] — plan-maker-for-team: E1c Graph-Path Provenance in /explain**
+- Observation: `ScoredSearchCandidate` lives in `_diagnostics.py` (not `_types.py`); `ExplainRequest`, `ExplainResponse`, `ExplainResult`, `ExplainNearMiss` all live inside `routes_explain.py` (not `schemas.py`); `ExplainPipelineResult` is a dataclass defined at the top of `pipeline.py`. The MCP `explain` tool exists in `mcp.py` and must be updated alongside the REST route. `from_candidate()` (line 98 in routes_explain.py) is the exact conversion point where `graph_provenance` must be threaded from candidate to response.
+- Action: For any explain-layer plan, read `routes_explain.py` for the schema definitions — do not assume they are in `schemas.py`. Always check `mcp.py` for a matching MCP tool when extending the REST explain endpoint.
+- Confidence: high
+
+**[2026-06-28] — plan-maker-for-team: E1c — api-contracts/ already had node_modules**
+- Observation: The `api-contracts/` subfolder from prior E0/E1b sessions already had `node_modules` installed and the `@typespec/openapi3` emitter available. The E1c HTTP seam contract compiled and emitted `openapi.yaml` without any new npm install step.
+- Action: Before attempting npm install for TypeSpec OpenAPI emitter, check whether `api-contracts/node_modules/` already exists. If it does, compile directly with `tsp compile ... --emit @typespec/openapi3`.
+- Confidence: high
+
+**[2026-06-29] — E1a K1 implement-next: TypeSpec contract drift between extractor and store seams**
+- Observation: `e1a-graphextractor-contract.tsp` defined `EntityType` and `RelationshipType` enums and used them, but `e1a-graphstore-contract.tsp` used plain `string` for the same fields. The contracts had drifted silently between sessions. Iterative review caught it as Major in Cycle 1.
+- Action: When two TypeSpec files define the same domain model (e.g., `GraphNode` appears in both extractor and store contracts), add a note in the first-created file naming the other as "must stay in sync." Consider which file is authoritative and note it. Always diff corresponding model fields across all sibling contracts when reviewing a contract change.
+- Confidence: high
+
+**[2026-06-29] — E1a K1 implement-next: K1 is a documentation task — TDD cycle is skipped, but sanity-test still runs**
+- Observation: K1 produces only planning documents and TypeSpec contracts — no Python code. The implement-next Step 2 explicitly says to skip TDD for doc-only tasks. However, Step 4 (run tests) still applies as a sanity check that no code was broken. Running a small subset (`tests/test_config_defaults.py tests/test_no_fstring_sql.py`) in under 1 second confirmed no breakage.
+- Action: For doc-only tasks, run a minimal smoke test (2-3 test files) rather than the full suite to satisfy Step 4 efficiently. The full suite is not needed when no Python code was touched.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-2 implement-next: both ID functions must normalize ALL string inputs**
+- Observation: `make_stable_entity_id` was written normalizing only `entity_name` (strip+lower), leaving `entity_type` raw. Similarly, `make_stable_edge_id` did not normalize `relationship_type`. Iterative review caught both as Major/Moderate: inconsistent normalization means the same semantic entity/edge produces different dedup keys depending on caller casing.
+- Action: For any hash-based stable ID function that accepts multiple string parameters, apply `.strip().lower()` to every semantic parameter (not to SHA-256 hex digests which are already canonical). Symmetric normalization prevents split-entity bugs.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-2 implement-next: test strings must match enum vocabulary**
+- Observation: Initial tests for `make_stable_edge_id` used uppercase `"RELATED_TO"` and `"USES"` — strings not present in `RelationshipType` enum (whose values are lowercase). Tests passed but exercised a path no real caller follows, hiding the normalization gap.
+- Action: In hash-function tests, always drive test strings from the actual enum `.value` (e.g. `RelationshipType.related_to.value`), not invented uppercase variants. This ensures the tests catch real normalization failures rather than masking them.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-2 implement-next: contract comments must be updated when implementation changes formula**
+- Observation: After fixing `make_stable_entity_id` to normalize `entity_type`, the TypeSpec contract files (`e1a-graphextractor-contract.tsp`, `e1a-graphstore-contract.tsp`) and team plan (line 161 + BE-2 task description) still showed the old formula `{entity_type}:{...}`. Cycle 2 review flagged this as Major contract drift.
+- Action: Whenever the hash formula in an entities module changes (even defensively), grep all `.tsp`, `CLAUDE.md`, and plan files for the old formula string and update them in the same commit. Contracts are not just docs — future implementers read them first.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-3 GraphStore: AsyncMock vs MagicMock for lancedb table methods**
+- Observation: In unit tests mocking lancedb, using `AsyncMock()` for the table object causes `table.query()` and `table.merge_insert()` to return coroutines instead of synchronous builders. This breaks chains like `table.merge_insert("id").when_matched_update_all()` — the coroutine has no `.when_matched_update_all` attribute.
+- Action: Mock lancedb table objects as `MagicMock()` (not `AsyncMock`), and set `mock_table.open_table = AsyncMock(return_value=mock_table)` on the db. Only leaf async calls (`execute`, `to_arrow`, `to_list`) need `AsyncMock`.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-5 pipeline graph hook: GraphNode/GraphEdge require enum instances, not strings**
+- Observation: `GraphNode.entity_type` is typed `EntityType` (enum) and `GraphEdge.relationship_type` is typed `RelationshipType` (enum). `GraphStore.write_graph` calls `.value` on these fields. Tests that pass `EntityType.concept.value` (a plain string `"concept"`) cause `AttributeError: 'str' object has no attribute 'value'`.
+- Action: In tests and real callers, always pass enum instances (`EntityType.concept`, `RelationshipType.related_to`) to `GraphNode`/`GraphEdge`. Use `.value` only when computing stable IDs via `make_stable_entity_id`/`make_stable_edge_id`.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-5 pipeline graph hook: sys.modules[name] = None simulates absent package in tests**
+- Observation: Setting `sys.modules["spacy"] = None` (not `del`) causes `import spacy` to raise `ImportError` inside the code under test. However, the check in `_check_graph_deps` must explicitly handle the `None` sentinel — `import spacy` on a `None` module actually raises `ImportError` from Python's machinery automatically.
+- Action: To simulate an absent optional package in a unit test, use `sys.modules["pkg"] = None` and restore the original value in a `finally` block. The code under test will receive `ImportError` on `import pkg`.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-9 eval graph_mrr: graph-mode traces must be excluded by query_id, not id()**
+- Observation: First implementation used `{id(t) for t in graph_traces}` to exclude graph traces from regular `retrieval_traces`. Review flagged this as fragile — object identity breaks if traces are ever copied or serialized. `query_id`-based exclusion is self-describing and refactoring-safe.
+- Action: When excluding a subset of traces from a metrics computation, use `{q.query_id for q in corpus.queries if q.graph_mode is not None}` and filter by `t.query_id not in graph_query_ids`. Never rely on Python object identity (`id()`) for logic that survives refactoring.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-9 eval graph_mrr: promote private functions to public when they become cross-module contract**
+- Observation: `StubGraphExpander` in `backends.py` needed to import `_build_expanded_text` and `_tokenize_and_generate_ngrams` from `graph_expander.py`. These were private (`_` prefix). Review flagged this as coupling to an undocumented contract that could break silently.
+- Action: When a test stub or eval backend needs to reuse production helpers, promote those helpers to public (drop the underscore). If they are pure functions with stable behavior, they are already part of the module's contract — the `_` prefix is just incorrect labeling.
+- Confidence: high
+
+**[2026-06-29] — E1a BE-9 eval graph_mrr: silent skip in graph result mapping hides fixture bugs**
+- Observation: First implementation had `continue` when `path_to_fixture.get(rel)` returned `None` in `_execute_graph_retrieval_query`. The regular `_map_result` raises `ValueError` for unmapped paths. Silent skip means fixture drift (renamed file, missing doc_id) produces a `graph_mrr` of 0.0 with no diagnostic.
+- Action: In eval result mapping, always raise `ValueError` on unmapped paths. The eval corpus is fully controlled — there are no "extra docs" that should be silently dropped. Silent data loss in eval metrics is worse than an exception.
+- Confidence: high
+
+**[2026-06-29] — E1a T-6 close-out: background agent wrote camelCase Python method names into architecture docs**
+- Observation: A background agent updating `CLAUDE.md` and `110_component_catalog_and_layer_breakdown.md` invented camelCase method names (`ensureGraphTables`, `writeGraph`, `getNeighbours`, etc.) that do not exist in the snake_case Python code. The project convention and the code are both snake_case throughout.
+- Action: After any background agent updates architecture docs (CLAUDE.md, 110 catalog), grep for camelCase patterns (`[a-z][A-Z]`) against the actual method names in the referenced module. Background agents are reliable for prose but prone to hallucinating camelCase when the source is Python.
+- Confidence: high
+
+**[2026-06-29] — E1a T-6 close-out: iterative-review caught `expansion_used` definition missing new term**
+- Observation: The existing `expansion_used` documentation in `600_api_reference` and `05_searching.md` was stale — it described `hyde_applied OR rag_fusion_applied` but the actual code (routes_search.py:233) now includes `or result.graph_expansion_applied` as a third term. The background agent that added the E1a docs did not update this existing definition.
+- Action: When adding a new expansion type (graph, future modes), explicitly search for every existing "expansion_used" definition across all docs and update it. It is a cross-cutting concern that will appear in multiple files.
+- Confidence: high
+
+**[2026-06-29] — E1a T-6 close-out: duplicate BREAKING.md entries created by multi-session feature work**
+- Observation: The E1a feature spanned multiple sessions. An earlier session added a BREAKING.md entry (BE-1 task). The T-6 close-out session added another entry for the same feature. Both ended up in the file simultaneously.
+- Action: Before adding a BREAKING.md entry for a feature, always grep for the feature prefix (e.g., `grep "E1a" BREAKING.md`) to check whether an entry already exists. If one exists, merge rather than append.
 - Confidence: high
