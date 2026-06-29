@@ -553,7 +553,7 @@ flowchart LR
         - #unit_test — `test_eval_metrics_graph_mrr_none_by_default` — `EvalMetrics()` has `graph_mrr=None`
         - #integration_test — `test_eval_suite_graph_mrr_computed` — eval runner with graph fixture queries; assert `graph_mrr` is float (not None) after run
 
-- [ ] **T-5** — e2e: run full eval suite with graph fixtures; verify `graph_mrr` is computed and test passes (report-only) #tester-role
+- [x] **T-5** — e2e: run full eval suite with graph fixtures; verify `graph_mrr` is computed and test passes (report-only) #tester-role
     - — · 2.0h
     - needs BE-9 · completes S16
     - Tests

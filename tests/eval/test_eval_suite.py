@@ -250,6 +250,60 @@ async def test_eval_suite_gated_smoke_rejects_stale_eval_hash(
 
 
 # ---------------------------------------------------------------------------
+# T-5 graph eval gate: graph_mrr computed end-to-end (report-only)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.eval
+async def test_e2e_eval_graph_mrr_passes() -> None:
+    """T-5 e2e: full eval suite with graph fixtures; verify graph_mrr is computed.
+
+    Runs the full eval suite against the committed corpus (which includes the
+    graph collection fixtures added by BE-9: auth_service.md, token_validator.md,
+    and two graph_mode=naive queries q-graph-01, q-graph-02).
+
+    Assertions:
+    - ``report.metrics.graph_mrr`` is a float (not None) — confirms graph queries
+      were executed and the MRR metric was computed.
+    - The rendered report text includes "graph_mrr" — confirms it is surfaced to
+      the operator.
+
+    This test is report-only: no floor is asserted against ``graph_mrr`` because
+    calibration data from real corpora is required first. The test passes as long
+    as the metric is computed (not None), regardless of the numeric value.
+    """
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=None,
+        baseline_path=None,
+    )
+
+    assert report.metrics.graph_mrr is not None, (
+        "graph_mrr was None after running eval suite with graph fixtures. "
+        "Expected a float computed from graph_mode=naive queries (q-graph-01, "
+        "q-graph-02). Check that BE-9 graph fixtures are present in queries.jsonl, "
+        "labels.jsonl, and corpus/graph/, and that _execute_graph_retrieval_query "
+        "is wired in runner.py."
+    )
+    assert report.metrics.graph_mrr > 0.0, (
+        f"graph_mrr={report.metrics.graph_mrr!r} — expected > 0.0. "
+        "The committed graph fixtures (q-graph-01 → graph-001/graph-002, "
+        "q-graph-02 → graph-002) should produce at least one reciprocal-rank hit. "
+        "If graph_mrr is 0.0, graph expansion may be wired but returning zero "
+        "relevant documents — check StubGraphExpander wiring and graph fixture labels."
+    )
+
+    rendered = render_report(report)
+    expected_value_str = f"{report.metrics.graph_mrr:.4f}"
+    assert expected_value_str in rendered, (
+        f"Rendered report does not contain the graph_mrr value {expected_value_str!r}. "
+        "render_report may have stopped surfacing the computed metric value. "
+        f"Report:\n{rendered}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # C2 multilingual fixtures test
 # ---------------------------------------------------------------------------
 
