@@ -475,14 +475,14 @@ flowchart LR
         - [x] #unit_test — `test_search_many_local_mixed_match` — collection A has community match; collection B has no community (isolated nodes); collection A returns community result; collection B falls back to hybrid for that leg
         - [x] #unit_test — `test_search_many_local_one_leg_all_stale_falls_back` — collection A leg has community match but all-stale chunk IDs; falls back to hybrid for that leg; collection B leg unaffected; no exception raised
 
-- [ ] **T-2** — e2e: (a) `POST /search` with `graph_mode=local` and a query known to match a community entity → 200 + non-empty results + `graph_expansion_applied=true`; (b) `POST /search` with `graph_mode=local` and a query with no recognisable entities → 200 + standard results + `graph_expansion_applied=false` (fallback) #tester-role
+- [x] **T-2** — e2e: (a) `POST /search` with `graph_mode=local` and a query known to match a community entity → 200 + non-empty results + `graph_expansion_applied=true`; (b) `POST /search` with `graph_mode=local` and a query with no recognisable entities → 200 + standard results + `graph_expansion_applied=false` (fallback) #tester-role
     - — · 3.0h
     - needs BE-7b · completes S3, S9, S10
     - Tests
-        - #e2e_test — `test_e2e_local_mode_with_entity_match` — query containing a known entity returns community chunks; graph_expansion_applied=true (S3)
-        - #e2e_test — `test_e2e_local_mode_no_entities_fallback` — query with no entities returns standard results; graph_expansion_applied=false (S10)
-        - #e2e_test — `test_e2e_local_mode_isolated_node_fallback` — query containing a graph entity that is isolated (no community membership); response returns results; graph_expansion_applied=true (naive fallback); no 4xx error (S9)
-        - #e2e_test — `test_e2e_local_mode_multi_collection` — multi-collection fanout with graph_mode=local; one collection has communities, one does not; both legs return results (mixed-match case)
+        - [x] #e2e_test — `test_e2e_local_mode_with_entity_match` — query containing a known entity returns community chunks; graph_expansion_applied=true (S3)
+        - [x] #e2e_test — `test_e2e_local_mode_no_entities_fallback` — query with no entities returns standard results; graph_expansion_applied=false (S10)
+        - [x] #e2e_test — `test_e2e_local_mode_isolated_node_fallback` — query containing a graph entity that is isolated (no community membership); response returns results; graph_expansion_applied=true (naive fallback); no 4xx error (S9)
+        - [x] #e2e_test — `test_e2e_local_mode_multi_collection` — multi-collection fanout with graph_mode=local; one collection has communities, one does not; both legs return results (mixed-match case)
 
 ---
 

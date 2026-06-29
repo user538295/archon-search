@@ -78,6 +78,16 @@
 - Action: Keep fix agent prompts under ~5 targeted fixes. For 10+ fixes, split into two sequential agents or apply directly in main context using batched Edit calls.
 - Confidence: high
 
+**[2026-06-29] — BE-7b fanout: test spec overrides scenario spec for S9 in multi-collection context**
+- Observation: S9 (isolated nodes) in the team plan says "falls back silently to naive graph expansion." But the BE-7b test spec explicitly says "collection B has no community (isolated nodes); Collection B falls back to hybrid for that leg." Multiple review agents (architecture, correctness, Brooks-Lint) flagged the hybrid fallback as violating S9. They were wrong — the test spec is authoritative for the fanout context.
+- Action: When scenario spec and task-level test spec conflict, the task-level test spec wins. Always read the `Tests` block of the specific task (not just the Scenarios section) to determine expected behavior.
+- Confidence: high
+
+**[2026-06-29] — BE-7b fanout: vacuous OR assertion is a Critical finding — always use separate asserts for multi-leg tests**
+- Observation: `assert "chunk-a1" in chunk_ids or "chunk-b1" in chunk_ids` passes if only ONE of the two collections contributes results. This is unfalsifiable for the "both legs must appear" contract. Four out of four reviewers flagged it as Critical/Major.
+- Action: In multi-collection fanout tests, ALWAYS use separate assert statements for each collection's expected results: `assert "chunk-a1" in chunk_ids` and `assert "chunk-b1" in chunk_ids`. Never combine with `or`.
+- Confidence: high
+
 **[2026-06-29] — E1b T-1 e2e: same db_path for GraphStore and SearchStore matches production CLI**
 - Observation: Test (a) initially used separate paths (`graph_db_path` and `db_path`) with a fragile `GraphStore.__init__` patch. Reviews identified this as Major because the production CLI uses the same path for both stores — graph tables use `_archon_graph_` prefix to avoid collision. The patch silently discarded the path argument.
 - Action: In CLI e2e tests, always seed `GraphStore` and `SearchStore` using the same `db_path` that `mock_cfg.db_path` will point to. Remove `GraphStore.__init__` patches — they are never needed when paths are aligned.
