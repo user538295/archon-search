@@ -756,3 +756,18 @@
 - Observation: `GraphCommunitiesNotBuiltError` TypeSpec contract has `required: [code, message]` but the initial implementation only returned `{"code": "..."}` with no `message`. The fix is to bind the exception (`except Foo as exc`) and include `str(exc)` as `message`.
 - Action: When a TypeSpec contract error body lists `required: [code, message]`, always verify both fields are present in the JSONResponse dict. Bind the exception variable to extract the message string.
 - Confidence: high
+
+**[2026-06-29] — E1b BE-7a: importing a private `_SYMBOL` from another module is a cross-boundary coupling violation**
+- Observation: The plan directed `from graph_expander import _MAX_NGRAM_SIZE` but underscore-prefixed constants are private by Python convention. Any rename or removal in `graph_expander.py` silently breaks `pipeline.py`. The fix is a one-line default parameter: `def tokenize_and_generate_ngrams(query, max_n=_MAX_NGRAM_SIZE)` so callers pass no argument.
+- Action: Never import private (`_`-prefixed) symbols from another module. Instead, expose the value via a default parameter, public constant, or accessor.
+- Confidence: high
+
+**[2026-06-29] — E1b BE-7a: new code added during review cycle itself needs test coverage**
+- Observation: Cycle 1 added glob filtering on community candidates (`fnmatch.fnmatchcase` in Step 7). Cycle 2 correctly flagged this as Moderate: new behavioral code with zero tests. Added `test_local_mode_glob_filter_excludes_community_chunks` in Cycle 2.
+- Action: Whenever a fix agent adds production code (not just test cleanup), the next review cycle must check for test coverage of that new code. Review agents can miss this if not explicitly prompted.
+- Confidence: high
+
+**[2026-06-29] — E1b BE-7a: log messages should name ALL filters that can trigger a fallback**
+- Observation: After adding glob filter before ACL in Step 7, the warning message said "filtered by ACL" even though glob could be the sole cause. Cycle 2 review caught this as Minor.
+- Action: When a fallback condition is triggered by multiple filters (glob + ACL), the log message must name all of them: "filtered by glob/ACL". Update log messages when adding new filter paths.
+- Confidence: high
