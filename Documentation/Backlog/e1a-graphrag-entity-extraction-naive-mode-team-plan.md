@@ -523,12 +523,12 @@ flowchart LR
         - [x] #unit_test — `test_mcp_search_expansion_used_includes_graph_expansion` — MCP search with graph_mode=naive, expander returns expansionApplied=True; assert expansion_used==True in MCP response dict
         - [x] #unit_test — `test_mcp_search_response_includes_graph_expansion_applied_field` — McpSearchResponse has graph_expansion_applied field; False by default; True when graph expanded
 
-- [ ] **T-2** — e2e: ingest two related docs (one mentioning "AuthService", one mentioning "TokenValidator" in the same chunk as "AuthService"); search with `graph_mode=naive`; verify "TokenValidator" appears in results; also test multi-collection fanout #tester-role
+- [x] **T-2** — e2e: ingest two related docs (one mentioning "AuthService", one mentioning "TokenValidator" in the same chunk as "AuthService"); search with `graph_mode=naive`; verify "TokenValidator" appears in results; also test multi-collection fanout #tester-role
     - — · 4.0h
     - needs FE-2, BE-7 · completes S4, S7
     - Tests
-        - #e2e_test — `test_e2e_graph_naive_single_collection_recall` — ingest fixture with AuthService→TokenValidator relationship; search `"AuthService"` with `graph_mode="naive"`; assert results contain TokenValidator chunk
-        - #e2e_test — `test_e2e_graph_naive_fanout_per_collection` — two collections with separate graphs; fanout search; verify expansion used per-collection independently; `graph_expansion_applied=True`
+        - [x] #e2e_test — `test_e2e_graph_naive_single_collection_recall` — ingest fixture with AuthService→TokenValidator relationship; search `"AuthService"` with `graph_mode="naive"`; assert results contain TokenValidator chunk
+        - [x] #e2e_test — `test_e2e_graph_naive_fanout_per_collection` — two collections with separate graphs; fanout search; verify expansion used per-collection independently; `graph_expansion_applied=True`
 
 - [ ] **T-3** — e2e: graph disabled + `graph_mode=naive` → 422; `graph_mode=naive` + empty graph → no-op (200, `graph_expansion_applied=False`); MCP `graph_mode=naive` roundtrip (graph enabled) #tester-role
     - — · 2.0h
