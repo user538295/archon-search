@@ -781,3 +781,18 @@
 - Observation: After adding glob filter before ACL in Step 7, the warning message said "filtered by ACL" even though glob could be the sole cause. Cycle 2 review caught this as Minor.
 - Action: When a fallback condition is triggered by multiple filters (glob + ACL), the log message must name all of them: "filtered by glob/ACL". Update log messages when adding new filter paths.
 - Confidence: high
+
+**[2026-06-29] — E1b BE-8: adding Pydantic response fields requires OpenAPI snapshot regeneration**
+- Observation: Adding `community_count` and `last_built_at` to `StatusCollectionEntry` broke `tests/server/test_openapi_snapshot.py`. The Brooks-Lint reviewer caught this as a build-breaking Major issue (C1-B-1). The fix is `uv run --python 3.12 pytest tests/server/test_openapi_snapshot.py --update-openapi-snapshot`.
+- Action: Whenever a Pydantic model used as a response model gains or loses fields, immediately regenerate the OpenAPI snapshot in the same task. This is already in `learnings.md` but this confirms it's caught by automated CI — do not skip.
+- Confidence: high
+
+**[2026-06-29] — E1b BE-8: multi-collection status tests must use side_effect keyed on collection name**
+- Observation: Initial integration tests used a single-return `AsyncMock(return_value=...)` for `get_community_stats`. This meant the mock returned identical stats regardless of which collection was passed — making the per-collection mapping invisible to tests. Brooks-Lint raised this as C1-B-2 (Moderate).
+- Action: Any test for per-collection behavior (status, stats, etc.) MUST use `side_effect` keyed on the argument (e.g., `lambda name: stats_by_col[name]`) so that incorrect argument passing fails the test. A constant return value is a coverage illusion.
+- Confidence: high
+
+**[2026-06-29] — E1b BE-8: health-path async DB calls need try/except guards**
+- Observation: `get_community_stats` was called without exception guard in the `GET /status` collection loop. A LanceDB error in one collection would 500 the entire health endpoint. The existing `GraphStore.get_community_stats` only handles `FileNotFoundError`/`ValueError` on `open_table`, not downstream query errors.
+- Action: Any auxiliary DB call inside `GET /status` or similar health endpoints MUST be wrapped in `try/except Exception` with WARNING log + fallback to defaults. Never let a non-critical sub-system read take down the primary monitoring surface.
+- Confidence: high
