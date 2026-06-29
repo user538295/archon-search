@@ -1,7 +1,8 @@
 {
   "command": "pytest -m eval tests/eval/test_eval_suite.py::test_eval_suite_report_only_smoke",
-  "eval_hash": "b96f66aa982332e026cf9f92a8b999751e909c1de262e71a8e8c27e710896de9",
+  "eval_hash": "d703de36a8bd6248fb1060919196c29584342a7a4cca07eac620d72420167f4a",
   "metrics": {
+    "graph_mrr": 1.0,
     "latency_p50_ms": null,
     "latency_p95_ms": null,
     "mrr": 1.0,
@@ -12,12 +13,12 @@
     "recall_at_5": 0.9852941176470589,
     "reranker_lift": 0.02323056686543623,
     "routing_accuracy": 1.0,
-    "routing_mrr_centroid": 0.75,
-    "routing_mrr_hybrid": 0.75,
+    "routing_mrr_centroid": 0.7361111111111112,
+    "routing_mrr_hybrid": 0.7361111111111112,
     "routing_precision_at_1_centroid": 0.6666666666666666,
     "routing_precision_at_1_hybrid": 0.6666666666666666
   },
   "runtime_config_hash": "71d933f9eeed1406f18cb6026d4c0d72e7a4287654100dd20a9d4385a1226589",
-  "thresholds_hash": "97647940af544b4011ec22ea688dc241a3460ee2f608423a0e3776ab1d650cdc",
+  "thresholds_hash": "48ab31901848be52373ddebe318da678f41358974ee107e1ef7408c0dae1287a",
   "waiver_ids": {}
 }

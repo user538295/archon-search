@@ -990,6 +990,7 @@ def _make_metrics(
     routing_mrr_hybrid: float | None = None,
     routing_precision_at_1_centroid: float | None = None,
     routing_precision_at_1_hybrid: float | None = None,
+    graph_mrr: float | None = None,
 ) -> EvalMetrics:
     return EvalMetrics(
         recall_at_1=recall_at_1,
@@ -1006,6 +1007,7 @@ def _make_metrics(
         routing_mrr_hybrid=routing_mrr_hybrid,
         routing_precision_at_1_centroid=routing_precision_at_1_centroid,
         routing_precision_at_1_hybrid=routing_precision_at_1_hybrid,
+        graph_mrr=graph_mrr,
     )
 
 
@@ -1018,6 +1020,7 @@ def _make_quality_floors(**overrides) -> EvalQualityFloors:
         ndcg_at_5=0.70,
         ndcg_at_10=0.72,
         routing_accuracy=None,
+        graph_mrr=None,
     )
     defaults.update(overrides)
     return EvalQualityFloors(**defaults)
@@ -1159,6 +1162,31 @@ def test_assert_thresholds_does_not_fail_report_only_latency() -> None:
     metrics = _make_metrics(latency_p50_ms=9999.0, latency_p95_ms=99999.0)
     report = _make_report(metrics=metrics, thresholds=thresholds)
     assert_thresholds(report)  # no raise
+
+
+def test_assert_thresholds_enforces_graph_mrr_floor() -> None:
+    """assert_thresholds fails when graph_mrr is below the configured floor."""
+    floors = _make_quality_floors(graph_mrr=0.9)
+    metrics = _make_metrics(graph_mrr=0.7)
+    report = _make_report(metrics=metrics, thresholds=EvalThresholds(quality_floors=floors))
+    with pytest.raises(AssertionError, match="graph_mrr"):
+        assert_thresholds(report)
+
+
+def test_assert_thresholds_passes_when_graph_mrr_meets_floor() -> None:
+    """assert_thresholds passes when graph_mrr meets the floor."""
+    floors = _make_quality_floors(graph_mrr=0.9)
+    metrics = _make_metrics(graph_mrr=1.0)
+    report = _make_report(metrics=metrics, thresholds=EvalThresholds(quality_floors=floors))
+    assert_thresholds(report)  # must not raise
+
+
+def test_assert_thresholds_skips_graph_mrr_when_floor_none() -> None:
+    """assert_thresholds skips graph_mrr when floor is None (report-only mode)."""
+    floors = _make_quality_floors()  # graph_mrr defaults to None
+    metrics = _make_metrics(graph_mrr=None)
+    report = _make_report(metrics=metrics, thresholds=EvalThresholds(quality_floors=floors))
+    assert_thresholds(report)  # must not raise
 
 
 def test_render_report_mentions_eval_backend_latency() -> None:

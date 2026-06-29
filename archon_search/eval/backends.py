@@ -72,6 +72,59 @@ class EvalEmbedderBackend:
         return result
 
 
+# ---------------------------------------------------------------------------
+# Eval graph expansion stub (BE-9)
+# ---------------------------------------------------------------------------
+
+
+#: Deterministic entity→neighbours map for graph-mode eval queries.
+#: Covers the ``graph`` collection fixtures (auth_service.md, token_validator.md).
+EVAL_GRAPH_ENTITY_MAP: dict[str, list[str]] = {
+    "authservice": ["TokenValidator"],
+    "tokenvalidator": ["AuthService"],
+    "auth": ["AuthService", "TokenValidator"],
+}
+
+
+class StubGraphExpander:
+    """Deterministic stub GraphExpander for eval harness use only.
+
+    Uses a fixed entity→neighbours dict (no LanceDB, no spaCy).
+    Satisfies the GraphExpander protocol (``expand(query, collection) → ExpandedQuery``).
+    """
+
+    def __init__(self, entity_map: dict[str, list[str]]) -> None:
+        self._entity_map = {k.lower(): v for k, v in entity_map.items()}
+
+    async def expand(self, query: str, collection: str) -> "ExpandedQuery":  # type: ignore[name-defined]  # noqa: F821
+        from archon_search.graph_expander import (
+            ExpandedQuery,
+            build_expanded_text,
+            tokenize_and_generate_ngrams,
+        )
+
+        ngrams = tokenize_and_generate_ngrams(query, 3)
+        neighbour_names: list[str] = []
+        entity_names_found: list[str] = []
+        for ngram in ngrams:
+            neighbours = self._entity_map.get(ngram.lower())
+            if neighbours:
+                entity_names_found.append(ngram)
+                neighbour_names.extend(neighbours)
+
+        if not neighbour_names:
+            return ExpandedQuery(original_query=query, expanded_text=query)
+
+        expanded, appended = build_expanded_text(query, neighbour_names)
+        return ExpandedQuery(
+            original_query=query,
+            expanded_text=expanded,
+            expansion_applied=bool(appended),
+            entity_names_found=entity_names_found,
+            neighbour_names_added=appended,
+        )
+
+
 class EvalRerankerBackend:
     """BM25-inspired lexical reranker for eval harness use only.
 

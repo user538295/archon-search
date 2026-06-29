@@ -53,3 +53,6 @@
 {"query_id": "q-fr-04", "doc_id": "fr-003", "grade": 1}
 {"query_id": "q-fr-05", "doc_id": "fr-005", "grade": 2}
 {"query_id": "page_provenance_001", "doc_id": "pdf-001", "grade": 2}
+{"query_id": "q-graph-01", "doc_id": "graph-001", "grade": 2}
+{"query_id": "q-graph-01", "doc_id": "graph-002", "grade": 1}
+{"query_id": "q-graph-02", "doc_id": "graph-002", "grade": 2}

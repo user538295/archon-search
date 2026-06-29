@@ -13,25 +13,24 @@
 # in baseline.json and update both baseline.json/.md and this file together.
 
 [quality_floors]
-# Rationale: floors recalibrated after adding C3c code symbol context eval fixtures (Task 8.1).
-# 3 code corpus documents (symbol_enricher.py, ast_walker.py, module_resolver.py) added.
-# 1 retrieval query (q-code-11) added targeting the code collection.
-# Previous calibration (with pdf-fixtures, 39 queries / 63 docs):
-#   recall_at_1: 0.8636, recall_at_3: 0.9697, recall_at_5: 1.0
-#   ndcg_at_5: 0.9890, ndcg_at_10: 0.9890
-#   routing_accuracy: 1.0, routing_mrr_centroid/hybrid: 0.7556
-# New calibration (with C3c code docs, 40 queries / 66 docs):
-#   recall_at_1: 0.8714 (IMPROVED — new q-code-11 retrieves symbol_enricher.py at rank 1)
-#   recall_at_3: 0.9714 (IMPROVED — same reason)
-#   recall_at_5: 0.9857 (DELTA -0.014, within 0.05 no-waiver threshold — rationale:
-#     the code corpus is now larger (66 docs) and the deterministic SHA-256 embedder
-#     ranks the three new code documents with less discriminative separation; one of the
-#     existing 10 retrieval queries (q-code-02/07/10) now requires rank-6 to find its gold
-#     document; routing_accuracy is unchanged at 1.0)
-#   ndcg_at_5: 0.9856 (DELTA -0.0034, within 0.05, same corpus-size effect)
-#   ndcg_at_10: 0.9882 (DELTA -0.0008, within 0.05, same corpus-size effect)
-#   routing_accuracy: 1.0 (unchanged — new docs are in the code collection, not routing)
-#   routing_mrr_centroid/hybrid: 0.75 (DELTA -0.006, within 0.05, new code centroid shift)
+# Rationale: floors recalibrated after adding E1a BE-9 graph eval fixtures.
+# 2 graph corpus documents (auth_service.md, token_validator.md) added.
+# 2 retrieval queries (q-graph-01, q-graph-02) with graph_mode=naive added.
+# graph_mrr is report-only with no gated floor.
+# Previous calibration (with C3c code docs, 40 queries / 66 docs):
+#   recall_at_1: 0.8676, recall_at_3: 0.9706, recall_at_5: 0.9853
+#   ndcg_at_5: 0.9852, ndcg_at_10: 0.9879
+#   routing_accuracy: 1.0, routing_mrr_centroid/hybrid: 0.75
+# New calibration (with graph docs, 42 queries / 68 docs):
+#   recall_at_1: 0.8676 (UNCHANGED — graph queries excluded from retrieval metrics)
+#   recall_at_3: 0.9706 (UNCHANGED)
+#   recall_at_5: 0.9853 (UNCHANGED)
+#   ndcg_at_5: 0.9852 (UNCHANGED)
+#   ndcg_at_10: 0.9879 (UNCHANGED)
+#   routing_accuracy: 1.0 (UNCHANGED)
+#   routing_mrr_centroid/hybrid: 0.7361 (DELTA -0.0139, within 0.05 — corpus centroid shift
+#     from adding graph documents to the store; retrieval metrics unaffected because
+#     graph queries are excluded from the regular retrieval_traces set)
 # All drops are within max_floor_drop_without_waiver=0.05; no waiver entry required.
 # All floors set equal to new measured baseline so regressions are immediately gated.
 recall_at_1     = 0.8676470588235294
@@ -41,10 +40,11 @@ mrr             = 1.0
 ndcg_at_5       = 0.98516679592094
 ndcg_at_10      = 0.98786690917953
 routing_accuracy = 1.0
-routing_mrr_centroid = 0.75
-routing_mrr_hybrid = 0.75
+routing_mrr_centroid = 0.7361111111111112
+routing_mrr_hybrid = 0.7361111111111112
 # routing_precision_at_1_centroid — reported-only; no floor (P@1 report-only per Task 6.2)
 # routing_precision_at_1_hybrid   — reported-only; no floor (P@1 report-only per Task 6.2)
+# graph_mrr — reported-only; no floor set until calibration baseline exists (E1a BE-9)
 
 [multilingual]
 # Per-language recall floors for C2 multilingual eval fixtures.

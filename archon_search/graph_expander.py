@@ -78,7 +78,7 @@ def _generate_ngrams(tokens: list[str], max_n: int) -> list[str]:
     return candidates
 
 
-def _tokenize_and_generate_ngrams(query: str, max_n: int) -> list[str]:
+def tokenize_and_generate_ngrams(query: str, max_n: int) -> list[str]:
     """Split *query* by whitespace, then return all N-gram candidates."""
     tokens = query.split()
     if not tokens:
@@ -86,7 +86,7 @@ def _tokenize_and_generate_ngrams(query: str, max_n: int) -> list[str]:
     return _generate_ngrams(tokens, max_n)
 
 
-def _build_expanded_text(original_query: str, neighbour_names: list[str]) -> tuple[str, list[str]]:
+def build_expanded_text(original_query: str, neighbour_names: list[str]) -> tuple[str, list[str]]:
     """Append *neighbour_names* to *original_query*, skipping duplicates.
 
     Deduplication strategy:
@@ -157,7 +157,7 @@ class GraphExpander:
         """
         # Step 1: tokenise and generate N-gram candidates (CPU-bound).
         ngram_candidates: list[str] = await asyncio.to_thread(
-            _tokenize_and_generate_ngrams, query, _MAX_NGRAM_SIZE
+            tokenize_and_generate_ngrams, query, _MAX_NGRAM_SIZE
         )
 
         if not ngram_candidates:
@@ -212,7 +212,7 @@ class GraphExpander:
 
         # Step 4: build expanded text (CPU-bound, but trivially fast; no thread needed).
         neighbour_names = [n.entity_name for n in neighbour_nodes]
-        expanded, appended_names = _build_expanded_text(query, neighbour_names)
+        expanded, appended_names = build_expanded_text(query, neighbour_names)
 
         entity_names_found = [n.entity_name for n in matched_nodes]
 

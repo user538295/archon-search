@@ -545,7 +545,7 @@ flowchart LR
 
 > **Note:** Kuzu backend (BE-8), CLI graph migrate (FE-4), and T-4 e2e Kuzu migration are deferred to E1b. Eval baseline from E1a will confirm the scale need before implementing Kuzu.
 
-- [ ] **BE-9** — Add `graph_mrr: float | None` to `EvalMetrics` + `EvalQualityFloors` in `archon_search/eval/types.py` + `runner.py`; add graph-mode query fixtures to `tests/eval/queries.jsonl` + `labels.jsonl` + `corpus/`; deterministic graph stub for eval backend; add report-only entry to `thresholds.toml`; recalibrate baseline #backend-role
+- [x] **BE-9** — Add `graph_mrr: float | None` to `EvalMetrics` + `EvalQualityFloors` in `archon_search/eval/types.py` + `runner.py`; add graph-mode query fixtures to `tests/eval/queries.jsonl` + `labels.jsonl` + `corpus/`; deterministic graph stub for eval backend; add report-only entry to `thresholds.toml`; recalibrate baseline #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-7 · completes S16
     - Tests

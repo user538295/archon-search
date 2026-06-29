@@ -52,6 +52,7 @@ class EvalQualityFloors:
     routing_mrr_hybrid: float | None = None
     routing_precision_at_1_centroid: float | None = None
     routing_precision_at_1_hybrid: float | None = None
+    graph_mrr: float | None = None
 
 
 @dataclass
@@ -161,6 +162,7 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         "routing_mrr_hybrid",
         "routing_precision_at_1_centroid",
         "routing_precision_at_1_hybrid",
+        "graph_mrr",
     )
     optional_floats: dict[str, float | None] = {}
     for opt_key in _optional_float_fields:
@@ -184,6 +186,7 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         routing_mrr_hybrid=optional_floats["routing_mrr_hybrid"],
         routing_precision_at_1_centroid=optional_floats["routing_precision_at_1_centroid"],
         routing_precision_at_1_hybrid=optional_floats["routing_precision_at_1_hybrid"],
+        graph_mrr=optional_floats["graph_mrr"],
     )
 
     # --- latency_ceilings section (optional) ----------------------------------
@@ -460,6 +463,19 @@ class EvalReport:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_corpus_relative_path(source_path: str, corpus_root: Path) -> str:
+    """Resolve *source_path* to a path relative to the corpus/ subdirectory.
+
+    Mirrors the normalization in ``_map_result`` so both regular and
+    graph-mode result mapping use the same path convention.
+    """
+    corpus_dir = (corpus_root / "corpus").resolve()
+    try:
+        return str(Path(source_path).resolve().relative_to(corpus_dir))
+    except ValueError:
+        return source_path
+
+
 def _map_result(
     raw: EvalSearchResult,
     path_to_fixture: dict[str, tuple[str, str]],
@@ -472,11 +488,7 @@ def _map_result(
     # source_path is the absolute path used at ingest time.  Convert back to
     # a corpus-relative path (the key used by path_to_fixture) — relative to
     # the ``corpus/`` subdirectory, which is what build_doc_collection_map uses.
-    corpus_dir = (corpus_root / "corpus").resolve()
-    try:
-        rel = str(Path(raw.source_path).resolve().relative_to(corpus_dir))
-    except ValueError:
-        rel = raw.source_path  # fallback: not under corpus/
+    rel = _resolve_corpus_relative_path(raw.source_path, corpus_root)
 
     entry = path_to_fixture.get(rel)
     if entry is None:
@@ -553,6 +565,7 @@ async def _build_pipeline_with_eval_backends(
     store = SearchStore(db_path)
     await store.connect()
 
+    graph_expander = None
     if backend == "live":
         from archon_search.embedder import ModelEmbedder
         from archon_search.reranker import ModelReranker
@@ -560,10 +573,16 @@ async def _build_pipeline_with_eval_backends(
         embedder = Embedder(ModelEmbedder(model_name=embedding_model_name))
         reranker = Reranker(ModelReranker(model_name=reranker_model_name))
     elif backend == "deterministic":
-        from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
+        from archon_search.eval.backends import (
+            EVAL_GRAPH_ENTITY_MAP,
+            EvalEmbedderBackend,
+            EvalRerankerBackend,
+            StubGraphExpander,
+        )
 
         embedder = Embedder(EvalEmbedderBackend())
         reranker = Reranker(EvalRerankerBackend())
+        graph_expander = StubGraphExpander(EVAL_GRAPH_ENTITY_MAP)
     else:
         raise ValueError(f"unknown backend: {backend!r}")
 
@@ -577,6 +596,7 @@ async def _build_pipeline_with_eval_backends(
         parser=parser,
         top_k_retrieve=10,
         top_k_return=10,
+        graph_expander=graph_expander,
     )
     return pipeline
 
@@ -710,6 +730,9 @@ async def run_eval_suite(
     # set feeds all routing metrics.
     centroid_routing_traces: list[QueryEvalTrace] = []
     hybrid_routing_traces: list[QueryEvalTrace] = []
+    # graph_traces: retrieval queries run with graph_mode set (excluded from
+    # regular retrieval_traces so baseline metrics are unaffected).
+    graph_traces: list[QueryEvalTrace] = []
 
     with tempfile.TemporaryDirectory(prefix="archon-search-eval-") as tmpdir:
         db_path = Path(tmpdir) / "lancedb"
@@ -724,17 +747,27 @@ async def run_eval_suite(
 
             for q in corpus.queries:
                 if q.metric_scope == "retrieval":
-                    trace = await _execute_retrieval_query(
-                        pipeline=pipeline,
-                        query=q,
-                        runtime_cfg=runtime_cfg,
-                        path_to_fixture=path_to_fixture,
-                        corpus_root=corpus_root,
-                        per_col_unique=per_col_unique,
-                        corpus=corpus,
-                        collection_metas=collection_metas,
-                    )
-                    traces.append(trace)
+                    if q.graph_mode is not None:
+                        trace = await _execute_graph_retrieval_query(
+                            pipeline=pipeline,
+                            query=q,
+                            path_to_fixture=path_to_fixture,
+                            corpus_root=corpus_root,
+                        )
+                        graph_traces.append(trace)
+                        traces.append(trace)
+                    else:
+                        trace = await _execute_retrieval_query(
+                            pipeline=pipeline,
+                            query=q,
+                            runtime_cfg=runtime_cfg,
+                            path_to_fixture=path_to_fixture,
+                            corpus_root=corpus_root,
+                            per_col_unique=per_col_unique,
+                            corpus=corpus,
+                            collection_metas=collection_metas,
+                        )
+                        traces.append(trace)
                 else:
                     # routing-scope query
                     if not runtime_cfg.routing_contract_enabled:
@@ -815,7 +848,13 @@ async def run_eval_suite(
                 logger.debug("ignored disconnect error: %s", exc)
 
     # ----- metrics ----------------------------------------------------------
-    retrieval_traces = [t for t in traces if t.metric_scope == "retrieval"]
+    # Exclude graph-mode traces from regular retrieval metrics so the committed
+    # baseline is unaffected by graph fixture additions.
+    graph_query_ids = {q.query_id for q in corpus.queries if q.graph_mode is not None}
+    retrieval_traces = [
+        t for t in traces
+        if t.metric_scope == "retrieval" and t.query_id not in graph_query_ids
+    ]
 
     # Per-collection corpus size for the under-depth diagnostic
     def _corpus_for_trace(t: QueryEvalTrace) -> int | None:
@@ -849,6 +888,14 @@ async def run_eval_suite(
     routing_mrr_hybrid = compute_routing_mrr(hybrid_routing_traces, _gold_fn)
     routing_precision_at_1_hybrid = compute_routing_precision_at_1(hybrid_routing_traces, _gold_fn)
 
+    graph_mrr: float | None = (
+        compute_mrr(graph_traces, corpus.labels) if graph_traces else None
+    )
+
+    # Graph-mode traces are excluded from latency percentiles: the 2-document
+    # graph fixture corpus is too small to produce meaningful latency samples,
+    # and graph expansion latency will be tracked separately when the fixture
+    # grows in E1b. (Latency regressions from graph expansion are not measured here.)
     latencies = [t.latency_ms for t in retrieval_traces]
     p50, p95 = compute_latency_percentiles(latencies)
 
@@ -867,6 +914,7 @@ async def run_eval_suite(
         routing_mrr_hybrid=routing_mrr_hybrid,
         routing_precision_at_1_centroid=routing_precision_at_1_centroid,
         routing_precision_at_1_hybrid=routing_precision_at_1_hybrid,
+        graph_mrr=graph_mrr,
     )
 
     current_eval_hash = compute_eval_hash(corpus_root)
@@ -911,6 +959,7 @@ _QUALITY_FLOOR_FIELDS = (
     "routing_mrr_hybrid",
     "routing_precision_at_1_centroid",
     "routing_precision_at_1_hybrid",
+    "graph_mrr",
 )
 
 
@@ -1082,6 +1131,7 @@ _RENDERED_QUALITY_FIELDS = (
     "ndcg_at_10",
     "reranker_lift",
     "routing_accuracy",
+    "graph_mrr",
 )
 
 _RENDERED_LATENCY_FIELDS = ("latency_p50_ms", "latency_p95_ms")
@@ -1293,5 +1343,86 @@ async def _execute_retrieval_query(
         results=post_mapped,
         pre_rerank_results=pre_mapped,
         router_correct=router_correct,
+        latency_ms=elapsed,
+    )
+
+
+async def _execute_graph_retrieval_query(
+    *,
+    pipeline,
+    query: EvalQuery,
+    path_to_fixture: dict[str, tuple[str, str]],
+    corpus_root: Path,
+) -> QueryEvalTrace:
+    """Run a single graph-mode retrieval query and return a populated trace.
+
+    Uses ``pipeline.search()`` with ``graph_mode`` set, maps results to fixture
+    doc_ids, and returns a ``QueryEvalTrace``.  Excluded from the regular
+    ``retrieval_traces`` so it does not affect baseline metrics.
+
+    No under-depth diagnostic: graph collections are typically small (2 docs),
+    so the strict ``available >= metric_depth`` guard never triggers.
+    """
+    if query.collection is None:
+        raise ValueError(
+            f"graph retrieval query {query.query_id!r} has collection=None"
+        )
+
+    t0 = time.perf_counter()
+    search_result = await pipeline.search(
+        query.text,
+        query.collection,
+        embedder=pipeline._global_embedder,
+        graph_mode=query.graph_mode,
+    )
+    elapsed = (time.perf_counter() - t0) * 1000.0
+
+    from archon_search._diagnostics import SearchScoreBreakdown
+
+    mapped: list[EvalSearchResult] = []
+    for r in search_result.results:
+        rel = _resolve_corpus_relative_path(r.source_path, corpus_root)
+        entry = path_to_fixture.get(rel)
+        if entry is None:
+            available = sorted(path_to_fixture.keys())
+            raise ValueError(
+                f"unmapped source_path in graph query {query.query_id!r}: "
+                f"cannot map {r.source_path!r} (relative={rel!r}) "
+                f"to any fixture doc_id. Available fixture paths: {available}"
+            )
+        fixture_doc_id, _ = entry
+        mapped.append(
+            EvalSearchResult(
+                doc_id=fixture_doc_id,
+                runtime_doc_id=r.doc_id,
+                chunk_id=r.chunk_id,
+                text=r.text,
+                source_path=r.source_path,
+                collection=r.collection,
+                score_breakdown=SearchScoreBreakdown(
+                    vector_rank=None,
+                    vector_score=None,
+                    vector_score_kind=None,
+                    fts_rank=None,
+                    fts_score=None,
+                    fts_score_kind=None,
+                    rrf_score=r.score,
+                    reranker_score=None,
+                ),
+            )
+        )
+
+    # Apply deterministic tie-breaking: primary key is rrf_score descending;
+    # ties break by doc_id then chunk_id ascending — mirrors _execute_retrieval_query.
+    mapped.sort(key=lambda r: (-r.score_breakdown.rrf_score, r.doc_id, r.chunk_id))
+
+    return QueryEvalTrace(
+        query_id=query.query_id,
+        query_text=query.text,
+        collection=query.collection,
+        metric_scope="retrieval",
+        results=mapped,
+        pre_rerank_results=None,
+        router_correct=None,
         latency_ms=elapsed,
     )

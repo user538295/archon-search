@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 _VALID_METRIC_SCOPES = ("retrieval", "routing")
+_VALID_GRAPH_MODES = (None, "naive")
 
 # Same pattern as archon_search.store._COLLECTION_RE
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
@@ -50,12 +51,26 @@ class EvalQuery:
     collection: str | None
     metric_scope: Literal["retrieval", "routing"]
     routing_bypass: bool = False
+    graph_mode: str | None = None
+    """When set to ``"naive"``, the eval runner executes the query with graph
+    expansion enabled.  These traces feed ``graph_mrr`` only and are excluded
+    from the regular retrieval metrics to keep the committed baseline stable."""
 
     def __post_init__(self) -> None:
         if self.metric_scope not in _VALID_METRIC_SCOPES:
             raise ValueError(
                 f"metric_scope must be one of {_VALID_METRIC_SCOPES!r}, "
                 f"got {self.metric_scope!r}"
+            )
+        if self.graph_mode not in _VALID_GRAPH_MODES:
+            raise ValueError(
+                f"graph_mode must be one of {_VALID_GRAPH_MODES!r}, "
+                f"got {self.graph_mode!r}"
+            )
+        if self.graph_mode is not None and self.metric_scope != "retrieval":
+            raise ValueError(
+                f"graph_mode={self.graph_mode!r} is only valid with "
+                f"metric_scope='retrieval', got metric_scope={self.metric_scope!r}"
             )
 
 
@@ -212,6 +227,7 @@ def load_eval_corpus(root: Path) -> EvalCorpus:
                 collection=collection,
                 metric_scope=row["metric_scope"],
                 routing_bypass=bool(row.get("routing_bypass", False)),
+                graph_mode=row.get("graph_mode"),
             )
         )
 

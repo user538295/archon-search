@@ -29,6 +29,7 @@ _QUALITY_METRIC_FIELDS = (
     "ndcg_at_5",
     "ndcg_at_10",
     "routing_accuracy",
+    "graph_mrr",
 )
 
 

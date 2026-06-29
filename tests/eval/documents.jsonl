@@ -64,3 +64,5 @@
 {"doc_id": "fr-004", "collection": "fr-docs", "relative_path": "fr-docs/guide_configuration.md"}
 {"doc_id": "fr-005", "collection": "fr-docs", "relative_path": "fr-docs/guide_depannage.md"}
 {"doc_id": "pdf-001", "collection": "pdf-fixtures", "relative_path": "pdf-fixtures/three_page.pdf"}
+{"doc_id": "graph-001", "collection": "graph", "relative_path": "graph/auth_service.md"}
+{"doc_id": "graph-002", "collection": "graph", "relative_path": "graph/token_validator.md"}
