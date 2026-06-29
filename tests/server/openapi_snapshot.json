@@ -2535,6 +2535,18 @@
               }
             ]
           },
+          "graph_mode": {
+            "anyOf": [
+              {
+                "const": "naive",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Mode"
+          },
           "hyde": {
             "default": false,
             "title": "Hyde",
@@ -2605,6 +2617,11 @@
               }
             ],
             "title": "Expansion Warning"
+          },
+          "graph_expansion_applied": {
+            "default": false,
+            "title": "Graph Expansion Applied",
+            "type": "boolean"
           },
           "hyde_applied": {
             "default": false,

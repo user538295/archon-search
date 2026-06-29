@@ -6,6 +6,7 @@ import logging
 import time
 from contextlib import ExitStack
 from time import monotonic
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -42,6 +43,7 @@ class SearchRequest(BaseModel):
     filters: SearchFilters | None = None
     hyde: bool = False
     rag_fusion: bool = False
+    graph_mode: Literal["naive"] | None = None
 
     @field_validator("collection")
     @classmethod
@@ -127,6 +129,7 @@ class SearchResponse(BaseModel):
     rag_fusion_applied: bool = False
     rag_fusion_queries_used: int = 0
     rag_fusion_attempted: bool = False
+    graph_expansion_applied: bool = False
     expansion_used: bool = False
     expansion_warning: str | None = None
     applied_filters: SearchFilters | None = None
@@ -150,6 +153,13 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     if body.top_k > config.top_k_max:
         return JSONResponse(
             {"detail": f"top_k {body.top_k} exceeds operator-configured maximum of {config.top_k_max}"},
+            status_code=422,
+        )
+
+    # graph_mode guard: require [graph] enabled=true
+    if body.graph_mode is not None and not config.graph.enabled:
+        return JSONResponse(
+            {"detail": "graph_mode requires [graph] enabled=true in server config"},
             status_code=422,
         )
 
@@ -178,6 +188,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 rag_fusion_generator=rag_fusion_gen,
                 rag_fusion_config=config.rag_fusion,
                 filters=body.filters,
+                graph_mode=body.graph_mode,
             )
         except RAGFusionDependencyError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=422)
@@ -218,7 +229,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             rag_fusion_applied=result.rag_fusion_applied,
             rag_fusion_queries_used=result.rag_fusion_queries_used,
             rag_fusion_attempted=result.rag_fusion_attempted,
-            expansion_used=hyde_applied or result.rag_fusion_applied,
+            graph_expansion_applied=result.graph_expansion_applied,
+            expansion_used=hyde_applied or result.rag_fusion_applied or result.graph_expansion_applied,
             expansion_warning=_multi_expansion_warning,
             applied_filters=body.filters,
         )
@@ -270,6 +282,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                     rag_fusion=body.rag_fusion,
                     rag_fusion_generator=rag_fusion_gen,
                     rag_fusion_config=config.rag_fusion,
+                    graph_mode=body.graph_mode,
                 ),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
@@ -310,7 +323,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 rag_fusion_applied=result.rag_fusion_applied,
                 rag_fusion_queries_used=result.rag_fusion_queries_used,
                 rag_fusion_attempted=result.rag_fusion_attempted,
-                expansion_used=hyde_applied or result.rag_fusion_applied,
+                graph_expansion_applied=result.graph_expansion_applied,
+                expansion_used=hyde_applied or result.rag_fusion_applied or result.graph_expansion_applied,
                 expansion_warning=_expansion_warning,
                 applied_filters=body.filters,
             )
