@@ -84,6 +84,14 @@ class ChunkInput:
     """
     symbol_subtype: str | None
     """Optional C3 sub-label (e.g. ``"method"``); maps to ``GraphNode.entity_subtype``."""
+    containing_function: str | None = None
+    """C3 ``_containing_function`` value — used as entity NAME for function-level code chunks."""
+    containing_class: str | None = None
+    """C3 ``_containing_class`` value — used as entity NAME for class-level code chunks when
+    ``containing_function`` is absent."""
+    source_path: str | None = None
+    """Source file path — ``basename`` used as entity NAME fallback when both
+    ``containing_function`` and ``containing_class`` are absent."""
 
 
 @dataclass
@@ -143,6 +151,14 @@ class GraphExtractionResult:
     edges: list[GraphEdge]
     """Extracted relationship edges."""
     llm_fallback_used: bool = False
-    """True when the LLM extraction call failed; spaCy-only result is returned instead."""
+    """True when ``extraction_model`` is configured but LLM extraction is deferred to
+    post-E1a (it is not implemented yet); spaCy-only result is used instead.
+    This is a stub indicator, NOT a runtime failure flag.
+    """
     warnings: list[str] = field(default_factory=list)
     """Human-readable warning messages forwarded to ``IngestResult.warnings``."""
+    fatal_error: str | None = None
+    """When non-None, extraction completely failed (e.g. spaCy absent or model load failed).
+    The pipeline should set ``IngestResult.status = "error"`` when this field is non-None.
+    The value is an actionable human-readable error message.
+    """
