@@ -506,13 +506,13 @@ flowchart LR
         - [x] #integration_test — `test_mcp_search_global_mode_real` — real app + communities; MCP search with graph_mode=global → result dict with results list (S5)
         - [x] #integration_test — `test_mcp_search_local_mode_real` — real app + communities; MCP search with graph_mode=local and entity-matching query → result dict with results list; verifies local mode parameter threading through MCP (S5)
 
-- [ ] **T-3** — e2e: (a) `GET /status` after `build-communities` shows correct `community_count` and `last_built_at` for the collection; (b) MCP `search` tool with `graph_mode=global` returns results; (c) MCP `search` tool with `graph_mode=local` returns results #tester-role
+- [x] **T-3** — e2e: (a) `GET /status` after `build-communities` shows correct `community_count` and `last_built_at` for the collection; (b) MCP `search` tool with `graph_mode=global` returns results; (c) MCP `search` tool with `graph_mode=local` returns results #tester-role
     - — · 2.0h
     - needs T-2, BE-8, BE-9 · completes S4, S5
     - Tests
-        - #e2e_test — `test_e2e_status_community_fields` — GET /status after build-communities; community_count > 0; last_built_at is ISO timestamp (S4)
-        - #e2e_test — `test_e2e_mcp_search_global_mode` — MCP search tool with graph_mode=global; result has results key non-empty (S5)
-        - #e2e_test — `test_e2e_mcp_search_local_mode` — MCP search tool with graph_mode=local; result has results key (S5)
+        - [x] #e2e_test — `test_e2e_status_community_fields` — GET /status after build-communities; community_count > 0; last_built_at is ISO timestamp (S4)
+        - [x] #e2e_test — `test_e2e_mcp_search_global_mode` — MCP search tool with graph_mode=global; result has results key non-empty (S5)
+        - [x] #e2e_test — `test_e2e_mcp_search_local_mode` — MCP search tool with graph_mode=local; result has results key (S5)
 
 ---
 
