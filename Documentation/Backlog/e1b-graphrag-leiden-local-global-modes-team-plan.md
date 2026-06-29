@@ -362,7 +362,7 @@ flowchart LR
 
 ### Phase 1 · Build communities and search corpus-wide *(walking skeleton: data foundation + global mode end-to-end)*
 
-- [ ] **BE-1** — Add `Community` dataclass to `graph_types.py` (consistent with E1a graph entity convention — `GraphNode`, `GraphEdge`, `GraphExtractionResult` are all here); extend `GraphConfig` in `config.py` with `leiden_resolution`, `max_community_size`, `community_summary_chunks`, `max_global_candidates` (default `100`); TOML parsing for all fields. Note: `SearchPipelineResult.graph_expansion_applied` and `graph_mode` param on `search()` already exist from E1a — do NOT re-declare them. #backend-role
+- [x] **BE-1** — Add `Community` dataclass to `graph_types.py` (consistent with E1a graph entity convention — `GraphNode`, `GraphEdge`, `GraphExtractionResult` are all here); extend `GraphConfig` in `config.py` with `leiden_resolution`, `max_community_size`, `community_summary_chunks`, `max_global_candidates` (default `100`); TOML parsing for all fields. Note: `SearchPipelineResult.graph_expansion_applied` and `graph_mode` param on `search()` already exist from E1a — do NOT re-declare them. #backend-role
     - Entities · 1.5h
     - needs K1 · completes C3, C4
     - Tests

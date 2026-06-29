@@ -93,6 +93,10 @@ def test_graph_config_snapshot(tmp_path: Path) -> None:
         "enabled": False,
         "extraction_model": None,
         "backend_threshold_edges": 10_000,
+        "leiden_resolution": 1.0,
+        "max_community_size": 10,
+        "community_summary_chunks": 3,
+        "max_global_candidates": 100,
     }
 
 

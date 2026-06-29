@@ -1,14 +1,15 @@
-"""Entities layer for GraphRAG — E1a.
+"""Entities layer for GraphRAG — E1a / E1b.
 
 Defines the core graph domain types used across GraphExtractor, GraphStore,
-and GraphExpander. All SHA-256 ID helpers live here as the single source of
-truth; no other module may inline the hash formula.
+GraphExpander, and CommunityBuilder. All SHA-256 ID helpers live here as the
+single source of truth; no other module may inline the hash formula.
 """
 
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 
 
@@ -161,4 +162,35 @@ class GraphExtractionResult:
     """When non-None, extraction completely failed (e.g. spaCy absent or model load failed).
     The pipeline should set ``IngestResult.status = "error"`` when this field is non-None.
     The value is an actionable human-readable error message.
+    """
+
+
+@dataclass
+class Community:
+    """A Leiden-detected community of related graph entities — E1b.
+
+    Stored in ``_archon_graph_{col}_communities`` per collection. Each community
+    groups entities that are strongly connected in the entity graph; its
+    ``representative_chunk_ids`` are the MMR-selected diverse chunk IDs used
+    at search time for local and global graph-mode retrieval.
+    """
+
+    community_id: str
+    """Stable identifier for this community (UUID or deterministic hash — assigned by
+    ``CommunityBuilder``)."""
+    entity_ids: list[str]
+    """IDs of ``GraphNode`` members belonging to this community."""
+    representative_chunk_ids: list[str]
+    """Chunk IDs selected as diverse representatives (MMR over member chunks).
+    Used directly by ``SearchPipeline._search_graph_mode()`` at query time.
+    """
+    built_at: datetime
+    """UTC datetime when this community was last built by ``build-communities``.
+    UTC is expected by convention; not enforced at construction (consistent with
+    entity-layer policy).
+    """
+    summary_text: str | None = None
+    """Optional LLM-generated abstractive summary of this community.
+    ``None`` when ``[graph].extraction_model`` is not set or LLM summarisation
+    failed (falls back to MMR-only representatives).
     """

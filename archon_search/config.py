@@ -97,6 +97,10 @@ class IngestConfig:
 
 
 _GRAPH_BACKEND_THRESHOLD_EDGES_DEFAULT: int = 10_000
+_GRAPH_LEIDEN_RESOLUTION_DEFAULT: float = 1.0
+_GRAPH_MAX_COMMUNITY_SIZE_DEFAULT: int = 10
+_GRAPH_COMMUNITY_SUMMARY_CHUNKS_DEFAULT: int = 3
+_GRAPH_MAX_GLOBAL_CANDIDATES_DEFAULT: int = 100
 
 
 @dataclass
@@ -104,6 +108,18 @@ class GraphConfig:
     enabled: bool = False
     extraction_model: str | None = None
     backend_threshold_edges: int = _GRAPH_BACKEND_THRESHOLD_EDGES_DEFAULT
+    # E1b community-detection fields
+    leiden_resolution: float = _GRAPH_LEIDEN_RESOLUTION_DEFAULT
+    """Leiden algorithm resolution parameter. Higher values → more, smaller communities."""
+    max_community_size: int = _GRAPH_MAX_COMMUNITY_SIZE_DEFAULT
+    """Maximum number of entities per community. Oversized communities are split
+    by re-running Leiden at higher resolution (up to 5 recursion levels)."""
+    community_summary_chunks: int = _GRAPH_COMMUNITY_SUMMARY_CHUNKS_DEFAULT
+    """Number of MMR-selected representative chunks per community. Also used as
+    the LLM context window size for optional abstractive summarisation."""
+    max_global_candidates: int = _GRAPH_MAX_GLOBAL_CANDIDATES_DEFAULT
+    """Operator cap on community representative chunks fed to the reranker in
+    global mode. Prevents reranker overload on large corpora."""
 
 
 @dataclass
@@ -227,6 +243,16 @@ def _coerce_float(value: object, field_name: str) -> float:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"Expected float for '{field_name}', got {type(value).__name__}") from exc
+
+
+def _coerce_bounded_int(raw: object, field_name: str, *, minimum: int) -> int:
+    if isinstance(raw, bool):
+        raise ConfigError(f"Expected integer for '{field_name}', got bool")
+    if not isinstance(raw, int):
+        raise ConfigError(f"Expected integer for '{field_name}', got {type(raw).__name__}")
+    if raw < minimum:
+        raise ConfigError(f"'{field_name}' must be >= {minimum}, got {raw}")
+    return raw
 
 
 def _coerce_bool(value: object, field_name: str) -> bool:
@@ -675,6 +701,30 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
                 f"[graph].backend_threshold_edges must be >= 1, got {raw_threshold}"
             )
         graph.backend_threshold_edges = raw_threshold
+    if "leiden_resolution" in graph_cfg:
+        raw_leiden_resolution = graph_cfg["leiden_resolution"]
+        if isinstance(raw_leiden_resolution, bool):
+            raise ConfigError(
+                f"Expected float for '[graph].leiden_resolution', got bool"
+            )
+        leiden_resolution = _coerce_float(raw_leiden_resolution, "[graph].leiden_resolution")
+        if leiden_resolution <= 0:
+            raise ConfigError(
+                f"[graph].leiden_resolution must be > 0, got {leiden_resolution}"
+            )
+        graph.leiden_resolution = leiden_resolution
+    if "max_community_size" in graph_cfg:
+        graph.max_community_size = _coerce_bounded_int(
+            graph_cfg["max_community_size"], "[graph].max_community_size", minimum=1
+        )
+    if "community_summary_chunks" in graph_cfg:
+        graph.community_summary_chunks = _coerce_bounded_int(
+            graph_cfg["community_summary_chunks"], "[graph].community_summary_chunks", minimum=1
+        )
+    if "max_global_candidates" in graph_cfg:
+        graph.max_global_candidates = _coerce_bounded_int(
+            graph_cfg["max_global_candidates"], "[graph].max_global_candidates", minimum=1
+        )
     config.graph = graph
 
 

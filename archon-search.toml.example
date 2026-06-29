@@ -343,6 +343,28 @@ num_queries = 2
 # corpora where the latency is acceptable.
 # backend_threshold_edges = 10000
 
+# E1b community-detection fields
+#
+# leiden_resolution (float, default 1.0): Leiden algorithm resolution parameter.
+# Higher values produce more, smaller communities. Must be > 0.
+# Tune for your corpus — 1.0 is the standard default.
+# leiden_resolution = 1.0
+
+# max_community_size (int, default 10): Maximum number of entities per community.
+# Communities larger than this are split by re-running Leiden at higher resolution
+# on the oversized subgraph (up to 5 recursion levels). Must be >= 1.
+# max_community_size = 10
+
+# community_summary_chunks (int, default 3): Number of MMR-selected representative
+# chunks per community. Also used as the context window size for optional LLM
+# abstractive summarisation when extraction_model is set. Must be >= 1.
+# community_summary_chunks = 3
+
+# max_global_candidates (int, default 100): Operator cap on community representative
+# chunks fed to the reranker in global mode (graph_mode=global on POST /search).
+# Prevents reranker overload on large corpora. Must be > 0.
+# max_global_candidates = 100
+
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #
