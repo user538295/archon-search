@@ -30,6 +30,8 @@ graph = [
     "spacy>=3.8,<3.9",
     "networkx>=3.0",
     "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "leidenalg>=0.10",
+    "igraph>=0.11",
 ]
 code = [
     "tree-sitter>=0.25.0,<0.26",

@@ -721,3 +721,8 @@
 - Observation: The E1a feature spanned multiple sessions. An earlier session added a BREAKING.md entry (BE-1 task). The T-6 close-out session added another entry for the same feature. Both ended up in the file simultaneously.
 - Action: Before adding a BREAKING.md entry for a feature, always grep for the feature prefix (e.g., `grep "E1a" BREAKING.md`) to check whether an entry already exists. If one exists, merge rather than append.
 - Confidence: high
+
+**[2026-06-29] — E1b BE-3a: asyncio.get_event_loop().run_until_complete() breaks in xdist parallel workers**
+- Observation: Tests using `asyncio.get_event_loop().run_until_complete()` pass when run in isolation (`-n0`) but fail under xdist parallel execution (the default) because xdist workers have no current event loop.
+- Action: Always use `@pytest.mark.asyncio` with `async def` for async unit tests. Never use `asyncio.get_event_loop().run_until_complete()` in test bodies — it is broken in xdist and triggers a DeprecationWarning in Python 3.12+.
+- Confidence: high

@@ -535,3 +535,83 @@ class GraphStore:
                 )
             )
         return results
+
+    @staticmethod
+    def _arrow_to_edges(arrow_table) -> list[GraphEdge]:  # type: ignore[return]
+        """Convert a PyArrow table of edge rows into ``GraphEdge`` dataclass objects."""
+        results: list[GraphEdge] = []
+        ids = arrow_table["id"].to_pylist()
+        source_node_ids = arrow_table["source_node_id"].to_pylist()
+        target_node_ids = arrow_table["target_node_id"].to_pylist()
+        rel_types = arrow_table["relationship_type"].to_pylist()
+        source_docs = arrow_table["source_doc_id"].to_pylist()
+
+        for eid, src_id, tgt_id, rtype, sdoc in zip(
+            ids, source_node_ids, target_node_ids, rel_types, source_docs
+        ):
+            results.append(
+                GraphEdge(
+                    id=eid,
+                    source_node_id=src_id,
+                    target_node_id=tgt_id,
+                    relationship_type=RelationshipType(rtype),
+                    source_doc_id=sdoc,
+                )
+            )
+        return results
+
+    async def _load_all_from_table(self, table_name: str, context_label: str):  # type: ignore[return]
+        """Open *table_name* and fetch all rows as an Arrow table.
+
+        *context_label* is used only in log/error messages for diagnostics.
+
+        Returns ``None`` if the table does not exist (``FileNotFoundError`` /
+        ``ValueError``). Raises ``RuntimeError`` (chaining the original exception)
+        for any other failure (I/O error, Arrow query error, etc.).
+        """
+        db = self._require_db()
+        try:
+            table = await db.open_table(table_name)
+            return await table.query().to_arrow()
+        except (FileNotFoundError, ValueError):
+            return None
+        except Exception as exc:
+            logger.warning(
+                "_load_all_from_table: unexpected error for table %r (%s)",
+                table_name,
+                context_label,
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"Failed to load table {table_name!r} ({context_label}): {exc}"
+            ) from exc
+
+    async def get_all_nodes(self, collection: str) -> list[GraphNode]:
+        """Return all nodes for *collection*; empty list if table absent.
+
+        Raises:
+            RuntimeError: On unexpected storage / I/O errors (table absent
+                returns ``[]``, not an error).
+        """
+        self._validate_collection(collection)
+        arrow = await self._load_all_from_table(
+            self._nodes_table_name(collection), f"collection={collection!r}"
+        )
+        if arrow is None:
+            return []
+        return self._arrow_to_nodes(arrow)
+
+    async def get_all_edges(self, collection: str) -> list[GraphEdge]:
+        """Return all edges for *collection*; empty list if table absent.
+
+        Raises:
+            RuntimeError: On unexpected storage / I/O errors (table absent
+                returns ``[]``, not an error).
+        """
+        self._validate_collection(collection)
+        arrow = await self._load_all_from_table(
+            self._edges_table_name(collection), f"collection={collection!r}"
+        )
+        if arrow is None:
+            return []
+        return self._arrow_to_edges(arrow)
