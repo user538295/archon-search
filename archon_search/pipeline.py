@@ -31,9 +31,12 @@ from archon_search.parser import DocumentParser, ParseError
 from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
 from archon_search.store import SearchStore, StoreBusyError, elementwise_sum
 from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
+from archon_search.graph_types import ChunkInput
 
 if TYPE_CHECKING:
-    from archon_search.config import RAGFusionConfig, SearchConfig
+    from archon_search.config import GraphConfig, RAGFusionConfig, SearchConfig
+    from archon_search.graph_extractor import GraphExtractor
+    from archon_search.graph_store import GraphStore
     from archon_search.language_detector import LanguageDetector
     from archon_search.rag_fusion import RAGFusionGenerator
 
@@ -246,6 +249,9 @@ class SearchPipeline:
         language_detector: LanguageDetector | None = None,
         language_detection_confidence_threshold: float = 0.7,
         max_file_mb: int = 0,
+        graph_extractor: GraphExtractor | None = None,
+        graph_store: GraphStore | None = None,
+        graph_config: GraphConfig | None = None,
     ) -> None:
         self.store = store
         self._global_embedder = embedder
@@ -260,6 +266,9 @@ class SearchPipeline:
         self._language_detector = language_detector
         self._language_detection_confidence_threshold = language_detection_confidence_threshold
         self._max_file_mb = max_file_mb
+        self._graph_extractor = graph_extractor
+        self._graph_store = graph_store
+        self._graph_config = graph_config
 
     # ------------------------------------------------------------------
     # Warm-status accessors (used by health/readiness route handlers)
@@ -419,6 +428,45 @@ class SearchPipeline:
         if _chunk_collector is not None:
             _chunk_collector.extend(r.text for r in records)
 
+        # E1a / BE-5: graph extraction — runs after chunk IDs are assigned, before embed/persist.
+        _graph_enabled = (
+            self._graph_extractor is not None
+            and self._graph_store is not None
+            and self._graph_config is not None
+            and self._graph_config.enabled
+        )
+        _extraction_result = None
+        if _graph_enabled:
+            chunk_inputs = [
+                ChunkInput(
+                    chunk_id=r.chunk_id,
+                    text=r.text,
+                    symbol_type=r.metadata.get("_symbol_type") or None,
+                    symbol_subtype=r.metadata.get("_symbol_subtype") or None,
+                    containing_function=r.metadata.get("_containing_function") or None,
+                    containing_class=r.metadata.get("_containing_class") or None,
+                    source_path=r.source_path,
+                )
+                for r in records
+            ]
+            try:
+                _extraction_result = await self._graph_extractor.extract(chunk_inputs, doc_id, collection)
+                if _extraction_result.fatal_error:
+                    return IngestResult(
+                        doc_id=doc_id,
+                        chunks_created=0,
+                        status="error",
+                        error=_extraction_result.fatal_error,
+                        warnings=acl_warnings,
+                    )
+            except Exception:
+                logger.warning(
+                    "Graph extraction raised unexpectedly; skipping graph for %r in %r",
+                    doc_id, collection,
+                    exc_info=True,
+                )
+                _extraction_result = None
+
         # Embed first batch to initialise embedding_dim before ensure_collection
         first_batch = records[:_INGEST_CHUNK_BATCH_SIZE]
         first_vectors = await embedder.embed([r.text for r in first_batch])
@@ -477,6 +525,36 @@ class SearchPipeline:
                 else:
                     dominant_lang = await self.store.get_dominant_language(collection)
                     await self.store.rebuild_fts_index(collection, language=dominant_lang)
+
+        # E1a / BE-5: write graph extraction results after persist completes.
+        if _graph_enabled and _extraction_result is not None:
+            if _extraction_result.warnings:
+                acl_warnings.extend(_extraction_result.warnings)
+            try:
+                await self._graph_store.ensure_graph_tables(collection)
+                if _extraction_result.nodes or _extraction_result.edges:
+                    await self._graph_store.write_graph(
+                        collection, _extraction_result.nodes, _extraction_result.edges
+                    )
+                edge_count = await self._graph_store.edge_count(collection)
+                if edge_count >= self._graph_config.backend_threshold_edges:
+                    hint = (
+                        f"Graph edge count ({edge_count:,}) has reached "
+                        f"backend_threshold_edges ({self._graph_config.backend_threshold_edges:,}). "
+                        "NetworkX in-memory traversal may become latency-noticeable. "
+                        "Consider migrating to the Kuzu backend (available in E1b)."
+                    )
+                    logger.warning(hint)
+                    acl_warnings.append(hint)
+            except Exception:
+                logger.warning(
+                    "Graph write failed for %r in %r; graph data may be incomplete",
+                    doc_id, collection,
+                    exc_info=True,
+                )
+                acl_warnings.append(
+                    f"Graph write failed for {doc_id!r}: graph data may be incomplete"
+                )
 
         return IngestResult(
             doc_id=doc_id,
@@ -1645,6 +1723,14 @@ def create_pipeline(
         model_path = get_fasttext_models_dir() / FASTTEXT_MODEL_FILENAME
         language_detector = LanguageDetector(model_path)
 
+    graph_extractor = None
+    graph_store = None
+    if cfg.graph.enabled:
+        from archon_search.graph_extractor import GraphExtractor  # noqa: PLC0415
+        from archon_search.graph_store import GraphStore as _GraphStore  # noqa: PLC0415
+        graph_store = _GraphStore(cfg.db_path)
+        graph_extractor = GraphExtractor(cfg.graph)
+
     return SearchPipeline(
         store=store,
         embedder=embedder,
@@ -1659,4 +1745,7 @@ def create_pipeline(
         language_detector=language_detector,
         language_detection_confidence_threshold=cfg.language_detection_confidence_threshold,
         max_file_mb=cfg.ingest.max_file_mb,
+        graph_extractor=graph_extractor,
+        graph_store=graph_store,
+        graph_config=cfg.graph,
     )

@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from archon_search.chunker import DocumentChunker
-from archon_search.config import SearchConfig
+from archon_search.config import ConfigError, SearchConfig
 from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttext_models_dir
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import EmbedderCache
@@ -109,6 +109,29 @@ def _check_multilingual_deps(config: SearchConfig) -> None:
         )
 
 
+def _check_graph_deps(config: SearchConfig) -> None:
+    """Check that graph dependencies are present when graph.enabled=True.
+
+    Called synchronously in ``create_app()`` before ``SearchPipeline`` is
+    constructed.  Raises ``ConfigError`` with an actionable message when
+    ``spacy`` is not installed.
+
+    No-ops when ``config.graph.enabled`` is ``False``.
+    """
+    if not config.graph.enabled:
+        return
+
+    try:
+        import spacy  # type: ignore[import-untyped]  # noqa: PLC0415
+        if spacy is None:
+            raise ImportError("spacy is None")
+    except (ImportError, TypeError):
+        raise ConfigError(
+            "graph.enabled=true but spacy is not installed; "
+            "run: pip install archon-search[graph]"
+        )
+
+
 def _configure_openapi(app: FastAPI) -> None:
     """Override app.openapi with a closure that adds BearerAuth security scheme
     and per-path security annotations to all non-public endpoints."""
@@ -150,6 +173,7 @@ def create_app(
 ) -> FastAPI:
     """Create and configure the FastAPI application instance."""
     _check_multilingual_deps(config)
+    _check_graph_deps(config)
     api_key, key_source = load_or_generate_key()
 
     @asynccontextmanager
@@ -162,6 +186,17 @@ def create_app(
         # Startup: connect search store
         await app.state.search_store.connect()
         await app.state.search_store._run_startup_migrations()
+
+        # Startup: connect graph store (if graph is enabled)
+        if app.state.graph_store is not None:
+            try:
+                await app.state.graph_store.connect()
+            except Exception:
+                logger.warning(
+                    "Graph store failed to connect; graph extraction will be disabled",
+                    exc_info=True,
+                )
+                app.state.graph_store = None
 
         # Startup: create embedder cache and optionally preload models
         embedder_cache = EmbedderCache(config.embedder_cache_size)
@@ -368,6 +403,10 @@ def create_app(
             # Shutdown: disconnect search store
             await app.state.search_store.disconnect()
 
+            # Shutdown: disconnect graph store (if enabled)
+            if app.state.graph_store is not None:
+                await app.state.graph_store.disconnect()
+
             # Shutdown: drain writer before cancelling background tasks
             if app.state.telemetry_writer is not None:
                 await app.state.telemetry_writer.drain_and_stop()
@@ -439,6 +478,16 @@ def create_app(
     else:
         _lang_detector = None
 
+    if config.graph.enabled:
+        from archon_search.graph_store import GraphStore as _GraphStore  # noqa: PLC0415
+        from archon_search.graph_extractor import GraphExtractor as _GraphExtractor  # noqa: PLC0415
+        _graph_store = _GraphStore(config.db_path)
+        _graph_extractor = _GraphExtractor(config.graph)
+    else:
+        _graph_store = None
+        _graph_extractor = None
+    app.state.graph_store = _graph_store
+
     app.state.pipeline = SearchPipeline(
         store=app.state.search_store,
         embedder=app.state.embedder,
@@ -454,6 +503,9 @@ def create_app(
         language_detector=_lang_detector,
         language_detection_confidence_threshold=config.language_detection_confidence_threshold,
         max_file_mb=config.ingest.max_file_mb,
+        graph_extractor=_graph_extractor,
+        graph_store=_graph_store,
+        graph_config=config.graph,
     )
     from archon_search.hyde import HyDEGenerator  # noqa: PLC0415
     app.state.hyde_generator = HyDEGenerator(embedder=app.state.embedder, config=config.hyde)

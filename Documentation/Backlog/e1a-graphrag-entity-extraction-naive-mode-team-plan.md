@@ -440,18 +440,19 @@ flowchart LR
         - [x] #unit_test — `test_extractor_cooccurrence_edge_count` — chunk with 3 entities A, B, C; assert exactly 3 edges (N*(N-1)/2 = 3), not 6 directed pairs
         - [x] #unit_test — `test_extractor_code_symbol_name_fallback` — three code chunks: (1) has _containing_function="process", (2) has only _containing_class="Handler", (3) has neither; assert entity names are "process", "Handler", and source_path basename respectively
 
-- [ ] **BE-5** — Wire `GraphExtractor` + `GraphStore` into `pipeline.ingest_file`: construct `ChunkInput` objects from the in-memory chunk records BEFORE the ingest lock is released (while enrichment metadata is still in scope, not requiring a second LanceDB read); call extraction within the ingest transaction; append extraction warnings to `IngestResult.warnings`; emit WARNING + hint when `edgeCount >= backend_threshold_edges`; skip entirely when `config.graph.enabled=False`; startup `ConfigError` when extras absent #backend-role
+- [x] **BE-5** — Wire `GraphExtractor` + `GraphStore` into `pipeline.ingest_file`: construct `ChunkInput` objects from the in-memory chunk records BEFORE the ingest lock is released (while enrichment metadata is still in scope, not requiring a second LanceDB read); call extraction within the ingest transaction; append extraction warnings to `IngestResult.warnings`; emit WARNING + hint when `edgeCount >= backend_threshold_edges`; skip entirely when `config.graph.enabled=False`; startup `ConfigError` when extras absent #backend-role
     - Use Cases · 4.0h
     - needs BE-3, BE-4 · completes S1, S2, S9, S10, S11, S12
     - Tests
-        - #unit_test — `test_ingest_with_graph_disabled_skips_extraction` — `config.graph.enabled=False`; extractor never called
-        - #unit_test — `test_ingest_with_graph_enabled_calls_extractor` — extractor called once per ingest; result warnings propagated
-        - #unit_test — `test_ingest_threshold_warning_added_to_warnings` — edge count >= threshold → warning in `IngestResult.warnings` (threshold boundary: exactly at `backend_threshold_edges` triggers the warning)
-        - #unit_test — `test_startup_config_error_when_extras_absent` — `archon-search[graph]` absent + `graph.enabled=True` → `ConfigError` at app construction
-        - #unit_test — `test_llm_failure_falls_back_to_spacy` — LLM stub returns fallback; `IngestResult.status=="ok"`; warning present
-        - #integration_test — `test_ingest_file_graph_entities_written` — real pipeline, stub extractor returning fixed nodes+edges; assert GraphStore contains expected nodes after ingest
-        - #integration_test — `test_ingest_after_graph_disable_skips_extraction_preserves_tables` — ingest with graph enabled; disable graph (reconfigure); ingest again; assert (a) extractor not called on second ingest, (b) original graph tables still exist in LanceDB, (c) `GET /status` returns `graph:null`
-        - #integration_test — `test_ingest_two_docs_merges_graph` — ingest doc1 (contains "AuthService" and "TokenValidator" in same chunk); ingest doc2 (contains "AuthService" and "UserStore" in same chunk); assert GraphStore has exactly one AuthService node with neighbours including both TokenValidator and UserStore
+        - [x] #unit_test — `test_ingest_with_graph_disabled_skips_extraction` — `config.graph.enabled=False`; extractor never called
+        - [x] #unit_test — `test_ingest_with_graph_enabled_calls_extractor` — extractor called once per ingest; result warnings propagated
+        - [x] #unit_test — `test_ingest_threshold_warning_added_to_warnings` — edge count >= threshold → warning in `IngestResult.warnings` (threshold boundary: exactly at `backend_threshold_edges` triggers the warning)
+        - [x] #unit_test — `test_startup_config_error_when_extras_absent` — `archon-search[graph]` absent + `graph.enabled=True` → `ConfigError` at app construction
+        - [x] #unit_test — `test_llm_failure_falls_back_to_spacy` — LLM stub returns fallback; `IngestResult.status=="ok"`; warning present
+        - [x] #unit_test — `test_ingest_fatal_error_returns_error_status` — extraction returns `fatal_error` → `status="error"`, `chunks_created=0`, `write_graph` not called (added during review)
+        - [x] #integration_test — `test_ingest_file_graph_entities_written` — real pipeline, stub extractor returning fixed nodes+edges; assert GraphStore contains expected nodes after ingest
+        - [x] #integration_test — `test_ingest_after_graph_disable_skips_extraction_preserves_tables` — ingest with graph enabled; disable graph (reconfigure); ingest again; assert (a) extractor not called on second ingest, (b) original graph tables still exist in LanceDB; (c) `GET /status graph:null` deferred to FE-1
+        - [x] #integration_test — `test_ingest_two_docs_merges_graph` — ingest doc1 (AuthService+TokenValidator); ingest doc2 (AuthService+UserStore); assert 3 unique nodes, 2 edges; AuthService neighbours include both TokenValidator and UserStore (verified via `get_neighbours`)
 
 - [ ] **FE-1** — Add `GraphStatusDetail` + `GraphCollectionStats` to `schemas.py`; `StatusResponse.graph` field; `_build_graph_status()` builder in `routes_status.py`; regenerate OpenAPI snapshot #frontend-role
     - Presentation · 3.0h
