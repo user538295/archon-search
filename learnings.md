@@ -73,7 +73,27 @@
 - Action: For fanout e2e tests that must surface results from BOTH collections: (1) make each "target" doc very short (single chunk, ingested first for low vector rank), (2) make each "source" doc long (20+ reps), (3) set `reranker_model = ""` in TOML to disable the reranker and enable global RRF sort across all collections. Without all three changes, col2 candidates cannot reliably appear in top 5.
 - Confidence: high
 
-**[2026-06-29] — E1a T-2: FTS BM25 IDF breaks symmetry only when one doc is much rarer than the other**
+**[2026-06-29] — iterative-review on E1b plan: fix agent sub-prompt too large causes zero edits**
+- Observation: The first fix agent (C1) was given a large multi-issue prompt covering 7 fixes. It completed partially (applied F1-F7) but was cut off. The second pass needed to apply remaining fixes directly via Edit in the main context rather than another sub-agent.
+- Action: Keep fix agent prompts under ~5 targeted fixes. For 10+ fixes, split into two sequential agents or apply directly in main context using batched Edit calls.
+- Confidence: high
+
+**[2026-06-29] — iterative-review on E1b plan: JSONL output files too large to Read directly**
+- Observation: DA agent output JSONL files were 400KB+. Attempting to Read them overflows context. Use `python3 -c "import json,sys; [print(m['content'][0]['text']) for l in open(sys.argv[1]) for m in [json.loads(l)] if m.get('role')=='assistant']" <file>` to extract only assistant text.
+- Action: Never Read DA agent output JSONL files directly. Always use the python3 extraction one-liner to pull only assistant text before processing findings.
+- Confidence: high
+
+**[2026-06-29] — iterative-review on E1b plan: already-exists phantom — always grep before specifying "extract" tasks**
+- Observation: The plan incorrectly stated "`_extract_ngrams` should be extracted from `GraphExpander._expand_sync()`". Reality: `tokenize_and_generate_ngrams(query, max_n)` is ALREADY a module-level free function at `graph_expander.py:81`. The plan invented a refactoring task for something already done. DA agents caught this in Cycle 3.
+- Action: Before specifying any "extract X into a shared helper" task in a plan, grep the codebase for the function name to confirm it's actually inlined. Plans that reference phantom extractions waste implementation time and mislead reviewers.
+- Confidence: high
+
+**[2026-06-29] — iterative-review on E1b plan: ScoredSearchCandidate has no score field — scores live in SearchScoreBreakdown.rrf_score**
+- Observation: The plan initially said "convert community chunks to ScoredSearchCandidate with initial score=1.0". ScoredSearchCandidate (_diagnostics.py:47) has NO `score` field — all scoring lives in `SearchScoreBreakdown` (a required nested field with `rrf_score: float` + 7 optional fields). Setting "score=1.0" would fail at construction time.
+- Action: When specifying synthetic candidate construction for community/graph modes, always name the full `SearchScoreBreakdown(vector_rank=None, ..., rrf_score=1.0, reranker_score=None)` spec. Never say "score=1.0" without verifying the actual dataclass field.
+- Confidence: high
+
+**[2026-06-29] — iterative-review on E1b plan: FTS BM25 IDF breaks symmetry only when one doc is much rarer than the other**
 - Observation: When two docs have equal chunk counts (10 each), BM25 IDF for each term is log(1 + 10.5/10.5) ≈ log(2) ≈ 0.693 — the same for both. Expansion adds a term to the query but both docs still get similar RRF scores. Making the target doc very short (1 chunk vs 10) gives its unique term IDF = log(1 + 10.5/1.5) ≈ 2.08, making it rank #0 in FTS for the expanded query.
 - Action: When testing that expansion surfaces a target doc, make that doc short (1 chunk) and the source doc long. This is the only reliable way to create large IDF asymmetry that guarantees target rises above baseline threshold.
 - Confidence: high
