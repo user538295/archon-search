@@ -35,6 +35,7 @@ from archon_search.graph_types import ChunkInput
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig, RAGFusionConfig, SearchConfig
+    from archon_search.graph_expander import ExpandedQuery, GraphExpander
     from archon_search.graph_extractor import GraphExtractor
     from archon_search.graph_store import GraphStore
     from archon_search.language_detector import LanguageDetector
@@ -53,6 +54,7 @@ class SearchPipelineResult:
     rag_fusion_queries_used: int = 0
     rag_fusion_attempted: bool = False
     rag_fusion_warning: str | None = None
+    graph_expansion_applied: bool = False
 
 
 @dataclass
@@ -252,6 +254,7 @@ class SearchPipeline:
         graph_extractor: GraphExtractor | None = None,
         graph_store: GraphStore | None = None,
         graph_config: GraphConfig | None = None,
+        graph_expander: "GraphExpander | None" = None,
     ) -> None:
         self.store = store
         self._global_embedder = embedder
@@ -269,6 +272,7 @@ class SearchPipeline:
         self._graph_extractor = graph_extractor
         self._graph_store = graph_store
         self._graph_config = graph_config
+        self._graph_expander = graph_expander
 
     # ------------------------------------------------------------------
     # Warm-status accessors (used by health/readiness route handlers)
@@ -694,7 +698,20 @@ class SearchPipeline:
         rag_fusion: bool = False,
         rag_fusion_generator: "RAGFusionGenerator | None" = None,
         rag_fusion_config: "RAGFusionConfig | None" = None,
+        graph_mode: str | None = None,
     ) -> SearchPipelineResult:
+        # --- Graph expansion (naive mode) — applied to original query before all other paths ---
+        # Expansion is applied to the original query only.  RAG Fusion variants are generated
+        # from the original (unexpanded) query.  HyDE uses the original query; when expansion
+        # is active the expanded text is used for both FTS and vector embedding.
+        effective_query = query
+        graph_expansion_applied = False
+        if graph_mode == "naive" and self._graph_expander is not None:
+            expanded = await self._graph_expander.expand(query, collection)
+            if expanded.expansion_applied:
+                effective_query = expanded.expanded_text
+                graph_expansion_applied = True
+
         # --- RAG Fusion path ---
         if (
             rag_fusion
@@ -714,12 +731,14 @@ class SearchPipeline:
 
             # 1. FTS-only guard.
             if not await self.store.has_vector_index(collection):
-                return await self._search_standard(
-                    query, collection, namespace, embedder=embedder,
+                result = await self._search_standard(
+                    effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
                 )
+                result.graph_expansion_applied = graph_expansion_applied
+                return result
 
-            # 2. Generate variants.
+            # 2. Generate variants from the ORIGINAL (unexpanded) query.
             try:
                 variants = await rag_fusion_generator.generate_variants(query)
             except RAGFusionDependencyError:
@@ -730,11 +749,12 @@ class SearchPipeline:
                     _query_fingerprint(query),
                 )
                 fallback = await self._search_standard(
-                    query, collection, namespace, embedder=embedder,
+                    effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
                     rag_fusion_attempted=True,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion timed out"
+                fallback.graph_expansion_applied = graph_expansion_applied
                 return fallback
             except Exception:
                 logger.warning(
@@ -742,15 +762,16 @@ class SearchPipeline:
                     _query_fingerprint(query),
                 )
                 fallback = await self._search_standard(
-                    query, collection, namespace, embedder=embedder,
+                    effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
                     rag_fusion_attempted=True,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion expansion failed"
+                fallback.graph_expansion_applied = graph_expansion_applied
                 return fallback
 
-            # 3. All queries = original + variants.
-            all_queries = [query] + variants
+            # 3. All queries: slot 0 = effective_query (expanded if applicable); variants from original.
+            all_queries = [effective_query] + variants
 
             # 4. Embed all queries in parallel.
             try:
@@ -761,11 +782,12 @@ class SearchPipeline:
                     _query_fingerprint(query),
                 )
                 fallback = await self._search_standard(
-                    query, collection, namespace, embedder=embedder,
+                    effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
                     rag_fusion_attempted=True,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion expansion failed"
+                fallback.graph_expansion_applied = graph_expansion_applied
                 return fallback
 
             # 5. Parallel variant searches using hybrid_search_with_trace.
@@ -791,11 +813,13 @@ class SearchPipeline:
 
             if not successful_results:
                 # All searches failed — fall back to standard single-query search.
-                return await self._search_standard(
-                    query, collection, namespace, embedder=embedder,
+                result = await self._search_standard(
+                    effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
                     rag_fusion_attempted=True,
                 )
+                result.graph_expansion_applied = graph_expansion_applied
+                return result
 
             # rag_fusion_queries_used = successful variant searches (not counting original).
             # The original query is index 0; variants start at 1.
@@ -833,13 +857,19 @@ class SearchPipeline:
                 rag_fusion_applied=rag_fusion_applied,
                 rag_fusion_queries_used=num_successful_variants,
                 rag_fusion_attempted=True,
+                graph_expansion_applied=graph_expansion_applied,
             )
 
         # --- Standard path ---
-        return await self._search_standard(
-            query, collection, namespace, embedder=embedder,
-            filters=filters, query_vector=query_vector,
+        # When graph expansion is active, re-embed the expanded text (pass query_vector=None).
+        # When no expansion, honour the caller-supplied query_vector (e.g. HyDE pre-computed vector).
+        effective_query_vector = None if graph_expansion_applied else query_vector
+        result = await self._search_standard(
+            effective_query, collection, namespace, embedder=embedder,
+            filters=filters, query_vector=effective_query_vector,
         )
+        result.graph_expansion_applied = graph_expansion_applied
+        return result
 
     async def _search_standard(
         self,
@@ -1180,6 +1210,7 @@ class SearchPipeline:
         rag_fusion_generator: "RAGFusionGenerator | None" = None,
         rag_fusion_config: "RAGFusionConfig | None" = None,
         filters: SearchFilters | None = None,
+        graph_mode: str | None = None,
     ) -> SearchPipelineResult:
         """Embed the query once, fan out hybrid retrieval across ``collections`` in
         parallel, merge with provenance, run a single global rerank pass, and return a
@@ -1365,6 +1396,89 @@ class SearchPipeline:
                 rag_fusion_queries_used=num_successful_variants,
                 rag_fusion_attempted=rag_fusion_attempted,
                 rag_fusion_warning=_rag_fusion_warning,
+            )
+
+        # --- Standard path with graph expansion (per-leg) ---
+        if graph_mode == "naive" and self._graph_expander is not None:
+            # Step 1: Expand query per collection in parallel.
+            expansions: list["ExpandedQuery"] = list(await asyncio.gather(*[
+                self._graph_expander.expand(query, coll)
+                for coll in collections_in_scope
+            ]))
+            graph_expansion_applied = any(e.expansion_applied for e in expansions)
+
+            # Step 2: Embed each unique effective query text (deduplicated).
+            unique_texts: list[str] = list(dict.fromkeys(e.expanded_text for e in expansions))
+            embedded_vecs: list[list[float]] = list(await asyncio.gather(*[
+                self._global_embedder.embed_one(t) for t in unique_texts
+            ]))
+            text_to_vec: dict[str, list[float]] = dict(zip(unique_texts, embedded_vecs))
+
+            # Step 3: Per-leg search in parallel with timeout protection.
+            candidate_depth = max(self._top_k_retrieve * 3, 20)
+            if filters and filters.source_path_glob:
+                candidate_depth = max(candidate_depth * GLOB_OVERFETCH_FACTOR, 60)
+            trim = max(self._fanout_leg_trim, 1)
+
+            async def _graph_leg(
+                coll: str, exp: "ExpandedQuery",
+            ) -> tuple[str, list[ScoredSearchCandidate], float]:
+                effective_text = exp.expanded_text
+                effective_vec = text_to_vec[effective_text]
+                t0 = monotonic()
+                cands = await self.store.hybrid_search_with_trace(
+                    coll, effective_vec, effective_text,
+                    candidate_depth=candidate_depth, filters=filters,
+                )
+                return coll, cands, (monotonic() - t0) * 1000.0
+
+            try:
+                async with asyncio.timeout(self._fanout_timeout_seconds):
+                    leg_raw_with_exc = await asyncio.gather(*[
+                        _graph_leg(coll, exp)
+                        for coll, exp in zip(collections_in_scope, expansions)
+                    ], return_exceptions=True)
+            except TimeoutError:
+                raise FanoutTimeoutError()
+
+            # Step 4: Trim, merge, ACL-filter, rerank.
+            leg_times: dict[str, float] = {}
+            all_cands: list[ScoredSearchCandidate] = []
+            for coll, leg_result in zip(collections_in_scope, leg_raw_with_exc):
+                if isinstance(leg_result, BaseException):
+                    logger.warning(
+                        "search_many graph expansion: leg %r failed: %s",
+                        coll, type(leg_result).__name__,
+                    )
+                    continue
+                coll_name, cands, leg_ms = leg_result
+                if filters and filters.source_path_glob:
+                    _glob = filters.source_path_glob
+                    cands = [c for c in cands if fnmatch.fnmatchcase(c.source_path, _glob)]
+                cands_sorted = sorted(
+                    cands, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
+                )
+                all_cands.extend(cands_sorted[:trim])
+                leg_times[coll_name] = leg_ms
+
+            all_cands, acl_filtered = apply_acl_filter(all_cands, lambda c: c.acl, namespace)
+
+            if self._reranker is not None:
+                t0 = monotonic()
+                ranked = await self._reranker.rerank_candidates(query, all_cands, top_k=self._top_k_return)
+                rerank_time_ms = (monotonic() - t0) * 1000.0
+            else:
+                all_cands.sort(key=lambda c: -c.score_breakdown.rrf_score)
+                ranked = all_cands[:self._top_k_return]
+                rerank_time_ms = 0.0
+
+            results = [self._candidate_to_search_result(c) for c in ranked]
+            return SearchPipelineResult(
+                results=results,
+                acl_filtered=acl_filtered,
+                excluded_collections=excluded_collections,
+                fanout_timings=FanoutTimings(leg_times=leg_times, rerank_time_ms=rerank_time_ms),
+                graph_expansion_applied=graph_expansion_applied,
             )
 
         # --- Standard path ---
@@ -1725,11 +1839,14 @@ def create_pipeline(
 
     graph_extractor = None
     graph_store = None
+    graph_expander = None
     if cfg.graph.enabled:
         from archon_search.graph_extractor import GraphExtractor  # noqa: PLC0415
         from archon_search.graph_store import GraphStore as _GraphStore  # noqa: PLC0415
+        from archon_search.graph_expander import GraphExpander  # noqa: PLC0415
         graph_store = _GraphStore(cfg.db_path)
         graph_extractor = GraphExtractor(cfg.graph)
+        graph_expander = GraphExpander(graph_store)
 
     return SearchPipeline(
         store=store,
@@ -1748,4 +1865,5 @@ def create_pipeline(
         graph_extractor=graph_extractor,
         graph_store=graph_store,
         graph_config=cfg.graph,
+        graph_expander=graph_expander,
     )

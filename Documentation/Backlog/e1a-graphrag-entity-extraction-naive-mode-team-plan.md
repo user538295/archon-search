@@ -485,18 +485,18 @@ flowchart LR
         - #unit_test — `test_expander_matches_multi_word_entities` — query `"what does Token Validator do"` with a `"token validator"` node in the graph; assert neighbour names appear in `expandedText`
         - #integration_test — `test_expander_with_real_graph_store` — pre-seed graph tables with node+edge via direct insert; expand query containing the entity; assert neighbour name appears in `expandedText`
 
-- [ ] **BE-7** — Wire `GraphExpander` into `pipeline.search` (single-collection) and `pipeline.search_many` (per-leg before hybrid search); re-embed expanded query when `expansionApplied=True`; populate `SearchPipelineResult.graph_expansion_applied` flag. Add `graph_expansion_applied: bool = False` field to the `SearchPipelineResult` dataclass (alongside existing `rag_fusion_applied`, `hyde_applied` etc.). #backend-role
+- [x] **BE-7** — Wire `GraphExpander` into `pipeline.search` (single-collection) and `pipeline.search_many` (per-leg before hybrid search); re-embed expanded query when `expansionApplied=True`; populate `SearchPipelineResult.graph_expansion_applied` flag. Add `graph_expansion_applied: bool = False` field to the `SearchPipelineResult` dataclass (alongside existing `rag_fusion_applied`, `hyde_applied` etc.). #backend-role
     - Use Cases · 4.0h
     - needs BE-6 · completes S4, S5, S7
     - Tests
-        - #unit_test — `test_search_with_graph_mode_naive_calls_expander` — `graph_mode="naive"` → expander called; expanded query passed to `_search_standard`
-        - #unit_test — `test_search_without_graph_mode_skips_expander` — `graph_mode=None` → expander not called
-        - #unit_test — `test_search_many_applies_expansion_per_leg` — fanout with two collections; expander called once per leg with the correct collection
-        - #unit_test — `test_search_graph_expansion_applied_flag` — `graph_expansion_applied` in result reflects `expansionApplied` from expander
-        - #unit_test — `test_search_graph_mode_with_rag_fusion_applies_expansion_to_original` — `rag_fusion=true` + `graph_mode=naive`; assert expansion applied to original query; RAG Fusion variants not expanded
-        - #unit_test — `test_search_graph_mode_with_hyde_applies_expansion_to_original` — `graph_mode=naive` + `hyde=true`; assert graph expansion runs on original query; result has `graph_expansion_applied=True`
-        - #unit_test — `test_search_expanded_text_reaches_embedder` — stub expander returns `expandedText="AuthService TokenValidator"`; assert the embedder is called with the expanded text, not the original query string
-        - #integration_test — `test_pipeline_search_naive_expands_query` — stub expander appends "TokenValidator"; assert `_search_standard` called with expanded text; `graph_expansion_applied=True` in result
+        - [x] #unit_test — `test_search_with_graph_mode_naive_calls_expander` — `graph_mode="naive"` → expander called; expanded query passed to `_search_standard`
+        - [x] #unit_test — `test_search_without_graph_mode_skips_expander` — `graph_mode=None` → expander not called
+        - [x] #unit_test — `test_search_many_applies_expansion_per_leg` — fanout with two collections; expander called once per leg with the correct collection
+        - [x] #unit_test — `test_search_graph_expansion_applied_flag` — `graph_expansion_applied` in result reflects `expansionApplied` from expander
+        - [x] #unit_test — `test_search_graph_mode_with_rag_fusion_applies_expansion_to_original` — `rag_fusion=true` + `graph_mode=naive`; assert expansion applied to original query; RAG Fusion variants not expanded
+        - [x] #unit_test — `test_search_graph_mode_with_hyde_applies_expansion_to_original` — `graph_mode=naive` + `hyde=true`; assert graph expansion runs on original query; result has `graph_expansion_applied=True`
+        - [x] #unit_test — `test_search_expanded_text_reaches_embedder` — stub expander returns `expandedText="AuthService TokenValidator"`; assert the embedder is called with the expanded text, not the original query string
+        - [x] #integration_test — `test_pipeline_search_naive_expands_query` — stub expander appends "TokenValidator"; assert `_search_standard` called with expanded text; `graph_expansion_applied=True` in result
 
 - [ ] **FE-2** — Add `graph_mode: Literal["naive"] | None = None` to `SearchRequest`; `graph_expansion_applied: bool = False` to `SearchResponse`; handler body 422 when `graph_mode` requested and `graph.enabled=False`; thread `graph_mode` to `pipeline.search` / `pipeline.search_many`; regen OpenAPI snapshot. Update `SearchResponse.expansion_used` computation: currently `hyde_applied or result.rag_fusion_applied`; update to `hyde_applied or result.rag_fusion_applied or result.graph_expansion_applied`. Note: `ExplainRequest` already has `ConfigDict(extra='forbid')`, so clients sending `graph_mode` on `/explain` receive a Pydantic 422 automatically (no handler-body guard needed). The error message will be 'Extra inputs are not permitted'. No code change is required on the explain handler. #frontend-role
     - Presentation · 2.0h
