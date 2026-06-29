@@ -1877,9 +1877,201 @@ class SearchPipeline:
                     excluded_collections=excluded_collections,
                 )
 
-        if graph_mode == "local":
+        # --- Local graph mode fanout ---
+        if graph_mode == "local" and self._graph_store is not None:
+            # Embed the query once so all per-collection hybrid legs share the same vector.
+            local_vector = list(query_vector) if query_vector is not None else await self._global_embedder.embed_one(query)
+            local_candidate_depth = max(self._top_k_retrieve * 3, 20)
+            if filters and filters.source_path_glob:
+                local_candidate_depth = max(local_candidate_depth * GLOB_OVERFETCH_FACTOR, 60)
+
+            # Compute n-grams once — same query for every leg.
+            ngrams_for_local: list[str] = await asyncio.to_thread(tokenize_and_generate_ngrams, query)
+
+            async def _local_leg(coll: str) -> tuple[list[ScoredSearchCandidate], bool]:
+                """Return (candidates, graph_match) for one collection leg.
+
+                ``graph_match`` is True when community representative chunks were
+                fetched for this leg (not a pure hybrid fallback).
+                """
+                trim = max(self._fanout_leg_trim, 1)
+
+                # Helper: run standard hybrid search and return (candidates, False).
+                async def _hybrid_fallback() -> tuple[list[ScoredSearchCandidate], bool]:
+                    cands = await self.store.hybrid_search_with_trace(
+                        coll, local_vector, query,
+                        candidate_depth=local_candidate_depth, filters=filters,
+                    )
+                    if filters and filters.source_path_glob:
+                        _glob = filters.source_path_glob
+                        cands = [c for c in cands if fnmatch.fnmatchcase(c.source_path, _glob)]
+                    cands = cands[:trim]
+                    return cands, False
+
+                if not ngrams_for_local:
+                    return await _hybrid_fallback()
+
+                # 1. Entity matching for this collection.
+                try:
+                    matched_nodes = await self._graph_store.find_nodes_by_name(coll, ngrams_for_local)
+                except Exception:
+                    logger.warning(
+                        "search_many local: find_nodes_by_name failed for collection %r; falling back",
+                        coll, exc_info=True,
+                    )
+                    return await _hybrid_fallback()
+
+                if not matched_nodes:
+                    # S10: no entities recognised → pure hybrid for this leg.
+                    return await _hybrid_fallback()
+
+                # 2. Check communities table exists.
+                try:
+                    table_exists = await self._graph_store.communities_table_exists(coll)
+                except Exception:
+                    logger.warning(
+                        "search_many local: communities_table_exists failed for collection %r; falling back",
+                        coll, exc_info=True,
+                    )
+                    return await _hybrid_fallback()
+
+                if not table_exists:
+                    logger.warning(
+                        "search_many local: communities table not found for collection %r — "
+                        "run 'archon-search graph build-communities %s' first; falling back",
+                        coll, coll,
+                    )
+                    return await _hybrid_fallback()
+
+                # 3. Community lookup for matched entity IDs.
+                entity_ids = [n.id for n in matched_nodes]
+                try:
+                    communities = await self._graph_store.get_communities_for_entities(coll, entity_ids)
+                except Exception:
+                    logger.warning(
+                        "search_many local: get_communities_for_entities failed for collection %r; falling back",
+                        coll, exc_info=True,
+                    )
+                    return await _hybrid_fallback()
+
+                if not communities:
+                    # S9 in fanout context: isolated nodes → fall back to hybrid for this leg.
+                    logger.debug(
+                        "search_many local: entities matched but no community in collection %r (isolated); falling back",
+                        coll,
+                    )
+                    return await _hybrid_fallback()
+
+                # 4. Collect representative chunk IDs from matched communities.
+                chunk_ids: list[str] = []
+                for comm in communities:
+                    chunk_ids.extend(comm.representative_chunk_ids)
+                chunk_ids = list(dict.fromkeys(chunk_ids))  # deduplicate, preserve order
+                _MAX_LOCAL_FANOUT_CANDIDATES = 200
+                chunk_ids = chunk_ids[:_MAX_LOCAL_FANOUT_CANDIDATES]
+
+                if not chunk_ids:
+                    logger.warning(
+                        "search_many local: no representative chunk IDs for collection %r; falling back", coll,
+                    )
+                    return await _hybrid_fallback()
+
+                # 5. Fetch community chunk rows; silently skip stale IDs (Q6).
+                community_rows = await self.store.get_chunks_by_ids(coll, chunk_ids)
+                if not community_rows:
+                    # All stale → fall back to hybrid for this leg.
+                    logger.warning(
+                        "search_many local: all community chunk IDs stale for collection %r; falling back", coll,
+                    )
+                    return await _hybrid_fallback()
+
+                # 6. Convert community rows to candidates.
+                community_candidates = [_row_to_community_candidate(r, coll) for r in community_rows]
+                if filters and filters.source_path_glob:
+                    _glob = filters.source_path_glob
+                    community_candidates = [
+                        c for c in community_candidates if fnmatch.fnmatchcase(c.source_path, _glob)
+                    ]
+
+                if not community_candidates:
+                    logger.warning(
+                        "search_many local: community chunks filtered by glob for collection %r; falling back", coll,
+                    )
+                    return await _hybrid_fallback()
+
+                # 7. Run hybrid search for merge candidates.
+                hybrid_cands = await self.store.hybrid_search_with_trace(
+                    coll, local_vector, query,
+                    candidate_depth=local_candidate_depth, filters=filters,
+                )
+                if filters and filters.source_path_glob:
+                    _glob = filters.source_path_glob
+                    hybrid_cands = [c for c in hybrid_cands if fnmatch.fnmatchcase(c.source_path, _glob)]
+
+                # 8. Merge: community candidates first, then non-duplicate hybrid candidates.
+                seen_ids: set[str] = {c.chunk_id for c in community_candidates}
+                merged_leg = list(community_candidates)
+                for c in hybrid_cands:
+                    if c.chunk_id not in seen_ids:
+                        merged_leg.append(c)
+                        seen_ids.add(c.chunk_id)
+
+                # Trim to prevent one collection from dominating the reranker input.
+                merged_leg = sorted(
+                    merged_leg, key=lambda c: c.score_breakdown.rrf_score or 0.0, reverse=True
+                )[:trim]
+                return merged_leg, True
+
+            # Run all legs in parallel.
+            try:
+                async with asyncio.timeout(self._fanout_timeout_seconds):
+                    leg_raw = await asyncio.gather(
+                        *[_local_leg(coll) for coll in collections_in_scope],
+                        return_exceptions=True,
+                    )
+            except TimeoutError:
+                raise FanoutTimeoutError()
+
+            # Merge all-leg candidates; skip any failed legs.
+            all_local_candidates: list[ScoredSearchCandidate] = []
+            graph_expansion_applied = False
+            for coll, leg_result in zip(collections_in_scope, leg_raw):
+                if isinstance(leg_result, BaseException):
+                    logger.warning(
+                        "search_many local: leg %r failed: %s", coll, type(leg_result).__name__,
+                    )
+                    continue
+                leg_cands, leg_graph_match = leg_result
+                if leg_graph_match:
+                    graph_expansion_applied = True
+                all_local_candidates.extend(leg_cands)
+
+            # Apply ACL filter globally.
+            all_local_candidates, local_acl_filtered = apply_acl_filter(
+                all_local_candidates, lambda c: c.acl, namespace
+            )
+
+            if self._reranker is not None:
+                local_ranked = await self._reranker.rerank_candidates(
+                    query, all_local_candidates, top_k=self._top_k_return
+                )
+            else:
+                local_ranked = sorted(
+                    all_local_candidates,
+                    key=lambda c: c.score_breakdown.rrf_score or 0.0,
+                    reverse=True,
+                )[:self._top_k_return]
+
+            return SearchPipelineResult(
+                results=[self._candidate_to_search_result(c) for c in local_ranked],
+                acl_filtered=local_acl_filtered,
+                graph_expansion_applied=graph_expansion_applied,
+                excluded_collections=excluded_collections,
+            )
+
+        elif graph_mode == "local":
             logger.warning(
-                "search_many: graph_mode='local' not yet implemented; "
+                "search_many: graph_mode='local' requested but no graph_store configured; "
                 "falling back to standard search"
             )
 

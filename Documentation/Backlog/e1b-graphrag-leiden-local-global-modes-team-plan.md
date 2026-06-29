@@ -467,13 +467,13 @@ flowchart LR
         - #unit_test — `test_local_mode_all_stale_chunk_ids_falls_back_to_hybrid` — community matched; get_chunks_by_ids returns empty for ALL IDs; pipeline falls back to _search_standard(); WARNING logged (Q6 local path)
         - #unit_test — `test_local_mode_empty_representative_chunk_ids` — matched community has representative_chunk_ids=[]; treated as empty candidate set; falls back to _search_standard(); WARNING logged
 
-- [ ] **BE-7b** — Add `pipeline.search_many()` local-mode fanout: per-collection entity resolution → community lookup → representative chunk fetch → merge with hybrid leg results (same per-collection isolation as global fanout; no cross-collection community merge; collections with no community match fall back to hybrid for that leg). #backend-role
+- [x] **BE-7b** — Add `pipeline.search_many()` local-mode fanout: per-collection entity resolution → community lookup → representative chunk fetch → merge with hybrid leg results (same per-collection isolation as global fanout; no cross-collection community merge; collections with no community match fall back to hybrid for that leg). #backend-role
     - Use Cases · 1.5h
     - needs BE-7a · completes S9 (fanout), S10 (fanout)
     - Tests
-        - #unit_test — `test_search_many_local_mode_per_collection_isolation` — 2 collections with different communities; local mode returns per-collection communities without cross-collection merge
-        - #unit_test — `test_search_many_local_mixed_match` — collection A has community match; collection B has no community (isolated nodes); collection A returns community result; collection B falls back to hybrid for that leg
-        - #unit_test — `test_search_many_local_one_leg_all_stale_falls_back` — collection A leg has community match but all-stale chunk IDs; falls back to hybrid for that leg; collection B leg unaffected; no exception raised
+        - [x] #unit_test — `test_search_many_local_mode_per_collection_isolation` — 2 collections with different communities; local mode returns per-collection communities without cross-collection merge
+        - [x] #unit_test — `test_search_many_local_mixed_match` — collection A has community match; collection B has no community (isolated nodes); collection A returns community result; collection B falls back to hybrid for that leg
+        - [x] #unit_test — `test_search_many_local_one_leg_all_stale_falls_back` — collection A leg has community match but all-stale chunk IDs; falls back to hybrid for that leg; collection B leg unaffected; no exception raised
 
 - [ ] **T-2** — e2e: (a) `POST /search` with `graph_mode=local` and a query known to match a community entity → 200 + non-empty results + `graph_expansion_applied=true`; (b) `POST /search` with `graph_mode=local` and a query with no recognisable entities → 200 + standard results + `graph_expansion_applied=false` (fallback) #tester-role
     - — · 3.0h
