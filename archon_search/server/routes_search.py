@@ -18,6 +18,7 @@ from archon_search.hyde import resolve_hyde_vector
 from archon_search.pipeline import (
     CollectionNotFoundError,
     FanoutTimeoutError,
+    GraphCommunitiesNotBuiltError,
     MetadataLookupError,
 )
 from archon_search.rag_fusion import RAGFusionDependencyError
@@ -43,7 +44,7 @@ class SearchRequest(BaseModel):
     filters: SearchFilters | None = None
     hyde: bool = False
     rag_fusion: bool = False
-    graph_mode: Literal["naive"] | None = None
+    graph_mode: Literal["naive", "local", "global"] | None = None
 
     @field_validator("collection")
     @classmethod
@@ -192,6 +193,10 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             )
         except RAGFusionDependencyError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=422)
+        except GraphCommunitiesNotBuiltError as exc:
+            return JSONResponse(
+                {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
+            )
         except CollectionNotFoundError:
             return JSONResponse({"detail": "collection not found"}, status_code=404)
         except MetadataLookupError:
@@ -331,6 +336,11 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         except RAGFusionDependencyError as exc:
             _emit_timings()
             return JSONResponse({"detail": str(exc)}, status_code=422)
+        except GraphCommunitiesNotBuiltError as exc:
+            _emit_timings()
+            return JSONResponse(
+                {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
+            )
         except asyncio.TimeoutError:
             _emit_timings()
             if writer is not None:

@@ -741,3 +741,8 @@
 - Observation: If `connect()` is placed before the `try` block, a connection failure bypasses the except handler. Both `GraphStore.disconnect()` and `SearchStore.disconnect()` guard with `if self._db is not None`, so calling them in `finally` is always safe — but errors during `connect()` should still be caught by the handler.
 - Action: Always place `await store.connect()` inside the try block so connection failures are caught and the finally cleanup runs unconditionally.
 - Confidence: high
+
+**[2026-06-29] — E1b BE-6: TypeSpec contract required fields must be reflected in JSONResponse bodies**
+- Observation: `GraphCommunitiesNotBuiltError` TypeSpec contract has `required: [code, message]` but the initial implementation only returned `{"code": "..."}` with no `message`. The fix is to bind the exception (`except Foo as exc`) and include `str(exc)` as `message`.
+- Action: When a TypeSpec contract error body lists `required: [code, message]`, always verify both fields are present in the JSONResponse dict. Bind the exception variable to extract the message string.
+- Confidence: high
