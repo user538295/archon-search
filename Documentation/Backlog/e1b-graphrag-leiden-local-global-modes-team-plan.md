@@ -40,7 +40,7 @@ After `archon-search graph build-communities <collection>`, Leiden community det
 ### In Scope
 - `archon-search graph build-communities <collection>` CLI command
 - Leiden community detection via `leidenalg` + `igraph` (bundled in `archon-search[graph]` extra)
-- Per-collection `_archon_graph_{col}_communities` LanceDB table: `community_id`, `entity_ids[]`, `representative_chunk_ids[]`, `summary_text` (null when LLM disabled)
+- Per-collection `_archon_graph_{col}_communities` LanceDB table: `community_id`, `entity_ids[]`, `representative_chunk_ids[]`, `summary_text` (null when LLM disabled), `built_at` (UTC timestamp)
 - MMR over community member chunk embeddings for representative chunk selection (default, zero LLM)
 - Optional LLM abstractive summary when `[graph].extraction_model` is set
 - `graph_mode=local` and `graph_mode=global` on `POST /search` and MCP `search`
@@ -108,7 +108,7 @@ flowchart TD
   UC --> AD
   UC --> EN
   AD --> EN
-  FW --> UC
+  UC --> FW
   FW --> EN
 ```
 
@@ -353,7 +353,7 @@ flowchart LR
 
 ### Phase 0 · Kickoff *(prerequisite; the one cross-cutting step)*
 
-- [ ] **K1** — Agree Contracts and Scenarios; confirm E1a is complete and entity resolver symbol is known (`GraphExpander.expand()` / `graph_store.find_nodes_by_name()`); ratify Q3, Q4, Q6 resolutions (n-gram-only entity lookup for local mode; per-collection community isolation in fanout; silent skip on stale chunk IDs with WARNING) #team
+- [x] **K1** — Agree Contracts and Scenarios; confirm E1a is complete and entity resolver symbol is known (`GraphExpander.expand()` / `graph_store.find_nodes_by_name()`); ratify Q3, Q4, Q6 resolutions (n-gram-only entity lookup for local mode; per-collection community isolation in fanout; silent skip on stale chunk IDs with WARNING) #team
     - — · 1.0h
     - completes C1, C2, C3, C4
     - Tests
@@ -424,6 +424,7 @@ flowchart LR
         - #unit_test — `test_max_global_candidates_cap_enforced` — store returns 200 community representatives; pipeline.search(graph_mode="global") passes exactly 100 (max_global_candidates default) to reranker; no error
         - #unit_test — `test_all_stale_chunk_ids_falls_back_to_hybrid` — store.get_chunks_by_ids() returns empty for ALL IDs; pipeline falls back to _search_standard(); WARNING logged
         - #unit_test — `test_global_mode_acl_filters_cross_namespace` — community chunks include rows from a different namespace; ACL filter removes them before reranker call; graph_expansion_applied=True only if non-empty set remains
+        - #unit_test — `test_global_mode_all_acl_filtered_falls_back_to_hybrid` — all community chunks removed by ACL filter; empty candidate set after filter; pipeline falls back to _search_standard(); WARNING logged
         - #unit_test — `test_naive_mode_routed_through_dispatch` — pipeline.search(graph_mode="naive") still produces same result as before BE-5 (regression guard that naive path moved into _search_graph_mode())
         - #unit_test — `test_naive_plus_rag_fusion_uses_original_query_for_variants` — pipeline.search(graph_mode="naive", rag_fusion=True); mock verifies RAG Fusion variant generation uses the ORIGINAL (unexpanded) query, not the naive-expanded effective_query; the expanded query is used for the embedding step only
 
@@ -461,6 +462,10 @@ flowchart LR
         - #unit_test — `test_local_mode_multiple_communities_matched` — query entities span 2 communities; representative_chunk_ids from both communities merged before reranking; graph_expansion_applied=True
         - #integration_test — `test_pipeline_local_mode_real` — real store + real communities fixture; query matching known entity; result includes community representative chunks
         - #integration_test — `test_local_mode_acl_filters_community_chunks` — real app + communities across namespaces; graph_mode=local returns only chunks in the requesting namespace (S15)
+        - #unit_test — `test_local_mode_no_communities_table_falls_back_to_hybrid` — communities table does not exist for collection (build-communities never run); local mode falls back to standard hybrid search; graph_expansion_applied=False; WARNING logged
+        - #unit_test — `test_local_mode_stale_chunk_ids_silently_skipped` — community matched; get_chunks_by_ids returns empty for 1 of 3 IDs; remaining 2 passed to reranker; no error (Q6 local path)
+        - #unit_test — `test_local_mode_all_stale_chunk_ids_falls_back_to_hybrid` — community matched; get_chunks_by_ids returns empty for ALL IDs; pipeline falls back to _search_standard(); WARNING logged (Q6 local path)
+        - #unit_test — `test_local_mode_empty_representative_chunk_ids` — matched community has representative_chunk_ids=[]; treated as empty candidate set; falls back to _search_standard(); WARNING logged
 
 - [ ] **BE-7b** — Add `pipeline.search_many()` local-mode fanout: per-collection entity resolution → community lookup → representative chunk fetch → merge with hybrid leg results (same per-collection isolation as global fanout; no cross-collection community merge; collections with no community match fall back to hybrid for that leg). #backend-role
     - Use Cases · 1.5h
@@ -468,6 +473,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_search_many_local_mode_per_collection_isolation` — 2 collections with different communities; local mode returns per-collection communities without cross-collection merge
         - #unit_test — `test_search_many_local_mixed_match` — collection A has community match; collection B has no community (isolated nodes); collection A returns community result; collection B falls back to hybrid for that leg
+        - #unit_test — `test_search_many_local_one_leg_all_stale_falls_back` — collection A leg has community match but all-stale chunk IDs; falls back to hybrid for that leg; collection B leg unaffected; no exception raised
 
 - [ ] **T-2** — e2e: (a) `POST /search` with `graph_mode=local` and a query known to match a community entity → 200 + non-empty results + `graph_expansion_applied=true`; (b) `POST /search` with `graph_mode=local` and a query with no recognisable entities → 200 + standard results + `graph_expansion_applied=false` (fallback) #tester-role
     - — · 3.0h
