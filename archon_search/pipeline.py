@@ -32,6 +32,7 @@ from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
 from archon_search.store import SearchStore, StoreBusyError, elementwise_sum, parse_metadata, normalize_ingested_by
 from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
 from archon_search.graph_types import ChunkInput
+from archon_search.graph_expander import tokenize_and_generate_ngrams
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig, RAGFusionConfig, SearchConfig
@@ -937,14 +938,8 @@ class SearchPipeline:
             return expanded.expanded_text if expanded.expansion_applied else query
 
         if graph_mode == "local":
-            # BE-7a placeholder: fall back to standard hybrid search
-            logger.warning(
-                "_search_graph_mode: graph_mode='local' not yet implemented; "
-                "falling back to standard search (collection=%r)", collection,
-            )
-            return await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
-            )
+            return await self._search_local_mode(query, collection, namespace, filters=filters)
+
 
         if graph_mode == "global":
             if self._graph_store is None:
@@ -1002,6 +997,234 @@ class SearchPipeline:
         logger.warning("_search_graph_mode: unknown graph_mode=%r; falling back", graph_mode)
         return await self._search_standard(
             query, collection, namespace, embedder=self._global_embedder, filters=filters,
+        )
+
+    async def _search_local_mode(
+        self,
+        query: str,
+        collection: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        *,
+        filters: "SearchFilters | None" = None,
+    ) -> SearchPipelineResult:
+        """Single-collection path for graph_mode='local' (BE-7a).
+
+        Flow:
+        1. Tokenise query → generate N-gram candidates.
+        2. Look up matched graph nodes via find_nodes_by_name.
+           No match → fall back to standard hybrid search (S10).
+        3. Check communities table exists (build-communities must have run).
+           Table absent → fall back with WARNING (S10 variant).
+        4. Look up communities for matched entity IDs.
+           No community membership (isolated nodes) → naive-expansion fallback (S9).
+        5. Collect representative chunk IDs from all matched communities.
+           Empty → fall back with WARNING.
+        6. Fetch chunk rows; silently skip stale IDs (Q6).
+           All stale → fall back with WARNING.
+        7. Apply ACL filter.
+           All filtered → fall back with WARNING.
+        8. Embed query; run standard hybrid search to obtain hybrid candidates.
+        9. Merge: community chunks first, then hybrid candidates not already present.
+        10. Rerank merged set; return top-k with graph_expansion_applied=True.
+        """
+        fp = _query_fingerprint(query)
+
+        # Step 1: N-gram tokenisation (CPU-bound).
+        ngrams: list[str] = await asyncio.to_thread(
+            tokenize_and_generate_ngrams, query
+        )
+        if not ngrams:
+            logger.debug("_search_local_mode: empty query (fp=%s); falling back", fp)
+            return await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+
+        # Step 2: entity matching.
+        if self._graph_store is None:
+            logger.debug("_search_local_mode: no graph_store; falling back (fp=%s)", fp)
+            return await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+
+        try:
+            matched_nodes = await self._graph_store.find_nodes_by_name(collection, ngrams)
+        except Exception:
+            logger.warning(
+                "_search_local_mode: find_nodes_by_name failed for collection %r (fp=%s); falling back",
+                collection, fp, exc_info=True,
+            )
+            return await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+
+        if not matched_nodes:
+            # S10: no entities recognised in query → standard hybrid search.
+            logger.debug("_search_local_mode: no graph entities matched query (fp=%s)", fp)
+            result = await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+            result.graph_expansion_applied = False
+            return result
+
+        # Step 3: check if communities table exists (build-communities must have run).
+        try:
+            table_exists = await self._graph_store.communities_table_exists(collection)
+        except Exception:
+            logger.warning(
+                "_search_local_mode: communities_table_exists check failed for collection %r (fp=%s); falling back",
+                collection, fp, exc_info=True,
+            )
+            return await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+
+        if not table_exists:
+            logger.warning(
+                "_search_local_mode: communities table not found for collection %r — "
+                "run 'archon-search graph build-communities %s' first; falling back (fp=%s)",
+                collection, collection, fp,
+            )
+            result = await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+            result.graph_expansion_applied = False
+            return result
+
+        # Step 4: community lookup for matched entity IDs.
+        entity_ids = [n.id for n in matched_nodes]
+        try:
+            communities = await self._graph_store.get_communities_for_entities(collection, entity_ids)
+        except Exception:
+            logger.warning(
+                "_search_local_mode: get_communities_for_entities failed for collection %r (fp=%s); falling back",
+                collection, fp, exc_info=True,
+            )
+            return await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+
+        if not communities:
+            # S9: isolated nodes — no community membership; fall back to naive expansion.
+            logger.debug(
+                "_search_local_mode: entities matched but no community found for collection %r (isolated nodes, fp=%s); "
+                "falling back to naive expansion",
+                collection, fp,
+            )
+            if self._graph_expander is not None:
+                expanded = await self._graph_expander.expand(query, collection)
+                effective_query = expanded.expanded_text if expanded.expansion_applied else query
+            else:
+                effective_query = query
+            std_result = await self._search_standard(
+                effective_query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+            return SearchPipelineResult(
+                results=std_result.results,
+                acl_filtered=std_result.acl_filtered,
+                graph_expansion_applied=True,  # per spec S9: always True even when falling back to naive
+            )
+
+        # Step 5: collect representative chunk IDs from all matched communities.
+        chunk_ids: list[str] = []
+        for comm in communities:
+            chunk_ids.extend(comm.representative_chunk_ids)
+
+        if not chunk_ids:
+            logger.warning(
+                "_search_local_mode: matched communities have no representative chunk IDs for collection %r (fp=%s); "
+                "falling back to standard search",
+                collection, fp,
+            )
+            result = await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+            result.graph_expansion_applied = False
+            return result
+
+        # Deduplicate (multiple communities may share representative chunks).
+        chunk_ids = list(dict.fromkeys(chunk_ids))
+        # Cap to avoid unbounded reranker input (mirrors global mode's max_global_candidates).
+        _MAX_LOCAL_COMMUNITY_CANDIDATES = 200
+        chunk_ids = chunk_ids[:_MAX_LOCAL_COMMUNITY_CANDIDATES]
+
+        # Step 6: fetch chunk rows; silently skip stale IDs (Q6).
+        community_rows = await self.store.get_chunks_by_ids(collection, chunk_ids)
+        if not community_rows:
+            logger.warning(
+                "_search_local_mode: all community chunk IDs are stale for collection %r (fp=%s); "
+                "falling back to standard search",
+                collection, fp,
+            )
+            result = await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+            result.graph_expansion_applied = False
+            return result
+
+        # Step 7: convert to candidates; apply glob + ACL filter.
+        community_candidates = [_row_to_community_candidate(r, collection) for r in community_rows]
+        if filters and filters.source_path_glob:
+            glob_pattern = filters.source_path_glob
+            community_candidates = [
+                c for c in community_candidates
+                if fnmatch.fnmatchcase(c.source_path, glob_pattern)
+            ]
+        community_candidates, acl_filtered_comm = apply_acl_filter(
+            community_candidates, lambda c: c.acl, namespace
+        )
+
+        if not community_candidates:
+            logger.warning(
+                "_search_local_mode: all community chunks filtered by glob/ACL for collection %r (fp=%s); "
+                "falling back to standard search",
+                collection, fp,
+            )
+            result = await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+            result.graph_expansion_applied = False
+            return result
+
+        # Step 8: embed query once; run standard hybrid search for merge candidates.
+        vector = await self._global_embedder.embed_one(query)
+        hybrid_candidates = await self.store.hybrid_search_with_trace(
+            collection, vector, query,
+            candidate_depth=max(self._top_k_retrieve * 3, 20),
+            filters=filters,
+        )
+        if filters and filters.source_path_glob:
+            glob_pattern = filters.source_path_glob
+            hybrid_candidates = [
+                c for c in hybrid_candidates if fnmatch.fnmatchcase(c.source_path, glob_pattern)
+            ]
+        hybrid_candidates, acl_filtered_hybrid = apply_acl_filter(
+            hybrid_candidates, lambda c: c.acl, namespace
+        )
+
+        # Step 9: merge — community chunks first, then non-duplicate hybrid candidates.
+        seen_chunk_ids: set[str] = {c.chunk_id for c in community_candidates}
+        merged = list(community_candidates)
+        for c in hybrid_candidates:
+            if c.chunk_id not in seen_chunk_ids:
+                merged.append(c)
+                seen_chunk_ids.add(c.chunk_id)
+
+        acl_filtered = acl_filtered_comm or acl_filtered_hybrid
+
+        # Step 10: rerank merged set; return top-k.
+        if self._reranker is not None:
+            final_candidates = await self._reranker.rerank_candidates(
+                query, merged, top_k=self._top_k_return
+            )
+        else:
+            final_candidates = sorted(
+                merged, key=lambda c: c.score_breakdown.rrf_score or 0.0, reverse=True
+            )[:self._top_k_return]
+
+        return SearchPipelineResult(
+            results=[self._candidate_to_search_result(c) for c in final_candidates],
+            acl_filtered=acl_filtered,
+            graph_expansion_applied=True,
         )
 
     async def _search_standard(

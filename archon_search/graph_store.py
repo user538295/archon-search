@@ -335,6 +335,21 @@ class GraphStore:
     # Communities table (E1b)
     # ------------------------------------------------------------------
 
+    async def communities_table_exists(self, collection: str) -> bool:
+        """Return ``True`` if the communities table exists for *collection*.
+
+        Does NOT indicate whether any communities have been written — only
+        whether ``ensure_communities_table`` (or ``write_communities``) has
+        been called at least once for this collection.
+        """
+        self._validate_collection(collection)
+        db = self._require_db()
+        try:
+            await db.open_table(self._communities_table_name(collection))
+            return True
+        except (FileNotFoundError, ValueError):
+            return False
+
     async def ensure_communities_table(self, collection: str) -> None:
         """Create the communities table for *collection* if it doesn't already exist.
 

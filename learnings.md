@@ -78,6 +78,16 @@
 - Action: Keep fix agent prompts under ~5 targeted fixes. For 10+ fixes, split into two sequential agents or apply directly in main context using batched Edit calls.
 - Confidence: high
 
+**[2026-06-29] — E1b T-1 e2e: same db_path for GraphStore and SearchStore matches production CLI**
+- Observation: Test (a) initially used separate paths (`graph_db_path` and `db_path`) with a fragile `GraphStore.__init__` patch. Reviews identified this as Major because the production CLI uses the same path for both stores — graph tables use `_archon_graph_` prefix to avoid collision. The patch silently discarded the path argument.
+- Action: In CLI e2e tests, always seed `GraphStore` and `SearchStore` using the same `db_path` that `mock_cfg.db_path` will point to. Remove `GraphStore.__init__` patches — they are never needed when paths are aligned.
+- Confidence: high
+
+**[2026-06-29] — E1b T-1 e2e: module-level pytest.importorskip skips entire file, not just one test**
+- Observation: `pytest.importorskip("leidenalg")` at module scope caused all three tests to be skipped (only leidenalg-gated test should skip). The fix is a `try/except ImportError` block setting `_LEIDENALG_AVAILABLE` and `@pytest.mark.skipif(not _LEIDENALG_AVAILABLE, ...)` on just that test.
+- Action: Never use `pytest.importorskip` at module scope for optional dependencies. Use a module-level `try/except ImportError` flag + `@pytest.mark.skipif` on the individual test function.
+- Confidence: high
+
 **[2026-06-29] — iterative-review on E1b plan: JSONL output files too large to Read directly**
 - Observation: DA agent output JSONL files were 400KB+. Attempting to Read them overflows context. Use `python3 -c "import json,sys; [print(m['content'][0]['text']) for l in open(sys.argv[1]) for m in [json.loads(l)] if m.get('role')=='assistant']" <file>` to extract only assistant text.
 - Action: Never Read DA agent output JSONL files directly. Always use the python3 extraction one-liner to pull only assistant text before processing findings.

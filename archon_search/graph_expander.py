@@ -78,7 +78,7 @@ def _generate_ngrams(tokens: list[str], max_n: int) -> list[str]:
     return candidates
 
 
-def tokenize_and_generate_ngrams(query: str, max_n: int) -> list[str]:
+def tokenize_and_generate_ngrams(query: str, max_n: int = _MAX_NGRAM_SIZE) -> list[str]:
     """Split *query* by whitespace, then return all N-gram candidates."""
     tokens = query.split()
     if not tokens:
