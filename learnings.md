@@ -292,6 +292,16 @@
 **Dead module-level constants must be deleted, not commented as legacy**
 - Action: When replacing a constant with a parameter-derived value, delete it and update all test patches to use the actual controlling input (e.g., `--timeout N` CLI arg).
 
+**[2026-06-30] — E1b T-4: gated eval tests must call assert_thresholds(report) before targeted per-metric assertions**
+- Observation: Two per-metric gated eval tests (`test_eval_gate_graph_local_mrr`, `test_eval_gate_graph_global_mrr`) passed `baseline_path=BASELINE_JSON` to `run_eval_suite()` but never called `assert_thresholds(report)`. This bypassed the staleness hash checks, calibration-only baseline rejection, and floor-drop waiver policy that `assert_thresholds` enforces. The tests gave false confidence — they would pass even when `assert_thresholds` would fail due to a stale baseline. DA and Brooks-Lint caught this as a Major issue in Cycle 1.
+- Action: Any gated eval test that passes `baseline_path` to `run_eval_suite()` MUST call `assert_thresholds(report)` immediately after, before any targeted per-metric assertions. The per-metric check provides a clearer failure message; `assert_thresholds` enforces the full gate contract including staleness.
+- Confidence: high
+
+**[2026-06-30] — E1b T-4: _QUALITY_METRIC_FIELDS in test_eval_suite.py must be updated when new metrics are added**
+- Observation: `_QUALITY_METRIC_FIELDS` in `tests/eval/test_eval_suite.py` (used by `test_eval_suite_is_deterministic_except_latency`) only had `graph_mrr`, not `graph_local_mrr` or `graph_global_mrr`. Adding new per-mode graph metrics without updating this tuple leaves the determinism test blind to regressions in those metrics.
+- Action: After adding any new metric to `EvalMetrics`, immediately add the metric name to `_QUALITY_METRIC_FIELDS` in `test_eval_suite.py` so the determinism check covers it.
+- Confidence: high
+
 **[2026-06-28] — plan-maker-for-team: E1B GraphRAG Leiden + Local/Global Modes**
 - Observation: When E1a is a hard prerequisite but not yet implemented, the team plan must explicitly state it as a prerequisite (not just allude to it), name the exact artefacts E1b assumes exist (GraphConfig, graph tables, entity resolver, graph_mode=naive route), and add an open question to confirm the entity resolver symbol before BE-7 starts.
 - Action: For any feature with a hard prerequisite feature that is itself in-progress: name the prerequisite in a bold "Prerequisite:" block at the top; list each assumed artefact by symbol name; add a Q# asking to confirm resolver symbol once E1a lands.
@@ -501,6 +511,16 @@
 
 **No-op extension changes need explicit "cosmetic" labelling**
 - Action: If an extension already routes via a catch-all `else`-branch, adding it to the set is a no-op. Label as "explicitness only — no behavior change" to prevent tautological tests.
+
+**[2026-06-30] — E1b T-5 close-out: xdist stub-install without immediate restore leaks into all workers**
+- Observation: `test_e1b_be9_mcp_search_graph_mode.py` installed `_StubFastMCP` into `sys.modules["fastmcp"]` at module level but had no module-level restore. xdist with `--dist=loadgroup` imports ALL test files in every worker during collection. Workers that would never run the BE-9 tests still had `FastMCP = _StubFastMCP` left in their process-global `sys.modules`, causing 60+ MCP test failures (`AttributeError: '_StubFastMCP' object has no attribute 'http_app'`). The fix: immediately restore the real `FastMCP` (and pop `archon_search.server.mcp` from `sys.modules`) right after the module-level stub installation. The module-scoped fixture then reinstalls the stub only when the module's own tests actually execute.
+- Action: Any test file that installs a stub into `sys.modules` at module level MUST immediately restore the real class at module level too. Fixture teardown is not sufficient — fixtures only run when a test actually executes, not during xdist collection-phase imports.
+- Confidence: high
+
+**[2026-06-30] — E1b T-5 close-out: CLAUDE.md doc updates must verify method names against actual source**
+- Observation: Initial CLAUDE.md updates for E1b contained 4 fabricated `GraphStore` method names (`ensure_community_table`, `get_communities`, `community_count`, `last_community_built_at`) and a wrong `CommunityBuilder` method signature (`build_communities(collection) -> int` instead of `build(collection) -> list[Community]`). The iterative-review architecture agent caught all 5 discrepancies by grep-verifying against source. Wrong method names in CLAUDE.md are downstream correctness hazards since it is loaded into every agent's context.
+- Action: After writing any CLAUDE.md doc update that names specific methods, always grep the actual source file (`grep -n "def <name>"`) to verify each method exists with the stated signature before finishing the session.
+- Confidence: high
 
 **DA hallucinations — verify function signatures before spawning fix agents**
 - Action: Before acting on a DA finding about a function signature, grep with `grep -n "def <function>"`. A "Major" severity label does not mean the finding is correct.

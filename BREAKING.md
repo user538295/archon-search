@@ -8,6 +8,24 @@
 
 ## Changelog
 
+### [next release] — E1b: `graph_mode` extended to `"local"` and `"global"`; `StatusCollectionEntry` gains community stats (all additive)
+
+**Surface**: `POST /search` request; `GET /status` response (`StatusCollectionEntry`); `GET /openapi.json` schema; MCP `search` tool.
+
+**Additive changes** (non-breaking for tolerant JSON consumers; breaking for strict-schema validators with `extra="forbid"`):
+
+1. **`SearchRequest.graph_mode` extended from `"naive" | null` to `"naive" | "local" | "global" | null`** — the two new string literals `"local"` and `"global"` activate community-based retrieval modes. Clients that already pass `graph_mode="naive"` or omit the field are completely unaffected. Clients with strict-schema validators that enumerate the allowed literals must add `"local"` and `"global"`. When either new value is supplied and `[graph] enabled = false`, the server returns `422`; callers that always omit `graph_mode` are unaffected.
+
+2. **`GET /status` `StatusCollectionEntry` gains `community_count: int` and `last_built_at: str | null`** — always present (zero and null when communities have not been built or when graph is disabled). Strict-validating clients must add these fields to their `StatusCollectionEntry` type stubs. Tolerant clients are unaffected.
+
+3. **`GET /status` `GraphCollectionStats` gains `community_count: int` and `last_built_at: str | null`** — same semantics as (2), scoped to the per-collection entry inside `graph.collections`. Strict-validating clients must update their `GraphCollectionStats` stubs.
+
+4. **New auxiliary LanceDB table** — when `[graph] enabled = true`, `CommunityBuilder.build()` creates a `_archon_graph_{col}_communities` table per collection (triggered via `archon-search graph build-communities <COLLECTION>`). This is auxiliary/internal, never exposed via REST or MCP pagination. Deployments without `graph.enabled = true` are completely unaffected.
+
+**Migration**: no action required for tolerant JSON consumers. Strict-schema validators should add `"local"` and `"global"` to `SearchRequest.graph_mode`, `community_count: int` to `StatusCollectionEntry` and `GraphCollectionStats`, and `last_built_at: str | null` to both. Regenerate from `GET /openapi.json`. To use the new modes: install `archon-search[graph]`, set `[graph] enabled = true`, re-ingest, then run `archon-search graph build-communities`.
+
+---
+
 ### [next release] — E1a: graph tables, `SearchRequest.graph_mode`, `SearchResponse.graph_expansion_applied` (all additive)
 
 **Surface**: LanceDB auxiliary tables (internal); `POST /search` request and response; `GET /status` response; MCP `search` and `search_with_context` tools.

@@ -61,6 +61,16 @@ if _FASTMCP_MODULE not in sys.modules:
 else:
     sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
 
+# Immediately restore the real FastMCP so workers that collect but do NOT run
+# these tests (xdist collects all test files in every worker) don't see the stub
+# when they later import archon_search.server.mcp.  The module-scoped fixture
+# below reinstalls the stub for the duration of THIS module's own test execution.
+if _real_fastmcp_class is not None:
+    sys.modules[_FASTMCP_MODULE].FastMCP = _real_fastmcp_class  # type: ignore[attr-defined]
+    if _real_fastmcp_context is not None:
+        sys.modules[_FASTMCP_MODULE].Context = _real_fastmcp_context  # type: ignore[attr-defined]
+sys.modules.pop(_MCP_MODULE, None)
+
 
 @pytest.fixture(autouse=True, scope="module")
 def _stub_fastmcp_for_module():

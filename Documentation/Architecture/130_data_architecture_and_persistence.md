@@ -147,6 +147,27 @@ The per-field partition map (**system** / **filterable** / **ranking** / **audit
 
 The three B5 columns are additive and populated lazily: rows written by an older binary that lacks B5 will have `None` for all three fields, which the store treats identically to the `needs_recompute = True` state and triggers a full recompute on next access. See also `BREAKING.md` for mixed-version deployment caveats.
 
+### Per-collection graph tables (E1a / E1b)
+
+When `[graph].enabled = true`, `GraphStore` creates two auxiliary tables per collection on first ingest:
+
+- **`_archon_graph_{col}_nodes`** — one row per unique entity (`entity_id`, `entity_type`, `entity_name`, `source_chunk_ids`). Written by `GraphStore.write_graph` during ingest.
+- **`_archon_graph_{col}_edges`** — one row per relationship (`edge_id`, `src_id`, `rel`, `tgt_id`). Written by `GraphStore.write_graph` during ingest.
+
+**E1b** adds a third auxiliary table per collection, populated only by the explicit CLI command `archon-search graph build-communities <collection>` (via `CommunityBuilder`). It is **never** auto-populated during ingest:
+
+**`_archon_graph_{col}_communities`** (`GraphStore.ensure_communities_table()`):
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `community_id` | string | Stable community identifier |
+| `entity_ids` | list[string] | Member entity IDs (from `_archon_graph_{col}_nodes`) |
+| `representative_chunk_ids` | list[string] | MMR-selected chunk IDs for retrieval |
+| `summary_text` | string? | Optional LLM abstractive summary; null when no `extraction_model` is configured |
+| `built_at` | string (ISO 8601 UTC) | UTC timestamp of last `build-communities` run; stored as `pa.utf8()` following the same convention as other timestamp columns |
+
+The table becomes stale whenever new entities are ingested after the last `build-communities` run. `GET /status` exposes `graph.last_built_at` per collection to signal staleness. `graph_mode="local"` falls back to hybrid search when the table is absent or empty; `graph_mode="global"` raises `GraphCommunitiesNotBuiltError` → `422`.
+
 ### Timestamp format
 
 `indexed_at` and `updated_at` are stored as fixed-width UTC strings: **`YYYY-MM-DDTHH:MM:SS.ffffffZ`** (26 characters, always 6 fractional digits, always `Z` suffix). The canonical producer is `archon_search._types.normalize_iso_utc`.

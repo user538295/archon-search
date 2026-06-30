@@ -250,6 +250,26 @@ When multiple collections use different models, the server keeps a small LRU cac
 
 **BM25 score note**: after many incremental `optimize()` calls, BM25 scores may differ slightly from a freshly rebuilt index. Search ranking (recall, NDCG) is unaffected — result-set membership is identical. Operators requiring strict score reproducibility should run a periodic reindex.
 
+## Building community structure (E1b)
+
+After entity extraction is populated (via graph extraction at ingest time with `[graph] enabled = true`), you can cluster entities into communities for richer graph-aware search:
+
+```bash
+archon-search graph build-communities <collection>
+```
+
+This runs Leiden community detection on the entity graph, selects MMR-diverse representative chunks per community, and persists results to `_archon_graph_{col}_communities`. Run this command explicitly — it is never triggered automatically on ingest.
+
+**When to re-run:** After any significant new ingest (e.g., many new documents), `GET /status` will show the old `last_built_at` timestamp, signalling stale communities. Re-run `build-communities` to refresh.
+
+**Configuration knobs** (in `[graph]` TOML section):
+- `leiden_resolution` (default `1.0`) — Leiden resolution; smaller values → larger, fewer communities
+- `max_community_size` (default `10`) — oversized communities are split recursively
+- `community_summary_chunks` (default `3`) — number of MMR representative chunks per community
+- `max_global_candidates` (default `100`) — cap on representatives fed to reranker in global mode
+
+**Prerequisites:** `archon-search[graph]` extras installed (`leidenalg`, `igraph`); E1a graph extraction must have populated entity/edge tables first.
+
 ## Related documents
 
 - [`02_configuration.md`](./02_configuration.md) — `[collections]` and `[database].chunk_size`.

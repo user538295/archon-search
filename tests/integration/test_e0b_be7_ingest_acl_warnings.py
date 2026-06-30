@@ -164,6 +164,7 @@ def test_async_ingest_directory_warnings_aggregated_in_job_result(tmp_path: Path
 
 
 @pytest.mark.integration
+@pytest.mark.xdist_group("mcp")
 def test_mcp_ingest_file_tool_returns_warnings_for_oversized_sidecar(
     tmp_path: Path, monkeypatch
 ) -> None:

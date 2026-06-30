@@ -457,6 +457,41 @@ When the query contains tokens that match entity names in the graph, the expande
 - Stale edges from deleted documents are not pruned in E1a. Re-ingesting removes old nodes/edges for a given document (upsert by stable ID), but manually deleted documents leave orphan edges.
 - Query-time entity matching is exact (case-insensitive string match), not NER — entities not mentioned verbatim in the query will not trigger expansion.
 
+## Graph-mode search — `graph_mode=local` and `graph_mode=global` (E1b)
+
+E1b adds two community-aware graph modes. Both require communities to have been built via `archon-search graph build-communities <collection>` (see [`04_ingestion_and_collections.md`](./04_ingestion_and_collections.md)).
+
+### graph_mode=local
+
+Focuses the search on the community containing the query's recognised entities.
+
+```json
+{"collection": "docs", "query": "AuthService", "graph_mode": "local"}
+```
+
+The pipeline:
+1. Extracts n-grams from the query and matches them against known graph entities
+2. Looks up the community containing the matched entities
+3. Fetches the community's `representative_chunk_ids[]` (MMR-selected at build time)
+4. Merges representative chunks with standard hybrid search candidates
+5. Reranks the combined pool and returns top-k
+
+**Fallback behaviour:** If no graph entities are recognised → standard hybrid search (`graph_expansion_applied: false`). If entities recognised but are isolated (not in any community) → falls back to naive graph expansion (`graph_expansion_applied: true`). If communities not built for the collection → falls back to standard hybrid search.
+
+### graph_mode=global
+
+Retrieves representative chunks from every community, reranked against the query. Useful for broad synthesis questions ("What are the main architectural patterns?").
+
+```json
+{"collection": "docs", "query": "authentication patterns", "graph_mode": "global"}
+```
+
+Returns `422 {"detail": {"code": "graph_communities_not_built"}}` if communities have not been built for the collection (`archon-search graph build-communities`).
+
+**Prerequisite:** Communities must be built via `archon-search graph build-communities <collection>`.
+
+**MCP**: the `search` tool accepts `graph_mode: "local"` and `graph_mode: "global"` with the same semantics as REST `POST /search`.
+
 ## Related documents
 
 - [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) — full REST/MCP reference.

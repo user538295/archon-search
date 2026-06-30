@@ -536,7 +536,7 @@ flowchart LR
 
 ### Phase 5 · Close-out
 
-- [ ] **T-5** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-5** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs T-4 · completes (acceptance gate)
     - Tests
