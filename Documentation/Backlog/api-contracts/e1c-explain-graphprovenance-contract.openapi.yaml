@@ -1,0 +1,265 @@
+openapi: 3.0.0
+info:
+  title: E1C Explain Graph Provenance API
+  version: 0.0.0
+tags: []
+paths:
+  /explain:
+    post:
+      operationId: Explain_explain
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExplainResponse'
+        '422':
+          description: Client error
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/GraphNotEnabledError'
+                  - $ref: '#/components/schemas/GraphCommunitiesNotBuiltError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExplainRequest'
+components:
+  schemas:
+    ExplainNearMiss:
+      type: object
+      required:
+        - docId
+        - chunkId
+        - sourcePath
+        - score
+        - breakdown
+        - collection
+      properties:
+        docId:
+          type: string
+        chunkId:
+          type: string
+        sourcePath:
+          type: string
+        score:
+          type: number
+          format: float
+        breakdown:
+          $ref: '#/components/schemas/ExplainScoreBreakdown'
+        collection:
+          type: string
+    ExplainRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+        collection:
+          type: string
+          nullable: true
+        collections:
+          type: array
+          items:
+            type: string
+          nullable: true
+        topK:
+          type: integer
+          format: int32
+        rerank:
+          type: boolean
+        hyde:
+          type: boolean
+        ragFusion:
+          type: boolean
+        graphMode:
+          allOf:
+            - $ref: '#/components/schemas/GraphMode'
+          nullable: true
+          description: |-
+            Null (default) = standard explain, no graph retrieval.
+            Caller must opt in explicitly — consistent with hyde and ragFusion.
+    ExplainResponse:
+      type: object
+      required:
+        - rerank
+        - collection
+        - aclFiltered
+        - results
+        - nearMisses
+        - embeddingModel
+        - hydeApplied
+        - ragFusionApplied
+        - graphModeApplied
+      properties:
+        rerank:
+          type: boolean
+        collection:
+          type: string
+        aclFiltered:
+          type: boolean
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExplainResult'
+        nearMisses:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExplainNearMiss'
+        embeddingModel:
+          type: string
+        hydeApplied:
+          type: boolean
+        ragFusionApplied:
+          type: boolean
+        graphModeApplied:
+          allOf:
+            - $ref: '#/components/schemas/GraphMode'
+          nullable: true
+          description: |-
+            Which graph mode the pipeline attempted to execute. Set to the requested mode
+            when graph retrieval ran, regardless of whether it yielded results.
+            Null only when graphMode was null (standard explain, no graph path entered).
+            When non-null, hydeApplied and ragFusionApplied are always false.
+    ExplainResult:
+      type: object
+      required:
+        - docId
+        - chunkId
+        - sourcePath
+        - text
+        - score
+        - breakdown
+        - fileType
+        - indexedAt
+        - language
+        - collection
+        - graphProvenance
+      properties:
+        docId:
+          type: string
+        chunkId:
+          type: string
+        sourcePath:
+          type: string
+        text:
+          type: string
+        score:
+          type: number
+          format: float
+        breakdown:
+          $ref: '#/components/schemas/ExplainScoreBreakdown'
+        fileType:
+          type: string
+        indexedAt:
+          type: string
+        language:
+          type: string
+        collection:
+          type: string
+        graphProvenance:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/GraphProvenance'
+          nullable: true
+          description: Null when the chunk was retrieved via standard hybrid search.
+    ExplainScoreBreakdown:
+      type: object
+      required:
+        - vector
+        - fts
+        - reranker
+      properties:
+        vector:
+          type: number
+          format: float
+        fts:
+          type: number
+          format: float
+        reranker:
+          type: number
+          format: float
+          nullable: true
+    GraphCommunitiesNotBuiltError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: object
+          properties:
+            code:
+              type: string
+              enum:
+                - graph_communities_not_built
+            message:
+              type: string
+          required:
+            - code
+            - message
+    GraphMode:
+      type: string
+      enum:
+        - naive
+        - local
+        - global
+      description: Allowed graph retrieval modes — mirrors E1a/E1b SearchRequest.graphMode.
+    GraphNotEnabledError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: "Plain string error message. Body: {\"detail\": \"graph_mode requires [graph] enabled=true in server config\"}"
+    GraphProvenance:
+      type: object
+      required:
+        - steps
+      properties:
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/TraversalStep'
+      description: |-
+        Full traversal chain attached to a graph-retrieved explain result.
+        steps is ordered: query entity first, terminal chunk step last.
+        steps: [] (empty) signals a graph-retrieval bug; graph_provenance: null means
+        the chunk was retrieved by standard hybrid search.
+    TraversalStep:
+      type: object
+      required:
+        - entity
+        - entityId
+        - relationship
+        - communityId
+        - chunkId
+      properties:
+        entity:
+          type: string
+          description: Entity name at this step.
+        entityId:
+          type: string
+          description: Stable SHA-256 hex entity identifier.
+        relationship:
+          type: string
+          nullable: true
+          description: 'Typed relationship edge (naive mode: USES, DEPENDS_ON …; null for community steps).'
+        communityId:
+          type: string
+          nullable: true
+          description: Community identifier (local/global mode; null for naive steps).
+        chunkId:
+          type: string
+          nullable: true
+          description: Present only on the terminal step — the chunk this path leads to.
+      description: |-
+        One step in the traversal chain from query entity → graph → chunk.
+        At least one of relationship, communityId, or chunkId MUST be set;
+        a step with all three null is invalid and rejected by the server.
