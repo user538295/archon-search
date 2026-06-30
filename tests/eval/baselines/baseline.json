@@ -1,8 +1,10 @@
 {
   "command": "pytest -m eval tests/eval/test_eval_suite.py::test_eval_suite_report_only_smoke",
-  "eval_hash": "d703de36a8bd6248fb1060919196c29584342a7a4cca07eac620d72420167f4a",
+  "eval_hash": "f2ae11f7b2015c2bf635dc88a5beeb0b7fceba7f14cfe2dd3b985aa60e51ab4f",
   "metrics": {
     "graph_mrr": 1.0,
+    "graph_local_mrr": 1.0,
+    "graph_global_mrr": 1.0,
     "latency_p50_ms": null,
     "latency_p95_ms": null,
     "mrr": 1.0,
@@ -19,6 +21,6 @@
     "routing_precision_at_1_hybrid": 0.6666666666666666
   },
   "runtime_config_hash": "71d933f9eeed1406f18cb6026d4c0d72e7a4287654100dd20a9d4385a1226589",
-  "thresholds_hash": "48ab31901848be52373ddebe318da678f41358974ee107e1ef7408c0dae1287a",
+  "thresholds_hash": "97fd28580325605e2267b3c8dfb6d77d771fcfb04c3fc1df96be3b62256c15ed",
   "waiver_ids": {}
 }

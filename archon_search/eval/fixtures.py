@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 _VALID_METRIC_SCOPES = ("retrieval", "routing")
-_VALID_GRAPH_MODES = (None, "naive")
+_VALID_GRAPH_MODES = (None, "naive", "local", "global")
 
 # Same pattern as archon_search.store._COLLECTION_RE
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
@@ -52,9 +52,14 @@ class EvalQuery:
     metric_scope: Literal["retrieval", "routing"]
     routing_bypass: bool = False
     graph_mode: str | None = None
-    """When set to ``"naive"``, the eval runner executes the query with graph
-    expansion enabled.  These traces feed ``graph_mrr`` only and are excluded
-    from the regular retrieval metrics to keep the committed baseline stable."""
+    """Valid values: ``"naive"``, ``"local"``, and ``"global"``.
+
+    * ``"naive"`` — graph expansion enabled; traces feed ``graph_mrr`` only.
+    * ``"local"`` — community-local graph mode; traces feed ``graph_local_mrr`` only.
+    * ``"global"`` — community-global graph mode; traces feed ``graph_global_mrr`` only.
+
+    All graph-mode traces are excluded from the regular retrieval metrics to keep
+    the committed baseline stable."""
 
     def __post_init__(self) -> None:
         if self.metric_scope not in _VALID_METRIC_SCOPES:

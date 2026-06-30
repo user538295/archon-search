@@ -991,6 +991,8 @@ def _make_metrics(
     routing_precision_at_1_centroid: float | None = None,
     routing_precision_at_1_hybrid: float | None = None,
     graph_mrr: float | None = None,
+    graph_local_mrr: float | None = None,
+    graph_global_mrr: float | None = None,
 ) -> EvalMetrics:
     return EvalMetrics(
         recall_at_1=recall_at_1,
@@ -1008,6 +1010,8 @@ def _make_metrics(
         routing_precision_at_1_centroid=routing_precision_at_1_centroid,
         routing_precision_at_1_hybrid=routing_precision_at_1_hybrid,
         graph_mrr=graph_mrr,
+        graph_local_mrr=graph_local_mrr,
+        graph_global_mrr=graph_global_mrr,
     )
 
 
@@ -1189,6 +1193,58 @@ def test_assert_thresholds_skips_graph_mrr_when_floor_none() -> None:
     assert_thresholds(report)  # must not raise
 
 
+def test_assert_thresholds_graph_local_mrr_below_floor_fails() -> None:
+    """assert_thresholds fails when graph_local_mrr is below the configured floor."""
+    floors = _make_quality_floors(graph_local_mrr=0.9)
+    metrics = _make_metrics(graph_local_mrr=0.7)
+    report = _make_report(metrics=metrics, thresholds=EvalThresholds(quality_floors=floors))
+    with pytest.raises(AssertionError, match="graph_local_mrr"):
+        assert_thresholds(report)
+
+
+def test_assert_thresholds_graph_local_mrr_at_floor_passes() -> None:
+    """assert_thresholds passes when graph_local_mrr meets the floor."""
+    floors = _make_quality_floors(graph_local_mrr=0.9)
+    metrics = _make_metrics(graph_local_mrr=1.0)
+    report = _make_report(metrics=metrics, thresholds=EvalThresholds(quality_floors=floors))
+    assert_thresholds(report)  # must not raise
+
+
+def test_assert_thresholds_graph_local_mrr_none_with_floor_fails() -> None:
+    """assert_thresholds fails when graph_local_mrr is None but a floor is set."""
+    floors = _make_quality_floors(graph_local_mrr=0.9)
+    metrics = _make_metrics(graph_local_mrr=None)
+    report = _make_report(metrics=metrics, thresholds=EvalThresholds(quality_floors=floors))
+    with pytest.raises(AssertionError, match="graph_local_mrr"):
+        assert_thresholds(report)
+
+
+def test_assert_thresholds_graph_global_mrr_below_floor_fails() -> None:
+    """assert_thresholds fails when graph_global_mrr is below the configured floor."""
+    floors = _make_quality_floors(graph_global_mrr=0.9)
+    metrics = _make_metrics(graph_global_mrr=0.7)
+    report = _make_report(metrics=metrics, thresholds=EvalThresholds(quality_floors=floors))
+    with pytest.raises(AssertionError, match="graph_global_mrr"):
+        assert_thresholds(report)
+
+
+def test_assert_thresholds_graph_global_mrr_at_floor_passes() -> None:
+    """assert_thresholds passes when graph_global_mrr meets the floor."""
+    floors = _make_quality_floors(graph_global_mrr=0.9)
+    metrics = _make_metrics(graph_global_mrr=1.0)
+    report = _make_report(metrics=metrics, thresholds=EvalThresholds(quality_floors=floors))
+    assert_thresholds(report)  # must not raise
+
+
+def test_assert_thresholds_graph_global_mrr_none_with_floor_fails() -> None:
+    """assert_thresholds fails when graph_global_mrr is None but a floor is set."""
+    floors = _make_quality_floors(graph_global_mrr=0.9)
+    metrics = _make_metrics(graph_global_mrr=None)
+    report = _make_report(metrics=metrics, thresholds=EvalThresholds(quality_floors=floors))
+    with pytest.raises(AssertionError, match="graph_global_mrr"):
+        assert_thresholds(report)
+
+
 def test_render_report_mentions_eval_backend_latency() -> None:
     thresholds = EvalThresholds(quality_floors=_make_quality_floors())
     report = _make_report(thresholds=thresholds)
@@ -1331,6 +1387,15 @@ def test_load_thresholds_parses_all_four_new_routing_fields(tmp_path: Path) -> N
     assert floors.routing_mrr_hybrid == pytest.approx(0.70)
     assert floors.routing_precision_at_1_centroid == pytest.approx(0.60)
     assert floors.routing_precision_at_1_hybrid == pytest.approx(0.60)
+
+
+def test_load_thresholds_parses_graph_local_and_global_mrr(tmp_path: Path) -> None:
+    """TOML with graph_local_mrr and graph_global_mrr floors parses correctly."""
+    extra = "graph_local_mrr = 0.8\ngraph_global_mrr = 0.7\n"
+    path = _write_toml(tmp_path, _FULL_QUALITY + extra)
+    floors = load_thresholds(path).quality_floors
+    assert floors.graph_local_mrr == pytest.approx(0.8)
+    assert floors.graph_global_mrr == pytest.approx(0.7)
 
 
 def test_run_router_for_query_accepts_strategy_param() -> None:

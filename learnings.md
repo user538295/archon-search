@@ -247,6 +247,21 @@
 **Place assertions inside `with patch(...)` when using synchronous TestClient**
 - Action: Always put HTTP call AND assertions inside the `with patch(...)` block. Outside is fragile to async refactors.
 
+**[2026-06-29] — E1b BE-9: module-level constant over closure-local for MCP validation tuples**
+- Observation: `_VALID_GRAPH_MODES` was initially declared inside the `search` tool closure. The iterative review flagged this as Moderate — closures with inline validation tuples are invisible to tests that import the module and check validation logic independently, and they can't be referenced by siblings (e.g., `search_with_context` docstring or a future validation helper).
+- Action: Hoist any MCP tool validation tuple (like `_VALID_GRAPH_MODES`) to module level immediately. Module-level constants are testable, greppable, and shared across tools without cross-closure coupling.
+- Confidence: high
+
+**[2026-06-29] — E1b BE-9: MCP test using OR-fallback pipeline call assertions gives false positives**
+- Observation: `assert pipeline.search.call_args.kwargs["graph_mode"] == "global" or "global" in str(call_kwargs)` — the `str(call_kwargs)` branch passes even if `graph_mode` was not forwarded (e.g., the whole kwargs dict contains "global" in some other field). DA review flagged this as Moderate.
+- Action: Never use `or str(something)` as an assertion fallback for call argument verification. Always use `assert pipeline.search.call_args.kwargs["graph_mode"] == expected_value` — single strict assertion, no fallback.
+- Confidence: high
+
+**[2026-06-29] — E1b BE-9: error message update requires sibling E1a test updates — always grep for assertion strings**
+- Observation: When BE-9 changed the `search_with_context` error message from "deferred to E1c" to "not supported; use the search tool instead", two tests in `test_e1a_fe3_mcp_search_graph_mode.py` silently broke: one asserted `"deferred" in ...` and another asserted `local` returns `invalid_graph_mode`. Neither test was mentioned in the BE-9 task spec.
+- Action: After changing any error message string in `mcp.py`, run `grep -r "deferred\|E1c\|the old string"` across `tests/` to find sibling test files that assert on the old text. Update them in the same commit. Never leave the test suite in a mixed state across MCP tool generations.
+- Confidence: high
+
 **`type(j) is IngestJob` predicates need a negative-case test with a subclass**
 - Action: Seed an `ExportJob` with the target status and assert it is NOT counted. Without this, replacing exact-type check with `isinstance` silently passes.
 

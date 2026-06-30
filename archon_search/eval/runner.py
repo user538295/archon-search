@@ -53,6 +53,8 @@ class EvalQualityFloors:
     routing_precision_at_1_centroid: float | None = None
     routing_precision_at_1_hybrid: float | None = None
     graph_mrr: float | None = None
+    graph_local_mrr: float | None = None
+    graph_global_mrr: float | None = None
 
 
 @dataclass
@@ -163,6 +165,8 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         "routing_precision_at_1_centroid",
         "routing_precision_at_1_hybrid",
         "graph_mrr",
+        "graph_local_mrr",
+        "graph_global_mrr",
     )
     optional_floats: dict[str, float | None] = {}
     for opt_key in _optional_float_fields:
@@ -187,6 +191,8 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         routing_precision_at_1_centroid=optional_floats["routing_precision_at_1_centroid"],
         routing_precision_at_1_hybrid=optional_floats["routing_precision_at_1_hybrid"],
         graph_mrr=optional_floats["graph_mrr"],
+        graph_local_mrr=optional_floats["graph_local_mrr"],
+        graph_global_mrr=optional_floats["graph_global_mrr"],
     )
 
     # --- latency_ceilings section (optional) ----------------------------------
@@ -566,6 +572,7 @@ async def _build_pipeline_with_eval_backends(
     await store.connect()
 
     graph_expander = None
+    community_store_stub = None
     if backend == "live":
         from archon_search.embedder import ModelEmbedder
         from archon_search.reranker import ModelReranker
@@ -575,6 +582,7 @@ async def _build_pipeline_with_eval_backends(
     elif backend == "deterministic":
         from archon_search.eval.backends import (
             EVAL_GRAPH_ENTITY_MAP,
+            CommunityStoreStub,
             EvalEmbedderBackend,
             EvalRerankerBackend,
             StubGraphExpander,
@@ -583,6 +591,7 @@ async def _build_pipeline_with_eval_backends(
         embedder = Embedder(EvalEmbedderBackend())
         reranker = Reranker(EvalRerankerBackend())
         graph_expander = StubGraphExpander(EVAL_GRAPH_ENTITY_MAP)
+        community_store_stub = CommunityStoreStub()
     else:
         raise ValueError(f"unknown backend: {backend!r}")
 
@@ -597,6 +606,7 @@ async def _build_pipeline_with_eval_backends(
         top_k_retrieve=10,
         top_k_return=10,
         graph_expander=graph_expander,
+        graph_store=community_store_stub if backend == "deterministic" else None,
     )
     return pipeline
 
@@ -888,8 +898,30 @@ async def run_eval_suite(
     routing_mrr_hybrid = compute_routing_mrr(hybrid_routing_traces, _gold_fn)
     routing_precision_at_1_hybrid = compute_routing_precision_at_1(hybrid_routing_traces, _gold_fn)
 
+    # Partition graph traces by graph_mode for per-mode MRR computation (BE-10).
+    # graph_mrr covers naive-mode traces only (backward compatibility).
+    # graph_local_mrr and graph_global_mrr cover local and global modes separately.
+    graph_query_id_to_mode: dict[str, str | None] = {
+        q.query_id: q.graph_mode for q in corpus.queries if q.graph_mode is not None
+    }
+    naive_graph_traces = [
+        t for t in graph_traces if graph_query_id_to_mode.get(t.query_id) == "naive"
+    ]
+    local_graph_traces = [
+        t for t in graph_traces if graph_query_id_to_mode.get(t.query_id) == "local"
+    ]
+    global_graph_traces = [
+        t for t in graph_traces if graph_query_id_to_mode.get(t.query_id) == "global"
+    ]
+
     graph_mrr: float | None = (
-        compute_mrr(graph_traces, corpus.labels) if graph_traces else None
+        compute_mrr(naive_graph_traces, corpus.labels) if naive_graph_traces else None
+    )
+    graph_local_mrr: float | None = (
+        compute_mrr(local_graph_traces, corpus.labels) if local_graph_traces else None
+    )
+    graph_global_mrr: float | None = (
+        compute_mrr(global_graph_traces, corpus.labels) if global_graph_traces else None
     )
 
     # Graph-mode traces are excluded from latency percentiles: the 2-document
@@ -915,6 +947,8 @@ async def run_eval_suite(
         routing_precision_at_1_centroid=routing_precision_at_1_centroid,
         routing_precision_at_1_hybrid=routing_precision_at_1_hybrid,
         graph_mrr=graph_mrr,
+        graph_local_mrr=graph_local_mrr,
+        graph_global_mrr=graph_global_mrr,
     )
 
     current_eval_hash = compute_eval_hash(corpus_root)
@@ -960,6 +994,8 @@ _QUALITY_FLOOR_FIELDS = (
     "routing_precision_at_1_centroid",
     "routing_precision_at_1_hybrid",
     "graph_mrr",
+    "graph_local_mrr",
+    "graph_global_mrr",
 )
 
 
@@ -1132,6 +1168,8 @@ _RENDERED_QUALITY_FIELDS = (
     "reranker_lift",
     "routing_accuracy",
     "graph_mrr",
+    "graph_local_mrr",
+    "graph_global_mrr",
 )
 
 _RENDERED_LATENCY_FIELDS = ("latency_p50_ms", "latency_p95_ms")

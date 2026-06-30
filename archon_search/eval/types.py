@@ -94,8 +94,12 @@ class EvalMetrics:
         routing_precision_at_1_hybrid: Precision@1 for hybrid routing.
             ``None`` when not yet computed.
         graph_mrr: Mean Reciprocal Rank over graph-mode (``graph_mode="naive"``)
-            retrieval queries only.  ``None`` when no graph-mode queries are
+            retrieval queries only.  ``None`` when no naive-mode graph queries are
             present in the corpus.  Report-only — no gating floor in E1a.
+        graph_local_mrr: Mean Reciprocal Rank over ``graph_mode="local"`` queries.
+            ``None`` when no local-mode graph queries are present.
+        graph_global_mrr: Mean Reciprocal Rank over ``graph_mode="global"`` queries.
+            ``None`` when no global-mode graph queries are present.
     """
 
     recall_at_1: float
@@ -113,3 +117,5 @@ class EvalMetrics:
     routing_precision_at_1_centroid: float | None = None
     routing_precision_at_1_hybrid: float | None = None
     graph_mrr: float | None = None
+    graph_local_mrr: float | None = None
+    graph_global_mrr: float | None = None

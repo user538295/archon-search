@@ -37,6 +37,8 @@ _QUALITY_FIELDS = (
     "ndcg_at_5",
     "ndcg_at_10",
     "routing_accuracy",
+    "graph_local_mrr",
+    "graph_global_mrr",
 )
 
 

@@ -40,3 +40,5 @@
 {"query_id": "page_provenance_001", "text": "find the beta content on page 2", "collection": "pdf-fixtures", "metric_scope": "retrieval"}
 {"query_id": "q-graph-01", "text": "AuthService authentication", "collection": "graph", "metric_scope": "retrieval", "graph_mode": "naive"}
 {"query_id": "q-graph-02", "text": "TokenValidator token verification", "collection": "graph", "metric_scope": "retrieval", "graph_mode": "naive"}
+{"query_id": "q-graph-local-01", "text": "AuthService user credentials session management login", "collection": "graph", "metric_scope": "retrieval", "graph_mode": "local"}
+{"query_id": "q-graph-global-01", "text": "JWT token expiry integrity verification enforcement", "collection": "graph", "metric_scope": "retrieval", "graph_mode": "global"}

@@ -56,3 +56,7 @@
 {"query_id": "q-graph-01", "doc_id": "graph-001", "grade": 2}
 {"query_id": "q-graph-01", "doc_id": "graph-002", "grade": 1}
 {"query_id": "q-graph-02", "doc_id": "graph-002", "grade": 2}
+{"query_id": "q-graph-local-01", "doc_id": "graph-001", "grade": 2}
+{"query_id": "q-graph-local-01", "doc_id": "graph-002", "grade": 1}
+{"query_id": "q-graph-global-01", "doc_id": "graph-002", "grade": 2}
+{"query_id": "q-graph-global-01", "doc_id": "graph-001", "grade": 1}

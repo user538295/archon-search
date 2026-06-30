@@ -125,6 +125,110 @@ class StubGraphExpander:
         )
 
 
+# ---------------------------------------------------------------------------
+# Eval community store stub (BE-10)
+# ---------------------------------------------------------------------------
+
+
+#: Eval collection that has community fixtures.
+_EVAL_COMMUNITY_COLLECTION = "graph"
+
+#: Entity names (lowercased) recognised by the stub for local-mode entity lookup.
+_EVAL_ENTITY_NAMES: frozenset[str] = frozenset(
+    {"authservice", "tokenvalidator", "auth", "token"}
+)
+
+#: Stub community id returned by the eval community store.
+_STUB_COMMUNITY_ID = "eval-community-01"
+
+#: Stub chunk IDs — intentionally non-existent in the real store.
+#: When the pipeline calls store.get_chunks_by_ids() with these IDs, it gets []
+#: and falls back to standard hybrid search (Q6 resolution).
+_STUB_CHUNK_IDS = ["stub-eval-chunk-id-1", "stub-eval-chunk-id-2"]
+
+
+class CommunityStoreStub:
+    """Deterministic stub GraphStore for eval harness use only.
+
+    Returns non-empty community fixtures for the ``graph`` collection so the
+    pipeline does not raise ``GraphCommunitiesNotBuiltError`` during eval.
+    All returned ``representative_chunk_ids`` are intentionally fake — they
+    are absent from the real eval LanceDB store — so ``store.get_chunks_by_ids``
+    returns ``[]`` and the pipeline falls back to standard hybrid search (Q6
+    resolution).  This lets ``graph_mode=local`` and ``graph_mode=global``
+    queries produce real MRR values (from standard hybrid search) without
+    requiring a real community table.
+
+    Implements the subset of ``GraphStore`` methods called by
+    ``SearchPipeline._search_graph_mode()`` and ``SearchPipeline._search_local_mode()``.
+    """
+
+    async def communities_table_exists(self, collection: str) -> bool:
+        """Return True only for the graph collection used in eval fixtures."""
+        return collection == _EVAL_COMMUNITY_COLLECTION
+
+    async def list_community_representatives(
+        self, collection: str
+    ) -> list:  # list[Community]
+        """Return one stub community for the graph collection; empty otherwise."""
+        from datetime import datetime, timezone
+
+        from archon_search.graph_types import Community
+
+        if collection != _EVAL_COMMUNITY_COLLECTION:
+            return []
+        return [
+            Community(
+                community_id=_STUB_COMMUNITY_ID,
+                entity_ids=["stub-entity-01", "stub-entity-02"],
+                representative_chunk_ids=list(_STUB_CHUNK_IDS),
+                built_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                summary_text=None,
+            )
+        ]
+
+    async def find_nodes_by_name(
+        self, collection: str, names: list[str]
+    ) -> list:  # list[GraphNode]
+        """Return a stub GraphNode when any recognised entity name is present."""
+        from archon_search.graph_types import EntityType, GraphNode
+
+        if collection != _EVAL_COMMUNITY_COLLECTION:
+            return []
+        lower_names = {n.lower() for n in names}
+        if not lower_names & _EVAL_ENTITY_NAMES:
+            return []
+        return [
+            GraphNode(
+                id="stub-entity-01",
+                entity_name="AuthService",
+                entity_type=EntityType.system,
+                source_doc_id="graph-001",
+                collection_name=collection,
+            )
+        ]
+
+    async def get_communities_for_entities(
+        self, collection: str, entity_ids: list[str]
+    ) -> list:  # list[Community]
+        """Return one stub community when entity_ids are non-empty for graph collection."""
+        from datetime import datetime, timezone
+
+        from archon_search.graph_types import Community
+
+        if collection != _EVAL_COMMUNITY_COLLECTION or not entity_ids:
+            return []
+        return [
+            Community(
+                community_id=_STUB_COMMUNITY_ID,
+                entity_ids=list(entity_ids),
+                representative_chunk_ids=list(_STUB_CHUNK_IDS),
+                built_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                summary_text=None,
+            )
+        ]
+
+
 class EvalRerankerBackend:
     """BM25-inspired lexical reranker for eval harness use only.
 

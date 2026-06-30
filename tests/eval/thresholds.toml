@@ -45,6 +45,13 @@ routing_mrr_hybrid = 0.7361111111111112
 # routing_precision_at_1_centroid — reported-only; no floor (P@1 report-only per Task 6.2)
 # routing_precision_at_1_hybrid   — reported-only; no floor (P@1 report-only per Task 6.2)
 # graph_mrr — reported-only; no floor set until calibration baseline exists (E1a BE-9)
+# graph_local_mrr and graph_global_mrr — gated floors added in E1b BE-10.
+# Calibration run (2026-06-29, graph eval corpus with CommunityStoreStub fallback to hybrid):
+#   graph_local_mrr: 1.0 (q-graph-local-01 → graph-001; falls back to hybrid search)
+#   graph_global_mrr: 1.0 (q-graph-global-01 → graph-002; falls back to hybrid search)
+# Floors set equal to calibration baseline so regressions are immediately gated.
+graph_local_mrr = 1.0
+graph_global_mrr = 1.0
 
 [multilingual]
 # Per-language recall floors for C2 multilingual eval fixtures.
