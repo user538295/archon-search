@@ -525,12 +525,12 @@ flowchart LR
         - #unit_test — `test_eval_fixture_graph_query_schema` — all queries.jsonl entries with graph_mode have required fields; graph_mode value is valid (one of "local", "global")
         - #integration_test — `test_eval_suite_graph_mode_smoke` — eval suite runs without --thresholds-path; report contains graph_local_mrr and graph_global_mrr as separate metric keys, not a merged graph_mrr (smoke only, no gate)
 
-- [ ] **T-4** — Eval gate: run gated eval suite (`uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml`) and confirm `graph_local_mrr >= baseline_mrr` and `graph_global_mrr >= baseline_mrr`; record result in baseline JSON #tester-role
+- [x] **T-4** — Eval gate: run gated eval suite (`uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml`) and confirm `graph_local_mrr >= baseline_mrr` and `graph_global_mrr >= baseline_mrr`; record result in baseline JSON #tester-role
     - — · 2.0h
     - needs BE-10 · completes S16
     - Tests
-        - #e2e_test — `test_eval_gate_graph_local_mrr` — gated eval; graph_local_mrr meets threshold (S16)
-        - #e2e_test — `test_eval_gate_graph_global_mrr` — gated eval; graph_global_mrr meets threshold (S16)
+        - [x] #e2e_test — `test_eval_gate_graph_local_mrr` — gated eval; graph_local_mrr meets threshold (S16)
+        - [x] #e2e_test — `test_eval_gate_graph_global_mrr` — gated eval; graph_global_mrr meets threshold (S16)
 
 ---
 

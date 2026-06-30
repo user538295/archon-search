@@ -1,4 +1,5 @@
-"""BE-10: Tests for graph_mode eval fixtures and per-mode MRR partitioning.
+"""BE-10 + T-4: Tests for graph_mode eval fixtures, per-mode MRR partitioning,
+and the gated eval gate for graph_local_mrr and graph_global_mrr.
 
 Tests:
 - test_eval_fixture_graph_query_schema: all graph_mode queries have required
@@ -7,6 +8,8 @@ Tests:
 - test_eval_suite_graph_mode_smoke: full eval suite run without --thresholds-path
   produces graph_local_mrr and graph_global_mrr as separate metric keys (not merged
   into a single graph_mrr).
+- test_eval_gate_graph_local_mrr: gated; graph_local_mrr meets threshold (S16/T-4).
+- test_eval_gate_graph_global_mrr: gated; graph_global_mrr meets threshold (S16/T-4).
 """
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.eval.runner import render_report, run_eval_suite
+from archon_search.eval.runner import assert_thresholds, load_thresholds, render_report, run_eval_suite
 
 
 CORPUS_ROOT = Path(__file__).resolve().parent
@@ -128,4 +131,79 @@ async def test_eval_suite_graph_mode_smoke() -> None:
     assert "graph_global_mrr" in rendered, (
         f"Rendered report does not contain 'graph_global_mrr'.\n"
         f"First 1000 chars:\n{rendered[:1000]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-4: Gated eval gate — graph_local_mrr and graph_global_mrr (S16)
+# ---------------------------------------------------------------------------
+
+BASELINE_JSON = CORPUS_ROOT / "baselines" / "baseline.json"
+
+
+@pytest.mark.eval
+async def test_eval_gate_graph_local_mrr(thresholds_path: Path) -> None:
+    """Gated: graph_local_mrr meets the floor configured in thresholds.toml (S16).
+
+    Requires --thresholds-path; skips gracefully without it (non-CI).
+    """
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=BASELINE_JSON,
+    )
+    # Enforce the full production gate contract first: staleness checks, floor-drop policy,
+    # calibration-only baseline rejection. The targeted assertion below then provides a
+    # more actionable message when graph_local_mrr specifically is the failing metric.
+    assert_thresholds(report)
+    thresholds = load_thresholds(thresholds_path)
+    floor = thresholds.quality_floors.graph_local_mrr
+    actual = report.metrics.graph_local_mrr
+
+    assert floor is not None, (
+        "graph_local_mrr floor is not set in thresholds.toml — "
+        "add [quality_floors] graph_local_mrr = <value>"
+    )
+    assert actual is not None, (
+        "graph_local_mrr metric is None — check that q-graph-local-01 is in "
+        "queries.jsonl and its label is in labels.jsonl"
+    )
+    assert actual >= floor, (
+        f"graph_local_mrr={actual:.4f} < floor={floor:.4f} "
+        f"(threshold not met — S16 eval gate failed)"
+    )
+
+
+@pytest.mark.eval
+async def test_eval_gate_graph_global_mrr(thresholds_path: Path) -> None:
+    """Gated: graph_global_mrr meets the floor configured in thresholds.toml (S16).
+
+    Requires --thresholds-path; skips gracefully without it (non-CI).
+    """
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=BASELINE_JSON,
+    )
+    # Enforce the full production gate contract first: staleness checks, floor-drop policy,
+    # calibration-only baseline rejection. The targeted assertion below then provides a
+    # more actionable message when graph_global_mrr specifically is the failing metric.
+    assert_thresholds(report)
+    thresholds = load_thresholds(thresholds_path)
+    floor = thresholds.quality_floors.graph_global_mrr
+    actual = report.metrics.graph_global_mrr
+
+    assert floor is not None, (
+        "graph_global_mrr floor is not set in thresholds.toml — "
+        "add [quality_floors] graph_global_mrr = <value>"
+    )
+    assert actual is not None, (
+        "graph_global_mrr metric is None — check that q-graph-global-01 is in "
+        "queries.jsonl and its label is in labels.jsonl"
+    )
+    assert actual >= floor, (
+        f"graph_global_mrr={actual:.4f} < floor={floor:.4f} "
+        f"(threshold not met — S16 eval gate failed)"
     )
