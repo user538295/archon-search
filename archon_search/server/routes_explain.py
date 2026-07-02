@@ -30,6 +30,7 @@ from archon_search.pipeline import (
     CollectionNotFoundError,
     ExplainStageError,
     FanoutTimeoutError,
+    GraphCommunitiesNotBuiltError,
     MetadataLookupError,
 )
 from archon_search.router import MultiCollectionRouter
@@ -439,6 +440,20 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             status_code=422,
         )
 
+    # graph_mode guard: require [graph] enabled=true (matching /search pattern)
+    if body.graph_mode is not None and not config.graph.enabled:
+        return JSONResponse(
+            {"detail": "graph_mode requires [graph] enabled=true in server config"},
+            status_code=422,
+        )
+
+    # graph_mode + multi-collection fanout is not supported in E1c (S14)
+    if body.graph_mode is not None and body.collections is not None:
+        return JSONResponse(
+            {"detail": "graph_mode is not supported with multi-collection fanout; use a single collection"},
+            status_code=422,
+        )
+
     routing: RoutingExplain | None = None
     rag_fusion_gen = getattr(request.app.state, "rag_fusion_generator", None)
 
@@ -484,6 +499,15 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 )
             except RAGFusionDependencyError as exc:
                 return JSONResponse({"detail": str(exc)}, status_code=422)
+            except GraphCommunitiesNotBuiltError as exc:
+                # Defensive: the S14 guard above prevents graph_mode+collections from
+                # reaching this path, and the multi-collection call does not currently
+                # pass graph_mode. This handler is required by the BE-5 spec to mirror
+                # the dual-handler pattern in routes_search.py and will become active
+                # when graph_mode is wired to the multi-collection path in a later ticket.
+                return JSONResponse(
+                    {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
+                )
             except CollectionNotFoundError:
                 return JSONResponse({"detail": "collection not found"}, status_code=404)
             except MetadataLookupError:
@@ -614,6 +638,10 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             )
         except RAGFusionDependencyError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=422)
+        except GraphCommunitiesNotBuiltError as exc:
+            return JSONResponse(
+                {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
+            )
         except ExplainStageError as exc:
             # Full original is logged server-side; the response detail is sanitized to
             # stage + exception type only — the original message could echo the query

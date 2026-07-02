@@ -14,6 +14,8 @@ Scenarios: S1, S9, S13, S15.
 """
 from __future__ import annotations
 
+import sys
+import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,6 +27,36 @@ from archon_search.server.routes_explain import ExplainNearMiss
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install a minimal spaCy stub that satisfies _check_graph_deps.
+
+    Must be called BEFORE make_real_app when graph_enabled=True;
+    create_app calls _check_graph_deps which imports spacy synchronously.
+    """
+
+    class _FakeDoc:
+        def __init__(self) -> None:
+            self.ents: list = []
+
+    class _FakeNLP:
+        def __call__(self, text: str) -> _FakeDoc:
+            return _FakeDoc()
+
+    nlp_instance = _FakeNLP()
+    fake_util = types.ModuleType("spacy.util")
+    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
+    fake_cli = types.ModuleType("spacy.cli")
+    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
+    fake_spacy = types.ModuleType("spacy")
+    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
+    fake_spacy.util = fake_util  # type: ignore[attr-defined]
+    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
+    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
+    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
 
 
 def _minimal_pipeline_result(**kwargs) -> ExplainPipelineResult:
@@ -105,10 +137,16 @@ def test_explain_endpoint_graph_mode_forwarded(tmp_path, monkeypatch, graph_mode
     BE-4's primary contract: the single-collection route call site must forward
     all three valid graph_mode values to pipeline.explain() and must set
     graph_mode_applied from the returned ExplainPipelineResult.
+
+    graph_enabled=True is required so the BE-5 guard (graph_not_enabled) does not
+    fire before the mocked pipeline.explain is reached. The spaCy stub must be
+    installed before make_real_app because create_app calls _check_graph_deps
+    synchronously.
     """
     from tests.integration.conftest import make_real_app
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    _install_spacy_stub(monkeypatch)
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         pipeline = client.app.state.pipeline
         client.app.state.embedder_cache = None
 
@@ -189,10 +227,14 @@ def test_explain_route_graph_mode_and_hyde_true_returns_hyde_applied_false(
     the case where a non-null HyDE vector was produced; without BE-4's override,
     both hyde_applied=True and query_vector=b"fakevector" would reach the pipeline
     — this test fails before the fix.
+
+    graph_enabled=True is required so the BE-5 guard (graph_not_enabled) does not
+    fire before the mocked pipeline.explain is reached.
     """
     from tests.integration.conftest import make_real_app
 
-    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+    _install_spacy_stub(monkeypatch)
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         pipeline = client.app.state.pipeline
         client.app.state.embedder_cache = None
 

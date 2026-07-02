@@ -780,6 +780,8 @@ def create_app(
                 )
             except RAGFusionDependencyError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
+            except GraphCommunitiesNotBuiltError as exc:
+                return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
             except CollectionNotFoundError:
                 return McpErrorResponse(error="collection not found", code="not_found")
             except FanoutTimeoutError:
@@ -930,6 +932,8 @@ def create_app(
                 return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except RAGFusionDependencyError as exc:
             return McpErrorResponse(error=str(exc), code="validation_error")
+        except GraphCommunitiesNotBuiltError as exc:
+            return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
         except ExplainStageError as exc:
             if writer is not None:
                 try:
