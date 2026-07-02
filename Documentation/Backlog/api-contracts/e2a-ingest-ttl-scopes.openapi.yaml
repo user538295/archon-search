@@ -1,0 +1,106 @@
+openapi: 3.0.0
+info:
+  title: Ingest API — TTL and scopes (E2a)
+  version: 0.0.0
+tags: []
+paths:
+  /ingest:
+    post:
+      operationId: Ingest_ingest
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestJobResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestRequest'
+  /ingest/directory:
+    post:
+      operationId: Ingest_ingestDirectory
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestJobResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestRequest'
+components:
+  schemas:
+    IngestJobResponse:
+      type: object
+      required:
+        - job_id
+        - status
+      properties:
+        job_id:
+          type: string
+        status:
+          type: string
+    IngestRequest:
+      type: object
+      required:
+        - collection
+      properties:
+        collection:
+          type: string
+        path:
+          type: string
+        documents:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        ingested_by:
+          type: string
+        chunk_ttl_seconds:
+          type: integer
+          format: int32
+          nullable: true
+        chunk_scopes:
+          type: array
+          items:
+            type: string
+          nullable: true
+      description: Stubbed full ingest request for route reference.
+    IngestRequestE2aExtension:
+      type: object
+      properties:
+        chunk_ttl_seconds:
+          type: integer
+          format: int32
+          nullable: true
+          description: |-
+            TTL for all chunks in this ingest, in seconds. Range: [1, 2^31-1].
+            Computes expires_at = now_utc + chunk_ttl_seconds on each chunk.
+            Per-chunk ttl_seconds in the chunk metadata dict overrides this value for that chunk.
+            Both override default_ttl_seconds on the collection.
+            Null or absent = no expiry (expires_at = null on chunk).
+        chunk_scopes:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: |-
+            Scope tags applied to all chunks in this ingest.
+            List of 0–100 strings; each string 1–255 UTF-8 chars, no null bytes, no empty strings.
+            Used to filter search results via scope_filter on POST /search and POST /explain.
+            Null or absent = no scope restriction (chunks are unscoped).
+      description: |-
+        E2a additions to IngestRequest (POST /ingest and POST /ingest/directory).
+        Partial model — only the fields added by E2a are shown.
+        The full IngestRequest lives in archon_search/server/routes_jobs.py.
+        Existing fields (collection, path, documents, ingested_by) are unchanged.

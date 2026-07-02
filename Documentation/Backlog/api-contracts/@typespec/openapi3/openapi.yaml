@@ -1,93 +1,55 @@
 openapi: 3.0.0
 info:
-  title: Archon Search — Ingest Size Guard
+  title: Status API — maintenance TTL pruning fields (E2a)
   version: 0.0.0
 tags: []
 paths:
-  /ingest:
-    post:
-      operationId: IngestRoute_ingest
-      description: Enqueue an ingest job. Returns 202 on success. Returns 413 when a single-file path exceeds [ingest].max_file_mb (skipped for directory paths and documents payload).
+  /status:
+    get:
+      operationId: Status_status
       parameters: []
       responses:
-        '202':
-          description: The request has been accepted for processing, but processing has not yet completed.
+        '200':
+          description: The request has succeeded.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobResponse'
-        '400':
-          description: The server could not understand the request due to invalid syntax.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorDetail'
-        '401':
-          description: Access is unauthorized.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorDetail'
-        '413':
-          description: File exceeds [ingest].max_file_mb; body.detail names the file size, limit, and config key.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorDetail'
-        '503':
-          description: Service unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorDetail'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/IngestRequest'
+                $ref: '#/components/schemas/StatusResponseE2aExtension'
 components:
   schemas:
-    ErrorDetail:
+    MaintenanceStatusE2aExtension:
       type: object
       required:
-        - detail
+        - expired_chunk_count
+        - last_expired_pruned_at
       properties:
-        detail:
+        expired_chunk_count:
+          type: integer
+          format: int32
+          nullable: true
+          description: |-
+            Point-in-time count of chunks with expires_at < now_utc across ALL collections (aggregated).
+            Computed at GET /status call time — not the count from the last prune run.
+            Null when prune_expired_chunks policy has never run (includes when disabled).
+        last_expired_pruned_at:
           type: string
-    IngestRequest:
+          nullable: true
+          description: |-
+            ISO 8601 UTC timestamp of the most recent successful prune_expired_chunks completion.
+            Null before the first successful prune run.
+      description: |-
+        E2a additions to MaintenanceStatusDetail (nested under GET /status → maintenance field).
+        Partial model — only the fields added by E2a are shown.
+        The full MaintenanceStatusDetail lives in archon_search/server/schemas.py.
+        Existing fields (enabled, interval_hours, last_run_at, next_run_at, collection_health) are unchanged.
+    StatusResponseE2aExtension:
       type: object
       required:
-        - collection
+        - maintenance
       properties:
-        path:
-          type: string
-        documents:
-          type: array
-          items:
-            type: object
-            additionalProperties: {}
-          description: Inline document list; when present, no filesystem path exists and the size guard is skipped.
-        collection:
-          type: string
-        ingested_by:
-          type: string
-    JobResponse:
-      type: object
-      required:
-        - job_id
-        - status
-        - kind
-        - created_at
-        - updated_at
-      properties:
-        job_id:
-          type: string
-        status:
-          type: string
-        kind:
-          type: string
-        created_at:
-          type: string
-        updated_at:
-          type: string
+        maintenance:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/MaintenanceStatusE2aExtension'
+          nullable: true
+      description: Stub for GET /status top-level shape. Only the maintenance-related E2a extension is shown.

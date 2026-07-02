@@ -1,0 +1,150 @@
+openapi: 3.0.0
+info:
+  title: Search and Explain API — scope filter (E2a)
+  version: 0.0.0
+tags: []
+paths:
+  /explain:
+    post:
+      operationId: Explain_explain
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExplainResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExplainRequest'
+  /search:
+    post:
+      operationId: Search_search
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+components:
+  schemas:
+    ExplainRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+        collection:
+          type: string
+        collections:
+          type: array
+          items:
+            type: string
+        top_k:
+          type: integer
+          format: int32
+        rerank:
+          type: boolean
+        hyde:
+          type: boolean
+        rag_fusion:
+          type: boolean
+        scope_filter:
+          type: string
+          nullable: true
+    ExplainResponse:
+      type: object
+      required:
+        - results
+        - near_misses
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        near_misses:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+    SearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+        collection:
+          type: string
+        collections:
+          type: array
+          items:
+            type: string
+        top_k:
+          type: integer
+          format: int32
+        hyde:
+          type: boolean
+        rag_fusion:
+          type: boolean
+        scope_filter:
+          type: string
+          nullable: true
+    SearchRequestE2aExtension:
+      type: object
+      properties:
+        scope_filter:
+          type: string
+          nullable: true
+          description: |-
+            Filter search results to chunks whose scopes list contains a value matching this expression.
+            Exact match: bare string (e.g. "user:alice") — matches only if "user:alice" is in chunk.scopes.
+            Wildcard suffix: trailing * (e.g. "user:alice*") — matches any scope with "user:alice" as prefix.
+            Validation: 1–255 chars; allowed chars: alphanumeric, _, -, :, ., /; at most one trailing *.
+            Rejected: bare "*", leading "*", mid-string "*", multiple "*" → 400 with human-readable error.
+            Applied as pre-retrieval LanceDB predicate (exact match) or Python-side post-filter (wildcard).
+            Null or absent = no scope restriction; all chunks are candidates.
+      description: |-
+        E2a additions to SearchRequest (POST /search) and ExplainRequest (POST /explain).
+        Partial models — only the fields added by E2a are shown.
+        Full models live in archon_search/server/routes_search.py and routes_explain.py.
+        Existing fields (collection, collections, query, top_k, filters, hyde, rag_fusion, rerank) are unchanged.
+    SearchResponse:
+      type: object
+      required:
+        - results
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+    SearchResult:
+      type: object
+      required:
+        - doc_id
+        - score
+        - text
+        - source_path
+      properties:
+        doc_id:
+          type: string
+        score:
+          type: number
+          format: float
+        text:
+          type: string
+        source_path:
+          type: string
+      description: Stub search result for reference.

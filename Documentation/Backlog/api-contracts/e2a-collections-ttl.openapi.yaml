@@ -1,0 +1,130 @@
+openapi: 3.0.0
+info:
+  title: Collections API — TTL default, expiring chunks, scopes in documents (E2a)
+  version: 0.0.0
+tags: []
+paths:
+  /collections/{name}:
+    patch:
+      operationId: Collections_patch
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchCollectionBodyE2aExtension'
+  /collections/{name}/expiring:
+    get:
+      operationId: Collections_listExpiring
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: within_hours
+          in: query
+          required: true
+          description: 'Hours ahead to look for expiring chunks. Range: [1, 8760].'
+          schema:
+            type: integer
+            format: int32
+          explode: false
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+          explode: false
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpiringChunksResponse'
+components:
+  schemas:
+    DocumentInfoItemE2aExtension:
+      type: object
+      required:
+        - scopes
+      properties:
+        scopes:
+          type: array
+          items:
+            type: string
+          description: |-
+            Union of scope tags assigned to chunks under this document.
+            Empty list when no chunks carry scopes.
+      description: |-
+        E2a addition to DocumentInfoItem (GET /collections/{name}/documents response items).
+        Existing fields: doc_id, source_path, chunk_count, indexed_at.
+        The full DocumentInfoItem lives in archon_search/server/schemas.py.
+    ExpiringChunkItem:
+      type: object
+      required:
+        - chunk_id
+        - doc_id
+        - source_path
+        - expires_at
+      properties:
+        chunk_id:
+          type: string
+        doc_id:
+          type: string
+        source_path:
+          type: string
+        expires_at:
+          type: string
+          description: ISO 8601 UTC timestamp when this chunk expires.
+      description: One expiring chunk entry returned by GET /collections/{name}/expiring.
+    ExpiringChunksResponse:
+      type: object
+      required:
+        - items
+        - next_cursor
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExpiringChunkItem'
+        next_cursor:
+          type: string
+          nullable: true
+        total:
+          type: integer
+          format: int32
+      description: Response for GET /collections/{name}/expiring (cursor-paginated).
+    PatchCollectionBodyE2aExtension:
+      type: object
+      properties:
+        default_ttl_seconds:
+          type: integer
+          format: int32
+          nullable: true
+          description: |-
+            Default TTL in seconds [1, 2^31-1] applied to all new chunks in this collection.
+            Only affects new ingests — does NOT retroactively update existing chunks.
+            Per-chunk ttl_seconds and request-level chunk_ttl_seconds both override this value.
+            Set to null to disable the collection default (new chunks have no expiry unless specified at ingest).
+      description: |-
+        E2a additions to PATCH /collections/{name}, new GET /collections/{name}/expiring,
+        and scopes field on GET /collections/{name}/documents items.E2a addition to PatchCollectionBody. Existing field: embedding_model.
