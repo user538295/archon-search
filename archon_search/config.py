@@ -79,6 +79,7 @@ class MaintenanceConfig:
     retry_max_attempts: int = 3
     retry_max_age_hours: int = 72
     exclude: list[str] = field(default_factory=list)
+    prune_expired_chunks: bool = True
 
 
 @dataclass
@@ -644,6 +645,10 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         maintenance.retry_max_age_hours = retry_max_age_hours
     if "exclude" in maintenance_cfg:
         maintenance.exclude = [str(p) for p in maintenance_cfg["exclude"]]
+    if "prune_expired_chunks" in maintenance_cfg:
+        maintenance.prune_expired_chunks = _coerce_bool(
+            maintenance_cfg["prune_expired_chunks"], "[maintenance].prune_expired_chunks"
+        )
     config.maintenance = maintenance
 
     auth_cfg = doc.get("auth", {})

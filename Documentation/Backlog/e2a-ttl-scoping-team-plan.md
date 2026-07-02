@@ -478,7 +478,7 @@ flowchart LR
 
 ### Phase 2 · Automatically prune expired chunks and report the count
 
-- [ ] **BE-6** — Store: `prune_expired_chunks(collection, ns) -> list[str]` method — Implementation: (1) SELECT query — `table.search()` or `table.to_pandas()` filtered by `expires_at IS NOT NULL AND expires_at < '{now_utc_iso}'` to collect `doc_ids` for the log; (2) DELETE operation — `table.delete('expires_at IS NOT NULL AND expires_at < \'{now_utc_iso}\'')` (predicate-based, NOT doc_id-based). Predicate construction safety: the CI guard at `tests/test_no_fstring_sql.py` fails if any f-string appears in a `.delete()`, `.where()`, or `.count_rows()` call in `store.py`. Build the compound predicate via string concatenation using `_sql_quote_str` from `store_filters.py`:
+- [x] **BE-6** — Store: `prune_expired_chunks(collection, ns) -> list[str]` method — Implementation: (1) SELECT query — `table.search()` or `table.to_pandas()` filtered by `expires_at IS NOT NULL AND expires_at < '{now_utc_iso}'` to collect `doc_ids` for the log; (2) DELETE operation — `table.delete('expires_at IS NOT NULL AND expires_at < \'{now_utc_iso}\'')` (predicate-based, NOT doc_id-based). Predicate construction safety: the CI guard at `tests/test_no_fstring_sql.py` fails if any f-string appears in a `.delete()`, `.where()`, or `.count_rows()` call in `store.py`. Build the compound predicate via string concatenation using `_sql_quote_str` from `store_filters.py`:
 ```python
 pred = 'expires_at IS NOT NULL AND expires_at < ' + _sql_quote_str(now_utc_iso)
 ```

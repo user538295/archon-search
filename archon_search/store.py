@@ -2329,6 +2329,88 @@ class SearchStore:
         ]
         return items, next_cursor
 
+    async def prune_expired_chunks(self, collection: str, namespace: str) -> list[str]:
+        """Delete all chunks whose ``expires_at`` is in the past and return their doc_ids.
+
+        Implementation:
+        1. SELECT snapshot — collect deduplicated ``doc_ids`` for the log (returned to
+           the caller).  At most ``_EXPIRING_SCAN_CEILING`` rows are scanned; the
+           returned doc_ids may therefore be a subset when more expired rows than the
+           ceiling exist.  The DELETE still removes ALL expired rows via the predicate.
+        2. DELETE — predicate-based delete of all rows where ``expires_at IS NOT NULL
+           AND expires_at < now_utc``.
+
+        The SELECT and DELETE share the same predicate string but are executed
+        sequentially; the returned doc_ids are from the SELECT snapshot and may
+        not exactly match what the DELETE removes (due to a race window), which
+        is acceptable — they are used for WARNING logs only.
+
+        Returned doc_ids are deduplicated (one entry per document, not per chunk).
+
+        Pre-migration guard: if the ``expires_at`` column is absent, returns ``[]``
+        immediately without touching the table.
+
+        The ``namespace`` parameter is accepted for API symmetry only.  The delete
+        operates on the entire collection table — it is NOT scoped to a single
+        namespace.  All namespaces sharing the collection lose their expired chunks.
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return []
+
+        schema = await table.schema()
+        if "expires_at" not in schema.names:
+            return []
+
+        now_utc_iso = normalize_iso_utc(datetime.now(timezone.utc))
+        pred = "expires_at IS NOT NULL AND expires_at < " + _sql_quote_str(now_utc_iso)
+
+        # SELECT snapshot for logging — collect doc_ids before the delete
+        raw_rows = (
+            await table.query()
+            .where(pred)
+            .select(["doc_id"])
+            .limit(_EXPIRING_SCAN_CEILING)
+            .to_list()
+        )
+        doc_ids = list(dict.fromkeys(r["doc_id"] for r in raw_rows))
+
+        if doc_ids:
+            await table.delete(pred)
+
+        return doc_ids
+
+    async def count_expired_chunks(self, collection: str, namespace: str) -> int:
+        """Return the live count of chunks where ``expires_at IS NOT NULL AND expires_at < now``.
+
+        Used by ``GET /status`` maintenance sub-object to report ``expired_chunk_count``
+        as a point-in-time snapshot (not a pruning-run artifact).
+
+        Pre-migration guard: if the ``expires_at`` column is absent, returns ``0``
+        immediately without raising.
+
+        The ``namespace`` parameter is accepted for API symmetry only.  The count
+        spans the entire collection table — it is NOT scoped to a single namespace.
+        All namespaces sharing the collection contribute to the count.
+        """
+        self._validate_collection(collection)
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return 0
+
+        schema = await table.schema()
+        if "expires_at" not in schema.names:
+            return 0
+
+        now_utc_iso = normalize_iso_utc(datetime.now(timezone.utc))
+        pred = "expires_at IS NOT NULL AND expires_at < " + _sql_quote_str(now_utc_iso)
+        return await table.count_rows(pred)
+
     # ------------------------------------------------------------------
     # Fetch adjacent chunks
     # ------------------------------------------------------------------

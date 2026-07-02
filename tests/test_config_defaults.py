@@ -186,6 +186,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "retry_max_attempts": 3,
             "retry_max_age_hours": 72,
             "exclude": [],
+            "prune_expired_chunks": True,
         },
         # [auth]
         "auth": {
