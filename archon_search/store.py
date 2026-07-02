@@ -1224,6 +1224,7 @@ class SearchStore:
                 mutations_since_recompute=existing.mutations_since_recompute,
                 needs_recompute=existing.needs_recompute,
                 schema_version=existing.schema_version,
+                default_ttl_seconds=existing.default_ttl_seconds,
             )
             await self._do_write_meta_unlocked(db, collection, updated)
         finally:
@@ -1303,6 +1304,7 @@ class SearchStore:
                     "mutations_since_recompute": meta.mutations_since_recompute,
                     "needs_recompute": meta.needs_recompute,
                     "schema_version": meta.schema_version,
+                    "default_ttl_seconds": meta.default_ttl_seconds,
                 }
             ]
         )
@@ -1364,6 +1366,7 @@ class SearchStore:
                     mutations_since_recompute=existing.mutations_since_recompute,
                     needs_recompute=True,
                     schema_version=existing.schema_version,
+                    default_ttl_seconds=existing.default_ttl_seconds,
                 )
                 await self._do_write_meta_unlocked(db, collection, patched)
                 return True
@@ -1393,6 +1396,7 @@ class SearchStore:
                     mutations_since_recompute=existing.mutations_since_recompute,
                     needs_recompute=True,
                     schema_version=existing.schema_version,
+                    default_ttl_seconds=existing.default_ttl_seconds,
                 )
                 await self._do_write_meta_unlocked(db, collection, patched)
                 return True
@@ -1421,6 +1425,7 @@ class SearchStore:
                 mutations_since_recompute=new_mutations,
                 needs_recompute=existing.needs_recompute,
                 schema_version=existing.schema_version,
+                default_ttl_seconds=existing.default_ttl_seconds,
             )
             await self._do_write_meta_unlocked(db, collection, new_meta)
             return new_meta.mutations_since_recompute >= self._config.centroid_recompute_threshold or new_meta.needs_recompute
@@ -1499,6 +1504,7 @@ class SearchStore:
                 mutations_since_recompute=new_mutations,
                 needs_recompute=True,
                 schema_version=existing.schema_version,
+                default_ttl_seconds=existing.default_ttl_seconds,
             )
             await self._do_write_meta_unlocked(db, collection, patched)
             return
@@ -1534,6 +1540,7 @@ class SearchStore:
             mutations_since_recompute=new_mutations,
             needs_recompute=existing.needs_recompute,
             schema_version=existing.schema_version,
+            default_ttl_seconds=existing.default_ttl_seconds,
         )
         await self._do_write_meta_unlocked(db, collection, new_meta)
 

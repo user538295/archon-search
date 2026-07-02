@@ -463,7 +463,7 @@ flowchart LR
         - [x] #unit_test — `test_mcp_ingest_file_invalid_scopes_overlong_returns_error` — scope string of 256 chars → result contains `code='invalid_parameter'`
         - [x] #integration_test — `test_mcp_ingest_file_with_ttl_stores_expires_at` — MCP call → store has expires_at
 
-- [ ] **T-1** — E2e: ingest a file with `chunk_ttl_seconds`; verify `GET /collections/{name}/expiring` returns it within window; verify ingest via `POST /ingest` with PATCH-set collection default TTL; verify `chunk_ttl_seconds=0` → 422; verify `chunk_scopes=[...×101]` → 422; run migration twice; verify no error and no data change #tester-role
+- [x] **T-1** — E2e: ingest a file with `chunk_ttl_seconds`; verify `GET /collections/{name}/expiring` returns it within window; verify ingest via `POST /ingest` with PATCH-set collection default TTL; verify `chunk_ttl_seconds=0` → 422; verify `chunk_scopes=[...×101]` → 422; run migration twice; verify no error and no data change #tester-role
     - — · 2.5h
     - needs BE-4, BE-5 · completes S1, S3, S4, S5, S14, S15, S16
     - Tests
