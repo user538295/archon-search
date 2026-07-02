@@ -537,3 +537,138 @@ async def test_explain_community_candidates_global_cap_respected() -> None:
         f"Expected exactly 5 chunk IDs requested, got {len(requested_chunk_ids)}: {requested_chunk_ids}"
     )
     assert len(result) == 5
+
+
+@pytest.mark.asyncio
+async def test_explain_community_candidates_local_table_not_exists_raises() -> None:
+    """Local mode: communities table does not exist → GraphCommunitiesNotBuiltError (mirrors global)."""
+    pipeline = _make_pipeline()
+    mock_graph_store = MagicMock()
+    matched_node = GraphNode(
+        id="entity-1",
+        entity_name="PaymentService",
+        entity_type=EntityType.system,
+        source_doc_id="doc1",
+        collection_name="col",
+    )
+    mock_graph_store.find_nodes_by_name = AsyncMock(return_value=[matched_node])
+    mock_graph_store.communities_table_exists = AsyncMock(return_value=False)
+    pipeline._graph_store = mock_graph_store
+
+    with pytest.raises(GraphCommunitiesNotBuiltError):
+        await pipeline._explain_community_candidates("PaymentService", "col", "local")
+
+
+@pytest.mark.asyncio
+async def test_explain_community_candidates_local_cap_respected() -> None:
+    """Local mode caps chunk_ids at _MAX_LOCAL_EXPLAIN_COMMUNITY_CANDIDATES; does not overshoot."""
+    from archon_search.pipeline import _MAX_LOCAL_EXPLAIN_COMMUNITY_CANDIDATES
+
+    # Build 3 communities each with 100 chunk IDs → total 300 > cap.
+    all_chunk_ids = [f"chunk-{i}" for i in range(300)]
+    communities = [
+        _community(f"comm-{c}", ["entity-pay"], all_chunk_ids[c * 100 : (c + 1) * 100])
+        for c in range(3)
+    ]
+
+    # Rows for all chunks.
+    def _row(cid: str) -> dict:
+        return {
+            "doc_id": "doc1", "chunk_id": cid, "text": f"text {cid}",
+            "source_path": "/tmp/x.md", "vector": [0.1, 0.2, 0.3, 0.4],
+            "collection": "col", "acl": None, "file_type": None, "indexed_at": None,
+            "updated_at": None, "ingested_by": None, "language": None, "metadata": None,
+        }
+
+    requested_chunk_ids: list[str] = []
+
+    async def _capture_get_chunks(collection: str, ids: list[str]) -> list[dict]:
+        requested_chunk_ids.extend(ids)
+        return [_row(cid) for cid in ids]
+
+    matched_node = GraphNode(
+        id="entity-pay",
+        entity_name="PaymentService",
+        entity_type=EntityType.system,
+        source_doc_id="doc1",
+        collection_name="col",
+    )
+
+    pipeline = _make_pipeline()
+    mock_store = MagicMock()
+    mock_store.get_chunks_by_ids = _capture_get_chunks
+    pipeline.store = mock_store
+
+    mock_graph_store = MagicMock()
+    mock_graph_store.find_nodes_by_name = AsyncMock(return_value=[matched_node])
+    mock_graph_store.communities_table_exists = AsyncMock(return_value=True)
+    mock_graph_store.get_communities_for_entities = AsyncMock(return_value=communities)
+    pipeline._graph_store = mock_graph_store
+
+    result = await pipeline._explain_community_candidates("PaymentService", "col", "local")
+
+    assert len(requested_chunk_ids) <= _MAX_LOCAL_EXPLAIN_COMMUNITY_CANDIDATES, (
+        f"Expected at most {_MAX_LOCAL_EXPLAIN_COMMUNITY_CANDIDATES} chunk IDs requested; "
+        f"got {len(requested_chunk_ids)}"
+    )
+    assert len(result) <= _MAX_LOCAL_EXPLAIN_COMMUNITY_CANDIDATES
+
+
+@pytest.mark.asyncio
+async def test_explain_community_candidates_local_overlapping_chunks_first_wins() -> None:
+    """When two communities share a representative chunk, the first community's provenance wins."""
+    shared_chunk_id = "shared-chunk"
+
+    comm_first = _community("comm-first", ["entity-1"], [shared_chunk_id, "chunk-a"])
+    comm_second = _community("comm-second", ["entity-2"], [shared_chunk_id, "chunk-b"])
+
+    rows = [
+        {
+            "doc_id": "doc1", "chunk_id": shared_chunk_id, "text": "shared text",
+            "source_path": "/tmp/s.md", "vector": [0.1, 0.2, 0.3, 0.4],
+            "collection": "col", "acl": None, "file_type": None, "indexed_at": None,
+            "updated_at": None, "ingested_by": None, "language": None, "metadata": None,
+        },
+        {
+            "doc_id": "doc1", "chunk_id": "chunk-a", "text": "chunk a text",
+            "source_path": "/tmp/a.md", "vector": [0.1, 0.2, 0.3, 0.4],
+            "collection": "col", "acl": None, "file_type": None, "indexed_at": None,
+            "updated_at": None, "ingested_by": None, "language": None, "metadata": None,
+        },
+        {
+            "doc_id": "doc1", "chunk_id": "chunk-b", "text": "chunk b text",
+            "source_path": "/tmp/b.md", "vector": [0.1, 0.2, 0.3, 0.4],
+            "collection": "col", "acl": None, "file_type": None, "indexed_at": None,
+            "updated_at": None, "ingested_by": None, "language": None, "metadata": None,
+        },
+    ]
+
+    matched_nodes = [
+        GraphNode(id="entity-1", entity_name="Entity1", entity_type=EntityType.system, source_doc_id="doc1", collection_name="col"),
+        GraphNode(id="entity-2", entity_name="Entity2", entity_type=EntityType.system, source_doc_id="doc1", collection_name="col"),
+    ]
+
+    pipeline = _make_pipeline()
+    mock_store = MagicMock()
+    mock_store.get_chunks_by_ids = AsyncMock(return_value=rows)
+    pipeline.store = mock_store
+
+    mock_graph_store = MagicMock()
+    mock_graph_store.find_nodes_by_name = AsyncMock(return_value=matched_nodes)
+    mock_graph_store.communities_table_exists = AsyncMock(return_value=True)
+    mock_graph_store.get_communities_for_entities = AsyncMock(return_value=[comm_first, comm_second])
+    pipeline._graph_store = mock_graph_store
+
+    result = await pipeline._explain_community_candidates("Entity1 Entity2", "col", "local")
+
+    # shared-chunk should appear exactly once.
+    shared_chunks = [c for c in result if c.chunk_id == shared_chunk_id]
+    assert len(shared_chunks) == 1, (
+        f"Expected shared-chunk to appear exactly once; got {len(shared_chunks)}"
+    )
+    # Its provenance should be from comm-first (first-write-wins).
+    shared = shared_chunks[0]
+    assert shared.graph_provenance is not None
+    assert shared.graph_provenance.steps[0].community_id == "comm-first", (
+        f"Expected comm-first to win; got {shared.graph_provenance.steps[0].community_id!r}"
+    )

@@ -481,12 +481,12 @@ flowchart LR
         - [x] #unit_test — `test_pipeline_explain_global_community_steps` — same for global mode (S4)
         - [x] #integration_test — `test_pipeline_explain_community_modes_real` — real pipeline + stubbed E1b; (a) graph_mode="local" → graph_mode_applied=="local"; steps carry community_id; (b) graph_mode="global" → graph_mode_applied=="global"; steps carry community_id (S3, S4)
 
-- [ ] **T-4** — Manual — community mode traversal provenance #tester-role
+- [x] **T-4** — Manual — community mode traversal provenance #tester-role
     - — · 3.0h
     - needs BE-8 · completes S3, S4
     - Tests
-        - #manual_test — Community local mode provenance — operator ingests a corpus, runs E1b community detection, calls POST /explain graph_mode="local", inspects TraversalStep.community_id values; verifies they match known community assignments (S3)
-        - #manual_test — Community global mode provenance — same corpus, graph_mode="global"; verifies global community representative steps appear in TraversalStep chain (S4)
+        - [x] #manual_test — Community local mode provenance — operator ingests a corpus, runs E1b community detection, calls POST /explain graph_mode="local", inspects TraversalStep.community_id values; verifies they match known community assignments (S3)
+        - [x] #manual_test — Community global mode provenance — same corpus, graph_mode="global"; verifies global community representative steps appear in TraversalStep chain (S4)
 
 ---
 

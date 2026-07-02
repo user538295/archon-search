@@ -1837,12 +1837,7 @@ class SearchPipeline:
                 )
                 return []
             if not table_exists:
-                logger.warning(
-                    "_explain_community_candidates local: communities table does not exist for "
-                    "collection %r; run 'archon-search graph build-communities %s' first",
-                    collection, collection,
-                )
-                return []
+                raise GraphCommunitiesNotBuiltError(collection)
 
             # Step 3: community lookup for matched entity IDs.
             entity_ids = [n.id for n in matched_nodes]
@@ -1947,7 +1942,7 @@ class SearchPipeline:
             if provenance_entry is not None:
                 comm_id, e_name, e_id = provenance_entry
                 candidate.graph_provenance = GraphProvenance(steps=[
-                    TraversalStep(entity=e_name, entity_id=e_id, community_id=comm_id)
+                    TraversalStep(entity=e_name, entity_id=e_id, community_id=comm_id, chunk_id=candidate.chunk_id)
                 ])
             candidates.append(candidate)
 
