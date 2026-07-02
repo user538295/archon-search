@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._privacy import _query_fingerprint
@@ -110,6 +110,7 @@ class ExplainPipelineResult:
     rag_fusion_attempted: bool = False
     rag_fusion_failure_reason: str | None = None
     rag_fusion_sub_query_results: list[RagFusionSubQueryInfo] | None = None
+    graph_mode_applied: Literal["naive", "local", "global"] | None = None
 
 
 class ExplainMultiCollectionNoRerankError(Exception):

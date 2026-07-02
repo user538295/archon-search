@@ -369,7 +369,7 @@ flowchart LR
         - #unit_test — `test_traversal_step_terminal_step` — entity + chunk_id set → valid
         - #unit_test — `test_traversal_step_all_null_optionals_rejected` — relationship/community_id/chunk_id all null → Pydantic ValidationError (S10)
 
-- [ ] **BE-2** — Add `graph_mode: Literal["naive","local","global"] | None = None` to `ExplainRequest`; add `graph_provenance: GraphProvenance | None = None` to `ExplainResult` and update `from_candidate()`; add `graph_mode_applied: Literal["naive","local","global"] | None = None` to `ExplainResponse` and `from_pipeline_result()`; add `graph_mode_applied` field to `ExplainPipelineResult` dataclass in `pipeline.py` #backend-role
+- [x] **BE-2** — Add `graph_mode: Literal["naive","local","global"] | None = None` to `ExplainRequest`; add `graph_provenance: GraphProvenance | None = None` to `ExplainResult` and update `from_candidate()`; add `graph_mode_applied: Literal["naive","local","global"] | None = None` to `ExplainResponse` and `from_pipeline_result()`; add `graph_mode_applied` field to `ExplainPipelineResult` dataclass in `pipeline.py` #backend-role
     - Update or remove `test_post_explain_graph_mode_422` in `tests/server/test_e1a_fe2_routes_search_graph_mode.py` — this test currently asserts that `graph_mode` on `/explain` returns 422 because it's an unknown field; once BE-2 adds `graph_mode` to `ExplainRequest`, the test must be updated to test a different invalid value (e.g. `graph_mode="NAIVE"` wrong case) instead.
     - Entities · 2.5h
     - needs BE-1 · completes C1 (partial), C2

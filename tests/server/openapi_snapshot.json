@@ -756,6 +756,22 @@
             ],
             "title": "Collections"
           },
+          "graph_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "naive",
+                  "local",
+                  "global"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Mode"
+          },
           "hyde": {
             "default": false,
             "title": "Hyde",
@@ -811,6 +827,22 @@
             },
             "title": "Excluded Collections",
             "type": "array"
+          },
+          "graph_mode_applied": {
+            "anyOf": [
+              {
+                "enum": [
+                  "naive",
+                  "local",
+                  "global"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Mode Applied"
           },
           "hyde_applied": {
             "default": false,
@@ -947,6 +979,16 @@
             "default": "",
             "title": "File Type",
             "type": "string"
+          },
+          "graph_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphProvenanceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "indexed_at": {
             "default": "",
@@ -1138,6 +1180,24 @@
           "edge_count"
         ],
         "title": "GraphCollectionStats",
+        "type": "object"
+      },
+      "GraphProvenanceResponse": {
+        "additionalProperties": false,
+        "description": "Pydantic response model for the full graph traversal chain of a chunk.\n\nAn empty ``steps`` list is valid and signals a graph-layer bug (a chunk\nwas attributed to graph retrieval but no traversal path was recorded).\nIt is returned as-is rather than masked as null \u2014 surfacing it to the\noperator is the correct behaviour (S11).",
+        "properties": {
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/TraversalStepResponse"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "steps"
+        ],
+        "title": "GraphProvenanceResponse",
         "type": "object"
       },
       "GraphStatusDetail": {
@@ -3151,6 +3211,59 @@
           "hash_doc_ids_enabled"
         ],
         "title": "TelemetryStatusDetail",
+        "type": "object"
+      },
+      "TraversalStepResponse": {
+        "additionalProperties": false,
+        "description": "Pydantic response model for a single graph traversal hop.\n\nEnforces the invariant that at least one of ``relationship``,\n``community_id``, or ``chunk_id`` is set \u2014 degenerate steps (all three\nnull) are meaningless and are rejected at the wire boundary.\n\nPopulated from ``archon_search._diagnostics.TraversalStep`` dataclass\ninstances by ``GraphProvenanceResponse.from_provenance()``.",
+        "properties": {
+          "chunk_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Id"
+          },
+          "community_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Community Id"
+          },
+          "entity": {
+            "title": "Entity",
+            "type": "string"
+          },
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "relationship": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relationship"
+          }
+        },
+        "required": [
+          "entity",
+          "entity_id"
+        ],
+        "title": "TraversalStepResponse",
         "type": "object"
       },
       "ValidationError": {

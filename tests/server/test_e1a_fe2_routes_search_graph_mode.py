@@ -268,23 +268,26 @@ def test_post_search_many_graph_mode_422_when_disabled(tmp_path: Path) -> None:
 
 
 def test_post_explain_graph_mode_422(tmp_path: Path) -> None:
-    """POST /explain with extra field graph_mode='naive' → 422 via Pydantic extra='forbid'."""
+    """POST /explain with graph_mode='NAIVE' (wrong case) → 422 via Pydantic Literal validation.
+
+    BE-2 added graph_mode as a Literal["naive","local","global"] field on ExplainRequest.
+    The previous version of this test checked that graph_mode was rejected as an extra field;
+    now that graph_mode is a known field, we instead verify that an invalid literal value is
+    rejected with a 422 validation error.
+    """
     app, client = _make_app(tmp_path)
 
-    # /explain with graph_mode as extra field — ExplainRequest has extra="forbid"
     response = client.post(
         "/explain",
         json={
-            "collection": "col",
             "query": "q",
-            "doc_id": "a" * 64,
-            "graph_mode": "naive",
+            "graph_mode": "NAIVE",
         },
     )
 
     assert response.status_code == 422
     body = response.json()
     detail_str = str(body.get("detail", ""))
-    assert "extra" in detail_str.lower() or "permitted" in detail_str.lower() or "graph_mode" in detail_str.lower(), (
-        f"Expected 422 about extra field, got: {detail_str!r}"
+    assert "graph_mode" in detail_str.lower() or "literal" in detail_str.lower() or "naive" in detail_str.lower(), (
+        f"Expected 422 about invalid graph_mode value, got: {detail_str!r}"
     )

@@ -17,7 +17,7 @@ import logging
 import time
 from contextlib import ExitStack
 from time import monotonic
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -152,9 +152,13 @@ class ExplainResult(BaseModel):
     metadata: dict[str, str] = Field(default_factory=dict)
     acl: list[str] | None = None
     collection: str = ""
+    graph_provenance: GraphProvenanceResponse | None = None
 
     @classmethod
     def from_candidate(cls, c: ScoredSearchCandidate) -> ExplainResult:
+        graph_prov: GraphProvenanceResponse | None = None
+        if c.graph_provenance is not None:
+            graph_prov = GraphProvenanceResponse.from_provenance(c.graph_provenance)
         return cls(
             doc_id=c.doc_id,
             chunk_id=c.chunk_id,
@@ -170,6 +174,7 @@ class ExplainResult(BaseModel):
             metadata=c.metadata,
             acl=c.acl,
             collection=c.collection,
+            graph_provenance=graph_prov,
         )
 
 
@@ -245,6 +250,7 @@ class ExplainRequest(BaseModel):
     rerank: bool = True
     hyde: bool = False
     rag_fusion: bool = False
+    graph_mode: Literal["naive", "local", "global"] | None = None
 
     @field_validator("query")
     @classmethod
@@ -310,6 +316,7 @@ class ExplainResponse(BaseModel):
     rag_fusion_attempted: bool = False
     rag_fusion_failure_reason: str | None = None
     rag_fusion_sub_queries: list[RagFusionSubQueryResult] | None = None
+    graph_mode_applied: Literal["naive", "local", "global"] | None = None
 
     @classmethod
     def from_pipeline_result(
@@ -327,6 +334,7 @@ class ExplainResponse(BaseModel):
         rag_fusion_attempted: bool = False,
         rag_fusion_failure_reason: str | None = None,
         rag_fusion_sub_query_results: list | None = None,
+        graph_mode_applied: Literal["naive", "local", "global"] | None = None,
     ) -> ExplainResponse:
         sub_queries: list[RagFusionSubQueryResult] | None = None
         if rag_fusion_sub_query_results is not None:
@@ -357,6 +365,7 @@ class ExplainResponse(BaseModel):
             rag_fusion_attempted=rag_fusion_attempted,
             rag_fusion_failure_reason=rag_fusion_failure_reason,
             rag_fusion_sub_queries=sub_queries,
+            graph_mode_applied=graph_mode_applied,
         )
 
 
@@ -510,6 +519,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 rag_fusion_attempted=result.rag_fusion_attempted,
                 rag_fusion_failure_reason=result.rag_fusion_failure_reason,
                 rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
+                # graph_mode_applied wired in BE-4
             )
             _emit_ok(
                 "",
@@ -633,6 +643,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
         rag_fusion_attempted=result.rag_fusion_attempted,
         rag_fusion_failure_reason=result.rag_fusion_failure_reason,
         rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
+        # graph_mode_applied wired in BE-4
     )
     _emit_ok(
         chosen,
