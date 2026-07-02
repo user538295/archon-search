@@ -177,6 +177,21 @@
 - Action: Always unpack `client, mock_store, validate_patch_ctx = _make_patch_app(...)` when using this helper. When the context manager is not needed (e.g., the test patches it separately), use `_validate_patch_ctx` as the throwaway name.
 - Confidence: high
 
+**[2026-07-02] — E2a BE-5 MCP TDD: importlib.reload inside patch() context breaks the patch**
+- Observation: Calling `importlib.reload(mcp_mod)` inside a `with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):` block causes the module to re-execute `from fastmcp import FastMCP`, which overwrites the patched value with the real FastMCP class. The `_FakeFastMCP` stub is silently discarded and the test fails with `AttributeError: 'FastMCP' object has no attribute 'tools'`.
+- Action: Never call `importlib.reload()` inside a `patch()` context manager for MCP unit tests. Instead, import the module once (`from archon_search.server import mcp as mcp_mod`) inside the patch block — the patch already replaces the attribute on the existing module object; no reload is needed.
+- Confidence: high
+
+**[2026-07-02] — E2a BE-5 MCP: scope length validation must use len(scope) not len(scope.encode("utf-8"))**
+- Observation: The REST layer (`routes_jobs.py` line 80) validates scope length using `len(item)` (Python character count). The initial MCP implementation used `len(scope.encode("utf-8"))` (UTF-8 byte count). These diverge for multibyte characters: a 200-char CJK scope is 400 UTF-8 bytes and would pass REST validation but fail MCP validation.
+- Action: Always use `len(scope)` (Python character count) for scope string length validation to match the REST layer. Never use `.encode("utf-8")` for this purpose in MCP tools.
+- Confidence: high
+
+**[2026-07-02] — E2a BE-5 MCP: validation tests for ingest_directory must be added separately — don't assume a shared helper means shared coverage**
+- Observation: When the implementation was refactored to use `_validate_ttl_and_scopes()` shared helper, reviewers initially suggested the tests for `ingest_file` validation also covered `ingest_directory`. This is wrong: before extraction, two separate blocks existed and could have had different bugs; after extraction, the two call sites need separate tests only to verify the helper is actually called. But the plan's test list only specified `ingest_file` validation tests, leaving `ingest_directory` without validation coverage.
+- Action: Always add validation tests for each MCP tool separately (even when sharing a helper), specifically: (1) zero/negative TTL test per tool, (2) overlong scope test per tool. This proves the helper is wired up correctly in each tool's code path.
+- Confidence: high
+
 **[2026-06-29] — E1a BE-5: spaCy model wheel version must match spaCy minor version range**
 - Observation: Adding `en_core_web_sm-3.8.0` wheel URL with `spacy>=3.7,<4` allows spaCy 3.7.x which is incompatible with the 3.8.0 model (spaCy model versions are minor-version-locked). DA review caught this as Major. Fix: tighten to `spacy>=3.8,<3.9`.
 - Action: When adding a pinned spaCy model wheel URL to optional extras, always match the spaCy version range to the model's minor version. Use `spacy>=X.Y,<X.(Y+1)` and `en_core_web_sm-X.Y.Z` with matching major.minor.
@@ -1024,6 +1039,16 @@
 **[2026-07-02] — E2a BE-3: test_old_schema_upsert_preserves_new_columns needs all migrations before update_collection_meta**
 - Observation: `test_old_schema_upsert_preserves_new_columns` ran B5/C1/D3 migrations but not E2a's `migrate_default_ttl_seconds`. When `update_collection_meta` wrote `default_ttl_seconds` to the partially-migrated table, LanceDB raised `ValueError: Invalid input, field 'default_ttl_seconds' does not exist in table schema`.
 - Action: When `update_collection_meta` writes a new column, any test that calls it on a manually-constructed table must also run the corresponding migration first. Add `await store.migrate_default_ttl_seconds()` to the migration chain in `test_old_schema_upsert_preserves_new_columns` whenever a new meta column is added via E2a-style migration.
+- Confidence: high
+
+**[2026-07-03] — E2a store.py: `_do_write_meta_unlocked` is the canonical write path, not just the constructors**
+- Observation: `_do_write_meta_unlocked` builds a raw dict before calling `table.add()`. Even when all `CollectionMeta(...)` constructors correctly propagate `default_ttl_seconds`, the field is silently dropped if it is absent from that dict. The write path (`_do_write_meta_unlocked`) and the public write path (`update_collection_meta`) were diverged: the latter already included `"default_ttl_seconds"` in its dict, the former did not.
+- Action: When adding a new column to `CollectionMeta`, verify it is included in BOTH write dicts: `update_collection_meta`'s `table.add([{...}])` AND `_do_write_meta_unlocked`'s `table.add([{...}])`. Missing it from `_do_write_meta_unlocked` silently wipes the field on every ingest-triggered centroid update. Also fix `pipeline.recompute_collection_meta`'s two `CollectionMeta(...)` constructors — they bypass the store's unlocked writer and call `update_collection_meta` directly, but still need `default_ttl_seconds=existing_meta.default_ttl_seconds if existing_meta else None`.
+- Confidence: high
+
+**[2026-07-03] — E2a T-1 e2e: asyncio.run() on server's store object is unsafe — prime meta via HTTP ingest instead**
+- Observation: `asyncio.run(store.update_collection_meta(...))` from a synchronous test body (inside `make_real_app` TestClient context) acquires `asyncio.Lock` objects in a new, temporary event loop. After `asyncio.run()` exits, those locks remain in `store._collection_locks[col]` tied to the dead loop. When the TestClient's thread acquires the same lock in its own event loop, the behaviour is undefined (may silently corrupt state). The established safe alternative — documented in `test_migrate_dry_run_in_place_e2e.py` — is to use a fresh `lancedb.connect_async(cfg.db_path)` connection for any direct DB operations, which shares no locks with the server.
+- Action: Never call async store methods via `asyncio.run()` inside a `make_real_app` TestClient context. To prime collection meta, do a real HTTP ingest (creates the meta row safely through the server stack). For schema inspection, open a fresh `lancedb.connect_async(cfg.db_path)` connection inside the `asyncio.run()` block — never pass `store._db` or call `store._require_connected()`.
 - Confidence: high
 
 **[2026-07-02] — E1c T-5 close-out: UserManual graph_mode error table had two stale E1c placeholder entries**
