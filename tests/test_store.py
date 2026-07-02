@@ -1273,10 +1273,11 @@ async def test_old_schema_upsert_preserves_new_columns(tmp_path: Path) -> None:
         row_b["name"] = "col-b"
         await table.add([row_a, row_b])
 
-        # Run migrations (B5 then C1 then D3) to reach a fully migrated state
+        # Run migrations (B5 then C1 then D3 then E2a) to reach a fully migrated state
         await store.migrate_centroid_sum()
         await store.migrate_per_collection_model()
         await store._migrate_schema_version()
+        await store.migrate_default_ttl_seconds()
 
         # Write B5 values to row_a via update_collection_meta
         meta_a = CollectionMeta(

@@ -986,6 +986,21 @@
 - Action: At close-out, verify each criterion by reading the actual source at the cited file path/line rather than relying on the plan description. The agent doing acceptance verification should search for the exact guard or field in the implementation file, not infer from test names.
 - Confidence: high
 
+**[2026-07-02] — E2a BE-3: store._row_to_meta and update_collection_meta must both handle new meta columns**
+- Observation: Adding `default_ttl_seconds` to `CollectionMeta` and `_meta_schema()` is not enough. Both `_row_to_meta` (deserialisation) and `update_collection_meta` (write dict) also need updating, or the field silently reads/writes as None. Tests fail with unexpected None even though the DB column exists.
+- Action: When adding a new column to `_meta_schema()`, always update `_row_to_meta` to read it and `update_collection_meta` to write it. Treat them as a matched pair — missing one is a silent data loss bug.
+- Confidence: high
+
+**[2026-07-02] — E2a BE-3: new `ingest_file` meta fetch breaks mock stores and assert_awaited_once_with assertions**
+- Observation: Adding `get_collection_meta` calls to `ingest_file` (for TTL resolution) caused 7 failures in `tests/pipeline/test_pipeline_ingest.py`: 5 from mock stores (`CapturingStore`, `TrackingStore`, `StubStore`) that don't implement `get_collection_meta`, and 2 from tests asserting `assert_awaited_once_with` that now fail because `get_collection_meta` is called multiple times (once for TTL pre-resolution in `ingest_directory`, once per file in `ingest_file`, once at end of `ingest_directory` for description update).
+- Action: When adding a new store method call to `ingest_file` or `ingest_directory`, add `async def get_collection_meta(self, *a, **kw): return None` to all inline mock stores in the affected test file. Change `assert_awaited_once_with` to `assert_any_call` in tests that only care about namespace forwarding, not exact call count.
+- Confidence: high
+
+**[2026-07-02] — E2a BE-3: test_old_schema_upsert_preserves_new_columns needs all migrations before update_collection_meta**
+- Observation: `test_old_schema_upsert_preserves_new_columns` ran B5/C1/D3 migrations but not E2a's `migrate_default_ttl_seconds`. When `update_collection_meta` wrote `default_ttl_seconds` to the partially-migrated table, LanceDB raised `ValueError: Invalid input, field 'default_ttl_seconds' does not exist in table schema`.
+- Action: When `update_collection_meta` writes a new column, any test that calls it on a manually-constructed table must also run the corresponding migration first. Add `await store.migrate_default_ttl_seconds()` to the migration chain in `test_old_schema_upsert_preserves_new_columns` whenever a new meta column is added via E2a-style migration.
+- Confidence: high
+
 **[2026-07-02] — E1c T-5 close-out: UserManual graph_mode error table had two stale E1c placeholder entries**
 - Observation: The UserManual `05_searching.md` error table had `graph_mode on POST /explain → 422 (extra field rejected)` (pre-E1c state) and `MCP search_with_context + graph_mode → Error dict (deferred to E1c)`. Both needed updating: the first because E1c now accepts graph_mode on /explain; the second because "deferred to E1c" is no longer accurate now that E1c has shipped.
 - Action: At close-out, grep the UserManual for the feature tag (e.g., `grep "E1c\|deferred"`) and also explicitly check error tables for entries that describe the state BEFORE the feature was built. Update both the placeholder text and the now-shipped feature entries.

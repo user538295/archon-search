@@ -9,14 +9,14 @@ import logging
 import math
 import os
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal
 
 from archon_search._diagnostics import GraphProvenance, ScoredSearchCandidate, SearchScoreBreakdown, TraversalStep
 from archon_search._privacy import _query_fingerprint
-from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, FanoutTimings, IngestedBy, IngestError, IngestResult, SearchResult, _file_exceeds_limit
+from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, FanoutTimings, IngestedBy, IngestError, IngestResult, SearchResult, _file_exceeds_limit, normalize_iso_utc
 from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.observability import record_stage
 from archon_search.filters import SearchFilters
@@ -345,6 +345,8 @@ class SearchPipeline:
         namespace: str = DEFAULT_NAMESPACE,
         ingested_by: IngestedBy = "cli",
         collection_root: Path | None = None,
+        chunk_ttl_seconds: int | None = None,
+        chunk_scopes: list[str] | None = None,
     ) -> IngestResult:
         doc_id = hashlib.sha256(str(path.resolve()).encode()).hexdigest()
 
@@ -454,6 +456,30 @@ class SearchPipeline:
         )
         if not records:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="ok", warnings=acl_warnings)
+
+        # E2a BE-3: compute expires_at (TTL precedence: request > collection default > null)
+        # and assign scopes (normalize [] to None).
+        # Validation of chunk_ttl_seconds range [1, 2^31-1] is enforced at the route/MCP
+        # layer (BE-4/BE-5); the pipeline trusts its callers to pass valid values.
+        if chunk_ttl_seconds is not None:
+            # Request-level TTL wins; no meta read needed.
+            _effective_ttl: int | None = chunk_ttl_seconds
+        else:
+            # Fall back to collection default (may itself be None = no expiry).
+            # When called from ingest_directory, chunk_ttl_seconds is pre-resolved
+            # to avoid N identical meta reads — so this branch only runs for
+            # standalone ingest_file calls.
+            meta = await self.store.get_collection_meta(collection, namespace=namespace)
+            _effective_ttl = meta.default_ttl_seconds if meta is not None else None
+        _expires_at: str | None = (
+            normalize_iso_utc(datetime.now(UTC) + timedelta(seconds=_effective_ttl))
+            if _effective_ttl is not None
+            else None
+        )
+        _scopes: list[str] | None = chunk_scopes if chunk_scopes else None
+        for record in records:
+            record.expires_at = _expires_at
+            record.scopes = _scopes
 
         # C3a / C3b / C3c: enrich every chunk with symbol or heading/page metadata.
         for record in records:
@@ -625,6 +651,8 @@ class SearchPipeline:
         ingested_by: IngestedBy = "cli",
         collection_root: Path | None = None,
         rebuild_fts: bool = True,
+        chunk_ttl_seconds: int | None = None,
+        chunk_scopes: list[str] | None = None,
     ) -> list[IngestResult]:
         # Collect and filter files
         files: list[Path] = []
@@ -656,6 +684,15 @@ class SearchPipeline:
         results: list[IngestResult] = []
         total = len(files)
 
+        # E2a BE-3: resolve effective TTL once for the batch to avoid N identical meta
+        # reads inside ingest_file. If a per-request TTL is given it always wins over
+        # the collection default; otherwise look up the default once here and pass the
+        # resolved value as chunk_ttl_seconds so ingest_file skips its own meta fetch.
+        _effective_batch_ttl = chunk_ttl_seconds
+        if chunk_ttl_seconds is None:
+            _batch_meta = await self.store.get_collection_meta(collection, namespace=namespace)
+            _effective_batch_ttl = _batch_meta.default_ttl_seconds if _batch_meta is not None else None
+
         for done_count, file_path in enumerate(files, start=1):
             result = await self.ingest_file(
                 file_path,
@@ -665,6 +702,8 @@ class SearchPipeline:
                 namespace=namespace,
                 collection_root=collection_root,
                 ingested_by=ingested_by,
+                chunk_ttl_seconds=_effective_batch_ttl,
+                chunk_scopes=chunk_scopes,
             )
             results.append(result)
             if on_file_complete is not None and result.status == "ok":

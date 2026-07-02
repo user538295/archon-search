@@ -107,6 +107,9 @@ async def test_pipeline_ingest_file_chunk_ids_sequential(connected_store, col_na
         async def get_dominant_language(self, *a: Any, **kw: Any) -> str:
             return ""
 
+        async def get_collection_meta(self, *a: Any, **kw: Any) -> None:
+            return None
+
     pipeline = SearchPipeline(
         store=CapturingStore(),  # type: ignore[arg-type]
         embedder=make_embedder(),
@@ -163,6 +166,9 @@ async def test_pipeline_ingest_file_doc_id_is_sha256_hex(connected_store, col_na
 
         async def get_dominant_language(self, *a: Any, **kw: Any) -> str:
             return ""
+
+        async def get_collection_meta(self, *a: Any, **kw: Any) -> None:
+            return None
 
     pipeline = SearchPipeline(
         store=CapturingStore(),  # type: ignore[arg-type]
@@ -421,6 +427,9 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
 
         async def get_dominant_language(self, *a: Any, **kw: Any) -> str:
             return ""
+
+        async def get_collection_meta(self, *a: Any, **kw: Any) -> None:
+            return None
 
     pipeline = SearchPipeline(
         store=TrackingStore(),  # type: ignore[arg-type]
@@ -739,6 +748,9 @@ async def test_ingest_file_records_parse_embed_persist(tmp_path):
         async def get_dominant_language(self, *a: Any, **kw: Any) -> str:
             return ""
 
+        async def get_collection_meta(self, *a: Any, **kw: Any) -> None:
+            return None
+
     pipeline = SearchPipeline(
         store=StubStore(),  # type: ignore[arg-type]
         embedder=make_embedder(),
@@ -808,6 +820,9 @@ async def test_pipeline_noop_when_unbound(tmp_path):
 
         async def get_dominant_language(self, *a: Any, **kw: Any) -> str:
             return ""
+
+        async def get_collection_meta(self, *a: Any, **kw: Any) -> None:
+            return None
 
     pipeline = SearchPipeline(
         store=StubStore(),  # type: ignore[arg-type]
@@ -1397,8 +1412,8 @@ async def test_ingest_directory_namespace_param(tmp_path) -> None:
 
     await pipeline.ingest_directory(tmp_path, "my-col", namespace="tenantA", embedder=pipeline._global_embedder, rebuild_fts=False)
 
-    # store.get_collection_meta must be called with namespace="tenantA"
-    store.get_collection_meta.assert_awaited_once_with("my-col", namespace="tenantA")
+    # store.get_collection_meta must be called with namespace="tenantA" (may be called multiple times for TTL + metadata)
+    store.get_collection_meta.assert_any_call("my-col", namespace="tenantA")
 
     # update_description must be called with namespace="tenantA"
     store.update_description.assert_awaited_once()
@@ -1444,7 +1459,8 @@ async def test_ingest_directory_default_namespace(tmp_path) -> None:
 
     await pipeline.ingest_directory(tmp_path, "my-col", embedder=pipeline._global_embedder, rebuild_fts=False)
 
-    store.get_collection_meta.assert_awaited_once_with("my-col", namespace=DEFAULT_NAMESPACE)
+    # may be called multiple times (TTL pre-resolution + per-file TTL + post-ingest metadata)
+    store.get_collection_meta.assert_any_call("my-col", namespace=DEFAULT_NAMESPACE)
     store.update_description.assert_awaited_once()
     _, kwargs = store.update_description.call_args
     assert kwargs.get("namespace") == DEFAULT_NAMESPACE

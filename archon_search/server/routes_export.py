@@ -287,6 +287,8 @@ async def _import_task(
                     custom_score=doc.get("custom_score"),
                     ingested_by=doc.get("ingested_by", "import"),  # type: ignore[arg-type]
                     updated_at=doc.get("updated_at", ""),
+                    expires_at=doc.get("expires_at"),
+                    scopes=doc.get("scopes"),
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 if job.on_error == "skip":

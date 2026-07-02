@@ -550,6 +550,8 @@ class SearchStore:
         mutations_since_recompute = int(row.get("mutations_since_recompute") or 0)
         needs_recompute = bool(row.get("needs_recompute") or False)
         schema_version = int(row.get("schema_version") or 0)
+        raw_default_ttl = row.get("default_ttl_seconds")
+        default_ttl_seconds = int(raw_default_ttl) if raw_default_ttl is not None else None
         return CollectionMeta(
             name=row["name"],
             description=row["description"] if row["description"] else None,
@@ -569,6 +571,7 @@ class SearchStore:
             namespace=row.get("namespace") or DEFAULT_NAMESPACE,
             description_embedding=description_embedding,
             schema_version=schema_version,
+            default_ttl_seconds=default_ttl_seconds,
         )
 
     async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> "CollectionMeta | None":
@@ -1166,6 +1169,7 @@ class SearchStore:
                         "mutations_since_recompute": meta.mutations_since_recompute,
                         "needs_recompute": meta.needs_recompute,
                         "schema_version": meta.schema_version,
+                        "default_ttl_seconds": meta.default_ttl_seconds,
                     }
                 ]
             )
@@ -2511,7 +2515,10 @@ class SearchStore:
         Includes all persisted fields: ``doc_id``, ``chunk_id``, ``text``,
         ``vector`` (as a list of floats), ``source_path``, ``indexed_at``,
         ``file_type``, ``language``, ``metadata``, ``acl``, ``custom_score``,
-        ``ingested_by``, and ``updated_at``.
+        ``ingested_by``, ``updated_at``, ``expires_at``, and ``scopes``.
+
+        ``expires_at`` and ``scopes`` are ``None`` on pre-migration collections
+        that do not yet have those columns.
 
         The *namespace* parameter is accepted for API symmetry but does not
         affect table-name resolution (the collection name is the table name).
@@ -2541,6 +2548,8 @@ class SearchStore:
                 "custom_score": r.get("custom_score"),
                 "ingested_by": r.get("ingested_by") or "",
                 "updated_at": r.get("updated_at") or r["indexed_at"],
+                "expires_at": r.get("expires_at"),
+                "scopes": r.get("scopes"),
             }
 
     async def count_untagged_language_chunks(self, collection: str) -> int:
