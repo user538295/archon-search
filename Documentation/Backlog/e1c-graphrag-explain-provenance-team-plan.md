@@ -441,7 +441,7 @@ flowchart LR
         - #unit_test — `test_mcp_explain_communities_not_built_returns_error` — MCP explain tool with graph_mode="local" + no communities → McpErrorResponse with code for communities not built
         - #integration_test — `test_mcp_explain_graph_mode_none_result_dict` — real TestClient MCP call; graph_mode=None → result dict contains graph_mode_applied=null; all result items have graph_provenance=null (S12 partial — full requires E1a)
 
-- [ ] **T-2** — E2e — graph error guard scenarios #tester-role
+- [x] **T-2** — E2e — graph error guard scenarios #tester-role
     - — · 1.5h
     - needs BE-5, BE-6 · completes S5, S6
     - Tests
