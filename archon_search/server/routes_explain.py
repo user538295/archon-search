@@ -454,6 +454,12 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
         except RuntimeError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=422)
 
+    # graph_mode and HyDE are mutually exclusive — graph_mode wins.
+    # Computed once here so both the single-collection and multi-collection
+    # response paths inherit the correct value without repeating the check.
+    if body.graph_mode is not None:
+        hyde_applied = False
+
     with ExitStack() as stack:
         recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
         t0 = time.perf_counter()
@@ -519,7 +525,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 rag_fusion_attempted=result.rag_fusion_attempted,
                 rag_fusion_failure_reason=result.rag_fusion_failure_reason,
                 rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
-                # graph_mode_applied wired in BE-4
+                graph_mode_applied=result.graph_mode_applied,
             )
             _emit_ok(
                 "",
@@ -602,6 +608,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 rag_fusion=body.rag_fusion,
                 rag_fusion_generator=rag_fusion_gen,
                 rag_fusion_config=config.rag_fusion,
+                graph_mode=body.graph_mode,
             )
         except RAGFusionDependencyError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=422)
@@ -643,7 +650,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
         rag_fusion_attempted=result.rag_fusion_attempted,
         rag_fusion_failure_reason=result.rag_fusion_failure_reason,
         rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
-        # graph_mode_applied wired in BE-4
+        graph_mode_applied=result.graph_mode_applied,
     )
     _emit_ok(
         chosen,
