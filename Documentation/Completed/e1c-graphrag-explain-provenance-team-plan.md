@@ -488,6 +488,15 @@ flowchart LR
         - [x] #manual_test — Community local mode provenance — operator ingests a corpus, runs E1b community detection, calls POST /explain graph_mode="local", inspects TraversalStep.community_id values; verifies they match known community assignments (S3)
         - [x] #manual_test — Community global mode provenance — same corpus, graph_mode="global"; verifies global community representative steps appear in TraversalStep chain (S4)
 
+- [x] **T-6** — E2e — community mode traversal provenance (S3, S4) #tester-role
+    - — · 2.0h
+    - needs BE-8, T-4 · completes S3, S4
+    - Tests
+        - `tests/integration/test_e1c_t6_e2e_community_provenance.py`
+        - **S3** — `test_explain_local_community_provenance_e2e`: 2-doc corpus, run `CommunityBuilder.build()`, call `POST /explain graph_mode="local"`, assert `graph_mode_applied="local"` and ≥1 result with non-null `graph_provenance` containing a `TraversalStep` with `community_id` set.
+        - **S4** — `test_explain_global_community_provenance_e2e`: same corpus after community build, call `POST /explain graph_mode="global"`, assert `graph_mode_applied="global"` and ≥1 result with non-null `graph_provenance` containing a `TraversalStep` with `community_id` set.
+        - **MCP variant** — `test_mcp_explain_local_community_provenance_e2e`: same corpus via MCP `explain` tool with `graph_mode="local"`, assert `graph_mode_applied="local"` and ≥1 non-null `graph_provenance` with `community_id`.
+
 ---
 
 ### Phase 5 · Close-out
