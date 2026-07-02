@@ -12,6 +12,52 @@ from archon_search._types import IngestedBy
 
 
 @dataclass
+class TraversalStep:
+    """A single hop in a graph traversal chain.
+
+    Represents one step that the graph retrieval algorithm took to reach a
+    chunk.  At least one of ``relationship``, ``community_id``, or
+    ``chunk_id`` must be set — degenerate steps (all three null) are
+    semantically meaningless.  The constraint is enforced at the Pydantic
+    response-model layer (``TraversalStepResponse`` in
+    ``archon_search.server.routes_explain``), not here, so the dataclass
+    itself is constraint-free.
+
+    Attributes:
+        entity: Human-readable entity name matched in the query.
+        entity_id: Stable, deterministic graph-node identifier (from
+            ``make_stable_entity_id``).
+        relationship: Edge label connecting this entity to its neighbour
+            (e.g. ``"CALLS"``, ``"DEPENDS_ON"``).  ``None`` for community
+            or terminal chunk steps.
+        community_id: Community the entity belongs to (E1b community-mode
+            steps).  ``None`` for naive-mode steps.
+        chunk_id: Chunk reached at this traversal step.  Non-null only for
+            terminal (leaf) steps.
+    """
+
+    entity: str
+    entity_id: str
+    relationship: str | None = None
+    community_id: str | None = None
+    chunk_id: str | None = None
+
+
+@dataclass
+class GraphProvenance:
+    """Full graph traversal chain for a single graph-retrieved chunk.
+
+    Attributes:
+        steps: Ordered list of traversal hops from the query entity to the
+            retrieved chunk.  An empty list signals a graph-layer bug (the
+            chunk was attributed to graph retrieval but no path was
+            recorded) — it is surfaced as-is rather than masked as null.
+    """
+
+    steps: list[TraversalStep] = field(default_factory=list)
+
+
+@dataclass
 class SearchScoreBreakdown:
     """Per-candidate score breakdown for the hybrid RRF retrieval pipeline.
 
@@ -64,6 +110,8 @@ class ScoredSearchCandidate:
         ingested_by: Call-site identity for the ingest write (cli/http/watcher/reindex).
         language: Detected language code; '' when untagged.
         metadata: Parsed key/value metadata dict (empty when absent).
+        graph_provenance: Graph traversal chain that produced this candidate.
+            ``None`` for standard hybrid-search results (non-graph path).
     """
 
     doc_id: str
@@ -79,3 +127,4 @@ class ScoredSearchCandidate:
     ingested_by: IngestedBy = "cli"
     language: str = ""
     metadata: dict[str, str] = field(default_factory=dict)
+    graph_provenance: GraphProvenance | None = None

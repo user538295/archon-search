@@ -359,7 +359,7 @@ flowchart LR
 
 ### Phase 1 · Extend /explain schema for graph provenance *(walking skeleton: thinnest end-to-end path; carries entity + pipeline delta; all provenance null)*
 
-- [ ] **BE-1** — Add `TraversalStep`, `GraphProvenance` dataclasses; add `graph_provenance: GraphProvenance | None = None` field to `ScoredSearchCandidate` in `_diagnostics.py` #backend-role
+- [x] **BE-1** — Add `TraversalStep`, `GraphProvenance` dataclasses; add `graph_provenance: GraphProvenance | None = None` field to `ScoredSearchCandidate` in `_diagnostics.py` #backend-role
     - `TraversalStep` and `GraphProvenance` are defined as **dataclasses** in `archon_search/_diagnostics.py` alongside `ScoredSearchCandidate`. This keeps the Entity layer dependency-free from Interface Adapters. Corresponding Pydantic response models `TraversalStepResponse` and `GraphProvenanceResponse` (or the same names with `model_config = ConfigDict(from_attributes=True)`) go in `archon_search/server/routes_explain.py` alongside `ExplainResult`, `ExplainScoreBreakdown`, and the other explain-specific Pydantic models — where ALL other explain Pydantic models live. `from_candidate()` on `ExplainResult` maps the dataclass `GraphProvenance` to the Pydantic response model. Do NOT put them in `schemas.py` (wrong file for explain-specific types) or `graph_types.py` (Entity-layer graph dataclasses, not provenance types).
     - Entities · 2.0h
     - needs K1 · completes C1 (partial), C2 (partial)

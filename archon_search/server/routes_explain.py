@@ -37,7 +37,11 @@ from archon_search.server.schemas import ExcludedCollectionSchema
 from archon_search.telemetry.entry import TelemetryEntry
 
 if TYPE_CHECKING:
-    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search._diagnostics import (
+        GraphProvenance,
+        ScoredSearchCandidate,
+        SearchScoreBreakdown,
+    )
     from archon_search.pipeline import ExplainPipelineResult
 
 logger = logging.getLogger(__name__)
@@ -48,6 +52,61 @@ router = APIRouter()
 def _final_score(b: SearchScoreBreakdown) -> float:
     """reranker_score when a reranker ran, else the fused RRF score."""
     return b.reranker_score if b.reranker_score is not None else b.rrf_score
+
+
+class TraversalStepResponse(BaseModel):
+    """Pydantic response model for a single graph traversal hop.
+
+    Enforces the invariant that at least one of ``relationship``,
+    ``community_id``, or ``chunk_id`` is set — degenerate steps (all three
+    null) are meaningless and are rejected at the wire boundary.
+
+    Populated from ``archon_search._diagnostics.TraversalStep`` dataclass
+    instances by ``GraphProvenanceResponse.from_provenance()``.
+    """
+
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    entity: str
+    entity_id: str
+    relationship: str | None = None
+    community_id: str | None = None
+    chunk_id: str | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one_optional_set(self) -> "TraversalStepResponse":
+        if self.relationship is None and self.community_id is None and self.chunk_id is None:
+            raise ValueError(
+                "TraversalStep must have at least one of relationship, community_id, or chunk_id set"
+            )
+        return self
+
+
+class GraphProvenanceResponse(BaseModel):
+    """Pydantic response model for the full graph traversal chain of a chunk.
+
+    An empty ``steps`` list is valid and signals a graph-layer bug (a chunk
+    was attributed to graph retrieval but no traversal path was recorded).
+    It is returned as-is rather than masked as null — surfacing it to the
+    operator is the correct behaviour (S11).
+    """
+
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    steps: list[TraversalStepResponse]
+
+    @classmethod
+    def from_provenance(cls, prov: "GraphProvenance") -> "GraphProvenanceResponse":
+        """Build from a ``GraphProvenance`` dataclass instance.
+
+        Uses ``TraversalStepResponse.model_validate`` (enabled by ``from_attributes=True``)
+        to map each ``TraversalStep`` dataclass to its Pydantic response model.  The
+        ``_at_least_one_optional_set`` validator runs during this coercion, so
+        degenerate steps (all three optional fields null) raise ``ValidationError``.
+        """
+        return cls(
+            steps=[TraversalStepResponse.model_validate(s) for s in prov.steps]
+        )
 
 
 class ExplainScoreBreakdown(BaseModel):
