@@ -166,12 +166,9 @@ def test_schema_status_reflects_migration_state_e2e(tmp_path, monkeypatch) -> No
             f"got {body['collections_schema_behind']}"
         )
 
-        # Guard: when STORE_SCHEMA_VERSION bumps to 1+, Step 2's assertion
-        # (collections_schema_behind == 0) becomes non-tautological (fresh
-        # collections still start at schema_version=STORE_SCHEMA_VERSION, so
-        # they won't be behind). The seed step (schema_version=-1) will still
-        # exercise the < comparison. Review and update this test when bumping.
-        assert STORE_SCHEMA_VERSION == 0, (
-            "STORE_SCHEMA_VERSION was bumped; review this test — Step 2 may now "
-            "need a fresh collection seed path, and Step 3 may need adjustment."
+        # Guard: updated for E2a (STORE_SCHEMA_VERSION=1). Fresh collections are created
+        # at schema_version=STORE_SCHEMA_VERSION=1 via the stub meta in add_collection,
+        # so Step 2's assertion (collections_schema_behind == 0) is non-tautological.
+        assert STORE_SCHEMA_VERSION == 1, (
+            "STORE_SCHEMA_VERSION was bumped again; review Step 2 fresh collection path."
         )

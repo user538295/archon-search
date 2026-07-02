@@ -22,7 +22,7 @@ from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _reindex_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
-from archon_search.store import StoreBusyError
+from archon_search.store import STORE_SCHEMA_VERSION, StoreBusyError
 from archon_search.sync import path_to_collection_name
 from archon_search.types import JobStatus, MigrationJob, MigrationKind, MigrationSpec
 
@@ -183,6 +183,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
                 pending_embedding_model=None,
                 needs_reindex=False,
                 reindex_job_id=None,
+                schema_version=STORE_SCHEMA_VERSION,
             )
         )
     except StoreBusyError as e:

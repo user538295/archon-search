@@ -12,7 +12,7 @@ import random
 import re
 import time
 from collections.abc import AsyncIterator, Iterable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -135,10 +135,13 @@ FTS_OPTIMIZE_REMOVES_DELETED: bool = True  # Plan A; change to False if Plan B a
 # NOTE: chunk-table-only structural changes (e.g. migrate_acl which adds an acl column
 # to per-collection chunk tables) do NOT bump STORE_SCHEMA_VERSION. Only changes to
 # _meta_schema() or _schema() (the shared chunk-table schema) require a version bump.
-STORE_SCHEMA_VERSION: int = 0
+STORE_SCHEMA_VERSION: int = 1
 
 # Number of chunks processed between progress_cb calls in apply_rewrite_migration.
 _MIGRATION_PROGRESS_INTERVAL: int = 100
+
+# Hard ceiling for query_expiring_chunks scan to avoid runaway scans on large collections.
+_EXPIRING_SCAN_CEILING: int = 10_000
 
 # ---------------------------------------------------------------------------
 # SQL fragment helpers — defense-in-depth behind upstream identifier regexes.
@@ -379,6 +382,8 @@ class SearchStore:
                 pa.field("ingested_by", pa.utf8()),
                 pa.field("updated_at", pa.utf8()),
                 pa.field("acl", pa.list_(pa.utf8()), nullable=True),
+                pa.field("expires_at", pa.utf8(), nullable=True),
+                pa.field("scopes", pa.list_(pa.utf8()), nullable=True),
             ]
         )
 
@@ -406,6 +411,7 @@ class SearchStore:
                 pa.field("mutations_since_recompute", pa.int64(), nullable=True),
                 pa.field("needs_recompute", pa.bool_(), nullable=True),
                 pa.field("schema_version", pa.int64(), nullable=True),
+                pa.field("default_ttl_seconds", pa.int64(), nullable=True),
             ]
         )
 
@@ -792,6 +798,65 @@ class SearchStore:
                 else:
                     logger.warning("acl migration: skipping %r due to RuntimeError — %s", name, exc)
 
+    async def migrate_expires_at_and_scopes(self) -> None:
+        """Idempotent: adds expires_at (utf8|null) and scopes (list<utf8>|null) to each chunk table."""
+        import pyarrow as pa  # noqa: PLC0415
+
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        meta_table = await db.open_table(_META_TABLE)
+        rows = await meta_table.query().to_list()
+        collection_names = [r["name"] for r in rows]
+        expires_at_field = pa.field("expires_at", pa.utf8(), nullable=True)
+        scopes_field = pa.field("scopes", pa.list_(pa.utf8()), nullable=True)
+        for name in collection_names:
+            if name not in all_names:
+                continue
+            table = await db.open_table(name)
+            schema = await table.schema()
+            schema_names = schema.names
+            if "expires_at" not in schema_names:
+                try:
+                    await table.add_columns(expires_at_field)
+                    logger.info("E2a migration: added expires_at column to chunk table %r", name)
+                except RuntimeError as exc:
+                    if "already exists" in str(exc).lower():
+                        logger.warning("Concurrent E2a migration for %r: expires_at already added — %s", name, exc)
+                    else:
+                        logger.warning("E2a migration: skipping expires_at for %r due to RuntimeError — %s", name, exc)
+            if "scopes" not in schema_names:
+                try:
+                    await table.add_columns(scopes_field)
+                    logger.info("E2a migration: added scopes column to chunk table %r", name)
+                except RuntimeError as exc:
+                    if "already exists" in str(exc).lower():
+                        logger.warning("Concurrent E2a migration for %r: scopes already added — %s", name, exc)
+                    else:
+                        logger.warning("E2a migration: skipping scopes for %r due to RuntimeError — %s", name, exc)
+
+    async def migrate_default_ttl_seconds(self) -> None:
+        """Idempotent: adds default_ttl_seconds (int64|null) to _archon_collection_meta."""
+        import pyarrow as pa  # noqa: PLC0415
+
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        table = await db.open_table(_META_TABLE)
+        schema = await table.schema()
+        if "default_ttl_seconds" in schema.names:
+            return
+        try:
+            await table.add_columns(pa.field("default_ttl_seconds", pa.int64(), nullable=True))
+            logger.info("E2a migration: added default_ttl_seconds column to %s", _META_TABLE)
+        except RuntimeError as exc:
+            if "already exists" in str(exc).lower():
+                logger.warning("Concurrent E2a migration: default_ttl_seconds already added — %s", exc)
+            else:
+                raise
+
     async def _migrate_schema_version(self) -> None:
         """Idempotent: adds schema_version column to _archon_collection_meta if absent."""
         db = self._require_connected()
@@ -906,6 +971,18 @@ class SearchStore:
                 kind=MigrationKind.IN_PLACE,
                 description="Add active_embedding_model, pending_embedding_model, needs_reindex, reindex_job_id columns to _archon_collection_meta; backfill from legacy embedding_model column and drop it (C1 structural migration).",
                 introduced_at=0,
+            ),
+            MigrationSpec(
+                name="migrate_expires_at_and_scopes",
+                kind=MigrationKind.IN_PLACE,
+                description="Add expires_at (utf8|null) and scopes (list<utf8>|null) columns to per-collection chunk tables (E2a TTL and Scoping migration).",
+                introduced_at=1,
+            ),
+            MigrationSpec(
+                name="migrate_default_ttl_seconds",
+                kind=MigrationKind.IN_PLACE,
+                description="Add default_ttl_seconds (int64|null) column to _archon_collection_meta (E2a TTL and Scoping migration).",
+                introduced_at=1,
             ),
         ]
 
@@ -1530,6 +1607,15 @@ class SearchStore:
 
     async def _do_ingest(self, db, collection: str, chunks: list[ChunkRecord]) -> int:
         table = await db.open_table(collection)
+        _schema_names = (await table.schema()).names
+        has_ttl_cols = "expires_at" in _schema_names and "scopes" in _schema_names
+        if not has_ttl_cols and any(c.expires_at is not None or c.scopes is not None for c in chunks):
+            logger.warning(
+                "_do_ingest: collection %r has not been migrated to E2a schema (missing expires_at/scopes columns); "
+                "TTL and scope data will be silently dropped. Run POST /collections/%s/migrate to apply E2a migrations.",
+                collection,
+                collection,
+            )
         rows = [
             {
                 "doc_id": c.doc_id,
@@ -1545,6 +1631,7 @@ class SearchStore:
                 "ingested_by": c.ingested_by,
                 "updated_at": c.updated_at or c.indexed_at,
                 "acl": c.acl,
+                **({"expires_at": normalize_iso_utc(c.expires_at) if c.expires_at is not None else None, "scopes": c.scopes} if has_ttl_cols else {}),
             }
             for c in chunks
         ]
@@ -2057,9 +2144,21 @@ class SearchStore:
         except ValueError:
             return [], None, 0
 
+        # Include "scopes" only if the column exists (pre-E2a stores may not have it)
+        try:
+            tbl_schema = await table.schema()
+            select_cols = ["doc_id", "source_path", "indexed_at"]
+            has_scopes_col = "scopes" in tbl_schema.names
+            if has_scopes_col:
+                select_cols.append("scopes")
+        except (ValueError, RuntimeError) as exc:
+            logger.warning("list_documents: could not read schema for %r, scopes disabled — %s", collection, exc)
+            select_cols = ["doc_id", "source_path", "indexed_at"]
+            has_scopes_col = False
+
         rows = (
             await table.query()
-            .select(["doc_id", "source_path", "indexed_at"])
+            .select(select_cols)
             .limit(limit * 50)
             .to_list()
         )
@@ -2073,8 +2172,13 @@ class SearchStore:
                     "source_path": r["source_path"],
                     "indexed_at": r["indexed_at"],
                     "chunk_count": 0,
+                    "scopes_set": set(),
                 }
             docs[doc_id]["chunk_count"] += 1
+            if has_scopes_col:
+                chunk_scopes = r.get("scopes") or []
+                if chunk_scopes:
+                    docs[doc_id]["scopes_set"].update(chunk_scopes)
 
         # Sort by doc_id ascending for stable, cursor-compatible ordering
         sorted_docs = sorted(docs.items(), key=lambda kv: kv[0])
@@ -2098,14 +2202,121 @@ class SearchStore:
                 source_path=info["source_path"],
                 chunk_count=info["chunk_count"],
                 indexed_at=info["indexed_at"],
+                scopes=sorted(info["scopes_set"]),
             )
             for doc_id, info in page_docs
         ]
+
+        # NOTE: DocumentInfo.scopes is computed here but not yet surfaced in the API response.
+        # BE-11 will add scopes to DocumentInfoItem in schemas.py and routes_collections.py.
 
         # Accurate total using count_documents (reads full collection)
         total = await self.count_documents(collection)
 
         return items, next_cursor, total
+
+    # ------------------------------------------------------------------
+    # TTL expiry query
+    # ------------------------------------------------------------------
+
+    async def query_expiring_chunks(
+        self,
+        collection: str,
+        namespace: str,
+        within_seconds: int,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict], str | None]:
+        """Return chunks expiring within *within_seconds* seconds from now.
+
+        Excludes already-expired chunks (``expires_at < now``) and chunks with
+        ``expires_at = null`` (no expiry).
+
+        Returns ``(items, next_cursor)`` where items are dicts with keys:
+        ``chunk_id``, ``doc_id``, ``source_path``, ``expires_at``.
+
+        Cursor is a composite opaque string ``"{expires_at_iso}::{chunk_id}"``.
+        Results are sorted by ``(expires_at ASC, chunk_id ASC)``.
+
+        Pre-migration guard: if the ``expires_at`` column is absent, returns ``([], None)``.
+
+        At most ``_EXPIRING_SCAN_CEILING`` rows are fetched from the store to avoid runaway
+        scans on very large collections.
+        """
+        self._validate_collection(collection)
+        if within_seconds <= 0:
+            raise ValueError(f"within_seconds must be positive, got {within_seconds!r}")
+        db = self._require_connected()
+        try:
+            table = await db.open_table(collection)
+        except ValueError:
+            return [], None
+
+        schema = await table.schema()
+        if "expires_at" not in schema.names:
+            return [], None
+
+        now = datetime.now(timezone.utc)
+        cutoff = now + timedelta(seconds=within_seconds)
+        now_iso = normalize_iso_utc(now)
+        cutoff_iso = normalize_iso_utc(cutoff)
+
+        base_pred = (
+            "expires_at IS NOT NULL AND expires_at >= " + _sql_quote_str(now_iso)
+            + " AND expires_at <= " + _sql_quote_str(cutoff_iso)
+        )
+
+        if cursor is not None:
+            # cursor format: "{expires_at_iso}::{chunk_id}"
+            sep_idx = cursor.find("::")
+            if sep_idx == -1:
+                predicate = base_pred
+            else:
+                cursor_expires_at = cursor[:sep_idx]
+                cursor_chunk_id = cursor[sep_idx + 2:]
+                predicate = (
+                    "(" + base_pred + ") AND ("
+                    + "expires_at > " + _sql_quote_str(cursor_expires_at)
+                    + " OR (expires_at = " + _sql_quote_str(cursor_expires_at)
+                    + " AND chunk_id > " + _sql_quote_str(cursor_chunk_id) + "))"
+                )
+        else:
+            predicate = base_pred
+
+        # Fetch all matching rows up to hard ceiling (no ORDER BY in LanceDB where), sort Python-side.
+        # Using limit + 1 would be wrong here because LanceDB's .limit() is a scan-level cap applied
+        # before Python-side sort — fetching only limit+1 rows in storage order and sorting them would
+        # produce wrong pagination results for large datasets.
+        raw_rows = (
+            await table.query()
+            .where(predicate)
+            .select(["chunk_id", "doc_id", "source_path", "expires_at"])
+            .limit(_EXPIRING_SCAN_CEILING)
+            .to_list()
+        )
+
+        # Sort by (expires_at ASC, chunk_id ASC) Python-side
+        raw_rows.sort(key=lambda r: (r["expires_at"] or "", r["chunk_id"]))
+
+        next_cursor: str | None
+        if len(raw_rows) > limit:
+            page_rows = raw_rows[:limit]
+            last = page_rows[-1]
+            next_cursor = (last["expires_at"] or "") + "::" + last["chunk_id"]
+        else:
+            page_rows = raw_rows
+            next_cursor = None
+
+        items = [
+            {
+                "chunk_id": r["chunk_id"],
+                "doc_id": r["doc_id"],
+                "source_path": r["source_path"],
+                "expires_at": r["expires_at"],
+            }
+            for r in page_rows
+        ]
+        return items, next_cursor
 
     # ------------------------------------------------------------------
     # Fetch adjacent chunks

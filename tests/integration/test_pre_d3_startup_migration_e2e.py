@@ -76,11 +76,10 @@ def test_pre_d3_startup_applies_in_place_migrations_e2e(
 
     db_path = str(tmp_path / "db")
 
-    # Step 1: seed a pre-D3 meta table (no schema_version column) with one row.
-    # The schema mirrors _meta_schema() minus the schema_version field — this is
-    # what a real pre-D3 LanceDB instance looks like.
+    # Step 1: seed a pre-D3 meta table (no schema_version or default_ttl_seconds columns) with one row.
+    # The schema mirrors _meta_schema() minus the fields added after D3.
     pre_d3_schema = pa.schema(
-        [f for f in SearchStore._meta_schema() if f.name != "schema_version"]
+        [f for f in SearchStore._meta_schema() if f.name not in ("schema_version", "default_ttl_seconds")]
     )
 
     col_path = tmp_path / "pre_d3_docs"
@@ -180,18 +179,18 @@ def test_pre_d3_startup_applies_in_place_migrations_e2e(
             assert body["collection"] == col_name, (
                 f"expected collection={col_name!r}, got {body['collection']!r}"
             )
-            assert body["pending"] == [], (
-                f"expected pending=[] for a pre-D3 collection after startup migration; "
-                f"got: {body['pending']}"
-            )
-            # schema_version must be 0: all pre-D3 specs have introduced_at=0 and
-            # STORE_SCHEMA_VERSION=0, so a migrated pre-D3 collection is fully up-to-date.
-            # NOTE: this assertion uses the literal 0, not STORE_SCHEMA_VERSION, to
-            # document that a pre-D3 collection is ALWAYS at version 0 after migration.
-            # If STORE_SCHEMA_VERSION is bumped to 1+ in the future, this assertion should
-            # remain 0 (the collection was not explicitly migrated to 1).
+            # schema_version must be 0: startup migration adds the column with cast(0 as bigint).
+            # The two E2a migrations (introduced_at=1) are pending because 1 > 0.
+            # Operators must run POST /collections/{name}/migrate to apply them.
             assert body["schema_version"] == 0, (
                 f"expected schema_version=0 for pre-D3 collection; got {body['schema_version']}"
+            )
+            pending_names = [s["name"] for s in body["pending"]]
+            assert "migrate_expires_at_and_scopes" in pending_names, (
+                f"expected E2a migration in pending; got: {pending_names}"
+            )
+            assert "migrate_default_ttl_seconds" in pending_names, (
+                f"expected E2a migration in pending; got: {pending_names}"
             )
 
     # Step 7: assert no WARNING+ log messages from archon_search during the
@@ -219,10 +218,10 @@ def test_pre_d3_startup_applies_in_place_migrations_e2e(
         f"unexpected WARNING+ log messages from archon_search during startup migration: "
         f"{[(r.name, r.levelname, r.message) for r in other_warnings]}"
     )
-    assert STORE_SCHEMA_VERSION == 0, (
-        "When STORE_SCHEMA_VERSION is bumped, update this test: seed the row with "
-        "schema_version=0, verify it's returned as pending by GET /migrations/pending, "
-        "then apply via POST /migrate, and re-verify pending=[]."
+    # Updated for E2a: STORE_SCHEMA_VERSION=1; pre-D3 rows get schema_version=0 via
+    # _migrate_schema_version(), and the two E2a migrations are now pending.
+    assert STORE_SCHEMA_VERSION == 1, (
+        "When STORE_SCHEMA_VERSION is bumped again, review the pending assertions above."
     )
 
 
@@ -289,6 +288,7 @@ def test_apply_in_place_migrations_bumped_schema_version_e2e(
             "mutations_since_recompute": 0,
             "needs_recompute": False,
             "schema_version": 0,
+            "default_ttl_seconds": None,
         }
         await db.create_table(
             "_archon_collection_meta",

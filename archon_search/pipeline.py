@@ -29,7 +29,7 @@ from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher
 from archon_search.enricher import MarkdownEnricher, is_docling_source, source_subtype_for
 from archon_search.parser import DocumentParser, ParseError
 from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
-from archon_search.store import SearchStore, StoreBusyError, elementwise_sum, parse_metadata, normalize_ingested_by
+from archon_search.store import STORE_SCHEMA_VERSION, SearchStore, StoreBusyError, elementwise_sum, parse_metadata, normalize_ingested_by
 from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
 from archon_search.graph_types import ChunkInput, GraphNode
 from archon_search.graph_expander import build_expanded_text, tokenize_and_generate_ngrams
@@ -2794,7 +2794,7 @@ class SearchPipeline:
                     description_embedding=None,
                     mutations_since_recompute=0,
                     needs_recompute=False,
-                    schema_version=existing_meta.schema_version if existing_meta else 0,
+                    schema_version=existing_meta.schema_version if existing_meta else STORE_SCHEMA_VERSION,
                 )
                 await self.store.update_collection_meta(meta)
             return

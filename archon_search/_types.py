@@ -82,6 +82,10 @@ class ChunkRecord:
     """filterable: file mtime (ISO 8601 UTC); falls back to indexed_at."""
     acl: list[str] | None = None
     """system: namespace tokens that must intersect a caller's tokens."""
+    expires_at: str | None = None
+    """system: ISO 8601 UTC expiry timestamp; null = never expires (E2a)."""
+    scopes: list[str] | None = None
+    """system: scope tags for per-caller filtering; null = shared/global (E2a)."""
     start_offset: int = -1
     """transient: character offset of chunk start in the post-front-matter text. Not persisted to LanceDB."""
     end_offset: int = -1
@@ -123,6 +127,8 @@ class DocumentInfo:
     source_path: str
     chunk_count: int
     indexed_at: str
+    scopes: list[str] = field(default_factory=list)
+    """system: set-union of scope tags across all chunks for this document."""
 
 
 @dataclass

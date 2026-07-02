@@ -1822,6 +1822,9 @@ async def test_malformed_centroid_sum_json_parses_to_none(connected_store: Searc
     # D3 int field must not be left as "" — LanceDB cannot cast empty string to int64
     if "schema_version" in schema.names:
         row["schema_version"] = 0
+    # E2a int field must not be left as "" — LanceDB cannot cast empty string to int64
+    if "default_ttl_seconds" in schema.names:
+        row["default_ttl_seconds"] = None
     await table.add([row])
     retrieved = await connected_store.get_collection_meta("b5-malformed-sum")
     assert retrieved is not None
@@ -6848,11 +6851,11 @@ def test_row_to_meta_defaults_schema_version_to_zero() -> None:
     assert meta.schema_version == 0
 
 
-def test_store_schema_version_constant_is_zero() -> None:
-    """STORE_SCHEMA_VERSION starts at 0 for D3 (infrastructure-only release)."""
+def test_store_schema_version_constant_is_one() -> None:
+    """STORE_SCHEMA_VERSION is 1 after E2a TTL and Scoping migration."""
     from archon_search.store import STORE_SCHEMA_VERSION
 
-    assert STORE_SCHEMA_VERSION == 0
+    assert STORE_SCHEMA_VERSION == 1
 
 
 @pytest.mark.integration
@@ -6992,45 +6995,37 @@ async def test_pending_migrations_returns_specs_when_behind() -> None:
     from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
     from archon_search.types import MigrationKind
 
-    assert STORE_SCHEMA_VERSION == 0, (
-        "Update schema_version=-1 to 0 when the first introduced_at=1 migration is added"
+    assert STORE_SCHEMA_VERSION == 1, (
+        "Update this test when STORE_SCHEMA_VERSION changes again"
     )
 
     store = SearchStore.__new__(SearchStore)
 
     mock_meta = MagicMock()
-    # NOTE: schema_version=-1 is an impossible production value (minimum is 0).
-    # We use -1 here because all five existing migrations have introduced_at=0,
-    # so no realistic value of schema_version triggers them as pending right now
-    # (0 > 0 is False). This test proves the filter logic is directionally correct.
-    # When the first introduced_at=1 migration is added, update this test to use
-    # schema_version=0 instead.
-    mock_meta.schema_version = -1  # deliberately behind
+    # schema_version=0 is behind STORE_SCHEMA_VERSION=1; the two E2a migrations
+    # at introduced_at=1 are pending (1 > 0 is True).
+    mock_meta.schema_version = 0  # one version behind
 
     store.get_collection_meta = AsyncMock(return_value=mock_meta)  # type: ignore[method-assign]
 
     result = await store.pending_migrations("col1", "default")
-    # All five existing in_place migrations have introduced_at=0, which is > -1
-    assert len(result) == 5
+    # Two E2a in_place migrations have introduced_at=1, which is > 0
+    assert len(result) == 2
     assert all(s.kind == MigrationKind.IN_PLACE for s in result)
-    assert all(s.introduced_at == 0 for s in result)
+    assert all(s.introduced_at == 1 for s in result)
     names = {s.name for s in result}
-    assert "migrate_namespace" in names
-    assert "migrate_description_embedding" in names
-    assert "migrate_centroid_sum" in names
-    assert "migrate_per_collection_model" in names
-    assert "migrate_acl" in names
+    assert "migrate_expires_at_and_scopes" in names
+    assert "migrate_default_ttl_seconds" in names
 
 
 @pytest.mark.asyncio
 async def test_pending_migrations_defaults_missing_schema_version_to_zero() -> None:
-    """pending_migrations returns [] when get_collection_meta returns schema_version=0.
+    """pending_migrations returns the two E2a migrations when schema_version=0 (pre-E2a collection).
 
     schema_version=0 is the value _row_to_meta() produces for a pre-D3 row that has
     no schema_version column (tested directly in test_row_to_meta_defaults_schema_version_to_zero).
-    This test verifies that the defaulting path flows correctly through pending_migrations:
-    since all five existing migrations have introduced_at=0 and 0 > 0 is False, the
-    result is an empty list.
+    With STORE_SCHEMA_VERSION=1, a collection at schema_version=0 has two pending E2a migrations
+    (migrate_expires_at_and_scopes and migrate_default_ttl_seconds, both at introduced_at=1).
     """
     from unittest.mock import AsyncMock, MagicMock
 
@@ -7040,14 +7035,18 @@ async def test_pending_migrations_defaults_missing_schema_version_to_zero() -> N
 
     mock_meta = MagicMock()
     # schema_version=0 is what _row_to_meta() produces for a pre-D3 row that has
-    # no schema_version column — the same as STORE_SCHEMA_VERSION (0).
+    # no schema_version column. With STORE_SCHEMA_VERSION=1, this means 2 E2a migrations
+    # are pending (introduced_at=1 > schema_version=0).
     mock_meta.schema_version = 0
 
     store.get_collection_meta = AsyncMock(return_value=mock_meta)  # type: ignore[method-assign]
 
     result = await store.pending_migrations("pre-d3-col", "default")
-    # All five existing migrations have introduced_at=0; 0 > 0 is False → empty list.
-    assert result == []
+    # Two E2a migrations have introduced_at=1 > schema_version=0 → both are pending.
+    assert len(result) == 2
+    names = {s.name for s in result}
+    assert "migrate_expires_at_and_scopes" in names
+    assert "migrate_default_ttl_seconds" in names
 
 
 @pytest.mark.asyncio
@@ -7067,20 +7066,20 @@ async def test_pending_migrations_unknown_collection_returns_empty() -> None:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_pending_migrations_real_store_empty(tmp_path: Path) -> None:
-    """pending_migrations() returns [] for a freshly created collection.
+    """pending_migrations() returns [] for a collection at STORE_SCHEMA_VERSION.
 
-    All five existing migrations have introduced_at=0 and STORE_SCHEMA_VERSION=0,
-    so introduced_at > schema_version is always False → empty list.
+    A freshly created collection at schema_version=STORE_SCHEMA_VERSION=1 has no
+    pending migrations (all specs have introduced_at <= 1).
     """
     from archon_search.collection_meta import CollectionMeta
     from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
 
-    assert STORE_SCHEMA_VERSION == 0, "This test assumes D3 starting value"
+    assert STORE_SCHEMA_VERSION == 1, "This test assumes E2a starting value"
 
     store = SearchStore(tmp_path / "db_pending")
     await store.connect()
     try:
-        meta = CollectionMeta(name="fresh-col", schema_version=0)
+        meta = CollectionMeta(name="fresh-col", schema_version=STORE_SCHEMA_VERSION)
         await store.update_collection_meta(meta)
 
         result = await store.pending_migrations("fresh-col", "default")
@@ -7298,15 +7297,15 @@ async def test_run_startup_migrations_applies_in_place_on_startup(tmp_path: Path
     from archon_search.collection_meta import CollectionMeta
     from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
 
-    assert STORE_SCHEMA_VERSION == 0, "This test assumes D3 starting value"
+    assert STORE_SCHEMA_VERSION == 1, "Update this assertion when STORE_SCHEMA_VERSION changes"
 
     store = SearchStore(tmp_path / "db_be6_startup")
     await store.connect()
     try:
         db = store._require_connected()
-        # Seed a pre-D3 meta table without schema_version
+        # Seed a pre-D3 meta table without schema_version or default_ttl_seconds
         old_schema = pa.schema(
-            [f for f in SearchStore._meta_schema() if f.name != "schema_version"]
+            [f for f in SearchStore._meta_schema() if f.name not in ("schema_version", "default_ttl_seconds")]
         )
         await db.create_table("_archon_collection_meta", schema=old_schema)
 
@@ -7804,7 +7803,7 @@ async def test_apply_rewrite_real_store_with_dummy_transform(tmp_path) -> None:
     from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
     from archon_search.types import MigrationKind, MigrationSpec
 
-    assert STORE_SCHEMA_VERSION == 0, "Test assumes D3 starting value; update when version bumps."
+    assert STORE_SCHEMA_VERSION == 1, "Test assumes E2a version; update when version bumps."
 
     store = SearchStore(tmp_path / "db_be9_rewrite")
     await store.connect()

@@ -172,6 +172,16 @@
 - Action: When adding a pinned spaCy model wheel URL to optional extras, always match the spaCy version range to the model's minor version. Use `spacy>=X.Y,<X.(Y+1)` and `en_core_web_sm-X.Y.Z` with matching major.minor.
 - Confidence: high
 
+**[2026-07-02] — E2a BE-1: STORE_SCHEMA_VERSION bump propagates to 3 call sites beyond store.py**
+- Observation: Bumping STORE_SCHEMA_VERSION from 0 to 1 caused 11 test failures. Beyond the test guard assertions (`assert STORE_SCHEMA_VERSION == 0`), two production call sites set `schema_version=0` as a hardcoded default: (1) `pipeline.py` uses `existing_meta.schema_version if existing_meta else 0`; (2) `routes_collections.py` creates stub meta with `CollectionMeta(...)` whose default `schema_version=0`. Both needed fixing: pipeline.py imports `STORE_SCHEMA_VERSION` and uses it as the else-branch; `add_collection` route passes `schema_version=STORE_SCHEMA_VERSION` to the stub. Additionally, integration test seed rows that build schemas from `_meta_schema()` must explicitly exclude any new non-null integer columns added (like `default_ttl_seconds`).
+- Action: Before bumping STORE_SCHEMA_VERSION, grep for `schema_version=0` hardcoded defaults and `else 0` in schema_version assignment branches in production code. Every hardcoded `0` is a regression waiting to happen. Also, any seed row in integration tests that uses `_meta_schema()` must be audited to include all new nullable/int columns.
+- Confidence: high
+
+**[2026-07-02] — E2a BE-1: LanceDB `add_columns` accepts a PyArrow Field directly for nullable columns**
+- Observation: The `migrate_acl` method calls `table.add_columns(acl_field)` where `acl_field = pa.field("acl", pa.list_(pa.utf8()), nullable=True)`. This is the correct pattern for adding nullable columns — passing a `pa.Field` object directly. For non-nullable columns with defaults, the dict form `{"col": "cast(0 as bigint)"}` is used. The two forms serve different purposes and must not be mixed.
+- Action: For nullable new columns (null default), use `table.add_columns(pa.field(..., nullable=True))`. For non-nullable columns with SQL-expression defaults, use `table.add_columns({"col": "cast(0 as bigint)"})`. Never use the dict form for nullable columns.
+- Confidence: high
+
 **[2026-06-29] — E1a FE-2: graph_mode enabled flag check needs spaCy stub to construct app in tests**
 - Observation: `create_app()` raises `ConfigError` when `config.graph.enabled=True` but spaCy is not installed (the `archon-search[graph]` extras are absent in CI and local dev by default). Any test that constructs an app with `graph_enabled=True` must inject a stub `types.ModuleType("spacy")` into `sys.modules["spacy"]` around the `create_app()` call, then restore the original (or remove it) in a `finally` block.
 - Action: Pattern for graph-enabled app in tests: inject spacy stub before `create_app`, restore in `finally`. The stub only needs to exist in `sys.modules` — no attributes needed for the startup check.
@@ -226,6 +236,35 @@
 **[2026-06-29] — E1a T-3: assertion ordering — presence check before value check**
 - Observation: In `test_e2e_graph_mode_noop_empty_graph`, the initial version asserted `data.get("graph_expansion_applied") is False` before asserting `"graph_expansion_applied" in data`. If the field is absent, `.get()` returns `None`, `None is False` is `False`, and the first assertion fails with a confusing type mismatch message. The presence check is then unreachable dead code.
 - Action: In any test checking both presence and value of a response field, always assert presence first (`assert "field" in data`), then use direct indexing (`data["field"]`) for the value check. The ordering matters for diagnostic clarity.
+
+**[2026-07-02] — E2a iterative-review (plan doc, 12 cycles): phantom function/class names recur across every cycle**
+- Observation: Across 12 review cycles, phantom references recurred constantly: `format_utc_timestamp` (doesn't exist; real fn is `normalize_iso_utc` in `_types.py`), `CollectionUpdateRequest` (real name is `PatchCollectionBody` in `schemas.py`), `_run_migrations()` (real method is `_run_startup_migrations()` or `apply_in_place_migrations()`), `_build_status_response` (doesn't exist; logic is inline in `async def status()` at routes_status.py line 45). All required DA reviewers to grep the codebase to resolve.
+- Action: When writing any plan that references existing functions, classes, or route handlers by name, grep the codebase first to verify the exact name. Never write a plan referencing a symbol you haven't verified.
+- Confidence: high
+
+**[2026-07-02] — E2a iterative-review: PatchCollectionBody.embedding_model being required blocks partial PATCH**
+- Observation: `PatchCollectionBody` in schemas.py had `embedding_model: str` as a required field. The E2a plan needed to add `default_ttl_seconds` as an optional PATCH field, but any PATCH without `embedding_model` would return 422. Fix requires: (1) make `embedding_model: str | None = None`, (2) update the `validate_embedding_model_not_empty` validator to guard `if v is not None and not v`, (3) restructure the handler to `payload = body.model_dump(exclude_unset=True)` and gate ALL embedding model logic behind `'embedding_model' in payload`. This is a breaking API change requiring a BREAKING.md entry.
+- Action: When adding a new optional field to an existing PATCH body that has required fields, always check whether existing required fields block partial-body requests. If so, document the breaking change (optional-ification) as a prerequisite task, not an afterthought.
+- Confidence: high
+
+**[2026-07-02] — E2a iterative-review: apply_in_place_migrations calls zero-arg global methods**
+- Observation: `apply_in_place_migrations` dispatches via `getattr(self, spec.name); await method()` — zero arguments. New migration methods must be global (iterate ALL collections internally, guard per-table with schema inspection). This means `POST /collections/foo/migrate` silently migrates all collections, not just `foo`. The schema_version in meta is bumped only for the requested collection. This is the same behavior as v0 migrations and must be documented in the operator runbook.
+- Action: When designing LanceDB schema migrations, always specify whether the migration method is global (zero-arg, iterates all) or per-collection (takes collection+ns args). Check the existing `apply_in_place_migrations` dispatch to avoid over-specifying a per-collection pattern that doesn't fit the framework.
+- Confidence: high
+
+**[2026-07-02] — E2a iterative-review: defensive assertions are dead code without caller forwarding**
+- Observation: Adding `scope_filter: str | None = None` + `assert scope_filter is None` to graph-mode methods is useless without the callers forwarding `scope_filter=scope_filter`. Since the default is `None`, omitting the forward means the assertion always passes — it can never fire even if the 422 guard is removed later. This required an additional fix to enumerate all call sites that must forward the parameter.
+- Action: Whenever adding a defensive `assert param is None` to a method, also enumerate every caller that must forward the parameter explicitly. Without forwarding, the assertion is dead code and provides zero safety net.
+- Confidence: high
+
+**[2026-07-02] — E2a iterative-review: LanceDB _do_ingest extra-key behavior needs schema guard**
+- Observation: Adding `'expires_at': c.expires_at` and `'scopes': c.scopes` to the `_do_ingest` row dict unconditionally risks LanceDB auto-adding those columns on un-migrated tables (schema evolution on write), bypassing the migration framework and leaving `schema_version` inconsistent. The safe pattern: `has_ttl_cols = 'expires_at' in [f.name for f in table.schema]`; include the new keys only when `has_ttl_cols` is True.
+- Action: When adding new schema columns via migration, always add a corresponding schema guard in the ingest row dict builder. Never include extra keys unconditionally — check the table schema first to avoid unintentional schema evolution on un-migrated tables.
+- Confidence: high
+
+**[2026-07-02] — E2a K1 iterative-review: TypeSpec contracts can compile clean and still contradict the plan**
+- Observation: All 5 E2a TypeSpec contracts compiled without errors, yet reviewers found Critical issues: `expired_chunk_count: int32 | null` contradicted the plan's "always non-null (0 or more)" spec, and a doc comment described a per-chunk TTL override that is explicitly deferred to v2. TypeSpec compilation only validates syntax — it does not catch semantic disagreements with the authoritative plan.
+- Action: After authoring TypeSpec contracts, always cross-check nullable vs non-nullable fields against the plan's acceptance criteria. Pay special attention to count/status fields — "always an integer" in the plan means non-nullable in the TypeSpec. Run this check before calling K1 complete.
 - Confidence: high
 
 **[2026-06-29] — E1a T-3: MCP test xdist_group("mcp") must be on ALL files with MCP tests — even when mixed with non-MCP tests**
@@ -263,6 +302,21 @@
 
 **Defensive `or 0` on optional fields needs two tests: absent key AND null value**
 - Action: `get(key, default) or fallback` has two branches. Add one test for absent key and one for null value — they are distinct code paths.
+
+**[2026-07-02] — E1c T-6: single-entity corpus triggers CommunityBuilder early-exit without leidenalg**
+- Observation: `leidenalg` (the optional Leiden community detection library) is absent from the dev environment. CommunityBuilder.build() takes an early-exit at `len(nodes) < 2` that returns a single community without running Leiden. Designing the corpus with exactly one unique entity ("PaymentService") across all docs guarantees this path — tests exercise the full ingest → extraction → community write → explain → provenance chain without the optional dependency.
+- Action: For e2e community tests in environments where leidenalg is not installed, design the corpus so all docs share exactly one unique entity. This triggers the `len(nodes) < 2` early-exit in CommunityBuilder.build() and yields a valid community that the explain endpoint can traverse.
+- Confidence: high
+
+**[2026-07-02] — E1c T-6: asyncio.run() is safe from the main test thread inside `with TestClient(app):`**
+- Observation: Starlette's TestClient runs the ASGI app in a background thread with its own event loop. The main test thread has no running event loop. Therefore `asyncio.run(coroutine)` is safe from the main thread even while the TestClient context is open. This allows opening fresh GraphStore + SearchStore connections to the same db_path to run CommunityBuilder.build() synchronously between ingest and the HTTP explain call.
+- Action: Use `asyncio.run(_build_communities_async(cfg.db_path, col, cfg))` from the main test thread to seed community data between ingest and explain assertions. Open fresh store connections pointing to the same tmp_path db; GraphStore opens tables per-call so communities written by the fresh connections are immediately visible to the app's pipeline.
+- Confidence: high
+
+**[2026-07-02] — E1c T-6: chunk_id is always set in community-mode TraversalStep**
+- Observation: In `pipeline.py` (line ~1945), community-mode TraversalStep construction always includes `chunk_id=candidate.chunk_id`. This is not optional. Tests must assert `step.get("chunk_id")` as truthy — if it's absent, it signals a regression in community candidate selection.
+- Action: Any community-mode provenance test must assert `chunk_id` (truthy), not just `community_id`. Missing chunk_id is a real regression, not a quirk.
+- Confidence: high
 
 **Place assertions inside `with patch(...)` when using synchronous TestClient**
 - Action: Always put HTTP call AND assertions inside the `with patch(...)` block. Outside is fragile to async refactors.
