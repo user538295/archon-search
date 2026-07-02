@@ -65,17 +65,17 @@ architecture: clean
 
 ## Acceptance criteria
 
-- [ ] `POST /explain` with `graph_mode=null` (or omitted) returns the exact same response as today — zero behaviour change for non-graph callers
-- [ ] `POST /explain` with `graph_mode="naive"` returns `graph_mode_applied="naive"` and `graph_provenance` populated on each graph-retrieved result
-- [ ] `POST /explain` with `graph_mode="local"` or `"global"` returns community traversal steps with `community_id` set
-- [ ] Standard hybrid-search results in the same response carry `graph_provenance: null`
-- [ ] `graph_mode` requested but graph not enabled → 422 with plain string detail: `"graph_mode requires [graph] enabled=true in server config"` (no `code` field) — route-layer guard (inline check in `routes_explain.py`)
-- [ ] `graph_mode=local/global` but communities not built → 422 with `code: "graph_communities_not_built"` — pipeline exception (`GraphCommunitiesNotBuiltError`) caught at the route layer
-- [ ] `graph_mode` with multi-collection (`collections=[]`) returns 422 — single-collection only for E1c
-- [ ] `TraversalStep` with all-null optional fields → Pydantic validation error
-- [ ] Near misses carry no `graph_provenance` field (omission by design)
-- [ ] MCP `explain` tool accepts `graph_mode` and surfaces `graph_provenance` in its result dict
-- [ ] OpenAPI snapshot updated; `tests/server/test_openapi_snapshot.py` passes
+- [x] `POST /explain` with `graph_mode=null` (or omitted) returns the exact same response as today — zero behaviour change for non-graph callers
+- [x] `POST /explain` with `graph_mode="naive"` returns `graph_mode_applied="naive"` and `graph_provenance` populated on each graph-retrieved result
+- [x] `POST /explain` with `graph_mode="local"` or `"global"` returns community traversal steps with `community_id` set
+- [x] Standard hybrid-search results in the same response carry `graph_provenance: null`
+- [x] `graph_mode` requested but graph not enabled → 422 with plain string detail: `"graph_mode requires [graph] enabled=true in server config"` (no `code` field) — route-layer guard (inline check in `routes_explain.py`)
+- [x] `graph_mode=local/global` but communities not built → 422 with `code: "graph_communities_not_built"` — pipeline exception (`GraphCommunitiesNotBuiltError`) caught at the route layer
+- [x] `graph_mode` with multi-collection (`collections=[]`) returns 422 — single-collection only for E1c
+- [x] `TraversalStep` with all-null optional fields → Pydantic validation error
+- [x] Near misses carry no `graph_provenance` field (omission by design)
+- [x] MCP `explain` tool accepts `graph_mode` and surfaces `graph_provenance` in its result dict
+- [x] OpenAPI snapshot updated; `tests/server/test_openapi_snapshot.py` passes
 
 ---
 
@@ -209,12 +209,12 @@ N/A — no frontend work for this feature. This project has no browser UI. The C
 - Frameworks & Drivers: BE-9 (OpenAPI snapshot)
 
 **Done when**
-- [ ] `POST /explain` with `graph_mode=null` behaves identically to today — S1, S13
-- [ ] `graph_provenance` and `graph_mode_applied` fields present and null on all non-graph results — S1
-- [ ] Error guards return correct 422 codes — S5, S6
-- [ ] MCP `explain` accepts `graph_mode` and surfaces provenance — S12
-- [ ] Naive and community traversal provenance flows through to response — S2, S3, S4, S7, S8 (after E1a/E1b)
-- [ ] OpenAPI snapshot up to date
+- [x] `POST /explain` with `graph_mode=null` behaves identically to today — S1, S13
+- [x] `graph_provenance` and `graph_mode_applied` fields present and null on all non-graph results — S1
+- [x] Error guards return correct 422 codes — S5, S6
+- [x] MCP `explain` accepts `graph_mode` and surfaces provenance — S12
+- [x] Naive and community traversal provenance flows through to response — S2, S3, S4, S7, S8 (after E1a/E1b)
+- [x] OpenAPI snapshot up to date
 
 ---
 
@@ -492,7 +492,7 @@ flowchart LR
 
 ### Phase 5 · Close-out
 
-- [ ] **T-5** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-5** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs BE-1, BE-2, BE-3, BE-4, BE-5, BE-6, BE-7, BE-8, BE-9, T-1, T-2, T-3, T-4
     - Tests

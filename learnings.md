@@ -896,3 +896,38 @@
 - Observation: First integration test used `graph_mode=None`, which bypasses the new `if graph_mode is not None` block entirely. The test passed but provided zero coverage of the new branch. Review (C1-B-2) caught the gap — the integration test was a coverage illusion.
 - Action: When the task adds a new code branch gated on a parameter, the integration test MUST pass a non-null value for that parameter. Tests with the default/null value are still useful for regression, but they do not prove the new branch works.
 - Confidence: high
+
+**[2026-07-02] — E1c T-3: mixed-results e2e requires corpus >> candidate_depth to force null-provenance candidates**
+- Observation: S7 (mixed provenance) requires doc1 chunks to exceed candidate_depth so the expanded search cannot retrieve ALL of them, leaving some doc1 chunks only reachable by the standard hybrid path (null provenance). Initial corpus (~7 chunks) was far below candidate_depth=45 — all chunks got provenance and the null-provenance assertion always failed. Fix: 30 reps × chunk_size=16 → ~60 chunks >> candidate_depth=20 (pinned via top_k_retrieve=3 in TOML).
+- Action: For any mixed-provenance test, set chunk_size small (16 GPT-2 tokens) and repetitions high (≥3× safety margin over candidate_depth). Pin top_k_retrieve in the TOML to make candidate_depth = max(top_k_retrieve × 3, 20) deterministic. Pin top_k in the request to the theoretical max (2 searches × 40-candidate union = 80) so near_misses stays empty and provenance checks stay in results[].
+- Confidence: high
+
+**[2026-07-02] — E1c T-3: ExplainNearMiss has no graph_provenance field — never check near_misses for provenance**
+- Observation: `ExplainNearMiss` schema has `extra="forbid"` and does NOT include `graph_provenance`. Any `nm.get("graph_provenance")` on a near_miss always returns None vacuously, making "null provenance in near_misses" a meaningless assertion that can never fail. Review (C1-I-1) caught this as a tautological check.
+- Action: In /explain e2e tests, ALWAYS check provenance only on `results[]` (which uses `ExplainResult` with `graph_provenance` field). Add `assert not near_misses` when the test requires all candidates to land in results[] — never mix results and near_misses into a single provenance pool.
+- Confidence: high
+
+**[2026-07-02] — E1c T-3: merge-path test (S7) needs TraversalStep structure validation — S2/S12 alone are insufficient**
+- Observation: S2 and S12 exercise the all-graph path (all chunks fit in expanded search). S7 is the only test that exercises the merge path. If the merge path corrupts provenance structure (e.g., `graph_provenance` set to non-null garbage dict), S2/S12 would not catch it since they test a different code path. Review (C2-I-22) identified this as Major.
+- Action: Any test that exercises a new code path through the pipeline MUST validate the full output structure on that path, not just the happy-path outcome. Even if S2 already validates TraversalStep in a simpler scenario, S7's merge path must validate the same structure independently.
+- Confidence: high
+
+**[2026-07-02] — E1c BE-8: unit tests that stub the method under test provide zero internal coverage**
+- Observation: All three initial "unit" tests for BE-8 stubbed `_explain_community_candidates` with `AsyncMock`, so they only validated the call-path wiring in `explain()` but left all 7 branch paths inside the helper itself uncovered. Review caught this as Critical-coverage-gap.
+- Action: When adding a new helper method, always write at least one set of tests that exercise the REAL method (not a stub). Stub-based tests are valid for the caller's orchestration logic, but cannot substitute for direct tests of the method being implemented. Add both.
+- Confidence: high
+
+**[2026-07-02] — E1c BE-8: global-mode chunk cap: inner-loop break + hard slice are both needed**
+- Observation: The global community-retrieval loop breaks when `len(chunk_ids) >= max_cands` but the break fires AFTER the inner loop completes for one community, potentially adding up to one full community's worth of chunks beyond the limit. Review caught this as Major (C2-I-1). The fix: add `chunk_ids = chunk_ids[:max_cands]` after the loop (hard slice) in addition to the early-exit break.
+- Action: For any loop that collects items and breaks when a threshold is reached, always apply a hard post-loop slice as the correctness guarantee. The break is only an optimization. This pattern mirrors the sibling `_search_graph_mode` global path (line 963: `chunk_ids[:max_cands]`).
+- Confidence: high
+
+**[2026-07-02] — E1c T-5 close-out: all 11 acceptance criteria verified by reading source code directly**
+- Observation: All 11 E1c acceptance criteria were verifiable by reading `routes_explain.py`, `pipeline.py`, `_diagnostics.py`, `mcp.py`, and `tests/server/openapi_snapshot.json`. The test suite (6171 tests) passed with 93% coverage. Criterion 8 (TraversalStep with all-null optional fields → Pydantic validation error) is correctly enforced at the `TraversalStepResponse` Pydantic layer, not the `TraversalStep` dataclass layer — this is by design (docstring at `_diagnostics.py:21-22` explicitly notes this).
+- Action: At close-out, verify each criterion by reading the actual source at the cited file path/line rather than relying on the plan description. The agent doing acceptance verification should search for the exact guard or field in the implementation file, not infer from test names.
+- Confidence: high
+
+**[2026-07-02] — E1c T-5 close-out: UserManual graph_mode error table had two stale E1c placeholder entries**
+- Observation: The UserManual `05_searching.md` error table had `graph_mode on POST /explain → 422 (extra field rejected)` (pre-E1c state) and `MCP search_with_context + graph_mode → Error dict (deferred to E1c)`. Both needed updating: the first because E1c now accepts graph_mode on /explain; the second because "deferred to E1c" is no longer accurate now that E1c has shipped.
+- Action: At close-out, grep the UserManual for the feature tag (e.g., `grep "E1c\|deferred"`) and also explicitly check error tables for entries that describe the state BEFORE the feature was built. Update both the placeholder text and the now-shipped feature entries.
+- Confidence: high

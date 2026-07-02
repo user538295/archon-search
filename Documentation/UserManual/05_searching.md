@@ -105,7 +105,7 @@ A typical workflow is: call `/route`, then call `/search` once per name in `pinn
 | --- | --- | --- |
 | `search` | `query`, `collection?`, `graph_mode: str\|null = null` (**E1a**) | `{"results":[…], "acl_filtered":bool, "excluded_collections":[…], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null, "graph_expansion_applied":bool}` (**E0b**: gains `expansion_used`, `expansion_warning`; **E1a**: gains `graph_expansion_applied`) |
 | `search_with_context` | `query`, `collection?`, `context_window=1`, `graph_mode: str\|null = null` (**E1a** — returns `{"error":…,"code":"graph_mode_not_supported"}` when non-null) | `{"results":[{result, context_before, context_after}, …], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null}` (**E0b**: gains `expansion_used` and `expansion_warning`) |
-| `explain` | `query`, `collection?`, `top_k=5`, `rerank=true` | Per-stage retrieval/reranking trace plus routing decision (mirrors `POST /explain`) |
+| `explain` | `query`, `collection?`, `top_k=5`, `rerank=true`, `graph_mode: str\|null = null` (**E1c**) | Per-stage retrieval/reranking trace plus routing decision (mirrors `POST /explain`). **E1c**: result dict gains `graph_mode_applied` and per-result `graph_provenance: {steps:[…]}|null` |
 | `ingest_file` | `path`, `collection?` | Per-file ingest result dict (gains `warnings: list[str]` in **E0b** for ACL sidecar issues) |
 | `ingest_directory` | `path`, `glob_pattern="**/*"`, `collection?` | List of ingest results; reports MCP progress |
 | `list_collections` | — | List of collection summaries (centroid omitted) |
@@ -448,8 +448,8 @@ When the query contains tokens that match entity names in the graph, the expande
 | `archon-search[graph]` not installed and `[graph] enabled = true` | `ConfigError` at server startup (server does not start) |
 | Edge count ≥ `backend_threshold_edges` (default 10 000) on ingest | WARNING logged + hint in `IngestResult.warnings`; ingest completes normally |
 | Query contains no tokens matching graph entities | 200 with `graph_expansion_applied: false`; normal search result returned |
-| `graph_mode` on `POST /explain` | 422 (extra field rejected by Pydantic `extra="forbid"`) |
-| MCP `search_with_context` + `graph_mode` | Error dict `code="graph_mode_not_supported"` (deferred to E1c) |
+| `graph_mode` on `POST /explain` | Supported (E1c); returns `graph_mode_applied` and per-result `graph_provenance`. See the E1c section below. |
+| MCP `search_with_context` + `graph_mode` | Error dict `code="graph_mode_not_supported"` (permanent; use the `search` tool instead) |
 
 ### Known limitations
 
@@ -491,6 +491,33 @@ Returns `422 {"detail": {"code": "graph_communities_not_built"}}` if communities
 **Prerequisite:** Communities must be built via `archon-search graph build-communities <collection>`.
 
 **MCP**: the `search` tool accepts `graph_mode: "local"` and `graph_mode: "global"` with the same semantics as REST `POST /search`.
+
+## Graph-path provenance in `/explain` (E1c)
+
+E1c extends `POST /explain` and the MCP `explain` tool with the same `graph_mode` values (`"naive"`, `"local"`, `"global"`). The explain response gains two new fields:
+
+- `graph_mode_applied: "naive" | "local" | "global" | null` — the mode the pipeline attempted (set even when no graph candidates were found; `null` when `graph_mode` was not supplied in the request).
+- `results[].graph_provenance: {steps: [...]} | null` — non-null only for candidates retrieved via graph traversal; standard hybrid-search results carry `null`. Near-misses structurally omit `graph_provenance`.
+
+Each `TraversalStep` in `graph_provenance.steps` has: `entity` (str), `entity_id` (str), `relationship` (str | null), `community_id` (str | null), `chunk_id` (str | null). At least one of `relationship`, `community_id`, or `chunk_id` is guaranteed non-null.
+
+```bash
+# Explain with graph provenance (naive mode)
+curl -X POST http://localhost:8765/explain \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"docs","query":"AuthService","graph_mode":"naive"}'
+```
+
+### Error cases specific to graph_mode on /explain
+
+| Condition | Status | Body |
+|---|---|---|
+| `graph_mode` non-null and `[graph] enabled = false` | 422 | `{"detail": "graph_mode requires [graph] enabled=true in server config"}` |
+| `graph_mode` non-null and `collections` (multi-collection) supplied | 422 | `{"detail": "graph_mode is not supported with multi-collection fanout; use a single collection"}` |
+| `graph_mode="local"` or `"global"` and communities not built | 422 | `{"detail": {"code": "graph_communities_not_built", "message": "..."}}` |
+
+**MCP**: the `explain` tool accepts `graph_mode: str | null = null` with the same semantics. The result dict includes `graph_mode_applied` and per-result `graph_provenance`.
 
 ## Related documents
 

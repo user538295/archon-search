@@ -1,6 +1,20 @@
 # Changelog
 
 
+## [next] — E1c Graph-Path Provenance in /explain
+
+**Graph-path provenance on `POST /explain`**
+- `ExplainRequest` gains `graph_mode: "naive" | "local" | "global" | null` (default `null` — zero behaviour change for non-graph callers)
+- `ExplainResponse` gains `graph_mode_applied: "naive" | "local" | "global" | null`
+- `ExplainResult` gains `graph_provenance: { steps: [{ entity, entity_id, relationship?, community_id?, chunk_id? }] } | null`; non-graph results always carry `graph_provenance: null`
+- 422 guard: `graph_mode` non-null and `[graph] enabled = false` → plain string detail `"graph_mode requires [graph] enabled=true in server config"` (no `code` field), matching the `/search` pattern
+- 422 guard: `graph_mode = "local"` or `"global"` and communities not yet built → `code: "graph_communities_not_built"` (pipeline exception `GraphCommunitiesNotBuiltError` caught at route layer)
+- 422 guard: `graph_mode` non-null with multi-collection fanout (`collections` list with > 1 entry) → 422; single-collection only for E1c
+- MCP `explain` tool gains `graph_mode` parameter with the same semantics; result dict exposes `graph_mode_applied` and per-result `graph_provenance`
+- New Pydantic entities `TraversalStep` and `GraphProvenance`; `TraversalStep` Pydantic validator rejects all-null optional fields (`relationship`, `community_id`, `chunk_id`)
+- OpenAPI snapshot updated
+
+
 ## [next] — C2 Multilingual Retrieval
 
 **Language Detection + Filter**
