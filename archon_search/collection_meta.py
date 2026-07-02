@@ -30,3 +30,7 @@ class CollectionMeta:
     namespace: str = DEFAULT_NAMESPACE
     description_embedding: list[float] | None = None
     schema_version: int = 0
+    default_ttl_seconds: int | None = None
+    """E2a: optional default TTL in seconds for new chunks in this collection.
+    None = no automatic expiry. Valid range when set: [1, 2_147_483_647].
+    Read by the pipeline at ingest time (BE-3); set via PATCH route (BE-4)."""

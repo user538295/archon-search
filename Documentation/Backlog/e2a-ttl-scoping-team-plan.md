@@ -411,14 +411,14 @@ flowchart LR
         - #integration_test — `test_query_expiring_chunks_real_store` — ingest chunk with expires_at, verify query returns it within window
         - #integration_test — `test_list_documents_scopes_are_set_union` — document with 3 chunks having scopes ["a"],["b"],["a","c"] returns scopes=["a","b","c"] (deduplicated set union)
 
-- [ ] **BE-2** — Extend `ChunkRecord` with `expires_at: str | None` and `scopes: list[str] | None`; extend `CollectionMeta` with `default_ttl_seconds: int | None`; extend `DocumentInfo` (`_types.py`) with `scopes: list[str]` (default `[]`) #backend-role
+- [x] **BE-2** — Extend `ChunkRecord` with `expires_at: str | None` and `scopes: list[str] | None`; extend `CollectionMeta` with `default_ttl_seconds: int | None`; extend `DocumentInfo` (`_types.py`) with `scopes: list[str]` (default `[]`) #backend-role
     - Entities · 1.0h
     - needs K1 · completes C5
     - Tests
-        - #unit_test — `test_chunk_record_default_expires_at_is_none` — default value is None
-        - #unit_test — `test_chunk_record_default_scopes_is_none` — default value is None
-        - #unit_test — `test_collection_meta_default_ttl_seconds_is_none` — default value is None
-        - #unit_test — `test_document_info_default_scopes_is_empty_list` — default value is []
+        - [x] #unit_test — `test_chunk_record_default_expires_at_is_none` — default value is None
+        - [x] #unit_test — `test_chunk_record_default_scopes_is_none` — default value is None
+        - [x] #unit_test — `test_collection_meta_default_ttl_seconds_is_none` — default value is None
+        - [x] #unit_test — `test_document_info_default_scopes_is_empty_list` — default value is []
 
 - [ ] **BE-3** — Implement TTL computation + scopes assignment in `pipeline.ingest_file` and `pipeline.ingest_directory`; implement TTL precedence (per-chunk > request-level > collection default > null); update `ingest_chunks` call to pass new fields. Format requirement: `expires_at` must be formatted via `normalize_iso_utc` (from `archon_search._types`), the same helper used for `indexed_at`. Example: `normalize_iso_utc(datetime.now(UTC) + timedelta(seconds=ttl_seconds))`. Do NOT use `datetime.isoformat()` — the format produced by `normalize_iso_utc` is fixed-width (guarantees lexicographic = chronological sort), while `.isoformat()` produces variable-width output that breaks string-comparison predicates. Also update `pipeline.ingest_directory(...)` signature to accept `chunk_ttl_seconds: int | None = None, chunk_scopes: list[str] | None = None` and forward both to each `pipeline.ingest_file(...)` call inside. The BE-4 route and BE-5 MCP changes depend on this signature being in place. #backend-role
     - Use Cases · 3.0h

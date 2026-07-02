@@ -182,6 +182,11 @@
 - Action: For nullable new columns (null default), use `table.add_columns(pa.field(..., nullable=True))`. For non-nullable columns with SQL-expression defaults, use `table.add_columns({"col": "cast(0 as bigint)"})`. Never use the dict form for nullable columns.
 - Confidence: high
 
+**[2026-07-02] — E2a BE-1: LanceDB `.limit()` is a scan limit, not a sort-then-limit — pagination methods must fetch all then sort**
+- Observation: `query_expiring_chunks` initially used `.limit(limit + 1)` before Python-side sort. LanceDB's `.limit()` returns the first N rows in storage order, not sort order. Sorting those N rows then paginating produces wrong results when there are more than `limit + 1` qualifying rows — rows that sort earlier but are stored later are silently missed.
+- Action: For any store method that needs sorted cursor pagination with Python-side sort: (1) fetch ALL matching rows up to a hard ceiling constant (e.g., `_EXPIRING_SCAN_CEILING = 10_000`), (2) sort Python-side, (3) then apply cursor filter and paginate. Never apply `.limit()` before the sort unless LanceDB natively supports `ORDER BY` for the query type.
+- Confidence: high
+
 **[2026-06-29] — E1a FE-2: graph_mode enabled flag check needs spaCy stub to construct app in tests**
 - Observation: `create_app()` raises `ConfigError` when `config.graph.enabled=True` but spaCy is not installed (the `archon-search[graph]` extras are absent in CI and local dev by default). Any test that constructs an app with `graph_enabled=True` must inject a stub `types.ModuleType("spacy")` into `sys.modules["spacy"]` around the `create_app()` call, then restore the original (or remove it) in a `finally` block.
 - Action: Pattern for graph-enabled app in tests: inject spacy stub before `create_app`, restore in `finally`. The stub only needs to exist in `sys.modules` — no attributes needed for the startup check.
