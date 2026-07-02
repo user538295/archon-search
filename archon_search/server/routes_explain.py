@@ -455,10 +455,12 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             return JSONResponse({"detail": str(exc)}, status_code=422)
 
     # graph_mode and HyDE are mutually exclusive — graph_mode wins.
+    # Null the vector so HyDE does not drive retrieval even in the stub path.
     # Computed once here so both the single-collection and multi-collection
     # response paths inherit the correct value without repeating the check.
     if body.graph_mode is not None:
         hyde_applied = False
+        hyde_vector = None
 
     with ExitStack() as stack:
         recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None

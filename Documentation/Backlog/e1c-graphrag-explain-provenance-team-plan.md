@@ -403,7 +403,7 @@ flowchart LR
         - #integration_test — `test_explain_route_graph_mode_null_response_structure` — real app + TestClient; POST /explain with graph_mode=null → 200; response fields graph_mode_applied=null; all result.graph_provenance=null
         - #integration_test — `test_explain_route_graph_mode_and_hyde_true_returns_hyde_applied_false` — POST /explain graph_mode="naive" + hyde=True → 200; response.hyde_applied=False; response.graph_mode_applied="naive" (S15)
 
-- [ ] **BE-9** — Regenerate `tests/server/openapi_snapshot.json` to include new ExplainRequest/ExplainResponse fields #backend-role
+- [x] **BE-9** — Regenerate `tests/server/openapi_snapshot.json` to include new ExplainRequest/ExplainResponse fields #backend-role
     - Frameworks & Drivers · 0.5h
     - needs BE-4 · completes (snapshot gate)
     - Tests

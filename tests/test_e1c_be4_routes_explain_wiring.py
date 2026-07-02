@@ -182,12 +182,13 @@ def test_explain_route_graph_mode_and_hyde_true_returns_hyde_applied_false(
 
     When graph_mode is non-null, the route must pass hyde_applied=False to
     ExplainResponse.from_pipeline_result() regardless of what resolve_hyde_vector()
-    returned. This invariant ensures callers never receive a misleading
-    hyde_applied=True when HyDE was silently ignored.
+    returned. Additionally, the HyDE vector must be nulled out so it does not
+    drive retrieval via query_vector even in the stub path.
 
-    resolve_hyde_vector is patched to return (None, True) to simulate the case
-    where HyDE was attempted; without BE-4's override, response.hyde_applied
-    would be True — this test fails before the fix.
+    resolve_hyde_vector is patched to return (b"fakevector", True) to simulate
+    the case where a non-null HyDE vector was produced; without BE-4's override,
+    both hyde_applied=True and query_vector=b"fakevector" would reach the pipeline
+    — this test fails before the fix.
     """
     from tests.integration.conftest import make_real_app
 
@@ -201,11 +202,11 @@ def test_explain_route_graph_mode_and_hyde_true_returns_hyde_applied_false(
             return_value=_minimal_pipeline_result(graph_mode_applied="naive")
         )
 
-        # Simulate HyDE returning hyde_applied=True (would cause misleading response
-        # without BE-4's forced override)
+        # Simulate HyDE returning a non-null vector with hyde_applied=True (would cause
+        # misleading response and HyDE-driven retrieval without BE-4's forced override)
         with patch(
             "archon_search.server.routes_explain.resolve_hyde_vector",
-            new=AsyncMock(return_value=(None, True)),
+            new=AsyncMock(return_value=(b"fakevector", True)),
         ):
             response = client.post(
                 "/explain",
@@ -224,3 +225,9 @@ def test_explain_route_graph_mode_and_hyde_true_returns_hyde_applied_false(
         assert data["hyde_applied"] is False
         # graph_mode_applied must reflect what the pipeline returned
         assert data["graph_mode_applied"] == "naive"
+        # Vector invariant: pipeline.explain must receive query_vector=None, not the HyDE vector
+        call_kwargs = pipeline.explain.call_args
+        assert call_kwargs.kwargs.get("query_vector") is None, (
+            "pipeline.explain must receive query_vector=None when graph_mode is set; "
+            "HyDE vector must be nulled before reaching the pipeline"
+        )

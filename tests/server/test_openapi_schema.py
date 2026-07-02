@@ -551,3 +551,72 @@ def test_delete_active_job_returns_202(
     body = del_resp.json()
     for field in ("job_id", "status", "created_at", "updated_at", "namespace"):
         assert field in body, f"DELETE job response must have '{field}' field"
+
+
+def test_explain_request_graph_mode_in_spec(app) -> None:
+    """POST /explain ExplainRequest must have 'graph_mode' optional field (E1c)."""
+    schema = app.openapi()
+    post_op = schema["paths"]["/explain"]["post"]
+    req_ref = post_op["requestBody"]["content"]["application/json"]["schema"]["$ref"]
+    schema_name = req_ref.split("/")[-1]
+    model_schema = schema["components"]["schemas"][schema_name]
+    props = model_schema.get("properties", {})
+    assert "graph_mode" in props, "ExplainRequest must have 'graph_mode' property (E1c BE-2)"
+    # graph_mode must be optional (not in required list)
+    assert "graph_mode" not in model_schema.get("required", []), \
+        "graph_mode must be optional in ExplainRequest"
+
+
+def test_explain_response_graph_fields_in_spec(app) -> None:
+    """POST /explain ExplainResponse must have 'graph_mode_applied' and results with 'graph_provenance' (E1c)."""
+    schema = app.openapi()
+    post_op = schema["paths"]["/explain"]["post"]
+    resp_200 = post_op["responses"]["200"]
+    resp_ref = resp_200["content"]["application/json"]["schema"]["$ref"]
+    schema_name = resp_ref.split("/")[-1]
+    model_schema = schema["components"]["schemas"][schema_name]
+    props = model_schema.get("properties", {})
+    assert "graph_mode_applied" in props, "ExplainResponse must have 'graph_mode_applied' (E1c BE-2)"
+    # graph_mode_applied must be optional (nullable, not required)
+    assert "graph_mode_applied" not in model_schema.get("required", []), \
+        "graph_mode_applied must be optional in ExplainResponse"
+
+
+def test_graph_provenance_schema_in_spec(app) -> None:
+    """GraphProvenanceResponse and TraversalStepResponse must be in OpenAPI components (E1c BE-1)."""
+    schema = app.openapi()
+    components = schema["components"]["schemas"]
+    assert "GraphProvenanceResponse" in components, \
+        "GraphProvenanceResponse must be a named schema component (E1c BE-1)"
+    assert "TraversalStepResponse" in components, \
+        "TraversalStepResponse must be a named schema component (E1c BE-1)"
+
+    provenance_schema = components["GraphProvenanceResponse"]
+    provenance_props = provenance_schema.get("properties", {})
+    assert "steps" in provenance_props, "GraphProvenanceResponse must have 'steps' field"
+
+    step_schema = components["TraversalStepResponse"]
+    step_props = step_schema.get("properties", {})
+    assert "entity" in step_props, "TraversalStepResponse must have 'entity' field"
+    assert "entity_id" in step_props, "TraversalStepResponse must have 'entity_id' field"
+    # Optional nullable fields
+    for field in ("relationship", "community_id", "chunk_id"):
+        assert field in step_props, f"TraversalStepResponse must have '{field}' optional field"
+    # entity and entity_id are required
+    step_required = step_schema.get("required", [])
+    assert "entity" in step_required, "TraversalStepResponse.entity must be required"
+    assert "entity_id" in step_required, "TraversalStepResponse.entity_id must be required"
+
+
+def test_explain_result_graph_provenance_in_spec(app) -> None:
+    """ExplainResult must have 'graph_provenance' field referencing GraphProvenanceResponse (E1c BE-2)."""
+    schema = app.openapi()
+    components = schema["components"]["schemas"]
+    assert "ExplainResult" in components, "ExplainResult must be a named schema component"
+    result_schema = components["ExplainResult"]
+    result_props = result_schema.get("properties", {})
+    assert "graph_provenance" in result_props, \
+        "ExplainResult must have 'graph_provenance' field (E1c BE-2)"
+    # graph_provenance must be optional (not required)
+    assert "graph_provenance" not in result_schema.get("required", []), \
+        "graph_provenance must be optional (nullable) in ExplainResult"

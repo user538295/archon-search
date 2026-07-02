@@ -78,6 +78,16 @@
 - Action: Keep fix agent prompts under ~5 targeted fixes. For 10+ fixes, split into two sequential agents or apply directly in main context using batched Edit calls.
 - Confidence: high
 
+**[2026-06-30] — iterative-review on E1c plan (plan doc review, not code): layer and guard pattern issues dominate**
+- Observation: Plan doc reviews surface different dominant issues than code reviews. The two most expensive cycles were: (1) guard layer — plan said "no exceptions in pipeline" but `graph_communities_not_built` physically requires a pipeline-level check (graph store is only accessible through the pipeline); (2) layer assignment — plan put TraversalStep/GraphProvenance in `schemas.py` but all other explain Pydantic models are in `routes_explain.py`, and _diagnostics.py (Entities) importing from schemas.py (Interface Adapters) violates Clean Architecture. Both required checking the actual codebase to resolve.
+- Action: When reviewing plan docs for a feature that adds new types, always verify: (a) the exact file where analogous existing types live — don't assume by layer name; (b) whether any proposed guard requires data that's only accessible deeper in the stack (if yes, it cannot be a route-layer guard). Read the existing guard patterns in the real code before specifying new guards in the plan.
+- Confidence: high
+
+**[2026-06-30] — iterative-review on E1c plan: hyde_applied vs rag_fusion_applied are separately owned**
+- Observation: The plan conflated `hyde_applied` and `rag_fusion_applied` as both pipeline-owned. In reality `hyde_applied` is computed by the route handler (before calling the pipeline, via `resolve_hyde_vector()`), while `rag_fusion_applied` IS returned by the pipeline in `ExplainPipelineResult`. Specifying "pipeline enforces both False when graph_mode is set" was correct for rag_fusion but wrong for hyde_applied — the route handler must explicitly override it.
+- Action: When writing invariants about response booleans on `/explain`, always check which layer computes each flag. Read `from_pipeline_result()` to see which flags are pipeline-owned params vs route-handler-computed params. State the owning layer explicitly in the plan invariant.
+- Confidence: high
+
 **[2026-06-29] — BE-7b fanout: test spec overrides scenario spec for S9 in multi-collection context**
 - Observation: S9 (isolated nodes) in the team plan says "falls back silently to naive graph expansion." But the BE-7b test spec explicitly says "collection B has no community (isolated nodes); Collection B falls back to hybrid for that leg." Multiple review agents (architecture, correctness, Brooks-Lint) flagged the hybrid fallback as violating S9. They were wrong — the test spec is authoritative for the fanout context.
 - Action: When scenario spec and task-level test spec conflict, the task-level test spec wins. Always read the `Tests` block of the specific task (not just the Scenarios section) to determine expected behavior.
@@ -830,4 +840,24 @@
 **[2026-06-29] — E1b BE-8: health-path async DB calls need try/except guards**
 - Observation: `get_community_stats` was called without exception guard in the `GET /status` collection loop. A LanceDB error in one collection would 500 the entire health endpoint. The existing `GraphStore.get_community_stats` only handles `FileNotFoundError`/`ValueError` on `open_table`, not downstream query errors.
 - Action: Any auxiliary DB call inside `GET /status` or similar health endpoints MUST be wrapped in `try/except Exception` with WARNING log + fallback to defaults. Never let a non-critical sub-system read take down the primary monitoring surface.
+- Confidence: high
+
+**[2026-06-30] — E1c K1 implement-next: TypeSpec→OpenAPI can silently produce wrong error body shape**
+- Observation: The E1c C1 TypeSpec defined `GraphNotEnabledError.detail` as `detail: string` (plain string, matching the `/search` live pattern). But the generated OpenAPI YAML rendered it as `detail: {code, message}` — a structured object that contradicts both the TypeSpec and the plan. The discrepancy was caught by iterative review (all 4 agents flagged it independently). The compiled artifact and its source were in direct conflict.
+- Action: After generating any OpenAPI YAML from TypeSpec, always diff the error model shapes against: (1) the TypeSpec source, (2) the plan's error contract description, and (3) the existing sibling implementation (grep for the error string in `routes_*.py`). Never assume the TypeSpec compiler rendered error bodies correctly — plain-string `detail` vs structured-object `detail` is a common TypeSpec compilation pitfall.
+- Confidence: high
+
+**[2026-06-30] — E1c K1 implement-next: TypeSpec nullable fields without `?` generate required:true in OpenAPI**
+- Observation: `graphMode: GraphMode | null` in TypeSpec means "must be present, may be null." TypeSpec generates this as `required: [graphMode]` in OpenAPI. The plan says `graph_mode` defaults to `None` (i.e., it can be omitted entirely). Without `?` (optional marker), the contract incorrectly requires the field. This also applied to `collection`, `collections`, `topK`, `rerank`, `hyde`, `ragFusion`.
+- Action: In TypeSpec HTTP service contracts, always use `fieldName?: Type | null` (with `?`) for optional-with-null-default fields. Distinguish TypeSpec's two nullable semantics: `F?: Type | null` = may be absent or null; `F: Type | null` = must be present but can be null. For request body fields with defaults, always use `?`.
+- Confidence: high
+
+**[2026-07-02] — E1c BE-3 implement-next: tautological mock assertions — always test override, not default**
+- Observation: Initial test for `rag_fusion_applied=False` had the mock returning `rag_fusion_applied=False` already. The assertion then proved nothing — the override in the graph_mode block was never exercised. Review caught this (C1-B-5).
+- Action: When writing tests that verify a field is overridden to a specific value, always construct the mock to return the OPPOSITE value first. "Override to False" tests must start with the mock at `True`; "override to True" tests must start at `False`.
+- Confidence: high
+
+**[2026-07-02] — E1c BE-3 implement-next: integration test must exercise the NEW code path, not the null case**
+- Observation: First integration test used `graph_mode=None`, which bypasses the new `if graph_mode is not None` block entirely. The test passed but provided zero coverage of the new branch. Review (C1-B-2) caught the gap — the integration test was a coverage illusion.
+- Action: When the task adds a new code branch gated on a parameter, the integration test MUST pass a non-null value for that parameter. Tests with the default/null value are still useful for regression, but they do not prove the new branch works.
 - Confidence: high
