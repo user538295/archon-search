@@ -1291,6 +1291,7 @@ class SearchPipeline:
         rag_fusion: bool = False,
         rag_fusion_generator: "RAGFusionGenerator | None" = None,
         rag_fusion_config: "RAGFusionConfig | None" = None,
+        graph_mode: Literal["naive", "local", "global"] | None = None,
     ) -> ExplainPipelineResult:
         """Fetch an amplified pool (``max(top_k_retrieve*3, 20)`` candidates) and, when
         ``rerank=True``, rerank the entire ACL-filtered pool so near-misses carry real
@@ -1307,11 +1308,23 @@ class SearchPipeline:
         decomposes the query into variants, searches in parallel, and fuses results via
         second-pass RRF. Multi-collection path (``collections``) ignores RAG Fusion in
         this version (falls back to standard explain).
+
+        When ``graph_mode`` is set (``"naive"``, ``"local"``, or ``"global"``), the RAG Fusion
+        path is bypassed entirely and ``_explain_standard`` is called directly. The returned
+        ``ExplainPipelineResult.graph_mode_applied`` is set to the mode the pipeline *attempted*
+        to execute (not whether it yielded graph-retrieved results). In this null pass-through
+        stub (pre-E1a), no graph retrieval occurs and all candidates carry
+        ``graph_provenance=None``. ``graph_mode`` is incompatible with multi-collection fanout
+        (``collections`` kwarg) and raises ``ValueError`` if both are supplied.
         """
         if collection is not None and collections is not None:
             raise ValueError("supply either collection or collections, not both")
         if collection is None and collections is None:
             raise ValueError("supply either collection or collections")
+        if graph_mode is not None and collections is not None:
+            raise ValueError(
+                "graph_mode is not supported with multi-collection explain; supply collection instead"
+            )
 
         def _final_score(c: ScoredSearchCandidate) -> float:
             rs = c.score_breakdown.reranker_score
@@ -1371,6 +1384,18 @@ class SearchPipeline:
                 acl_filtered=acl_filtered,
                 excluded_collections=excluded,
             )
+
+        # --- Graph mode path (bypasses RAG Fusion; null pass-through before E1a wiring) ---
+        if graph_mode is not None:
+            _single_embedder = embedder if embedder is not None else self._global_embedder
+            result = await self._explain_standard(
+                query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
+                query_vector=query_vector, embedder=_single_embedder,
+            )
+            result.graph_mode_applied = graph_mode
+            result.rag_fusion_applied = False
+            result.rag_fusion_attempted = False
+            return result
 
         # --- Single-collection RAG Fusion path ---
         if (

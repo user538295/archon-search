@@ -383,7 +383,7 @@ flowchart LR
         - #integration_test — `test_explain_schemas_extra_forbid_graph_mode` — ExplainRequest rejects unknown fields per extra="forbid"
         - #integration_test — `test_explain_route_invalid_graph_mode_returns_422` — POST /explain with `graph_mode="NAIVE"` (wrong case) → 422
 
-- [ ] **BE-3** — Add `graph_mode: Literal["naive","local","global"] | None = None` parameter to `pipeline.explain()`; set `graph_mode_applied` in returned `ExplainPipelineResult`; all candidates keep `graph_provenance=None` in the null pass-through path (before E1a wiring). **Invariant:** when `graph_mode` is non-null, the pipeline's `graph_mode` path does not call `_rag_fusion_search`; ensure `ExplainPipelineResult.rag_fusion_applied=False` in this path. Note: `hyde_applied` is NOT returned by the pipeline — it is computed by the route handler. BE-4 is responsible for setting `hyde_applied=False` in the response when `graph_mode` is non-null #backend-role
+- [x] **BE-3** — Add `graph_mode: Literal["naive","local","global"] | None = None` parameter to `pipeline.explain()`; set `graph_mode_applied` in returned `ExplainPipelineResult`; all candidates keep `graph_provenance=None` in the null pass-through path (before E1a wiring). **Invariant:** when `graph_mode` is non-null, the pipeline's `graph_mode` path does not call `_rag_fusion_search`; ensure `ExplainPipelineResult.rag_fusion_applied=False` in this path. Note: `hyde_applied` is NOT returned by the pipeline — it is computed by the route handler. BE-4 is responsible for setting `hyde_applied=False` in the response when `graph_mode` is non-null #backend-role
     - Use Cases · 2.5h
     - needs BE-2 · completes C2, S1, S13
     - Tests
