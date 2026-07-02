@@ -461,7 +461,7 @@ flowchart LR
         - #unit_test — `test_pipeline_explain_naive_hybrid_chunks_null_provenance` — non-graph candidates in mixed result → graph_provenance is None (S7)
         - #integration_test — `test_pipeline_explain_naive_real_graph_layer` — real SearchPipeline + stubbed E1a graph layer; graph_mode="naive" → ExplainPipelineResult.graph_mode_applied=="naive"; at least one candidate has non-null graph_provenance
 
-- [ ] **T-3** — E2e — naive mode traversal provenance and mixed results #tester-role
+- [x] **T-3** — E2e — naive mode traversal provenance and mixed results #tester-role
     - — · 2.5h
     - needs BE-7 · completes S2, S7, S8, S12
     - Tests
