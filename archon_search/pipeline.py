@@ -31,7 +31,7 @@ from archon_search.parser import DocumentParser, ParseError
 from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
 from archon_search.store import SearchStore, StoreBusyError, elementwise_sum, parse_metadata, normalize_ingested_by
 from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
-from archon_search.graph_types import ChunkInput
+from archon_search.graph_types import ChunkInput, GraphNode
 from archon_search.graph_expander import build_expanded_text, tokenize_and_generate_ngrams
 
 if TYPE_CHECKING:
@@ -192,6 +192,7 @@ _BINARY_EXTENSIONS = frozenset(
 # Binary formats (PDF, DOCX, etc.) are excluded — their extracted text may begin
 # with `---` by coincidence and must not be parsed for front matter.
 _FRONT_MATTER_EXTENSIONS = frozenset({".md", ".txt", ".rst", ".html"})
+_MAX_LOCAL_EXPLAIN_COMMUNITY_CANDIDATES = 200
 
 
 def _fuse_rag_fusion_results(
@@ -1407,60 +1408,38 @@ class SearchPipeline:
                     result.rag_fusion_attempted = False
                     return result
 
-                # Standard hybrid search with original query for baseline candidates.
-                orig_vector = (
-                    query_vector if query_vector is not None
-                    else await _single_embedder.embed_one(query)
-                )
-                candidate_depth = max(self._top_k_retrieve * 3, 20)
-                try:
-                    hybrid_candidates = await self.store.hybrid_search_with_trace(
-                        collection, orig_vector, query, candidate_depth=candidate_depth
-                    )
-                except Exception as exc:
-                    raise ExplainStageError("store", exc) from exc
-
-                # Merge: graph provenance wins for same chunk (S8).
-                graph_by_chunk: dict[str, ScoredSearchCandidate] = {
-                    c.chunk_id: c for c in graph_candidates
-                }
-                merged: list[ScoredSearchCandidate] = list(graph_candidates)
-                for c in hybrid_candidates:
-                    if c.chunk_id not in graph_by_chunk:
-                        merged.append(c)
-
-                # ACL filter on merged pool.
-                merged, acl_filtered = apply_acl_filter(merged, lambda c: c.acl, namespace)
-
-                # Rerank merged set using original query.
-                if rerank and self._reranker is not None:
-                    try:
-                        merged = await self._reranker.rerank_candidates(
-                            query, merged, top_k=len(merged)
-                        )
-                    except Exception as exc:
-                        raise ExplainStageError("reranker", exc) from exc
-
-                merged.sort(key=lambda c: (-_final_score(c), c.doc_id, c.chunk_id))
-
-                return ExplainPipelineResult(
-                    top_results=merged[:top_k],
-                    near_misses=merged[top_k : top_k + 20],
-                    acl_filtered=acl_filtered,
-                    rag_fusion_applied=False,
-                    rag_fusion_attempted=False,
-                    graph_mode_applied="naive",
+                return await self._explain_merge_and_rank(
+                    graph_candidates,
+                    query, collection,
+                    top_k=top_k, rerank=rerank, namespace=namespace,
+                    query_vector=query_vector, embedder=_single_embedder,
+                    graph_mode="naive",
                 )
 
-            # local/global: stub for BE-8 (community traversal wiring)
-            result = await self._explain_standard(
-                query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
-                query_vector=query_vector, embedder=_single_embedder,
+            # local/global: E1b community traversal wiring (BE-8).
+            community_candidates = await self._explain_community_candidates(
+                query, collection, graph_mode,
             )
-            result.graph_mode_applied = graph_mode
-            result.rag_fusion_applied = False
-            result.rag_fusion_attempted = False
-            return result
+
+            if not community_candidates:
+                # No community candidates (no entity match, no communities, or no chunks).
+                # Fall back to standard hybrid explain and stamp graph_mode_applied.
+                result = await self._explain_standard(
+                    query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
+                    query_vector=query_vector, embedder=_single_embedder,
+                )
+                result.graph_mode_applied = graph_mode
+                result.rag_fusion_applied = False
+                result.rag_fusion_attempted = False
+                return result
+
+            return await self._explain_merge_and_rank(
+                community_candidates,
+                query, collection,
+                top_k=top_k, rerank=rerank, namespace=namespace,
+                query_vector=query_vector, embedder=_single_embedder,
+                graph_mode=graph_mode,
+            )
 
         # --- Single-collection RAG Fusion path ---
         if (
@@ -1723,6 +1702,254 @@ class SearchPipeline:
         # Step 8: attach provenance to every graph-retrieved candidate (each gets its own instance).
         for c in candidates:
             c.graph_provenance = GraphProvenance(steps=list(steps))
+
+        return candidates
+
+    async def _explain_merge_and_rank(
+        self,
+        winning_candidates: list[ScoredSearchCandidate],
+        query: str,
+        collection: str,
+        *,
+        top_k: int,
+        rerank: bool,
+        namespace: str,
+        query_vector: list[float] | None,
+        embedder: "Embedder",
+        graph_mode: Literal["naive", "local", "global"],
+    ) -> ExplainPipelineResult:
+        """Merge winning graph candidates with hybrid baseline, ACL filter, rerank, and return ExplainPipelineResult."""
+
+        def _final_score(c: ScoredSearchCandidate) -> float:
+            rs = c.score_breakdown.reranker_score
+            return rs if rs is not None else c.score_breakdown.rrf_score
+
+        orig_vector = (
+            query_vector if query_vector is not None
+            else await embedder.embed_one(query)
+        )
+        candidate_depth = max(self._top_k_retrieve * 3, 20)
+        try:
+            hybrid_candidates = await self.store.hybrid_search_with_trace(
+                collection, orig_vector, query, candidate_depth=candidate_depth
+            )
+        except Exception as exc:
+            raise ExplainStageError("store", exc) from exc
+
+        # Merge: winning provenance wins for same chunk.
+        winning_by_chunk: dict[str, ScoredSearchCandidate] = {
+            c.chunk_id: c for c in winning_candidates
+        }
+        merged: list[ScoredSearchCandidate] = list(winning_candidates)
+        for c in hybrid_candidates:
+            if c.chunk_id not in winning_by_chunk:
+                merged.append(c)
+
+        # ACL filter on merged pool.
+        merged, acl_filtered = apply_acl_filter(merged, lambda c: c.acl, namespace)
+
+        # Rerank merged set using original query.
+        if rerank and self._reranker is not None:
+            try:
+                merged = await self._reranker.rerank_candidates(
+                    query, merged, top_k=len(merged)
+                )
+            except Exception as exc:
+                raise ExplainStageError("reranker", exc) from exc
+
+        merged.sort(key=lambda c: (-_final_score(c), c.doc_id, c.chunk_id))
+
+        return ExplainPipelineResult(
+            top_results=merged[:top_k],
+            near_misses=merged[top_k : top_k + 20],
+            acl_filtered=acl_filtered,
+            rag_fusion_applied=False,
+            rag_fusion_attempted=False,
+            graph_mode_applied=graph_mode,
+        )
+
+    async def _explain_community_candidates(
+        self,
+        query: str,
+        collection: str,
+        graph_mode: Literal["local", "global"],
+    ) -> list[ScoredSearchCandidate]:
+        """Community-mode graph retrieval for explain — E1b wiring (BE-8).
+
+        For ``graph_mode='local'``: tokenises the query → matches entity names →
+        looks up communities for those entities → fetches representative chunks →
+        attaches ``GraphProvenance`` with ``community_id`` to every candidate.
+
+        For ``graph_mode='global'``: lists all communities → fetches representative
+        chunks (capped to ``max_global_candidates``) → attaches ``GraphProvenance``
+        with ``community_id`` to every candidate.
+
+        Returns ``[]`` when any of the following are true:
+        - ``_graph_store`` is not configured
+        - local: no query N-grams, no entity match, communities table absent, no community
+          membership for matched entities, or no chunk rows returned
+        - global: no chunk rows returned after a successful community fetch
+
+        Raises:
+            ``GraphCommunitiesNotBuiltError``: when ``graph_mode='global'`` and no
+                communities have been built for the collection (matches search behaviour).
+        """
+        if self._graph_store is None:
+            return []
+
+        fp = _query_fingerprint(query)
+
+        if graph_mode == "local":
+            # Step 1: tokenise query → N-gram candidates.
+            ngrams: list[str] = await asyncio.to_thread(tokenize_and_generate_ngrams, query)
+            if not ngrams:
+                logger.debug(
+                    "_explain_community_candidates local: empty query ngrams (fp=%s); returning []", fp
+                )
+                return []
+
+            # Step 2: entity matching.
+            try:
+                matched_nodes = await self._graph_store.find_nodes_by_name(collection, ngrams)
+            except Exception:
+                logger.warning(
+                    "_explain_community_candidates local: find_nodes_by_name failed for "
+                    "collection %r (fp=%s); returning []",
+                    collection, fp, exc_info=True,
+                )
+                return []
+
+            if not matched_nodes:
+                logger.debug(
+                    "_explain_community_candidates local: no entities matched query (fp=%s); returning []",
+                    fp,
+                )
+                return []
+
+            # Step 2b: communities table guard.
+            try:
+                table_exists = await self._graph_store.communities_table_exists(collection)
+            except Exception:
+                logger.warning(
+                    "_explain_community_candidates local: communities_table_exists failed for "
+                    "collection %r (fp=%s); returning []",
+                    collection, fp, exc_info=True,
+                )
+                return []
+            if not table_exists:
+                logger.warning(
+                    "_explain_community_candidates local: communities table does not exist for "
+                    "collection %r; run 'archon-search graph build-communities %s' first",
+                    collection, collection,
+                )
+                return []
+
+            # Step 3: community lookup for matched entity IDs.
+            entity_ids = [n.id for n in matched_nodes]
+            try:
+                communities = await self._graph_store.get_communities_for_entities(
+                    collection, entity_ids
+                )
+            except Exception:
+                logger.warning(
+                    "_explain_community_candidates local: get_communities_for_entities failed for "
+                    "collection %r (fp=%s); returning []",
+                    collection, fp, exc_info=True,
+                )
+                return []
+
+            if not communities:
+                # No community membership for matched entities.
+                # Note: unlike _search_local_mode (which falls back to naive expansion for
+                # isolated nodes / S9 scenario), explain returns [] here and lets the caller
+                # fall back to _explain_standard. This is intentional: explain's contract is
+                # provenance transparency, not result maximisation — mixing community and naive
+                # traversal in one explain response would be confusing to operators.
+                logger.debug(
+                    "_explain_community_candidates local: no communities found for matched entities "
+                    "(fp=%s); returning []",
+                    fp,
+                )
+                return []
+
+            # Build chunk_id → (community_id, entity_name, entity_id) map for provenance.
+            # Use the first matched entity that is listed in each community's entity_ids.
+            matched_id_to_node: dict[str, GraphNode] = {n.id: n for n in matched_nodes}
+            chunk_to_provenance: dict[str, tuple[str, str, str]] = {}
+            chunk_ids: list[str] = []
+
+            for comm in communities:
+                rep_node = next(
+                    (matched_id_to_node[eid] for eid in comm.entity_ids if eid in matched_id_to_node),
+                    None,
+                )
+                entity_name: str = (
+                    rep_node.entity_name
+                    if rep_node is not None
+                    else comm.community_id
+                )
+                entity_id: str = (
+                    rep_node.id
+                    if rep_node is not None
+                    else comm.community_id
+                )
+                for chunk_id in comm.representative_chunk_ids:
+                    if chunk_id not in chunk_to_provenance:
+                        chunk_ids.append(chunk_id)
+                        chunk_to_provenance[chunk_id] = (comm.community_id, entity_name, entity_id)
+            chunk_ids = chunk_ids[:_MAX_LOCAL_EXPLAIN_COMMUNITY_CANDIDATES]
+
+        else:  # global
+            # Fetch all communities; raise if none (mirrors search global path).
+            communities = await self._graph_store.list_community_representatives(collection)
+            if not communities:
+                raise GraphCommunitiesNotBuiltError(collection)
+
+            max_cands = self._graph_config.max_global_candidates if self._graph_config else 100
+            chunk_to_provenance = {}
+            chunk_ids = []
+            for comm in communities:
+                for chunk_id in comm.representative_chunk_ids:
+                    if chunk_id not in chunk_to_provenance:
+                        chunk_ids.append(chunk_id)
+                        # Use community_id as the synthetic entity (no query entity matched in global).
+                        chunk_to_provenance[chunk_id] = (
+                            comm.community_id,
+                            comm.community_id,
+                            comm.community_id,
+                        )
+                if len(chunk_ids) >= max_cands:
+                    break
+            # Hard cap: the inner loop may overshoot by up to one community's chunk count.
+            chunk_ids = chunk_ids[:max_cands]
+
+        if not chunk_ids:
+            logger.debug(
+                "_explain_community_candidates: no chunk IDs to fetch for collection %r (fp=%s)",
+                collection, fp,
+            )
+            return []
+
+        # Fetch chunk rows from the store.
+        rows = await self.store.get_chunks_by_ids(collection, chunk_ids)
+        if not rows:
+            logger.warning(
+                "_explain_community_candidates: no chunk rows returned for collection %r (fp=%s)",
+                collection, fp,
+            )
+            return []
+
+        # Build candidates with graph provenance attached.
+        candidates: list[ScoredSearchCandidate] = []
+        for row in rows:
+            candidate = _row_to_community_candidate(row, collection)
+            provenance_entry = chunk_to_provenance.get(candidate.chunk_id)
+            if provenance_entry is not None:
+                comm_id, e_name, e_id = provenance_entry
+                candidate.graph_provenance = GraphProvenance(steps=[
+                    TraversalStep(entity=e_name, entity_id=e_id, community_id=comm_id)
+                ])
+            candidates.append(candidate)
 
         return candidates
 

@@ -473,13 +473,13 @@ flowchart LR
 
 ### Phase 4 · Community-mode traversal provenance *(blocked on E1b)*
 
-- [ ] **BE-8** — Wire `graph_mode="local"` and `"global"` community traversal in `pipeline.explain()`: call the E1b community graph function; populate `community_id` in `TraversalStep`; set `graph_mode_applied` correctly #backend-role
+- [x] **BE-8** — Wire `graph_mode="local"` and `"global"` community traversal in `pipeline.explain()`: call the E1b community graph function; populate `community_id` in `TraversalStep`; set `graph_mode_applied` correctly #backend-role
     - Use Cases · 3.0h
     - needs BE-7, E1b-stable · completes S3, S4
     - Tests
-        - #unit_test — `test_pipeline_explain_local_community_steps` — mock E1b returning community candidates; TraversalStep has community_id set, relationship null (S3)
-        - #unit_test — `test_pipeline_explain_global_community_steps` — same for global mode (S4)
-        - #integration_test — `test_pipeline_explain_community_modes_real` — real pipeline + stubbed E1b; (a) graph_mode="local" → graph_mode_applied=="local"; steps carry community_id; (b) graph_mode="global" → graph_mode_applied=="global"; steps carry community_id (S3, S4)
+        - [x] #unit_test — `test_pipeline_explain_local_community_steps` — mock E1b returning community candidates; TraversalStep has community_id set, relationship null (S3)
+        - [x] #unit_test — `test_pipeline_explain_global_community_steps` — same for global mode (S4)
+        - [x] #integration_test — `test_pipeline_explain_community_modes_real` — real pipeline + stubbed E1b; (a) graph_mode="local" → graph_mode_applied=="local"; steps carry community_id; (b) graph_mode="global" → graph_mode_applied=="global"; steps carry community_id (S3, S4)
 
 - [ ] **T-4** — Manual — community mode traversal provenance #tester-role
     - — · 3.0h
