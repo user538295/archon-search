@@ -182,7 +182,22 @@
 - Action: When adding a pinned spaCy model wheel URL to optional extras, always match the spaCy version range to the model's minor version. Use `spacy>=X.Y,<X.(Y+1)` and `en_core_web_sm-X.Y.Z` with matching major.minor.
 - Confidence: high
 
-**[2026-07-02] — E2a BE-1: STORE_SCHEMA_VERSION bump propagates to 3 call sites beyond store.py**
+**[2026-07-02] — E2a BE-4: `page_count` not `total` for scan-bounded endpoints**
+- Observation: `ExpiringChunksResponse` initially had `total: int = len(items)`. This is page count, not a cross-page total — `DocumentListResponse.total` IS a cross-page total. Using the same field name for two semantically different things is a silent lie. DA review flagged it as Major.
+- Action: Any endpoint whose count field only reflects the current page's item count (not the global store total) must be named `page_count`, `returned_count`, or similar — never `total`. Use `total` only when the value represents the full collection count (paginated or not).
+- Confidence: high
+
+**[2026-07-02] — E2a BE-4: PATCH handler requires `model_dump(exclude_unset=True)` for absent-vs-null semantics**
+- Observation: `PATCH /collections/{name}` must distinguish "field absent from payload" (no change) from "field explicitly set to null" (clear). Without `exclude_unset=True`, Pydantic sets all absent fields to their `default` (e.g. `None`), making absent and explicit-null indistinguishable.
+- Action: Always use `payload = body.model_dump(exclude_unset=True)` in PATCH handlers, then gate each sub-behavior on `"field_name" in payload`. Never check `body.field_name is not None` alone.
+- Confidence: high
+
+**[2026-07-02] — E2a BE-4: range validator needed on PATCH field, not just ingest field**
+- Observation: `IngestRequest.chunk_ttl_seconds` had a range validator added immediately. `PatchCollectionBody.default_ttl_seconds` did not — 0 or -1 would create immediately-expired chunks silently. DA review cycle caught the omission.
+- Action: Whenever adding a TTL field to any request model, immediately add a range validator `[_TTL_MIN, _TTL_MAX]` in the same step. Check every model that touches the same semantic field — ingest, patch, and any future body — before the first review cycle.
+- Confidence: high
+
+**[2026-07-02] — E2a BE-4: STORE_SCHEMA_VERSION bump propagates to 3 call sites beyond store.py**
 - Observation: Bumping STORE_SCHEMA_VERSION from 0 to 1 caused 11 test failures. Beyond the test guard assertions (`assert STORE_SCHEMA_VERSION == 0`), two production call sites set `schema_version=0` as a hardcoded default: (1) `pipeline.py` uses `existing_meta.schema_version if existing_meta else 0`; (2) `routes_collections.py` creates stub meta with `CollectionMeta(...)` whose default `schema_version=0`. Both needed fixing: pipeline.py imports `STORE_SCHEMA_VERSION` and uses it as the else-branch; `add_collection` route passes `schema_version=STORE_SCHEMA_VERSION` to the stub. Additionally, integration test seed rows that build schemas from `_meta_schema()` must explicitly exclude any new non-null integer columns added (like `default_ttl_seconds`).
 - Action: Before bumping STORE_SCHEMA_VERSION, grep for `schema_version=0` hardcoded defaults and `else 0` in schema_version assignment branches in production code. Every hardcoded `0` is a regression waiting to happen. Also, any seed row in integration tests that uses `_meta_schema()` must be audited to include all new nullable/int columns.
 - Confidence: high
