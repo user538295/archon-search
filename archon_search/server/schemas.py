@@ -18,6 +18,11 @@ from pydantic import (
 )
 
 
+# Inclusive valid range for TTL seconds — shared by IngestRequest and PatchCollectionBody.
+_TTL_MIN: int = 1
+_TTL_MAX: int = 2**31 - 1
+
+
 class CheckStatus(str, Enum):
     """Check result for readiness probes.
 
@@ -220,6 +225,33 @@ class SearchStatusDetail(BaseModel):
     top_k_max: int
 
 
+class ExpiringChunkItem(BaseModel):
+    """One entry in an ExpiringChunksResponse (E2a BE-4).
+
+    Mirrors the dict shape returned by ``SearchStore.query_expiring_chunks``.
+    """
+
+    chunk_id: str
+    doc_id: str
+    source_path: str
+    expires_at: str
+
+
+class ExpiringChunksResponse(BaseModel):
+    """Response for GET /collections/{name}/expiring (E2a BE-4).
+
+    ``items`` contains the current page of expiring chunks sorted by
+    ``(expires_at ASC, chunk_id ASC)``.  ``next_cursor`` is the opaque
+    cursor for the next page (``None`` on the last page).  ``page_count``
+    is the count of items in the current page (scan-bounded endpoint —
+    unlike ``DocumentListResponse.total``, there is no full-collection count).
+    """
+
+    items: list[ExpiringChunkItem]
+    next_cursor: str | None
+    page_count: int
+
+
 class DocumentInfoItem(BaseModel):
     """One document entry in a DocumentListResponse (E0c BE-6).
 
@@ -230,6 +262,7 @@ class DocumentInfoItem(BaseModel):
     source_path: str
     chunk_count: int
     indexed_at: str
+    scopes: list[str] = []
 
 
 class DocumentListResponse(BaseModel):
@@ -429,13 +462,23 @@ class BackupTriggerResponse(BaseModel):
 
 
 class PatchCollectionBody(BaseModel):
-    embedding_model: str
+    embedding_model: str | None = None
+    # E2a BE-4: optional default TTL in seconds for new chunks (None = no change;
+    # explicit null clears the collection default).
+    default_ttl_seconds: int | None = Field(default=None)
 
     @field_validator("embedding_model")
     @classmethod
-    def validate_embedding_model_not_empty(cls, v: str) -> str:
-        if not v:
-            raise ValueError("embedding_model field required")
+    def validate_embedding_model_not_empty(cls, v: str | None) -> str | None:
+        if v is not None and not v:
+            raise ValueError("embedding_model must not be empty string")
+        return v
+
+    @field_validator("default_ttl_seconds")
+    @classmethod
+    def validate_default_ttl_seconds(cls, v: int | None) -> int | None:
+        if v is not None and not (_TTL_MIN <= v <= _TTL_MAX):
+            raise ValueError(f"default_ttl_seconds must be in [{_TTL_MIN}, {_TTL_MAX}], got {v}")
         return v
 
 

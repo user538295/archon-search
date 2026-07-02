@@ -8,6 +8,16 @@
 
 ## Changelog
 
+### [next release] — E2a BE-4: `PATCH /collections/{name}` `embedding_model` field is now optional
+
+**Surface**: `PATCH /collections/{name}` request body (`PatchCollectionBody`).
+
+**Change**: `embedding_model` was previously a required `string` field. It is now an optional `string | null` field (default `null`). Callers that always provide `embedding_model` are completely unaffected. Sending `embedding_model: null` or omitting the field entirely skips the embedding-model state machine — only the newly-added `default_ttl_seconds` field is applied when provided.
+
+**Migration**: no action required for existing callers that always supply `embedding_model`.
+
+---
+
 ### [next release] — E1b: `graph_mode` extended to `"local"` and `"global"`; `StatusCollectionEntry` gains community stats (all additive)
 
 **Surface**: `POST /search` request; `GET /status` response (`StatusCollectionEntry`); `GET /openapi.json` schema; MCP `search` tool.

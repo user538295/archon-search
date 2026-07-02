@@ -435,6 +435,14 @@
             "title": "Indexed At",
             "type": "string"
           },
+          "scopes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          },
           "source_path": {
             "title": "Source Path",
             "type": "string"
@@ -636,6 +644,69 @@
           "reason"
         ],
         "title": "ExcludedCollectionSchema",
+        "type": "object"
+      },
+      "ExpiringChunkItem": {
+        "description": "One entry in an ExpiringChunksResponse (E2a BE-4).\n\nMirrors the dict shape returned by ``SearchStore.query_expiring_chunks``.",
+        "properties": {
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chunk_id",
+          "doc_id",
+          "source_path",
+          "expires_at"
+        ],
+        "title": "ExpiringChunkItem",
+        "type": "object"
+      },
+      "ExpiringChunksResponse": {
+        "description": "Response for GET /collections/{name}/expiring (E2a BE-4).\n\n``items`` contains the current page of expiring chunks sorted by\n``(expires_at ASC, chunk_id ASC)``.  ``next_cursor`` is the opaque\ncursor for the next page (``None`` on the last page).  ``page_count``\nis the count of items in the current page (scan-bounded endpoint \u2014\nunlike ``DocumentListResponse.total``, there is no full-collection count).",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExpiringChunkItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "page_count": {
+            "title": "Page Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "page_count"
+        ],
+        "title": "ExpiringChunksResponse",
         "type": "object"
       },
       "ExplainNearMiss": {
@@ -1411,6 +1482,31 @@
       },
       "IngestRequest": {
         "properties": {
+          "chunk_scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Scopes"
+          },
+          "chunk_ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Ttl Seconds"
+          },
           "collection": {
             "title": "Collection",
             "type": "string"
@@ -2210,14 +2306,29 @@
       },
       "PatchCollectionBody": {
         "properties": {
+          "default_ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Ttl Seconds"
+          },
           "embedding_model": {
-            "title": "Embedding Model",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Model"
           }
         },
-        "required": [
-          "embedding_model"
-        ],
         "title": "PatchCollectionBody",
         "type": "object"
       },
@@ -3626,7 +3737,7 @@
         "summary": "Get Collection Info"
       },
       "patch": {
-        "description": "Update the embedding model for a collection. Triggers reindex if needed.",
+        "description": "Update a collection's embedding model and/or default TTL. Triggers reindex when the model changes.",
         "operationId": "patch_collection_collections__name__patch",
         "parameters": [
           {
@@ -3800,6 +3911,110 @@
           }
         ],
         "summary": "List Collection Documents"
+      }
+    },
+    "/collections/{name}/expiring": {
+      "get": {
+        "description": "List chunks expiring within *within_hours* hours (E2a BE-4).\n\n- ``within_hours``: 1\u20138760 (1 hour to 1 year); required.\n- ``limit``: 1\u2013200, default 50.\n- ``cursor``: opaque cursor from a previous response's ``next_cursor``.\n- Returns 404 when the collection does not exist in the caller's namespace.\n- Already-expired chunks are excluded; chunks with no expiry are excluded.",
+        "operationId": "get_expiring_chunks_collections__name__expiring_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "within_hours",
+            "required": true,
+            "schema": {
+              "maximum": 8760,
+              "minimum": 1,
+              "title": "Within Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExpiringChunksResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Expiring Chunks"
       }
     },
     "/collections/{name}/export": {

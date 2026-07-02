@@ -34,17 +34,53 @@ _TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED
 _ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.PENDING}
 
 
+# Inclusive valid range for chunk_ttl_seconds.
+_TTL_MIN: int = 1
+_TTL_MAX: int = 2**31 - 1
+# Limits for chunk_scopes.
+_SCOPES_MAX_ITEMS: int = 100
+_SCOPE_MAX_LEN: int = 255
+
+
 class IngestRequest(BaseModel):
     collection: str
     path: str | None = None
     documents: list[dict[str, Any]] | None = None
     ingested_by: str = "http"
+    # E2a BE-4: optional per-request TTL and scope tags forwarded to the pipeline.
+    chunk_ttl_seconds: int | None = None
+    chunk_scopes: list[str] | None = None
 
     @field_validator("collection")
     @classmethod
     def collection_must_be_non_empty(cls, v: str) -> str:
         if not v:
             raise ValueError("collection must be non-empty")
+        return v
+
+    @field_validator("chunk_ttl_seconds")
+    @classmethod
+    def chunk_ttl_seconds_must_be_positive(cls, v: int | None) -> int | None:
+        if v is not None and not (_TTL_MIN <= v <= _TTL_MAX):
+            raise ValueError(
+                f"chunk_ttl_seconds must be in [{_TTL_MIN}, {_TTL_MAX}], got {v}"
+            )
+        return v
+
+    @field_validator("chunk_scopes")
+    @classmethod
+    def chunk_scopes_must_be_valid(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        if len(v) > _SCOPES_MAX_ITEMS:
+            raise ValueError(
+                f"chunk_scopes must have at most {_SCOPES_MAX_ITEMS} items, got {len(v)}"
+            )
+        for item in v:
+            if not (1 <= len(item) <= _SCOPE_MAX_LEN):
+                raise ValueError(
+                    f"each scope string must be 1–{_SCOPE_MAX_LEN} chars; got {len(item)!r}"
+                )
         return v
 
 
@@ -91,7 +127,10 @@ async def _dispatch_ingest(
         p = Path(body.path)
         if p.is_file():
             result = await pipeline.ingest_file(
-                p, body.collection, embedder=embedder, namespace=namespace, ingested_by=body.ingested_by
+                p, body.collection, embedder=embedder, namespace=namespace,
+                ingested_by=body.ingested_by,
+                chunk_ttl_seconds=body.chunk_ttl_seconds,
+                chunk_scopes=body.chunk_scopes,
             )
             file_results = []
             if result.code is not None:
@@ -99,7 +138,10 @@ async def _dispatch_ingest(
             return list(result.warnings), file_results
         elif p.is_dir():
             results = await pipeline.ingest_directory(
-                p, body.collection, embedder=embedder, namespace=namespace, ingested_by=body.ingested_by
+                p, body.collection, embedder=embedder, namespace=namespace,
+                ingested_by=body.ingested_by,
+                chunk_ttl_seconds=body.chunk_ttl_seconds,
+                chunk_scopes=body.chunk_scopes,
             )
             warnings = [w for r in results for w in r.warnings]
             file_results = [

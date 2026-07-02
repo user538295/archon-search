@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from archon_search.model_validation import ModelValidationError, validate_embedd
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _reindex_task
-from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
+from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, ExpiringChunkItem, ExpiringChunksResponse, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
 from archon_search.store import STORE_SCHEMA_VERSION, StoreBusyError
 from archon_search.sync import path_to_collection_name
 from archon_search.types import JobStatus, MigrationJob, MigrationKind, MigrationSpec
@@ -422,12 +423,51 @@ async def list_collection_documents(
                 source_path=doc.source_path,
                 chunk_count=doc.chunk_count,
                 indexed_at=doc.indexed_at,
+                scopes=doc.scopes,
             )
             for doc in items
         ],
         next_cursor=next_cursor,
         total=total,
     )
+
+
+_SECONDS_PER_HOUR: int = 3_600
+
+
+@router.get(
+    "/{name}/expiring",
+    response_model=ExpiringChunksResponse,
+    responses={**_ERROR_401_404, 422: {"model": ErrorDetail}},
+)
+async def get_expiring_chunks(
+    name: str,
+    request: Request,
+    within_hours: int = Query(ge=1, le=8760),
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None),
+) -> ExpiringChunksResponse:
+    """List chunks expiring within *within_hours* hours (E2a BE-4).
+
+    - ``within_hours``: 1–8760 (1 hour to 1 year); required.
+    - ``limit``: 1–200, default 50.
+    - ``cursor``: opaque cursor from a previous response's ``next_cursor``.
+    - Returns 404 when the collection does not exist in the caller's namespace.
+    - Already-expired chunks are excluded; chunks with no expiry are excluded.
+    """
+    ns: str = request.state.namespace
+    search_store = request.app.state.search_store
+
+    meta = await search_store.get_collection_meta(name, namespace=ns)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    within_seconds = within_hours * _SECONDS_PER_HOUR
+    items_raw, next_cursor = await search_store.query_expiring_chunks(
+        name, ns, within_seconds, limit, cursor
+    )
+    items = [ExpiringChunkItem(**row) for row in items_raw]
+    return ExpiringChunksResponse(items=items, next_cursor=next_cursor, page_count=len(items))
 
 
 _ERROR_401_404_409_422 = {
@@ -440,7 +480,7 @@ _ERROR_401_404_409_422 = {
 
 @router.patch("/{name}", response_model=CollectionDetail, responses=_ERROR_401_404_409_422)
 async def patch_collection(name: str, body: PatchCollectionBody, request: Request) -> CollectionDetail | JSONResponse:
-    """Update the embedding model for a collection. Triggers reindex if needed."""
+    """Update a collection's embedding model and/or default TTL. Triggers reindex when the model changes."""
     config: SearchConfig = request.app.state.config
     search_store = request.app.state.search_store
     job_store: JobStore = request.app.state.job_store
@@ -456,66 +496,86 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
     if meta is None:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
-    # Validate embedding model — 422 on ModelValidationError
-    try:
-        new_dim = await validate_embedding_model(body.embedding_model)
-    except ModelValidationError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    # Determine which fields were explicitly provided in the request body.
+    payload = body.model_dump(exclude_unset=True)
 
-    # Dimension mismatch guard
-    stored_dim = await search_store.get_stored_vector_dimension(name, namespace=ns)
-    if stored_dim is not None and stored_dim != new_dim:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"model dimension mismatch: current vectors are {stored_dim}-dim, "
-                f"new model produces {new_dim}-dim; delete and recreate collection to change dimensions"
-            ),
-        )
-
-    # 409 guard: check if reindex job is still active
+    # --- Embedding model logic (only when field is explicitly set AND non-null) ---
     stale_cleared = False
-    if meta.reindex_job_id is not None:
-        job = job_store.get(meta.reindex_job_id)
-        if job is not None and job.status in (JobStatus.RUNNING, JobStatus.PENDING):
-            return JSONResponse(
-                {"detail": "reindex in progress; wait for job to complete before changing embedding model"},
-                status_code=409,
+    if "embedding_model" in payload and body.embedding_model is not None:
+        # Validate embedding model — 422 on ModelValidationError
+        try:
+            new_dim = await validate_embedding_model(body.embedding_model)
+        except ModelValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+        # Dimension mismatch guard
+        stored_dim = await search_store.get_stored_vector_dimension(name, namespace=ns)
+        if stored_dim is not None and stored_dim != new_dim:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"model dimension mismatch: current vectors are {stored_dim}-dim, "
+                    f"new model produces {new_dim}-dim; delete and recreate collection to change dimensions"
+                ),
             )
-        # Stale (DONE/FAILED/CANCELLED) — clear it (must persist below)
-        meta.reindex_job_id = None
-        stale_cleared = True
 
-    requested = body.embedding_model
-    active = meta.active_embedding_model
-    pending = meta.pending_embedding_model
+        # 409 guard: check if reindex job is still active
+        if meta.reindex_job_id is not None:
+            job = job_store.get(meta.reindex_job_id)
+            if job is not None and job.status in (JobStatus.RUNNING, JobStatus.PENDING):
+                return JSONResponse(
+                    {"detail": "reindex in progress; wait for job to complete before changing embedding model"},
+                    status_code=409,
+                )
+            # Stale (DONE/FAILED/CANCELLED) — clear it (must persist below)
+            meta.reindex_job_id = None
+            stale_cleared = True
 
-    # State machine
-    if active == requested and pending is None:
-        # (a) no-op — persist only if stale reindex_job_id was cleared
-        if stale_cleared:
-            await search_store.update_collection_meta(meta)
-    elif pending == requested:
-        # (a') no-op — persist only if stale reindex_job_id was cleared
-        if stale_cleared:
-            await search_store.update_collection_meta(meta)
-    elif pending is not None and active == requested:
-        # (c) revert: clear pending and any stale reindex_job_id
-        meta.pending_embedding_model = None
-        meta.needs_reindex = False
-        meta.reindex_job_id = None
-        await search_store.update_collection_meta(meta)
-    else:
-        # (b) or (d): new model requested
-        chunk_count = await search_store.count_chunks(name, namespace=ns)
-        if chunk_count > 0:
-            meta.pending_embedding_model = requested
-            meta.needs_reindex = True
-        else:
-            meta.active_embedding_model = requested
+        requested = body.embedding_model
+        active = meta.active_embedding_model
+        pending = meta.pending_embedding_model
+
+        # State machine
+        if active == requested and pending is None:
+            # (a) no-op — persist only if stale reindex_job_id was cleared
+            if stale_cleared:
+                await search_store.update_collection_meta(meta)
+        elif pending == requested:
+            # (a') no-op — persist only if stale reindex_job_id was cleared
+            if stale_cleared:
+                await search_store.update_collection_meta(meta)
+        elif pending is not None and active == requested:
+            # (c) revert: clear pending and any stale reindex_job_id
             meta.pending_embedding_model = None
             meta.needs_reindex = False
             meta.reindex_job_id = None
+            await search_store.update_collection_meta(meta)
+        else:
+            # (b) or (d): new model requested
+            chunk_count = await search_store.count_chunks(name, namespace=ns)
+            if chunk_count > 0:
+                meta.pending_embedding_model = requested
+                meta.needs_reindex = True
+            else:
+                meta.active_embedding_model = requested
+                meta.pending_embedding_model = None
+                meta.needs_reindex = False
+                meta.reindex_job_id = None
+            await search_store.update_collection_meta(meta)
+    elif "embedding_model" not in payload:
+        # No embedding_model field at all — check for stale reindex_job_id (for TTL-only path)
+        if meta.reindex_job_id is not None:
+            job = job_store.get(meta.reindex_job_id)
+            if job is None or job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
+                meta.reindex_job_id = None
+                stale_cleared = True
+
+    # --- default_ttl_seconds (explicit null = clear; absent = no change) ---
+    if "default_ttl_seconds" in payload:
+        meta = dataclasses.replace(meta, default_ttl_seconds=body.default_ttl_seconds)
+        await search_store.update_collection_meta(meta)
+    elif stale_cleared and "embedding_model" not in payload:
+        # Persist stale-cleared reindex_job_id even when no other field changed
         await search_store.update_collection_meta(meta)
 
     # Build CollectionDetail response

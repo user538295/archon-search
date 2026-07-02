@@ -167,6 +167,16 @@
 - Action: Use `MagicMock(spec_set=False, active_embedding_model=None)` or plain `MagicMock(active_embedding_model=None)` instead of anonymous types when stubbing objects for route-handler integration tests. This is safer and consistent with the existing BE-5 tests.
 - Confidence: high
 
+**[2026-07-02] — E2a BE-4 TDD: TOML `[collections]` section format required for `make_real_app(toml_content=...)`**
+- Observation: Writing `toml_content = f'collections = ["{path}"]\n'` (top-level key) does NOT populate `cfg.collections`. The config loader reads `doc.get("collections", {})` treating the `[collections]` TOML section as a dict, then reads `collections["collections"]`. A top-level `collections = [...]` key returns a list, not a dict, so `"collections" in list` is False and the path is silently ignored.
+- Action: When using `make_real_app(toml_content=...)` to register collection paths, always write `[collections]\ncollections = ["/path"]\n` (with the section header). A bare `collections = [...]` at the top level is silently ignored.
+- Confidence: high
+
+**[2026-07-02] — E2a BE-4 TDD: `_make_patch_app` in test_routes_collections.py returns 3-tuple, not 2-tuple**
+- Observation: `_make_patch_app` returns `(client, mock_store, validate_patch_ctx)`. Using `client, _ = _make_patch_app(...)` raises `ValueError: too many values to unpack`. The third value (`validate_patch_ctx`) is the context manager for mocking `validate_embedding_model`.
+- Action: Always unpack `client, mock_store, validate_patch_ctx = _make_patch_app(...)` when using this helper. When the context manager is not needed (e.g., the test patches it separately), use `_validate_patch_ctx` as the throwaway name.
+- Confidence: high
+
 **[2026-06-29] — E1a BE-5: spaCy model wheel version must match spaCy minor version range**
 - Observation: Adding `en_core_web_sm-3.8.0` wheel URL with `spacy>=3.7,<4` allows spaCy 3.7.x which is incompatible with the 3.8.0 model (spaCy model versions are minor-version-locked). DA review caught this as Major. Fix: tighten to `spacy>=3.8,<3.9`.
 - Action: When adding a pinned spaCy model wheel URL to optional extras, always match the spaCy version range to the model's minor version. Use `spacy>=X.Y,<X.(Y+1)` and `en_core_web_sm-X.Y.Z` with matching major.minor.

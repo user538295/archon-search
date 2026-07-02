@@ -2275,54 +2275,47 @@ def test_patch_state_a_prime_same_pending(
     mock_store.update_collection_meta.assert_not_called()
 
 
-def test_patch_missing_embedding_model_returns_422(
+def test_patch_missing_embedding_model_accepted(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
-    """PATCH without embedding_model field returns 422."""
+    """E2a BE-4: PATCH without embedding_model is now valid (no-op on model); returns 200."""
+    from archon_search.collection_meta import CollectionMeta
+
     src = tmp_path / "docs"
     src.mkdir()
-    cfg = SearchConfig()
-    cfg.db_path = str(tmp_path / "search")
-    cfg.collections = [str(src)]
-    app = create_app(cfg, tmp_store)
-
-    mock_store = MagicMock()
-    mock_store.migrate_namespace = AsyncMock()
-    mock_store.connect = AsyncMock()
-    mock_store.disconnect = AsyncMock()
-    app.state.search_store = mock_store
-
     name = path_to_collection_name(str(src))
-    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    meta = CollectionMeta(name=name, namespace="default", active_embedding_model="BAAI/bge-small-en-v1.5")
 
-    response = c.patch(f"/collections/{name}", json={})
-    assert response.status_code == 422
+    # _make_patch_app returns (client, mock_store, validate_patch_ctx); unpack all 3
+    client, _, _validate_patch_ctx = _make_patch_app(tmp_path, tmp_store, meta=meta, count_chunks=0)
+
+    with patch(
+        "archon_search.server.routes_collections.validate_embedding_model",
+        side_effect=AssertionError("must not be called when embedding_model is absent"),
+    ):
+        response = client.patch(f"/collections/{name}", json={})
+    assert response.status_code == 200, f"expected 200, got {response.status_code}: {response.text}"
 
 
-def test_patch_null_embedding_model_returns_422(
+def test_patch_null_embedding_model_accepted(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
-    """PATCH with null embedding_model returns 422."""
+    """E2a BE-4: PATCH with null embedding_model is now valid (no-op on model); returns 200."""
+    from archon_search.collection_meta import CollectionMeta
+
     src = tmp_path / "docs"
     src.mkdir()
-    cfg = SearchConfig()
-    cfg.db_path = str(tmp_path / "search")
-    cfg.collections = [str(src)]
-    app = create_app(cfg, tmp_store)
-
-    mock_store = MagicMock()
-    mock_store.migrate_namespace = AsyncMock()
-    mock_store.connect = AsyncMock()
-    mock_store.disconnect = AsyncMock()
-    app.state.search_store = mock_store
-
     name = path_to_collection_name(str(src))
-    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    meta = CollectionMeta(name=name, namespace="default", active_embedding_model="BAAI/bge-small-en-v1.5")
 
-    response = c.patch(f"/collections/{name}", json={"embedding_model": None})
-    assert response.status_code == 422
+    client, _, _validate_patch_ctx = _make_patch_app(tmp_path, tmp_store, meta=meta, count_chunks=0)
+
+    with patch(
+        "archon_search.server.routes_collections.validate_embedding_model",
+        side_effect=AssertionError("must not be called when embedding_model is null"),
+    ):
+        response = client.patch(f"/collections/{name}", json={"embedding_model": None})
+    assert response.status_code == 200, f"expected 200, got {response.status_code}: {response.text}"
 
 
 def test_patch_empty_string_embedding_model_returns_422(
