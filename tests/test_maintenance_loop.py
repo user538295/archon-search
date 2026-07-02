@@ -178,6 +178,7 @@ def test_load_state_missing_file_returns_empty(tmp_path: Path) -> None:
         "next_run_at": None,
         "collection_health": {},
         "retry_counts": {},
+        "last_expired_pruned_at": None,
     }
 
 
@@ -197,6 +198,7 @@ def test_load_state_corrupt_file_returns_empty_and_warns(
         "next_run_at": None,
         "collection_health": {},
         "retry_counts": {},
+        "last_expired_pruned_at": None,
     }
     assert any("WARNING" in r.levelname or r.levelno >= logging.WARNING for r in caplog.records)
 
@@ -268,6 +270,7 @@ async def test_run_one_pass_no_collections(tmp_path: Path) -> None:
     # Stub out per-collection and pass-level policies
     loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
     loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
 
     await loop._run_one_pass()
@@ -291,6 +294,7 @@ async def test_run_one_pass_get_collection_meta_returns_none(tmp_path: Path) -> 
     loop = _make_loop(tmp_path, search_store=ss)
     loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
     loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
 
     await loop._run_one_pass()
@@ -319,6 +323,7 @@ async def test_exclude_exact_ns_col(tmp_path: Path) -> None:
 
     loop._run_fts_optimize = _fake_fts_optimize  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
     loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
 
     await loop._run_one_pass()
@@ -345,6 +350,7 @@ async def test_exclude_bare_col_all_namespaces(tmp_path: Path) -> None:
 
     loop._run_fts_optimize = _fake_fts_optimize  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
     loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
 
     await loop._run_one_pass()
@@ -373,6 +379,7 @@ async def test_run_one_pass_continues_after_per_collection_exception(tmp_path: P
 
     loop._run_fts_optimize = _fake_fts_optimize  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
     loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
 
     await loop._run_one_pass()  # must not raise
@@ -401,10 +408,12 @@ async def test_run_one_pass_policy_exception_does_not_abort_other_policies(tmp_p
 
     fts_mock = AsyncMock(side_effect=RuntimeError("fts failed"))
     orphan_mock = AsyncMock()
+    prune_mock = AsyncMock()
     retry_mock = AsyncMock()
 
     loop._run_fts_optimize = fts_mock  # type: ignore[method-assign]
     loop._run_orphan_cleanup = orphan_mock  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = prune_mock  # type: ignore[method-assign]
     loop._run_failed_ingest_retry = retry_mock  # type: ignore[method-assign]
 
     await loop._run_one_pass()  # must not raise
@@ -488,6 +497,7 @@ async def test_run_one_pass_health_entry_conforms_to_c3_schema(tmp_path: Path) -
     loop = _make_loop(tmp_path, search_store=ss)
     loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
     loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
 
     await loop._run_one_pass()
@@ -502,6 +512,7 @@ async def test_run_one_pass_health_entry_conforms_to_c3_schema(tmp_path: Path) -
         "last_error",
         "meta_chunk_count",
         "mutations_since_recompute",
+        "expired_chunks_removed_last_run",
     }
     assert set(health_entry.keys()) == expected_keys
 

@@ -19,6 +19,7 @@ See ``Documentation/Backlog/D5-maintenance-jobs-policies-team-plan.md`` Task BE-
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -51,6 +52,7 @@ _EMPTY_HEALTH_ENTRY: dict[str, Any] = {
     "last_retry_at": None,
     "last_error": None,
     "meta_chunk_count": 0,
+    "expired_chunks_removed_last_run": 0,
 }
 
 # Top-level state keys for the .maintenance-state.json file (C3 contract).
@@ -59,6 +61,7 @@ _EMPTY_STATE: dict[str, Any] = {
     "next_run_at": None,
     "collection_health": {},
     "retry_counts": {},
+    "last_expired_pruned_at": None,
 }
 
 
@@ -113,7 +116,7 @@ class MaintenanceLoop:
     def _load_state(self) -> dict[str, Any]:
         """Read the maintenance state. Returns empty state on missing or corrupt file."""
         if not self._state_file.exists():
-            return {"last_run_at": None, "next_run_at": None, "collection_health": {}, "retry_counts": {}}
+            return copy.deepcopy(_EMPTY_STATE)
         try:
             raw = json.loads(self._state_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -122,19 +125,20 @@ class MaintenanceLoop:
                 self._state_file,
                 exc,
             )
-            return {"last_run_at": None, "next_run_at": None, "collection_health": {}, "retry_counts": {}}
+            return copy.deepcopy(_EMPTY_STATE)
         if not isinstance(raw, dict):
             logger.warning(
                 "MaintenanceLoop: state file %s has unexpected format; treating as empty",
                 self._state_file,
             )
-            return {"last_run_at": None, "next_run_at": None, "collection_health": {}, "retry_counts": {}}
+            return copy.deepcopy(_EMPTY_STATE)
         # Ensure required top-level keys are present (tolerate partial/old files).
         return {
             "last_run_at": raw.get("last_run_at"),
             "next_run_at": raw.get("next_run_at"),
             "collection_health": raw.get("collection_health", {}),
             "retry_counts": raw.get("retry_counts", {}),
+            "last_expired_pruned_at": raw.get("last_expired_pruned_at"),
         }
 
     def _save_state(self, state: dict[str, Any]) -> None:
@@ -302,6 +306,34 @@ class MaintenanceLoop:
         # Update per-collection health dict.
         if hasattr(self, "_current_health"):
             self._current_health["orphans_removed_last_run"] = orphan_count
+
+    async def _run_expired_chunk_pruning(self, collection: str, namespace: str) -> None:
+        """Prune expired chunks for a single collection (BE-7, E2a).
+
+        Checks ``config.maintenance.prune_expired_chunks`` first; returns
+        immediately when the policy is disabled.
+
+        On success, logs WARNING with the count and doc_ids of deleted chunks
+        (only when at least one chunk was pruned), then sets
+        ``expired_chunks_removed_last_run`` in the current collection health dict.
+        """
+        if not self._config.prune_expired_chunks:
+            return
+
+        pruned_doc_ids = await self._search_store.prune_expired_chunks(collection, namespace)
+        n = len(pruned_doc_ids)
+
+        if n > 0:
+            logger.warning(
+                "MaintenanceLoop: pruned %d expired chunks from %s/%s — doc_ids: %s",
+                n,
+                namespace,
+                collection,
+                pruned_doc_ids,
+            )
+
+        if hasattr(self, "_current_health"):
+            self._current_health["expired_chunks_removed_last_run"] = n
 
     async def _run_failed_ingest_retry(
         self, health: dict[str, Any], retry_counts: dict[str, int]
@@ -505,13 +537,7 @@ class MaintenanceLoop:
         now_str = now.isoformat()
         for col_key in retried_collections:
             if col_key not in health:
-                health[col_key] = {
-                    "fts_optimized_at": None,
-                    "orphans_removed_last_run": 0,
-                    "last_retry_at": None,
-                    "last_error": None,
-                    "meta_chunk_count": 0,
-                }
+                health[col_key] = dict(_EMPTY_HEALTH_ENTRY)
             health[col_key]["last_retry_at"] = now_str
 
     # ------------------------------------------------------------------
@@ -601,7 +627,22 @@ class MaintenanceLoop:
                 )
                 col_health["last_error"] = str(exc)
 
+            try:
+                await self._run_expired_chunk_pruning(col, ns)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "MaintenanceLoop: _run_expired_chunk_pruning failed for %s: %s", key, exc
+                )
+                col_health["last_error"] = str(exc)
+
             health[key] = col_health
+
+        # After the per-collection loop, record the timestamp of the prune pass when
+        # the policy is enabled; preserve the previous value when disabled.
+        if self._config.prune_expired_chunks:
+            last_expired_pruned_at: str | None = now_str
+        else:
+            last_expired_pruned_at = state.get("last_expired_pruned_at")
 
         # Pass-level retry (once per pass, after all per-collection work).
         # Passes the pass-level health and retry_counts dicts so the method
@@ -617,6 +658,7 @@ class MaintenanceLoop:
             "next_run_at": next_run_at,
             "collection_health": health,
             "retry_counts": retry_counts,
+            "last_expired_pruned_at": last_expired_pruned_at,
         }
         self._save_state(new_state)
 
