@@ -119,6 +119,44 @@ class McpErrorResponse(TypedDict):
 
 _ERR_SCHEMA = "schema_validation_error"
 _VALID_GRAPH_MODES: tuple[None | str, ...] = (None, "naive", "local", "global")
+# E2a — ingest TTL and scope validation limits (same constraints as routes_jobs.py IngestRequest validators)
+_INT32_MAX: int = 2**31 - 1
+_MAX_SCOPE_LIST_ITEMS: int = 100
+_MAX_SCOPE_ITEM_LEN: int = 255
+
+
+def _validate_ttl_and_scopes(
+    chunk_ttl_seconds: int | None,
+    chunk_scopes: list[str] | None,
+) -> "McpErrorResponse | None":
+    """Validate chunk_ttl_seconds and chunk_scopes for MCP ingest tools.
+
+    Returns a McpErrorResponse dict if validation fails, None if valid.
+    Mirrors the validation in routes_jobs.py IngestRequest validators.
+    """
+    if chunk_ttl_seconds is not None:
+        if chunk_ttl_seconds < 1 or chunk_ttl_seconds > _INT32_MAX:
+            return McpErrorResponse(
+                error=f"chunk_ttl_seconds must be in [1, {_INT32_MAX}]; got {chunk_ttl_seconds}",
+                code="invalid_parameter",
+            )
+    if chunk_scopes is not None:
+        if len(chunk_scopes) > _MAX_SCOPE_LIST_ITEMS:
+            return McpErrorResponse(
+                error=f"chunk_scopes must not exceed {_MAX_SCOPE_LIST_ITEMS} items; got {len(chunk_scopes)}",
+                code="invalid_parameter",
+            )
+        for scope in chunk_scopes:
+            scope_chars = len(scope)
+            if scope_chars < 1 or scope_chars > _MAX_SCOPE_ITEM_LEN:
+                return McpErrorResponse(
+                    error=(
+                        f"each scope must be 1-{_MAX_SCOPE_ITEM_LEN} characters; "
+                        f"got {scope_chars} for {scope!r}"
+                    ),
+                    code="invalid_parameter",
+                )
+    return None
 
 
 _PATH_UNSAFE_MESSAGES: dict[str, str] = {
@@ -1004,8 +1042,13 @@ def create_app(
     async def ingest_file(
         path: str,
         collection: str | None = None,
+        chunk_ttl_seconds: int | None = None,
+        chunk_scopes: list[str] | None = None,
     ) -> dict[str, Any]:
         """Ingest a single file into the RAG store."""
+        _err = _validate_ttl_and_scopes(chunk_ttl_seconds, chunk_scopes)
+        if _err is not None:
+            return _err
         _ingest_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         try:
@@ -1021,6 +1064,8 @@ def create_app(
                 result = await pipeline.ingest_file(
                     validated, _ingest_col, embedder=_ingest_embedder, ingested_by="http",
                     namespace=_ingest_ns,
+                    chunk_ttl_seconds=chunk_ttl_seconds,
+                    chunk_scopes=chunk_scopes,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -1051,8 +1096,13 @@ def create_app(
         glob_pattern: str = "**/*",
         collection: str | None = None,
         ctx: Context | None = None,
+        chunk_ttl_seconds: int | None = None,
+        chunk_scopes: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Ingest all files in a directory into the RAG store."""
+        _err = _validate_ttl_and_scopes(chunk_ttl_seconds, chunk_scopes)
+        if _err is not None:
+            return _err
         _dir_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         try:
@@ -1078,6 +1128,8 @@ def create_app(
                     embedder=_dir_embedder,
                     ingested_by="http",
                     namespace=_dir_ns,
+                    chunk_ttl_seconds=chunk_ttl_seconds,
+                    chunk_scopes=chunk_scopes,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)

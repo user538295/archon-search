@@ -452,16 +452,16 @@ flowchart LR
         - [x] #unit_test — `test_patch_collection_embedding_model_only_still_works` — PATCH body with only `embedding_model` (no `default_ttl_seconds`) still triggers reindex correctly
         - [x] #unit_test — `test_patch_collection_embedding_model_explicit_null_accepted` — PATCH body `{'embedding_model': null, 'default_ttl_seconds': 3600}` returns 200; no reindex triggered; only TTL updated
 
-- [ ] **BE-5** — MCP: `ingest_file` and `ingest_directory` tools gain `chunk_ttl_seconds: int | None` and `chunk_scopes: list[str] | None`; thread to `pipeline.ingest_file`/`pipeline.ingest_directory`. MCP validation: MCP `ingest_file` and `ingest_directory` tools must validate `chunk_ttl_seconds` (if set: must be integer in [1, 2^31-1]; 0 or negative → error) and `chunk_scopes` (if set: max 100 items, each 1-255 UTF-8 chars; violations → error). Return `{'code': 'invalid_parameter', 'error': '<message>'}` in the result dict, consistent with existing MCP ingest error patterns. #backend-role
+- [x] **BE-5** — MCP: `ingest_file` and `ingest_directory` tools gain `chunk_ttl_seconds: int | None` and `chunk_scopes: list[str] | None`; thread to `pipeline.ingest_file`/`pipeline.ingest_directory`. MCP validation: MCP `ingest_file` and `ingest_directory` tools must validate `chunk_ttl_seconds` (if set: must be integer in [1, 2^31-1]; 0 or negative → error) and `chunk_scopes` (if set: max 100 items, each 1-255 UTF-8 chars; violations → error). Return `{'code': 'invalid_parameter', 'error': '<message>'}` in the result dict, consistent with existing MCP ingest error patterns. #backend-role
     - Presentation · 1.5h
     - needs BE-4 · completes C1
     - Tests
         - Note: BE-5 test file must include `pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]` and use `AsyncMock` for async pipeline methods.
-        - #unit_test — `test_mcp_ingest_file_accepts_chunk_ttl_seconds` — tool accepts param, passes to pipeline
-        - #unit_test — `test_mcp_ingest_directory_accepts_chunk_scopes` — tool accepts param, passes to pipeline
-        - #unit_test — `test_mcp_ingest_file_invalid_ttl_zero_returns_error` — `chunk_ttl_seconds=0` → result contains `code='invalid_parameter'`
-        - #unit_test — `test_mcp_ingest_file_invalid_scopes_overlong_returns_error` — scope string of 256 chars → result contains `code='invalid_parameter'`
-        - #integration_test — `test_mcp_ingest_file_with_ttl_stores_expires_at` — MCP call → store has expires_at
+        - [x] #unit_test — `test_mcp_ingest_file_accepts_chunk_ttl_seconds` — tool accepts param, passes to pipeline
+        - [x] #unit_test — `test_mcp_ingest_directory_accepts_chunk_scopes` — tool accepts param, passes to pipeline
+        - [x] #unit_test — `test_mcp_ingest_file_invalid_ttl_zero_returns_error` — `chunk_ttl_seconds=0` → result contains `code='invalid_parameter'`
+        - [x] #unit_test — `test_mcp_ingest_file_invalid_scopes_overlong_returns_error` — scope string of 256 chars → result contains `code='invalid_parameter'`
+        - [x] #integration_test — `test_mcp_ingest_file_with_ttl_stores_expires_at` — MCP call → store has expires_at
 
 - [ ] **T-1** — E2e: ingest a file with `chunk_ttl_seconds`; verify `GET /collections/{name}/expiring` returns it within window; verify ingest via `POST /ingest` with PATCH-set collection default TTL; verify `chunk_ttl_seconds=0` → 422; verify `chunk_scopes=[...×101]` → 422; run migration twice; verify no error and no data change #tester-role
     - — · 2.5h
