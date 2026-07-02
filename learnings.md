@@ -287,6 +287,31 @@
 **Index slicing, not `[-1]`, for isolating entries from a second session**
 - Action: Use `entries[before_count]` to isolate entries written by a second app session sharing the same log dir. `[-1]` picks the last overall entry, not the first one from session 2.
 
+**[2026-07-02] — E1c T-1: single-file ingest with chunk_size=512 produces only 1 retrieved result even with top_k=1**
+- Observation: A document repeated 6× (~780 chars) with chunk_size=512 produces 2 chunks, but the vector+FTS search with a stub embedder returns at most 1 candidate (near_misses=[]). The `assert near_misses` guard fails even though the doc theoretically has 2 chunks.
+- Action: To guarantee near_misses is non-empty in an explain e2e test, ingest TWO separate files (each produces its own chunk), then use top_k=1. With 2 distinct docs in the index, the second doc's chunk reliably lands in near_misses. Repeating a single doc is not sufficient due to stub embedder score symmetry.
+- Confidence: high
+
+**[2026-07-02] — E1c T-1: _REQUIRED_TOP_LEVEL_FIELDS coverage illusion in backward-compat tests**
+- Observation: A backward-compatibility smoke test that hand-curates a subset of response fields can silently miss regressions on excluded fields. All four reviewers flagged the initial 9-field set as Major; the full ExplainResponse has 16 fields (15 always-present + stage_timings_ms which is conditionally popped).
+- Action: When writing a backward-compatibility test for a Pydantic response model, use `ExplainResponse.model_fields.keys()` to enumerate the complete field set, then explicitly document which fields are intentionally excluded and why (e.g., `stage_timings_ms` is popped from the dict when None). Hand-curating a partial set without documentation creates a coverage illusion.
+- Confidence: high
+
+**[2026-07-02] — E1c BE-5: guard ordering creates shadow test problem for S14**
+- Observation: When two 422 guards are ordered sequentially (graph_not_enabled before graph_mode_with_collections), a test that sends graph_mode+collections with graph disabled will hit the first guard and never reach the second. The S14 test was a false positive until graph_enabled=True was added.
+- Action: When testing a guard that comes AFTER another guard in the same handler, ensure the precondition for the earlier guard is satisfied (here: graph.enabled=True) so only the target guard fires. Assert the exact error message to confirm which guard fired.
+- Confidence: high
+
+**[2026-07-02] — E1c BE-5: source-inspection tests disguise unreachable handlers as covered**
+- Observation: `inspect.getsource()` checks pass whether a handler is correct, wrong, or unreachable. An abandoned HTTP-test attempt that falls back to source inspection creates a false-positive that survives all future test runs.
+- Action: Never use inspect.getsource() as a proxy for behavior tests. If a handler is currently unreachable via the public API (e.g., blocked by a prior guard), send collections WITHOUT the blocking param and mock the pipeline to raise the error. This reaches the handler via a valid (non-blocked) path.
+- Confidence: high
+
+**[2026-07-02] — E1c BE-5: new route guards break existing tests that send now-guarded params**
+- Observation: Adding a pre-pipeline guard (graph_not_enabled) to a route breaks existing tests that send graph_mode with the default config (graph disabled). Those tests rely on getting through to a mocked pipeline.explain and now get 422 before reaching it.
+- Action: When adding a guard to a route, check existing tests in the same route's test files for requests that use the now-guarded param. Update those tests to satisfy the guard's precondition (e.g., graph_enabled=True + spaCy stub).
+- Confidence: high
+
 **`os.getuid()` is POSIX-only — use `getattr` form in skipif**
 - Action: `@pytest.mark.skipif(getattr(os, "getuid", lambda: -1)() == 0, ...)`. Bare `os.getuid()` crashes test collection on Windows.
 

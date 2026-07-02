@@ -698,6 +698,7 @@ def create_app(
         rerank: bool = True,
         hyde: bool = False,
         rag_fusion: bool = False,
+        graph_mode: str | None = None,
     ) -> dict[str, Any]:
         """Return the per-stage retrieval/reranking trace for a query, plus the
         routing decision when no collection is pinned. Operates in the caller's
@@ -722,12 +723,27 @@ def create_app(
                 code="validation_error",
             )
 
-        # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
+        # graph_mode validation — must be None, "naive", "local", or "global".
+        if graph_mode not in _VALID_GRAPH_MODES:
+            return McpErrorResponse(
+                error=f"graph_mode must be one of {list(m for m in _VALID_GRAPH_MODES if m is not None)!r}",
+                code="invalid_graph_mode",
+            )
+        _explain_graph_config = getattr(config, "graph", None)
+        _explain_graph_enabled = (
+            getattr(_explain_graph_config, "enabled", False) if _explain_graph_config is not None else False
+        )
+        if graph_mode is not None and not _explain_graph_enabled:
+            return McpErrorResponse(error="graph_mode requires [graph] enabled=true", code="graph_disabled")
+
+        # Mutual exclusion: graph_mode wins over HyDE — skip the LLM call entirely.
+        # rag_fusion=True also suppresses HyDE. graph_mode check comes first so the
+        # HyDE LLM call is never made when graph_mode is set (mirrors rag_fusion pattern).
         _explain_rf_config = getattr(config, "rag_fusion", None)
         if _explain_rf_config is None:
             from archon_search.config import RAGFusionConfig  # noqa: PLC0415
             _explain_rf_config = RAGFusionConfig()
-        if rag_fusion:
+        if graph_mode is not None or rag_fusion:
             explain_hyde_vector, explain_hyde_applied = None, False
         else:
             _explain_hyde_config = getattr(config, "hyde", None)
@@ -740,6 +756,14 @@ def create_app(
                 )
             except RuntimeError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
+
+        # graph_mode with multi-collection fanout is not supported in E1c — each collection
+        # has independent graph tables; cross-collection graph merge is out of scope.
+        if graph_mode is not None and collections is not None:
+            return McpErrorResponse(
+                error="graph_mode is not supported with multi-collection fanout (collections parameter)",
+                code="graph_mode_multi_collection_unsupported",
+            )
 
         # Multi-collection fan-out path (B3). The single/routing path below is unchanged.
         if collection is not None and collections is not None:
@@ -807,6 +831,7 @@ def create_app(
                     rag_fusion_attempted=result.rag_fusion_attempted,
                     rag_fusion_failure_reason=result.rag_fusion_failure_reason,
                     rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
+                    graph_mode_applied=result.graph_mode_applied,
                 )
                 result_dict = response.model_dump(mode="json", exclude_none=False)
                 result_dict.pop("stage_timings_ms", None)
@@ -879,12 +904,18 @@ def create_app(
                 if _explain_embedder is not pipeline._global_embedder:
                     query_vector = None
                     explain_hyde_applied = False
+                # graph_mode: null the query_vector so routing-computed vectors do not
+                # leak into graph retrieval (explain_hyde_applied is already False from
+                # the early HyDE suppression block above).
+                if graph_mode is not None:
+                    query_vector = None
                 result = await pipeline.explain(
                     req.query, chosen, top_k=req.top_k, rerank=req.rerank, namespace=ns,
                     query_vector=query_vector, embedder=_explain_embedder,
                     rag_fusion=rag_fusion,
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_explain_rf_config,
+                    graph_mode=graph_mode,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -909,6 +940,7 @@ def create_app(
                     rag_fusion_attempted=result.rag_fusion_attempted,
                     rag_fusion_failure_reason=result.rag_fusion_failure_reason,
                     rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
+                    graph_mode_applied=result.graph_mode_applied,
                 )
                 if writer is not None:
                     try:
