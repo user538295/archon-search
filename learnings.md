@@ -157,6 +157,16 @@
 - Action: Every early-return in ingest_file (i.e., every non-happy-path that returns before chunks are written) must have at least one unit test verifying (a) status="error", (b) chunks_created=0, and (c) no downstream write methods called.
 - Confidence: high
 
+**[2026-07-02] — E1c T-2: S6 scenario says "(both tested)" — always add separate tests for each graph_mode value**
+- Observation: S6 explicitly says "graph_mode='local' or 'global' (both tested)." The initial implementation only wrote a test for "local". Three DA reviewers independently flagged the missing "global" variant as Major. The plan task description only mentions "local" explicitly, but the S6 scenario definition (which T-2 "completes") mandates both.
+- Action: When a scenario says "both tested" or "each mode tested," always add separate tests for each. The task spec's T-2 Tests block naming only one mode does not override the scenario definition; the scenario is authoritative for what "completes S6" means.
+- Confidence: high
+
+**[2026-07-02] — E1c T-2: type("Meta", ...) anonymous stub is fragile — use MagicMock for route-handler integration tests**
+- Observation: Using `type("Meta", (), {"active_embedding_model": None})()` as a meta stub fails with AttributeError if the route handler ever reads any other attribute. Brooks-Lint and one DA agent flagged this as Moderate. `MagicMock(active_embedding_model=None)` tolerates incidental attribute reads while still returning None for the key field.
+- Action: Use `MagicMock(spec_set=False, active_embedding_model=None)` or plain `MagicMock(active_embedding_model=None)` instead of anonymous types when stubbing objects for route-handler integration tests. This is safer and consistent with the existing BE-5 tests.
+- Confidence: high
+
 **[2026-06-29] — E1a BE-5: spaCy model wheel version must match spaCy minor version range**
 - Observation: Adding `en_core_web_sm-3.8.0` wheel URL with `spacy>=3.7,<4` allows spaCy 3.7.x which is incompatible with the 3.8.0 model (spaCy model versions are minor-version-locked). DA review caught this as Major. Fix: tighten to `spacy>=3.8,<3.9`.
 - Action: When adding a pinned spaCy model wheel URL to optional extras, always match the spaCy version range to the model's minor version. Use `spacy>=X.Y,<X.(Y+1)` and `en_core_web_sm-X.Y.Z` with matching major.minor.

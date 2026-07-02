@@ -452,7 +452,7 @@ flowchart LR
 
 ### Phase 3 · Return naive-mode traversal provenance *(blocked on E1a)*
 
-- [ ] **BE-7** — Wire real naive graph traversal in `pipeline.explain()`: when `graph_mode="naive"`, call the E1a graph retrieval function (symbol confirmed via Q3); attach returned `GraphProvenance` to each graph-retrieved `ScoredSearchCandidate`; handle dedup (graph provenance wins over pure hybrid for same chunk); set `graph_mode_applied="naive"` on result #backend-role
+- [x] **BE-7** — Wire real naive graph traversal in `pipeline.explain()`: when `graph_mode="naive"`, call the E1a graph retrieval function (symbol confirmed via Q3); attach returned `GraphProvenance` to each graph-retrieved `ScoredSearchCandidate`; handle dedup (graph provenance wins over pure hybrid for same chunk); set `graph_mode_applied="naive"` on result #backend-role
     - Use Cases · 4.0h
     - needs BE-5, E1a-stable · completes S2, S7, S8, S11
     - Tests

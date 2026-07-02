@@ -591,3 +591,163 @@ def test_get_neighbours_multiple_entity_ids() -> None:
     result = asyncio.run(_run())
     assert len(result) == 1, f"Expected 1 neighbour (B), got {len(result)}: {[r.entity_name for r in result]}"
     assert result[0].entity_name == node_b.entity_name
+
+
+# ---------------------------------------------------------------------------
+# get_edges_for_nodes
+# ---------------------------------------------------------------------------
+
+
+def test_get_edges_for_nodes_empty_entity_ids() -> None:
+    """get_edges_for_nodes with empty entity_ids returns [] immediately without any DB call."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-edges-empty")
+    mock_db = AsyncMock()
+
+    async def _run() -> list:
+        store._db = mock_db
+        return await store.get_edges_for_nodes("test-col", [])
+
+    result = asyncio.run(_run())
+    assert result == []
+    mock_db.open_table.assert_not_called()
+
+
+def _build_edges_table_mock(edges: list) -> MagicMock:
+    """Build a mock edges table returning *edges* as an Arrow table."""
+    import pyarrow as pa
+
+    edge_schema = pa.schema([
+        pa.field("id", pa.utf8()),
+        pa.field("source_node_id", pa.utf8()),
+        pa.field("target_node_id", pa.utf8()),
+        pa.field("relationship_type", pa.utf8()),
+        pa.field("source_doc_id", pa.utf8()),
+    ])
+    arrow = pa.table(
+        {
+            "id": [e.id for e in edges],
+            "source_node_id": [e.source_node_id for e in edges],
+            "target_node_id": [e.target_node_id for e in edges],
+            "relationship_type": [e.relationship_type.value for e in edges],
+            "source_doc_id": [e.source_doc_id for e in edges],
+        },
+        schema=edge_schema,
+    ) if edges else pa.table(
+        {"id": [], "source_node_id": [], "target_node_id": [], "relationship_type": [], "source_doc_id": []},
+        schema=edge_schema,
+    )
+    query = MagicMock()
+    query.where.return_value = query
+    query.to_arrow = AsyncMock(return_value=arrow)
+    table = MagicMock()
+    table.query.return_value = query
+    return table
+
+
+def test_get_edges_for_nodes_entity_as_source() -> None:
+    """get_edges_for_nodes returns edges where the queried entity is the source."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    node_a = _node("A", EntityType.concept)
+    node_b = _node("B", EntityType.concept)
+    edge_ab = _edge(node_a, node_b)
+
+    store = GraphStore("/tmp/fake-db-edges-source")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=_build_edges_table_mock([edge_ab]))
+
+    async def _run() -> list:
+        store._db = mock_db
+        return await store.get_edges_for_nodes("test-col", [node_a.id])
+
+    result = asyncio.run(_run())
+    assert len(result) == 1
+    assert result[0].id == edge_ab.id
+    assert result[0].source_node_id == node_a.id
+    assert result[0].target_node_id == node_b.id
+
+
+def test_get_edges_for_nodes_entity_as_target() -> None:
+    """get_edges_for_nodes returns edges where the queried entity is the target."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    node_a = _node("A", EntityType.concept)
+    node_b = _node("B", EntityType.concept)
+    edge_ab = _edge(node_a, node_b)
+
+    store = GraphStore("/tmp/fake-db-edges-target")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=_build_edges_table_mock([edge_ab]))
+
+    async def _run() -> list:
+        store._db = mock_db
+        # Query by target node (B) — should still return the edge A→B
+        return await store.get_edges_for_nodes("test-col", [node_b.id])
+
+    result = asyncio.run(_run())
+    assert len(result) == 1
+    assert result[0].id == edge_ab.id
+
+
+def test_get_edges_for_nodes_entity_as_both_source_and_target() -> None:
+    """get_edges_for_nodes returns edges in both directions for the same entity."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    node_a = _node("A", EntityType.concept)
+    node_b = _node("B", EntityType.concept)
+    node_c = _node("C", EntityType.concept)
+    edge_ab = _edge(node_a, node_b)
+    # Edge from C to A (A is target here)
+    edge_ca = GraphEdge(
+        id=make_stable_edge_id(node_c.id, node_a.id, RelationshipType.uses.value),
+        source_node_id=node_c.id,
+        target_node_id=node_a.id,
+        relationship_type=RelationshipType.uses,
+        source_doc_id="doc-abc",
+    )
+
+    store = GraphStore("/tmp/fake-db-edges-bidirectional")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=_build_edges_table_mock([edge_ab, edge_ca]))
+
+    async def _run() -> list:
+        store._db = mock_db
+        # A appears as source in A→B and as target in C→A
+        return await store.get_edges_for_nodes("test-col", [node_a.id])
+
+    result = asyncio.run(_run())
+    assert len(result) == 2
+    returned_ids = {e.id for e in result}
+    assert edge_ab.id in returned_ids
+    assert edge_ca.id in returned_ids
+
+
+def test_get_edges_for_nodes_no_matching_edges() -> None:
+    """get_edges_for_nodes returns [] when no edges match the given entity_ids."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    node_x = _node("X", EntityType.concept)
+
+    store = GraphStore("/tmp/fake-db-edges-nomatch")
+    mock_db = AsyncMock()
+    # Edges table returns empty result
+    mock_db.open_table = AsyncMock(return_value=_build_edges_table_mock([]))
+
+    async def _run() -> list:
+        store._db = mock_db
+        return await store.get_edges_for_nodes("test-col", [node_x.id])
+
+    result = asyncio.run(_run())
+    assert result == []

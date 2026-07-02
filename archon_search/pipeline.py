@@ -14,7 +14,7 @@ from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal
 
-from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+from archon_search._diagnostics import GraphProvenance, ScoredSearchCandidate, SearchScoreBreakdown, TraversalStep
 from archon_search._privacy import _query_fingerprint
 from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, FanoutTimings, IngestedBy, IngestError, IngestResult, SearchResult, _file_exceeds_limit
 from archon_search.acl import apply_acl_filter, resolve_acl
@@ -32,7 +32,7 @@ from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
 from archon_search.store import SearchStore, StoreBusyError, elementwise_sum, parse_metadata, normalize_ingested_by
 from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
 from archon_search.graph_types import ChunkInput
-from archon_search.graph_expander import tokenize_and_generate_ngrams
+from archon_search.graph_expander import build_expanded_text, tokenize_and_generate_ngrams
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig, RAGFusionConfig, SearchConfig
@@ -1385,9 +1385,74 @@ class SearchPipeline:
                 excluded_collections=excluded,
             )
 
-        # --- Graph mode path (bypasses RAG Fusion; null pass-through before E1a wiring) ---
+        # --- Graph mode path (bypasses RAG Fusion) ---
         if graph_mode is not None:
             _single_embedder = embedder if embedder is not None else self._global_embedder
+
+            if graph_mode == "naive":
+                # E1a wiring (BE-7): graph retrieval + standard hybrid merge.
+                graph_candidates = await self._explain_naive_graph_candidates(
+                    query, collection, namespace=namespace, embedder=_single_embedder,
+                )
+
+                if not graph_candidates:
+                    # No graph retrieval (graph disabled, no entity match, or no edges).
+                    # Fall back to standard hybrid search with null provenance.
+                    result = await self._explain_standard(
+                        query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
+                        query_vector=query_vector, embedder=_single_embedder,
+                    )
+                    result.graph_mode_applied = "naive"
+                    result.rag_fusion_applied = False
+                    result.rag_fusion_attempted = False
+                    return result
+
+                # Standard hybrid search with original query for baseline candidates.
+                orig_vector = (
+                    query_vector if query_vector is not None
+                    else await _single_embedder.embed_one(query)
+                )
+                candidate_depth = max(self._top_k_retrieve * 3, 20)
+                try:
+                    hybrid_candidates = await self.store.hybrid_search_with_trace(
+                        collection, orig_vector, query, candidate_depth=candidate_depth
+                    )
+                except Exception as exc:
+                    raise ExplainStageError("store", exc) from exc
+
+                # Merge: graph provenance wins for same chunk (S8).
+                graph_by_chunk: dict[str, ScoredSearchCandidate] = {
+                    c.chunk_id: c for c in graph_candidates
+                }
+                merged: list[ScoredSearchCandidate] = list(graph_candidates)
+                for c in hybrid_candidates:
+                    if c.chunk_id not in graph_by_chunk:
+                        merged.append(c)
+
+                # ACL filter on merged pool.
+                merged, acl_filtered = apply_acl_filter(merged, lambda c: c.acl, namespace)
+
+                # Rerank merged set using original query.
+                if rerank and self._reranker is not None:
+                    try:
+                        merged = await self._reranker.rerank_candidates(
+                            query, merged, top_k=len(merged)
+                        )
+                    except Exception as exc:
+                        raise ExplainStageError("reranker", exc) from exc
+
+                merged.sort(key=lambda c: (-_final_score(c), c.doc_id, c.chunk_id))
+
+                return ExplainPipelineResult(
+                    top_results=merged[:top_k],
+                    near_misses=merged[top_k : top_k + 20],
+                    acl_filtered=acl_filtered,
+                    rag_fusion_applied=False,
+                    rag_fusion_attempted=False,
+                    graph_mode_applied="naive",
+                )
+
+            # local/global: stub for BE-8 (community traversal wiring)
             result = await self._explain_standard(
                 query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
                 query_vector=query_vector, embedder=_single_embedder,
@@ -1530,6 +1595,136 @@ class SearchPipeline:
             query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
             query_vector=query_vector, embedder=_single_embedder,
         )
+
+    async def _explain_naive_graph_candidates(
+        self,
+        query: str,
+        collection: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        *,
+        embedder: "Embedder",
+    ) -> list[ScoredSearchCandidate]:
+        """Graph retrieval for naive-mode explain — E1a wiring (BE-7).
+
+        Performs graph traversal (query entity matching → edge traversal → query
+        expansion via neighbour names), runs hybrid search with the expanded query,
+        and attaches ``GraphProvenance`` to every returned candidate.
+
+        Returns ``[]`` when any of the following are true:
+        - ``_graph_store`` is not configured (graph feature disabled)
+        - no entity names from the query match graph nodes
+        - matched nodes have no edges (``relationship`` would be missing)
+        - the expanded query equals the original (all neighbour names already in query)
+
+        Does NOT apply ACL filtering — the caller merges the graph candidates with
+        the hybrid baseline and applies ACL once on the merged pool.
+        """
+        if self._graph_store is None:
+            return []
+
+        fp = _query_fingerprint(query)
+
+        # Step 1: tokenise query → N-gram candidates.
+        ngrams: list[str] = await asyncio.to_thread(tokenize_and_generate_ngrams, query)
+        if not ngrams:
+            logger.debug("_explain_naive_graph: empty query ngrams (fp=%s); returning []", fp)
+            return []
+
+        # Step 2: find matching graph nodes.
+        try:
+            matched_nodes = await self._graph_store.find_nodes_by_name(collection, ngrams)
+        except Exception:
+            logger.warning(
+                "_explain_naive_graph: find_nodes_by_name failed for collection %r (fp=%s); returning []",
+                collection, fp, exc_info=True,
+            )
+            return []
+
+        if not matched_nodes:
+            logger.debug("_explain_naive_graph: no graph entities matched query (fp=%s); returning []", fp)
+            return []
+
+        matched_ids = [n.id for n in matched_nodes]
+
+        # Step 3: fetch edges for matched nodes (needed for TraversalStep.relationship).
+        try:
+            edges = await self._graph_store.get_edges_for_nodes(collection, matched_ids)
+        except Exception:
+            logger.warning(
+                "_explain_naive_graph: get_edges_for_nodes failed for collection %r (fp=%s); using []",
+                collection, fp, exc_info=True,
+            )
+            edges = []
+
+        # Step 4: get first-degree neighbour nodes for query expansion.
+        try:
+            neighbour_nodes = await self._graph_store.get_neighbours(collection, matched_ids)
+        except Exception:
+            logger.warning(
+                "_explain_naive_graph: get_neighbours failed for collection %r (fp=%s); returning []",
+                collection, fp, exc_info=True,
+            )
+            return []
+
+        if not neighbour_nodes:
+            logger.debug("_explain_naive_graph: matched nodes have no neighbours (fp=%s); returning []", fp)
+            return []
+
+        # Step 5: build expanded query text.
+        neighbour_names = [n.entity_name for n in neighbour_nodes]
+        expanded_text, appended_names = build_expanded_text(query, neighbour_names)
+
+        if not appended_names:
+            logger.debug("_explain_naive_graph: no new neighbour names appended (fp=%s); returning []", fp)
+            return []
+
+        # Step 6: build traversal steps from matched nodes + edges.
+        # Each step records a matched entity and its outgoing/incoming edge relationship,
+        # so the operator can trace: "query matched entity E via relationship R".
+        matched_id_to_node = {n.id: n for n in matched_nodes}
+        steps: list[TraversalStep] = []
+        seen_step_keys: set[tuple[str, str]] = set()
+
+        for edge in edges:
+            if edge.source_node_id in matched_id_to_node:
+                node = matched_id_to_node[edge.source_node_id]
+            elif edge.target_node_id in matched_id_to_node:
+                node = matched_id_to_node[edge.target_node_id]
+            else:
+                continue
+            rel = edge.relationship_type.value
+            key = (node.id, rel)
+            if key not in seen_step_keys:
+                steps.append(TraversalStep(
+                    entity=node.entity_name,
+                    entity_id=node.id,
+                    relationship=rel,
+                ))
+                seen_step_keys.add(key)
+
+        if not steps:
+            # Matched nodes have no edges — relationship is required on TraversalStep.
+            logger.debug(
+                "_explain_naive_graph: matched nodes have no edges → no valid provenance (fp=%s); returning []",
+                fp,
+            )
+            return []
+
+        # Step 7: hybrid search with the expanded query.
+        expanded_vector = await embedder.embed_one(expanded_text)
+        candidate_depth = max(self._top_k_retrieve * 3, 20)
+        try:
+            candidates = await self.store.hybrid_search_with_trace(
+                collection, expanded_vector, expanded_text, candidate_depth=candidate_depth
+            )
+        except Exception as exc:
+            raise ExplainStageError("store", exc) from exc
+
+        # Step 8: attach provenance to every graph-retrieved candidate (each gets its own instance).
+        for c in candidates:
+            c.graph_provenance = GraphProvenance(steps=list(steps))
+
+        return candidates
 
     async def _explain_standard(
         self,

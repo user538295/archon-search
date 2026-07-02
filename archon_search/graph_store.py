@@ -276,6 +276,31 @@ class GraphStore:
 
         return self._arrow_to_nodes(nodes_arrow)
 
+    async def get_edges_for_nodes(
+        self, collection: str, entity_ids: list[str]
+    ) -> list[GraphEdge]:
+        """Return edges where any of *entity_ids* appears as source or target node.
+
+        Uses the same predicate as ``get_neighbours`` so edges in either direction
+        are returned.  Useful for building ``TraversalStep`` objects that require
+        the edge ``relationship_type`` (E1c naive-mode provenance).
+
+        Empty *entity_ids* returns ``[]`` immediately.
+        """
+        if not entity_ids:
+            return []
+
+        self._validate_collection(collection)
+        db = self._require_db()
+
+        edges_table = await db.open_table(self._edges_table_name(collection))
+        src_pred = _where_in("source_node_id", entity_ids)
+        tgt_pred = _where_in("target_node_id", entity_ids)
+        pred = "(" + src_pred + " OR " + tgt_pred + ")"
+
+        arrow = await edges_table.query().where(pred).to_arrow()
+        return self._arrow_to_edges(arrow)
+
     async def edge_count(self, collection: str) -> int:
         """Return the number of edges in *collection*'s graph table; 0 if table absent."""
         self._validate_collection(collection)
