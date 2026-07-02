@@ -409,7 +409,7 @@ flowchart LR
     - Tests
         - #integration_test — `test_openapi_snapshot` — run `tests/server/test_openapi_snapshot.py` with `--update-openapi-snapshot`; verify snapshot diff contains graph_mode, graph_mode_applied, graph_provenance, TraversalStep, GraphProvenance
 
-- [ ] **T-1** — E2e smoke — schema extension + null pass-through #tester-role
+- [x] **T-1** — E2e smoke — schema extension + null pass-through #tester-role
     - — · 2.0h
     - needs BE-4, BE-9 · completes S1, S13
     - Tests
