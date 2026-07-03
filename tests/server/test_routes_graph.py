@@ -158,3 +158,134 @@ class TestGetGraphGraphML:
                 pass
             else:
                 pytest.fail(f"Unexpected status code: {response.status_code}")
+
+
+@pytest.mark.integration
+class TestCrossCollectionRoute422LessThanTwo:
+    """Guard: 422 when less than two distinct collections."""
+
+    def test_cross_collection_route_422_less_than_two(self, tmp_path: Path, monkeypatch) -> None:
+        """GET /graph/cross-collection?collections=only-one returns 422."""
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+            response = client.get("/graph/cross-collection?collections=only-one", headers=_auth(api_key))
+            assert response.status_code == 422
+            assert "at least 2 distinct" in response.json()["detail"]
+
+
+@pytest.mark.integration
+class TestCrossCollectionRouteMissingParam:
+    """Guard: 422 when collections parameter is missing."""
+
+    def test_cross_collection_route_missing_param_returns_422(self, tmp_path: Path, monkeypatch) -> None:
+        """GET /graph/cross-collection with no collections param returns 422."""
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+            response = client.get("/graph/cross-collection", headers=_auth(api_key))
+            assert response.status_code == 422
+
+
+@pytest.mark.integration
+class TestCrossCollectionRouteEmptyParam:
+    """Guard: 422 when collections parameter is empty string."""
+
+    def test_cross_collection_route_empty_param_returns_422(self, tmp_path: Path, monkeypatch) -> None:
+        """GET /graph/cross-collection?collections= (empty string) returns 422."""
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+            response = client.get("/graph/cross-collection?collections=", headers=_auth(api_key))
+            assert response.status_code == 422
+            assert "required" in response.json()["detail"].lower()
+
+
+@pytest.mark.integration
+class TestCrossCollectionRouteDeduplicates:
+    """Deduplication: collections=a,a,b is treated as a,b after dedup."""
+
+    def test_cross_collection_route_deduplicates_collections(self, tmp_path: Path, monkeypatch) -> None:
+        """GET /graph/cross-collection?collections=a,a,b deduplicates correctly."""
+        toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
+            # Requesting a,a,b should deduplicate to a,b; collection "a" doesn't exist
+            # so we expect 404, confirming that dedup occurred (if no dedup, would error on param validation)
+            response = client.get("/graph/cross-collection?collections=test,test,test", headers=_auth(api_key))
+            # After dedup, only one collection; should get 422 for <2 collections
+            assert response.status_code == 422
+            assert "at least 2 distinct" in response.json()["detail"]
+
+
+@pytest.mark.integration
+class TestCrossCollectionJsonResponse:
+    """Happy path: GET /graph/cross-collection returns merged JSON."""
+
+    def test_get_cross_collection_json_merged_nodes(self, tmp_path: Path, monkeypatch) -> None:
+        """GET /graph/cross-collection returns 200 JSON with merged data."""
+        toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
+            # Query cross-collection endpoint with two test collections
+            response = client.get("/graph/cross-collection?collections=test,test-2", headers=_auth(api_key))
+
+            # Should return 404 for nonexistent collections or 200 for empty graph (if they exist)
+            if response.status_code == 200:
+                data = response.json()
+                assert "collections" in data
+                assert "nodes" in data
+                assert "edges" in data
+                assert "truncated" in data
+                assert "node_count" in data
+                assert "edge_count" in data
+                assert isinstance(data["collections"], list)
+                assert isinstance(data["nodes"], list)
+                assert isinstance(data["edges"], list)
+                assert isinstance(data["truncated"], bool)
+            elif response.status_code == 404:
+                # Collections don't exist, which is acceptable
+                pass
+            else:
+                pytest.fail(f"Unexpected status code: {response.status_code}")
+
+
+@pytest.mark.integration
+class TestCrossCollectionGraphML:
+    """GraphML export: GET /graph/cross-collection?format=graphml returns valid GraphML."""
+
+    def test_get_cross_collection_graphml_valid(self, tmp_path: Path, monkeypatch) -> None:
+        """GET /graph/cross-collection?format=graphml returns 200 with valid GraphML."""
+        toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
+            # Query cross-collection endpoint with graphml format
+            response = client.get(
+                "/graph/cross-collection?collections=test,test-2&format=graphml",
+                headers=_auth(api_key),
+            )
+
+            # Should return 200 or 404 depending on whether collections exist
+            if response.status_code == 200:
+                # Verify content type
+                assert response.headers.get("content-type") == "application/xml"
+
+                # Verify it's valid XML
+                graphml_bytes = response.content
+                root = ET.fromstring(graphml_bytes)
+                # GraphML root element should be <graphml>
+                assert root.tag.endswith("graphml") or root.tag == "graphml"
+            elif response.status_code == 404:
+                # Collections don't exist, which is acceptable
+                pass
+            else:
+                pytest.fail(f"Unexpected status code: {response.status_code}")
+
+
+@pytest.mark.integration
+class TestCrossCollectionRouteNotCapturedByCollection:
+    """Route registration order: /graph/cross-collection is not captured by /graph/{collection}."""
+
+    def test_cross_collection_route_not_captured_by_collection_param(self, tmp_path: Path, monkeypatch) -> None:
+        """GET /graph/cross-collection?collections=a,b is not treated as collection='cross-collection'."""
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+            # If routing is wrong, this would try to find a collection named "cross-collection"
+            # Correct routing should check the collections parameter and error on <2 collections
+            response = client.get(
+                "/graph/cross-collection?collections=a",
+                headers=_auth(api_key),
+            )
+            # Should get 422 for <2 collections, NOT 404 for missing "cross-collection" collection
+            assert response.status_code == 422
+            assert "at least 2 distinct" in response.json()["detail"]

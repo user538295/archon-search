@@ -660,3 +660,20 @@ class GraphInspectionResponse(BaseModel):
     """Total number of nodes in the graph (before truncation)."""
     edge_count: int
     """Number of edges where BOTH endpoints exist (after node filter, before edge cap)."""
+
+
+class CrossCollectionGraphInspectionResponse(BaseModel):
+    """Response body for GET /graph/cross-collection (E2b)."""
+
+    collections: list[str]
+    """Names of the collections included in the merged graph."""
+    nodes: list[GraphNodeResponse]
+    """Merged nodes (deduplicated by entity_id, chunk counts summed)."""
+    edges: list[GraphEdgeResponse]
+    """Merged edges (deduplicated by edge id, weights summed)."""
+    truncated: bool
+    """True if node cap, edge cap, or mention scan ceiling was reached."""
+    node_count: int
+    """Total merged node count (before edge survival filter and truncation)."""
+    edge_count: int
+    """Total merged edge count (after node survival filter, before edge cap)."""
