@@ -617,7 +617,7 @@ Add test: `test_graph_mode_defensive_assertion_fires` — call any of the four m
         - [x] #integration_test — `test_pipeline_explain_wildcard_scope_filter_applied` — ingest chunks with `scopes=['user:alice']`, `scopes=['user:bob']`, `scopes=null`; call `pipeline.explain(query, scope_filter='user:*')`; verify results and near_misses contain only alice-scoped, bob-scoped (both match `user:*`), and unscoped chunks; no cross-prefix chunks present
         - [x] #e2e_test — `test_explain_scope_filter_multi_collection_e2e` — ingest scoped chunks in 2 collections; POST /explain with `collections: ['c1', 'c2']` and `scope_filter='user:alice'`; verify only alice-scoped and unscoped chunks appear in results
 
-- [ ] **T-4** — Benchmark: pre-seed 1000+ chunks with mixed scopes; run `POST /search` with `scope_filter="user:*"` 100 times at `top_k=1000`; measure p99 wildcard post-filter overhead; assert <10ms p99 #tester-role
+- [x] **T-4** — Benchmark: pre-seed 1000+ chunks with mixed scopes; run `POST /search` with `scope_filter="user:*"` 100 times at `top_k=1000`; measure p99 wildcard post-filter overhead; assert <10ms p99 #tester-role
     - — · 1.5h
     - needs T-3 · completes S17
     - Tests

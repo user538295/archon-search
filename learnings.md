@@ -379,6 +379,21 @@
 **"not 422" assertions are weaker than specific downstream codes**
 - Action: For at-limit boundary tests with non-existent resources, assert `== 404` (proves request passed validation AND reached collection lookup), not `!= 422`.
 
+**[2026-07-03] — E2a T-3: exact-match vs wildcard test distinction requires a sub-scope in the exact-match corpus**
+- Observation: S8 (exact `scope_filter="user:alice"`) and S9 (wildcard `scope_filter="user:alice*"`) share almost all assertions. Without a chunk scoped `"user:alice:thread-1"` (sub-scope) in the test corpus, the two tests are indistinguishable: exact match and wildcard both include "user:alice" and exclude "user:bob". The sub-scope chunk is what separates them — S8 must exclude it, S9 must include it.
+- Action: When writing exact-vs-wildcard test pairs for scope_filter, always include a sub-scope chunk (e.g. `"user:alice:thread-1"`) in the corpus and add separate inclusion/exclusion assertions for it. Without it, S8 and S9 are the same test.
+- Confidence: high
+
+**[2026-07-03] — E2a T-4: `benchmark` marker is NOT excluded from the default pytest suite**
+- Observation: The docstring in `test_e2a_t4_scope_wildcard_benchmark.py` (and `test_search_filtered_benchmark.py`) falsely claims the `benchmark` marker is excluded via `-m 'not benchmark'` in addopts. The actual addopts excludes `live_benchmark`, not `benchmark`. Tests marked `@pytest.mark.benchmark` run on every `uv run pytest` invocation.
+- Action: Never write "Auto-excluded from the default suite" for a `benchmark`-marked test. Only `live_benchmark` is excluded. Use the docstring pattern: "Note: the `benchmark` marker is NOT excluded from the default suite." Carry `xdist_group("benchmark")` for CPU contention serialization.
+- Confidence: high
+
+**[2026-07-03] — E2a T-4: use `time.perf_counter()` not `time.process_time()` for sub-millisecond benchmarks**
+- Observation: `time.process_time()` measures CPU time with coarse resolution; many sub-ms filter operations register as 0.000ms. For latency benchmarks (especially pure Python operations taking microseconds), `perf_counter()` gives wall-clock nanosecond resolution.
+- Action: Use `time.perf_counter()` for all sub-ms timing in benchmark tests. Reserve `process_time()` for operations with significant I/O (like `hybrid_search_with_trace`) where the LanceDB wall-clock difference from CPU time doesn't matter.
+- Confidence: high
+
 **Exit code assertions need a unique string to pin the code path**
 - Action: When two code paths share an exit code, add `assert "specific string" in result.stderr`. Exit code alone is insufficient.
 
