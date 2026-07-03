@@ -862,6 +862,17 @@
             "title": "Rerank",
             "type": "boolean"
           },
+          "scope_filter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Filter"
+          },
           "top_k": {
             "default": 5,
             "minimum": 1.0,
@@ -2752,6 +2763,17 @@
             "default": false,
             "title": "Rag Fusion",
             "type": "boolean"
+          },
+          "scope_filter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Filter"
           },
           "top_k": {
             "default": 5,

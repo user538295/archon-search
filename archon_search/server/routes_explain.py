@@ -50,6 +50,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _check_scope_filter(scope_filter: str | None) -> str | None:
+    """Return an error message string if ``scope_filter`` is syntactically invalid, else ``None``.
+
+    Valid values: no wildcard (exact match) or exactly one trailing ``*`` with a non-empty prefix.
+    Invalid: bare ``*``, leading ``*``, mid-string ``*``, multiple ``*``.
+    """
+    if scope_filter is None:
+        return None
+    if not scope_filter:
+        return "scope_filter must not be empty"
+    if "*" not in scope_filter:
+        return None
+    star_count = scope_filter.count("*")
+    if star_count > 1:
+        return "scope_filter contains multiple '*' characters; only a single trailing '*' is permitted"
+    if not scope_filter.endswith("*"):
+        return "scope_filter wildcard '*' must appear only at the end of the string"
+    prefix = scope_filter[:-1]
+    if not prefix:
+        return "bare '*' is not a valid scope_filter; use a prefix followed by '*' for wildcard matching"
+    return None
+
+
 def _final_score(b: SearchScoreBreakdown) -> float:
     """reranker_score when a reranker ran, else the fused RRF score."""
     return b.reranker_score if b.reranker_score is not None else b.rrf_score
@@ -252,6 +275,7 @@ class ExplainRequest(BaseModel):
     hyde: bool = False
     rag_fusion: bool = False
     graph_mode: Literal["naive", "local", "global"] | None = None
+    scope_filter: str | None = None
 
     @field_validator("query")
     @classmethod
@@ -440,6 +464,21 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             status_code=422,
         )
 
+    # scope_filter syntax guard (400, not 422 — invalid input, not server-state conflict)
+    scope_filter_err = _check_scope_filter(body.scope_filter)
+    if scope_filter_err is not None:
+        return JSONResponse(
+            {"detail": {"code": "invalid_scope_filter", "message": scope_filter_err}},
+            status_code=400,
+        )
+
+    # scope_filter + graph_mode are mutually exclusive (graph paths bypass scope predicates)
+    if body.scope_filter is not None and body.graph_mode is not None:
+        return JSONResponse(
+            {"detail": "scope_filter is not supported with graph_mode"},
+            status_code=422,
+        )
+
     # graph_mode guard: require [graph] enabled=true (matching /search pattern)
     if body.graph_mode is not None and not config.graph.enabled:
         return JSONResponse(
@@ -496,6 +535,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     rag_fusion=body.rag_fusion,
                     rag_fusion_generator=rag_fusion_gen,
                     rag_fusion_config=config.rag_fusion,
+                    scope_filter=body.scope_filter,
                 )
             except RAGFusionDependencyError as exc:
                 return JSONResponse({"detail": str(exc)}, status_code=422)
@@ -635,6 +675,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 rag_fusion_generator=rag_fusion_gen,
                 rag_fusion_config=config.rag_fusion,
                 graph_mode=body.graph_mode,
+                scope_filter=body.scope_filter,
             )
         except RAGFusionDependencyError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=422)
