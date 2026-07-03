@@ -474,3 +474,137 @@ def test_mcp_explain_scope_filter_with_graph_mode_returns_error() -> None:
     )
     assert "error" in result, f"'error' key missing from result: {result!r}"
     pipeline.explain.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Unit test 11 — search_with_context with '**' scope_filter → invalid_scope_filter
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_search_with_context_scope_filter_invalid_syntax_returns_error() -> None:
+    """MCP search_with_context with scope_filter='**' returns code='invalid_scope_filter'.
+
+    Distinct code path from search and explain: search_with_context rejects
+    graph_mode first, then validates scope_filter.
+    """
+    pipeline = _make_search_pipeline()
+    app = _make_mcp_app(pipeline)
+    tool_fn = app.tools["search_with_context"]
+
+    result = asyncio.run(tool_fn(query="hello", collection="col1", scope_filter="**"))
+
+    assert isinstance(result, dict), f"Expected dict, got: {type(result)!r}: {result!r}"
+    assert result.get("code") == "invalid_scope_filter", (
+        f"Expected code='invalid_scope_filter' for scope_filter='**'; got: {result!r}"
+    )
+    assert "error" in result, f"'error' key missing from result: {result!r}"
+    pipeline.search_with_context.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Unit test 12 — search with empty string scope_filter → invalid_scope_filter
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_search_scope_filter_empty_string_returns_error() -> None:
+    """MCP search with scope_filter='' (empty string) returns code='invalid_scope_filter'.
+
+    Empty string is a separate code path (``if not scope_filter``) distinct from
+    wildcard checks.
+    """
+    pipeline = _make_search_pipeline()
+    app = _make_mcp_app(pipeline)
+    tool_fn = app.tools["search"]
+
+    result = asyncio.run(tool_fn(query="hello", collection="col1", scope_filter=""))
+
+    assert isinstance(result, dict), f"Expected dict, got: {type(result)!r}: {result!r}"
+    assert result.get("code") == "invalid_scope_filter", (
+        f"Expected code='invalid_scope_filter' for scope_filter=''; got: {result!r}"
+    )
+    assert "error" in result, f"'error' key missing from result: {result!r}"
+    pipeline.search.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Unit test 13 — search multi-collection path forwards scope_filter to search_many
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_search_multi_collection_scope_filter_forwarded() -> None:
+    """MCP search with collections=['c1', 'c2'] + scope_filter='user:alice' forwards to pipeline.search_many."""
+    pipeline = _make_search_pipeline()
+    # Multi-collection path calls pipeline.search_many, not pipeline.search
+    mock_search_result = _make_search_result()
+    pipeline.search_many = AsyncMock(return_value=mock_search_result)
+    app = _make_mcp_app(pipeline)
+    tool_fn = app.tools["search"]
+
+    result = asyncio.run(
+        tool_fn(query="hello", collections=["c1", "c2"], scope_filter="user:alice")
+    )
+
+    assert isinstance(result, dict), f"Expected dict, got: {type(result)!r}: {result!r}"
+    assert result.get("code") != "invalid_scope_filter", (
+        f"Unexpected validation error: {result!r}"
+    )
+    pipeline.search_many.assert_called_once()
+    call_kwargs = pipeline.search_many.call_args.kwargs
+    assert call_kwargs.get("scope_filter") == "user:alice", (
+        f"pipeline.search_many must receive scope_filter='user:alice'; got: {call_kwargs!r}"
+    )
+    # Single-collection pipeline.search must NOT have been called
+    pipeline.search.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Unit test 14 — explain multi-collection path forwards scope_filter to pipeline.explain
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_explain_multi_collection_scope_filter_forwarded() -> None:
+    """MCP explain with collections=['col1'] + scope_filter='user:alice' forwards scope_filter to pipeline.explain."""
+    pipeline = _make_search_pipeline()
+    app = _make_mcp_app(pipeline)
+    tool_fn = app.tools["explain"]
+
+    result = asyncio.run(
+        tool_fn(query="hello", collections=["col1"], scope_filter="user:alice")
+    )
+
+    assert isinstance(result, dict), f"Expected dict, got: {type(result)!r}: {result!r}"
+    assert result.get("code") != "invalid_scope_filter", (
+        f"Unexpected validation error: {result!r}"
+    )
+    pipeline.explain.assert_called_once()
+    call_kwargs = pipeline.explain.call_args.kwargs
+    assert call_kwargs.get("scope_filter") == "user:alice", (
+        f"pipeline.explain must receive scope_filter='user:alice'; got: {call_kwargs!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Unit test 15 — search_with_context rejects graph_mode before scope_filter check
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_search_with_context_scope_filter_graph_mode_ordering() -> None:
+    """MCP search_with_context with scope_filter='user:alice' + graph_mode='naive' returns
+    code='graph_mode_not_supported', not 'scope_filter_graph_mode_incompatible'.
+
+    Documents that search_with_context unconditionally rejects graph_mode before
+    reaching the scope_filter mutual-exclusion check.
+    """
+    pipeline = _make_search_pipeline()
+    app = _make_mcp_app(pipeline)
+    tool_fn = app.tools["search_with_context"]
+
+    result = asyncio.run(
+        tool_fn(query="hello", collection="col1", scope_filter="user:alice", graph_mode="naive")
+    )
+
+    assert isinstance(result, dict), f"Expected dict, got: {type(result)!r}: {result!r}"
+    assert result.get("code") == "graph_mode_not_supported", (
+        f"Expected code='graph_mode_not_supported' (graph_mode rejected before scope_filter check); got: {result!r}"
+    )
+    pipeline.search_with_context.assert_not_called()

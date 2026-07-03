@@ -335,6 +335,16 @@ def create_app(
         - ``"local"`` — community-scoped retrieval for the matched community (E1b).
         - ``"global"`` — corpus-wide synthesis over all community representatives (E1b).
         Requires ``[graph] enabled = true`` in the server config.
+
+        ``scope_filter`` restricts results to chunks whose scope tags match:
+        - Exact match: ``scope_filter="user:alice"`` returns only chunks tagged with
+          ``"user:alice"`` in their scopes (plus unscoped chunks).
+        - Prefix wildcard: ``scope_filter="user:alice*"`` returns chunks whose scope
+          starts with ``"user:alice"`` (plus unscoped chunks).
+        - Mutually exclusive with ``graph_mode``.
+
+        Invalid forms (bare ``*``, leading ``*``, mid-string ``*``, multiple ``*``,
+        or empty string) return ``code="invalid_scope_filter"``.
         """
         ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
@@ -627,6 +637,16 @@ def create_app(
 
         Returns ``{"results": [...], "hyde_applied": bool, "expansion_used": bool,
         "expansion_warning": str | null}``.
+
+        ``scope_filter`` restricts results to chunks whose scope tags match:
+        - Exact match: ``scope_filter="user:alice"`` returns only chunks tagged with
+          ``"user:alice"`` in their scopes (plus unscoped chunks).
+        - Prefix wildcard: ``scope_filter="user:alice*"`` returns chunks whose scope
+          starts with ``"user:alice"`` (plus unscoped chunks).
+
+        Invalid forms (bare ``*``, leading ``*``, mid-string ``*``, multiple ``*``,
+        or empty string) return ``code="invalid_scope_filter"``.
+        Note: ``graph_mode`` is not supported on this tool and is rejected unconditionally.
         """
         # graph_mode on search_with_context is not supported; use the search tool instead.
         if graph_mode is not None:
@@ -795,7 +815,18 @@ def create_app(
     ) -> dict[str, Any]:
         """Return the per-stage retrieval/reranking trace for a query, plus the
         routing decision when no collection is pinned. Operates in the caller's
-        authenticated namespace. The query is never echoed in the response or telemetry."""
+        authenticated namespace. The query is never echoed in the response or telemetry.
+
+        ``scope_filter`` restricts results to chunks whose scope tags match:
+        - Exact match: ``scope_filter="user:alice"`` returns only chunks tagged with
+          ``"user:alice"`` in their scopes (plus unscoped chunks).
+        - Prefix wildcard: ``scope_filter="user:alice*"`` returns chunks whose scope
+          starts with ``"user:alice"`` (plus unscoped chunks).
+        - Mutually exclusive with ``graph_mode``.
+
+        Invalid forms (bare ``*``, leading ``*``, mid-string ``*``, multiple ``*``,
+        or empty string) return ``code="invalid_scope_filter"``.
+        """
         _explain_ns = _get_request_namespace()
         start = monotonic()
 
