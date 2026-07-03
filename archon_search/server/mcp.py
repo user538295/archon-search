@@ -35,6 +35,7 @@ from archon_search.pipeline import (
 from archon_search.progress import IndexingState, IndexingStatus
 from archon_search.router import MultiCollectionRouter
 from archon_search.server.middleware_auth import APIKeyMiddleware
+from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.server.routes_explain import (
     ExplainRequest,
     ExplainResponse,
@@ -126,36 +127,11 @@ _MAX_SCOPE_ITEM_LEN: int = 255
 
 
 def _validate_scope_filter(scope_filter: str | None) -> "McpErrorResponse | None":
-    """Validate the scope_filter parameter for MCP search/explain tools.
-
-    Mirrors ``_check_scope_filter`` in ``routes_search.py``.
-    Returns a McpErrorResponse dict if invalid, None if valid.
-    """
-    if scope_filter is None:
+    """Validate scope_filter for MCP tools; wraps the shared validator into a McpErrorResponse."""
+    msg = _check_scope_filter(scope_filter)
+    if msg is None:
         return None
-    if not scope_filter:
-        return McpErrorResponse(error="scope_filter must not be empty", code="invalid_scope_filter")
-    if "*" not in scope_filter:
-        return None  # exact match — always valid
-    star_count = scope_filter.count("*")
-    if star_count > 1:
-        return McpErrorResponse(
-            error="scope_filter contains multiple '*' characters; only a single trailing '*' is permitted",
-            code="invalid_scope_filter",
-        )
-    # Exactly one '*' — must be at end with non-empty prefix
-    if not scope_filter.endswith("*"):
-        return McpErrorResponse(
-            error="scope_filter wildcard '*' must appear only at the end of the string",
-            code="invalid_scope_filter",
-        )
-    prefix = scope_filter[:-1]
-    if not prefix:
-        return McpErrorResponse(
-            error="bare '*' is not a valid scope_filter; use a prefix followed by '*' for wildcard matching",
-            code="invalid_scope_filter",
-        )
-    return None  # valid trailing wildcard
+    return McpErrorResponse(error=msg, code="invalid_scope_filter")
 
 
 def _validate_ttl_and_scopes(

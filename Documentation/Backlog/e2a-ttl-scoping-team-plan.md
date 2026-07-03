@@ -625,6 +625,14 @@ Add test: `test_graph_mode_defensive_assertion_fires` — call any of the four m
 
 ---
 
+### Phase N+1 · Tech Debt
+
+- [x] **TD-1** — Deduplicate `scope_filter` validation: extract shared `_validate_scope_filter(value: str) -> None` into `archon_search/server/_validators.py`; replace the three independent copies in `routes_search.py:39`, `routes_explain.py:53`, and `mcp.py:128` with calls to it. Add one unit test covering all reject cases (bare `*`, leading `*`, mid-string `*`, multiple `*`) and one accept case. #backend-role
+    - — · 0.5h
+    - needs T-5 · resolves DOC-2
+
+---
+
 ### Phase N · Close-out
 
 - [x] **T-5** — Project close-out & acceptance fact-check #tester-role
