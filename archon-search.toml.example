@@ -369,6 +369,22 @@ num_queries = 2
 # Prevents reranker overload on large corpora. Must be > 0.
 # max_global_candidates = 100
 
+# E2b graph inspection fields
+#
+# max_inspection_nodes (int, default 5000): Operator ceiling on the number of nodes
+# returned by GET /graph/{collection} and GET /graph/cross-collection. When the graph
+# exceeds this limit, truncation fires (nodes are sorted by chunk_count desc, then
+# entity_id asc, and capped at max_inspection_nodes). The truncated flag is set
+# to true in the response when either the node cap or edge cap fires.
+# max_inspection_nodes = 5000
+
+# max_inspection_edges (int, default 25000): Operator ceiling on the number of edges
+# returned by GET /graph/{collection} and GET /graph/cross-collection. Edges are
+# filtered to those where both source_entity_id and target_entity_id survive the
+# node truncation, then sorted by weight desc and id asc, and capped at
+# max_inspection_edges. Must be > 0.
+# max_inspection_edges = 25000
+
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #

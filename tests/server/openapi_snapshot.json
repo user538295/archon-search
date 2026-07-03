@@ -391,6 +391,54 @@
         "title": "CollectionSummary",
         "type": "object"
       },
+      "CrossCollectionGraphInspectionResponse": {
+        "description": "Response body for GET /graph/cross-collection (E2b).",
+        "properties": {
+          "collections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Collections",
+            "type": "array"
+          },
+          "edge_count": {
+            "title": "Edge Count",
+            "type": "integer"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/GraphEdgeResponse"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "node_count": {
+            "title": "Node Count",
+            "type": "integer"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/GraphNodeResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "collections",
+          "nodes",
+          "edges",
+          "truncated",
+          "node_count",
+          "edge_count"
+        ],
+        "title": "CrossCollectionGraphInspectionResponse",
+        "type": "object"
+      },
       "DeleteResponse": {
         "properties": {
           "deleted": {
@@ -1262,6 +1310,112 @@
           "edge_count"
         ],
         "title": "GraphCollectionStats",
+        "type": "object"
+      },
+      "GraphEdgeResponse": {
+        "description": "An edge in a graph inspection response (E2b).",
+        "properties": {
+          "edge_id": {
+            "title": "Edge Id",
+            "type": "string"
+          },
+          "source_chunk_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Chunk Ids",
+            "type": "array"
+          },
+          "source_entity_id": {
+            "title": "Source Entity Id",
+            "type": "string"
+          },
+          "target_entity_id": {
+            "title": "Target Entity Id",
+            "type": "string"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "edge_id",
+          "source_entity_id",
+          "target_entity_id",
+          "weight",
+          "source_chunk_ids"
+        ],
+        "title": "GraphEdgeResponse",
+        "type": "object"
+      },
+      "GraphInspectionResponse": {
+        "description": "Response body for GET /graph/{collection} (E2b).",
+        "properties": {
+          "edge_count": {
+            "title": "Edge Count",
+            "type": "integer"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/GraphEdgeResponse"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "node_count": {
+            "title": "Node Count",
+            "type": "integer"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/GraphNodeResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "nodes",
+          "edges",
+          "truncated",
+          "node_count",
+          "edge_count"
+        ],
+        "title": "GraphInspectionResponse",
+        "type": "object"
+      },
+      "GraphNodeResponse": {
+        "description": "A node in a graph inspection response (E2b).",
+        "properties": {
+          "chunk_count": {
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "entity_name": {
+            "title": "Entity Name",
+            "type": "string"
+          },
+          "salience": {
+            "title": "Salience",
+            "type": "number"
+          }
+        },
+        "required": [
+          "entity_id",
+          "entity_name",
+          "chunk_count",
+          "salience"
+        ],
+        "title": "GraphNodeResponse",
         "type": "object"
       },
       "GraphProvenanceResponse": {
@@ -4549,7 +4703,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CrossCollectionGraphInspectionResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4606,7 +4762,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GraphInspectionResponse"
+                }
               }
             },
             "description": "Successful Response"

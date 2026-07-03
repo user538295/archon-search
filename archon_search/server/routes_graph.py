@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/graph/cross-collection", name="get_graph_cross_collection", response_model=None)
+@router.get("/graph/cross-collection", name="get_graph_cross_collection", response_model=CrossCollectionGraphInspectionResponse)
 async def get_graph_cross_collection(
     collections: str = Query(...),
     format: Literal["json", "graphml"] = Query(default="json"),
@@ -114,7 +114,7 @@ async def get_graph_cross_collection(
         return _cross_collection_view_to_response(view)
 
 
-@router.get("/graph/{collection}", name="get_graph", response_model=None)
+@router.get("/graph/{collection}", name="get_graph", response_model=GraphInspectionResponse)
 async def get_graph(
     collection: str,
     format: Literal["json", "graphml"] = Query(default="json"),
